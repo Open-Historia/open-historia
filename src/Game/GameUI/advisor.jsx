@@ -805,7 +805,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     </div>
 ));
 
-const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
+const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResizingChange, onOpenActions, onOpenProjects, requestedPrompt, onConsumeRequest }) => {
     const [messages, setMessages]   = useState([]);
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
@@ -838,17 +838,19 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
 
     // Drag the drawer's left edge to resize it. The panel is docked right, so the
     // new width is simply (viewport width − pointer x); the parent (main.jsx) clamps
-    // and persists it. Pointer capture keeps the drag alive if the cursor leaves the
-    // 10px handle. Works for mouse, touch and pen.
+    // it, and persists it when told the drag is over. Pointer capture keeps the drag
+    // alive if the cursor leaves the 10px handle. Works for mouse, touch and pen.
     const handleResizeStart = React.useCallback((e) => {
         if (typeof onResize !== "function") return;
         e.preventDefault();
         const target = e.currentTarget;
         try { target.setPointerCapture(e.pointerId); } catch { /* not fatal */ }
         setIsResizing(true);
+        onResizingChange?.(true);
         const onMove = (ev) => onResize(window.innerWidth - ev.clientX);
         const onUp = () => {
             setIsResizing(false);
+            onResizingChange?.(false);
             target.removeEventListener("pointermove", onMove);
             target.removeEventListener("pointerup", onUp);
             target.removeEventListener("pointercancel", onUp);
@@ -856,7 +858,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onOpenA
         target.addEventListener("pointermove", onMove);
         target.addEventListener("pointerup", onUp);
         target.addEventListener("pointercancel", onUp);
-    }, [onResize]);
+    }, [onResize, onResizingChange]);
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();

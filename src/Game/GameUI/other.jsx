@@ -49,7 +49,11 @@ const FallbackBadge = ({ label }) => (
     </div>
 );
 
-const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
+const Other = memo(function Other({
+    rightShift = "0.5rem",
+    rightShiftTransition = "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+    embedded = false,
+}) {
     const { activeGame } = useLibraryState();
     const activeGameId = String(activeGame?.id || "");
     const activeGameCountry = String(activeGame?.country || "").trim();
@@ -177,7 +181,7 @@ const Other = memo(function Other({ rightShift = "0.5rem", embedded = false }) {
             width: "2.75rem",
             padding: "0.35rem",
             boxSizing: "border-box",
-            transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
+            transition: rightShiftTransition,
             overflow: "hidden",
         }}
         >

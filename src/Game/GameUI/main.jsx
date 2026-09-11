@@ -154,7 +154,7 @@ const AdvisorDockIcon = () => (
   </svg>
 );
 
-const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
+const AdvisorButton = ({ isAdvisorOpen, rightShift, rightShiftTransition, onToggle }) => (
   <button
     type="button"
     title="Advisor"
@@ -168,7 +168,7 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
       background: isAdvisorOpen
         ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
         : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
-      transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease",
+      transition: `${rightShiftTransition}, background 0.15s ease`,
     }}
   >
     <AdvisorDockIcon />
@@ -192,6 +192,7 @@ const Main = ({
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
+  const [isAdvisorResizing, setIsAdvisorResizing] = useState(false);
   // A starter message queued for the advisor's input box — set when something
   // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
   // button) opens it wanting to prime the conversation, rather than opening it
@@ -362,8 +363,14 @@ const Main = ({
 
   // Called on every pointermove while the user drags the advisor's edge.
   const handleAdvisorResize = useCallback((px) => {
-    setAdvisorWidth(() => {
-      const w = clampAdvisorWidth(px);
+    setAdvisorWidth(clampAdvisorWidth(px));
+  }, []);
+
+  // The width is saved once, when the drag ends, rather than on every move.
+  const handleAdvisorResizingChange = useCallback((resizing) => {
+    setIsAdvisorResizing(resizing);
+    if (resizing) return;
+    setAdvisorWidth((w) => {
       try { localStorage.setItem("oh-advisor-width", String(w)); } catch { /* ignore */ }
       return w;
     });
@@ -377,6 +384,10 @@ const Main = ({
   }, []);
 
   const rightShift = isAdvisorOpen ? `calc(${advisorWidth}px + 0.5rem)` : "0.5rem";
+  // The HUD beside the drawer eases along when it opens or closes, but follows
+  // a drag instantly: an eased follow restarts on every pointermove, so the
+  // widgets trail the pointer by the length of the animation.
+  const rightShiftTransition = `right ${isAdvisorResizing ? "0s" : "0.35s"} cubic-bezier(0.4, 0, 0.2, 1)`;
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -393,6 +404,7 @@ const Main = ({
         onSetPanel={setActiveBottomPanel}
         onTogglePanel={toggleBottomPanel}
         rightShift={rightShift}
+        rightShiftTransition={rightShiftTransition}
         topOffset={TOP_BAR_OFFSET}
       />
       <Toolbar
@@ -401,7 +413,7 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         mapRef={mapRef}
       />
-      <Other rightShift={rightShift} />
+      <Other rightShift={rightShift} rightShiftTransition={rightShiftTransition} />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
@@ -412,6 +424,7 @@ const Main = ({
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         rightShift={rightShift}
+        rightShiftTransition={rightShiftTransition}
         onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
       />
       <Suspense fallback={null}>
@@ -422,6 +435,7 @@ const Main = ({
             onClose={() => setIsAdvisorOpen(false)}
             width={advisorWidth}
             onResize={handleAdvisorResize}
+            onResizingChange={handleAdvisorResizingChange}
             onOpenActions={() => setActiveBottomPanel("actions")}
             onOpenProjects={() => setActiveBottomPanel("projects")}
             requestedPrompt={pendingAdvisorPrompt}

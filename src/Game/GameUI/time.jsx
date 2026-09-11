@@ -1521,6 +1521,7 @@ const DateWidget = ({
     onSetPanel = null,
     onTogglePanel = null,
     rightShift,
+    rightShiftTransition = widgetSurface.transition,
     topOffset = "0.5rem",
 }) => {
     const [gameData, setGameData] = useState(null);
@@ -2383,6 +2384,7 @@ const DateWidget = ({
         style={{
             ...widgetSurface,
             right: rightShift,
+            transition: rightShiftTransition,
             top: topOffset,
             // The player's country sits beside the date. On phones the standalone
             // pill would cover the date, so stretch the widget; on desktop cap the
