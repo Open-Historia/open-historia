@@ -6,7 +6,7 @@ Thanks for helping build Open Historia. This page covers the one legal step ever
 
 Open Historia accepts contributions only under its [Contributor License Agreement](CLA.md). In short:
 
-- You keep the copyright in your contributions and grant the Open Historia Organisation and its members an exclusive, irrevocable licence to use, change and relicense them in any way, so the Project can be licensed, relicensed and defended as one whole.
+- You keep the copyright in your contributions and grant the Open Historia Organisation an exclusive, irrevocable licence to use, change and relicense them in any way, so the Project can be licensed, relicensed and defended as one whole.
 - You keep the right to use your own contributions for your own purposes and to share them under the Project's public licence. Because the licence is exclusive, you may not license them to others on other terms.
 - You confirm the work is yours to give, and you tell us about any third-party material in it.
 - Open Historia publishes what it accepts under the Project's public licence (currently AGPL-3.0-or-later), and may license it under other terms as well.
