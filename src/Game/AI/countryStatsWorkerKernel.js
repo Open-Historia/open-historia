@@ -39,6 +39,7 @@ const stableStatsHash = (value) => {
 const STATS_MACRO_MAX_BUCKETS = 12;
 const STATS_MACRO_TARGET_COMPONENTS = 30;
 const STATS_MACRO_SAMPLE_NAMES = 10;
+const STATS_MACRO_PARTIAL_SAMPLE_REGIONS = 4;
 
 const statsSphericalVector = (lng, lat) => {
   const lon = (Number(lng) || 0) * Math.PI / 180;
@@ -83,10 +84,20 @@ const buildStatsMacroPlan = (plannedRows = []) => {
       const lng = Number(row?.lng);
       const lat = Number(row?.lat);
       const hasPoint = hasLng && hasLat && Number.isFinite(lng) && Number.isFinite(lat);
+      const held = normalizeArray(row?.regions);
       return {
         sourceIndex: index,
         index: Number(row?.index) || index + 1,
         geography,
+        // How much of this base geography the polity actually holds. The prompt
+        // must say so: "Ukraine" alone reads as all of Ukraine (see macroMemberLabel).
+        heldRegions: held.length,
+        totalRegions: Math.max(held.length, Math.trunc(Number(row?.total) || 0)),
+        sampleRegionNames: [...held]
+          .sort((a, b) => (Number(b?.weight) || 1) - (Number(a?.weight) || 1) || normalizeString(a?.name).localeCompare(normalizeString(b?.name)))
+          .slice(0, STATS_MACRO_PARTIAL_SAMPLE_REGIONS)
+          .map((region) => normalizeString(region?.name))
+          .filter(Boolean),
         lng: hasPoint ? lng : ((index * 137.508) % 360) - 180,
         lat: hasPoint ? lat : 0,
         weight: Math.max(0.1, Number(row?.weight) || 1),
@@ -262,14 +273,40 @@ const buildStatsMacroPlan = (plannedRows = []) => {
   return buckets.map((bucket, index) => ({ index: index + 1, ...bucket }));
 };
 
+// A component is named by its base geography — the country its map regions
+// originally belong to — which is only the whole story when the polity holds all
+// of it. Russia holding Crimea is the component "Ukraine" with 16 of Ukraine's
+// 144 regions, and a field report's model, shown just "Russia, Ukraine", added the
+// whole of Ukraine: 143.5M + 45.4M = a 188.8M Russia. So every component says how
+// much of it is held, and a partial one names what it is.
+const macroMemberIsPartial = (member) =>
+  Number(member?.totalRegions) > 0 && Number(member?.heldRegions) < Number(member?.totalRegions);
+
+const macroMemberLabel = (member) => {
+  const held = Number(member?.heldRegions) || 0;
+  const total = Number(member?.totalRegions) || 0;
+  if (!total) return member.geography;
+  if (!macroMemberIsPartial(member)) return `${member.geography} (whole, ${total} region${total === 1 ? "" : "s"})`;
+  const names = normalizeArray(member?.sampleRegionNames);
+  const more = held - names.length;
+  return `${member.geography} (PARTIAL: only ${held} of its ${total} regions`
+    + `${names.length ? ` — ${names.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : ""}`
+    + `; count ONLY these, not all of ${member.geography})`;
+};
+
 const buildStatsMacroContext = (macroPlan = []) => normalizeArray(macroPlan).map((bucket) => {
   const center = statsVectorLngLat(statsSphericalVector(bucket?.lng, bucket?.lat));
   const members = normalizeArray(bucket?.members);
-  const samples = [...members]
-    .sort((a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography))
-    .slice(0, STATS_MACRO_SAMPLE_NAMES)
-    .map((member) => member.geography);
-  return `[M${bucket.index}] ${members.length} live component(s); center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}; representative places: ${samples.join(", ")}`;
+  const byWeight = (a, b) => b.weight - a.weight || a.geography.localeCompare(b.geography);
+  // Partial components first and never cut, however many whole ones the bucket
+  // has: they are the ones a name alone misrepresents.
+  const partial = members.filter(macroMemberIsPartial).sort(byWeight);
+  const whole = members.filter((member) => !macroMemberIsPartial(member)).sort(byWeight);
+  const shown = [...partial, ...whole.slice(0, Math.max(0, STATS_MACRO_SAMPLE_NAMES - partial.length))];
+  const unshown = members.length - shown.length;
+  const places = shown.map(macroMemberLabel).join("; ")
+    + (unshown > 0 ? `; and ${unshown} more whole component(s)` : "");
+  return `[M${bucket.index}] ${members.length} live component(s); center ${Math.abs(center.lat).toFixed(1)}°${center.lat >= 0 ? "N" : "S"}, ${Math.abs(center.lng).toFixed(1)}°${center.lng >= 0 ? "E" : "W"}; representative places: ${places}`;
 }).join("\n");
 
 const statsPolityAliases = (world, canonicalName) => {
