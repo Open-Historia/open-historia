@@ -195,6 +195,30 @@ export const busyProviderMessage = (providerLabel, detail, retried) =>
 export const providerErrorReplyMessage = (providerLabel, detail) =>
     `${providerLabel} returned an error instead of a reply${detail ? `: ${detail}` : ""}.`;
 
+// A structured task asked for a tool call and got back nothing at all — no call,
+// no text — except the provider's own error inside the stream. The providers retry
+// a busy one once; if it is still refusing after that, THIS is what to throw.
+//
+// Every tool path used to return an empty answer here instead. The task runner
+// then logged the provider as having "answered" with 0 characters, told the model
+// its reply "did not contain parseable JSON", and re-sent the whole prompt at once
+// to a provider that had just said it was overloaded. A DeepSeek V4 Flash field
+// report lost two held turns and a jump to exactly that, each one following a
+// "reported ... mid-stream; retrying once" warning a few minutes earlier.
+//
+// `providerRefusal` is how the task runner tells this apart from a real failure:
+// there was no answer to correct, so it spends its second attempt re-asking — after
+// a proper pause when the provider said it was busy — rather than falling back.
+export const toolStreamRefusalError = (providerLabel, error, retried) => {
+    const detail = errorPayloadText(error);
+    const busy = isBusyErrorPayload(error);
+    const refusal = new Error(busy
+        ? busyProviderMessage(providerLabel, detail, retried)
+        : providerErrorReplyMessage(providerLabel, detail));
+    refusal.providerRefusal = { busy, detail };
+    return refusal;
+};
+
 // Did the provider reject the request because it was STREAMED (rather than for
 // anything about its content)? Tool calls stream so a long timeline jump keeps
 // the connection warm, but a few gateways refuse stream and tools together, and

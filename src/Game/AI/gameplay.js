@@ -1308,6 +1308,24 @@ const computeSimulatedDays = (variables) => {
   return days === null ? null : Math.max(0, days);
 };
 
+// How long a task waits before re-asking a provider that refused its first
+// attempt as busy. The provider path has already retried once after 5s by then,
+// so this is the longer pause — the same 15s the providers use between their own
+// status-code retries.
+const BUSY_PROVIDER_TASK_PAUSE_MS = 15000;
+
+const abortableWait = (ms, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    reject(signal.reason);
+    return;
+  }
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener("abort", () => {
+    clearTimeout(timer);
+    reject(signal.reason);
+  }, { once: true });
+});
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
@@ -1946,33 +1964,53 @@ This live instruction supersedes older frozen country-stat prompts and all earli
       // Telemetry: the record for THIS attempt comes back through the sink, so
       // the validation outcome below lands on the call that produced it.
       const attemptSink = {};
-      const response = await callAI(systemPrompt, history, {
-        // No output-token cap. A long/action-heavy turn's JSON must not be truncated
-        // mid-response — a cut-off response won't parse, so runJsonTask fell back to
-        // canned events that carry NO regionTransfers and NO diplomacy, which is why
-        // the map never changed and no chats opened. main.jsx now lets each provider
-        // use its own model maximum when no maxTokens is passed.
-        // The moment this task gives up if nothing more arrives — null while
-        // nothing has come back yet. The providers read it to decide whether a
-        // busy-retry wait still fits inside the window.
-        deadline: idle.deadline,
-        // Every network chunk of the answer restarts that window.
-        onActivity: idle.note,
-        signal: controller.signal,
-        tool,
-        // Names this call in the ai-call transport entries, so a task's own
-        // entries and the request/response pair underneath them line up.
-        logLabel: `task "${taskKey}"`,
-        // Which model answers is the task's business (Settings → Per-task models).
-        taskKey,
-        // Where the cacheable prefix of the system prompt ends — null once the
-        // prompt was rewritten past it. Anthropic pins it with an explicit
-        // cache_control block; OpenAI and Gemini cache identical prefixes on
-        // their own, so the layout alone helps them.
-        staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
-        __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
-        __debugSink: attemptSink,
-      });
+      let response;
+      try {
+        response = await callAI(systemPrompt, history, {
+          // No output-token cap. A long/action-heavy turn's JSON must not be truncated
+          // mid-response — a cut-off response won't parse, so runJsonTask fell back to
+          // canned events that carry NO regionTransfers and NO diplomacy, which is why
+          // the map never changed and no chats opened. main.jsx now lets each provider
+          // use its own model maximum when no maxTokens is passed.
+          // The moment this task gives up if nothing more arrives — null while
+          // nothing has come back yet. The providers read it to decide whether a
+          // busy-retry wait still fits inside the window.
+          deadline: idle.deadline,
+          // Every network chunk of the answer restarts that window.
+          onActivity: idle.note,
+          signal: controller.signal,
+          tool,
+          // Names this call in the ai-call transport entries, so a task's own
+          // entries and the request/response pair underneath them line up.
+          logLabel: `task "${taskKey}"`,
+          // Which model answers is the task's business (Settings → Per-task models).
+          taskKey,
+          // Where the cacheable prefix of the system prompt ends — null once the
+          // prompt was rewritten past it. Anthropic pins it with an explicit
+          // cache_control block; OpenAI and Gemini cache identical prefixes on
+          // their own, so the layout alone helps them.
+          staticPrefixEnd: staticPrefixEndOf(systemPrompt, staticPromptPrefix),
+          __debug: { taskKey, attempt: outputAttempt, maxAttempts: 2, simulatedDays: computeSimulatedDays(variables) },
+          __debugSink: attemptSink,
+        });
+      } catch (error) {
+        // The provider refused inside the stream and gave no answer at all
+        // (providerErrors.js toolStreamRefusalError). There is nothing to correct,
+        // so the second attempt is a plain re-ask — after a real pause when it
+        // said it was busy, since its own quick retry has already failed — and
+        // not the canned fallback. Anything else still ends the task as before.
+        if (outputAttempt !== 1 || !error?.providerRefusal || controller.signal.aborted) throw error;
+        idle.cancel();
+        failureReason = normalizeString(error.message) || failureReason;
+        const pauseMs = error.providerRefusal.busy ? BUSY_PROVIDER_TASK_PAUSE_MS : 0;
+        logDebugEvent("ai", `Task "${taskKey}" attempt 1 got no answer: the provider refused.`, {
+          provider: error.providerRefusal.detail || "(no message)",
+          busy: error.providerRefusal.busy,
+          retryInMs: pauseMs,
+        }, { verbose: true });
+        if (pauseMs) await abortableWait(pauseMs, controller.signal);
+        continue;
+      }
       // This attempt is answered: stop counting silence against it. Validation,
       // salvage and the retry's own prompt evaluation all happen with nothing on
       // the wire, and leaving the window armed across them would have attempt

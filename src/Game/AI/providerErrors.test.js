@@ -13,12 +13,35 @@ import {
   looksLikeDeliberation,
   providerErrorReplyMessage,
   retryDelayMsFromPayload,
+  toolStreamRefusalError,
 } from "./providerErrors.js";
 import {
     contextWindowMessage,
     isContextWindowErrorPayload,
     isContextWindowErrorText,
 } from "./providerErrors.js";
+
+// A DeepSeek V4 Flash field report: a tool call refused mid-stream, retried once,
+// refused again — and the task was handed an empty "answer" that it then blamed
+// on the model. What the providers throw instead must say it was the provider,
+// and carry the flag the task runner reads to re-ask rather than fall back.
+test("a tool call the provider refused twice becomes a flagged busy error, not an empty answer", () => {
+  const error = toolStreamRefusalError(
+    "OpenAI Compatible",
+    { message: "An internal error occurred. Please try again later." },
+    true,
+  );
+  assert.equal(error.providerRefusal.busy, true);
+  assert.equal(error.providerRefusal.detail, "An internal error occurred. Please try again later.");
+  assert.equal(error.message, busyProviderMessage("OpenAI Compatible", "An internal error occurred. Please try again later.", true));
+  assert.match(error.message, /overloaded/);
+});
+
+test("a refusal that is not about load is quoted as the provider's error, still flagged", () => {
+  const error = toolStreamRefusalError("Gemini", { message: "Invalid argument in request." }, false);
+  assert.equal(error.providerRefusal.busy, false);
+  assert.equal(error.message, providerErrorReplyMessage("Gemini", "Invalid argument in request."));
+});
 
 // The frame that started this: an OpenAI-compatible gateway answering HTTP 200
 // and then refusing inside the stream. The advisor used to report it as "no

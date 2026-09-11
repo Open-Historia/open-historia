@@ -38,6 +38,7 @@ import {
     providerErrorReplyMessage,
     retryDelayMsFromPayload,
     TOOL_CALL_INSISTENCE,
+    toolStreamRefusalError,
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
@@ -923,6 +924,8 @@ async function callGemini(systemPrompt, history, {
                 await sleep(OVERLOADED_RETRY_DELAY, signal);
                 continue;
             }
+            // Still refusing: say so, rather than hand back an empty "answer".
+            if (!streamedText && streamedError) throw toolStreamRefusalError("Gemini", streamedError, retriedAfterOverload);
 
             return { rawText: streamedText, toolInput: null };
         }
@@ -1255,6 +1258,12 @@ async function callOpenAIStyleChatCompletions({
                 console.warn(`[ai] ${providerLabel} reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
                 await sleep(OVERLOADED_RETRY_DELAY, signal);
                 continue;
+            }
+            // Still refusing after that retry (or no time left for one): say so,
+            // rather than hand the task an empty "answer" to spend an attempt on.
+            // A partial tool call is left to the salvage pass, as before.
+            if (!text && streamedError && !extractOpenAIToolRaw(data, tool)) {
+                throw toolStreamRefusalError(providerLabel, streamedError, retriedAfterOverload);
             }
 
             // The model talked itself out of answering: no tool call, and the text
@@ -1627,7 +1636,10 @@ async function callAnthropic(systemPrompt, history, {
                     partialChars: data.partialToolJson.length,
                 }, { verbose: true });
             }
-            return { rawText: extractAnthropicText(data), toolInput: null };
+            // Still refusing: say so, rather than hand back an empty "answer".
+            const anthropicToolText = extractAnthropicText(data);
+            if (!anthropicToolText && data?.error) throw toolStreamRefusalError("Anthropic", data.error, retriedAfterOverload);
+            return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
 
@@ -1843,6 +1855,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
             }
 
             const anthropicText = extractAnthropicText(data);
+            // Still refusing: say so, rather than hand back an empty "answer".
+            if (!anthropicText && data?.error) throw toolStreamRefusalError("Anthropic Compatible", data.error, retriedAfterOverload);
             // No tool call, and what came back is a planning monologue rather
             // than anything a salvage pass could parse. The proxy accepted
             // tool_choice without enforcing it, so asking again more firmly
