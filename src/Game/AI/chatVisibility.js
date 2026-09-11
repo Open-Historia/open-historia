@@ -61,6 +61,20 @@ export const chatParticipantMatches = (country, polity) => {
 };
 
 /**
+ * A chat's participants with the player taken out — the invariant above, applied
+ * to a list a model wrote.
+ *
+ * Models list the player among the countries of a note they address TO the
+ * player: a field report's jump opened "Russian Federation, Republic of India"
+ * for a Russian player. Beyond the odd header, that list no longer matched the
+ * India thread already open, so the note forked a second thread instead of
+ * landing in the first — and the player would count as a participant everywhere
+ * this module decides who was in the room. A blank `player` removes nothing.
+ */
+export const withoutPlayerParticipant = (countries, player) =>
+    (Array.isArray(countries) ? countries : []).filter((country) => !chatParticipantMatches(country, player));
+
+/**
  * May `polity` see this chat?
  *
  * A blank `polity` means "no restriction" — the narrator and advisor paths — and

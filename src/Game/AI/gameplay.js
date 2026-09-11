@@ -46,6 +46,7 @@ import {
 import { UNIT_CONTRACT_MARKER, collapseRepeatedBlock, templateAlreadySays } from "./promptDedupe.js";
 import { buildJumpProjectsDirective } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
+import { withoutPlayerParticipant } from "./chatVisibility.js";
 import { decodeGameMasterTransportPayload, getGameplayTool, normalizeGameplayPayload, validateGameplayPayload } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import {
@@ -2925,21 +2926,20 @@ const fallbackNextSpeaker = ({ chat, excludedSpeaker }) => {
 
 export const buildGeneratedChat = async (chatLike, linkEventId, world, { fallbackTitle = "", playerName = "" } = {}) => {
   const countriesInput = Array.isArray(chatLike?.countries) ? chatLike.countries : [];
-  const countries = await resolveInvitees(countriesInput, world);
+  // A chat's countries are the OTHER side; the player is implicit
+  // (chatVisibility.js). A note naming the player among them is a note to the
+  // player, and keeping them there forks a duplicate of the thread already open.
+  const countries = withoutPlayerParticipant(await resolveInvitees(countriesInput, world), playerName);
   if (countries.length === 0) return null;
 
-  // The initiating polity speaks first — and it is never the player. When the
-  // model names no speaker (or names the player), attribute the opener to the
-  // first non-player participant.
-  const playerKey = normalizeString(playerName).toUpperCase();
-  const matchesPlayer = (country) =>
-    playerKey && (normalizeString(country.name).toUpperCase() === playerKey || normalizeString(country.code).toUpperCase() === playerKey);
+  // The initiating polity speaks first — and it is never the player, who is no
+  // longer in the list. When the model names no speaker (or names the player, or
+  // someone who is not a participant), attribute the opener to the first one.
   const speakerKey = normalizeString(chatLike?.speaker).toUpperCase();
   const initiator =
     countries.find((country) =>
-      speakerKey && !matchesPlayer(country)
+      speakerKey
       && (normalizeString(country.name).toUpperCase() === speakerKey || normalizeString(country.code).toUpperCase() === speakerKey))
-    ?? countries.find((country) => !matchesPlayer(country))
     ?? countries[0];
 
   const entry = normalizeChatEntry({

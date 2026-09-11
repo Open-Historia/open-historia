@@ -13,7 +13,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chatParticipantMatches, filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
+import { chatParticipantMatches, filterChatsVisibleTo, isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
+
+// The field report's jump addressed a note to a Russian player as
+// "Russian Federation, Republic of India", which forked a second India thread.
+test("a generated note's participant list loses the player, by name or code", () => {
+  const listed = [
+    { code: "Russian Federation", name: "Russian Federation" },
+    { code: "Republic of India", name: "Republic of India" },
+  ];
+  assert.deepEqual(withoutPlayerParticipant(listed, "Russian Federation"), [listed[1]]);
+  assert.deepEqual(
+    withoutPlayerParticipant([{ code: "RUS", name: "Russia" }, { code: "IND", name: "India" }], "rus"),
+    [{ code: "IND", name: "India" }],
+  );
+});
+
+test("with no player named, or only the player listed, nothing is invented", () => {
+  const listed = [{ code: "IND", name: "India" }];
+  assert.deepEqual(withoutPlayerParticipant(listed, ""), listed, "a blank player removes nobody");
+  assert.deepEqual(withoutPlayerParticipant([{ name: "Russia" }], "Russia"), [], "a note to nobody but the player is no chat");
+  assert.deepEqual(withoutPlayerParticipant(undefined, "Russia"), []);
+});
 
 // Shaped like storage/chat.json: `countries` lists the NON-PLAYER participants.
 const algeriaChat = { id: "c1", title: "Algeria: Electricity Corridor Inquiry", countries: [{ code: "DZA", name: "Algeria" }] };
