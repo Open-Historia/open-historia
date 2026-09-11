@@ -46,7 +46,6 @@ import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildDebugLogReport,
     clearDebugLog,
-    debugLogFilename,
     formatLogSize,
     getDebugLogBytes,
     getDebugLogLimitBytes,
@@ -57,6 +56,7 @@ import {
     setDebugLogVerbose,
     subscribeToDebugLog,
 } from "../../runtime/debugLog.js";
+import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
@@ -1230,18 +1230,12 @@ const DiagnosticsPanel = () => {
         setTimeout(() => setCopyState("idle"), 2500);
     };
 
-    const handleDownload = () => {
-        const blob = new Blob([buildDebugLogReport()], { type: "text/plain;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = debugLogFilename();
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        // Revoked on the next tick, not immediately: Firefox cancels a download
-        // whose blob URL is revoked in the same task as the click.
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // The same save the failure buttons use. Where no file can be saved (the
+    // Android app) it copies instead, and says so on the Copy button beside it.
+    const handleDownload = async () => {
+        if (await saveDebugLogFile() !== "copied") return;
+        setCopyState("copied");
+        setTimeout(() => setCopyState("idle"), 2500);
     };
 
     const handleClear = () => {

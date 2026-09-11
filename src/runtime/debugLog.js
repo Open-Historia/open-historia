@@ -3,7 +3,7 @@
 //
 // Before this, the only diagnostics the game could hand out were per-incident:
 // the advisor's "Copy for a bug report" and the timeline's "Copy debugging
-// message" (time.jsx), both of which describe ONE failed AI turn and nothing
+// message" (time.jsx), both of which described ONE failed AI turn and nothing
 // around it. That is the wrong shape for most reports, which are of the form
 // "I loaded this save, queued these actions, jumped twice and the border went
 // wrong" — a SEQUENCE. The packaged desktop app binds no developer tools (no
@@ -15,6 +15,12 @@
 // localStorage so it survives the reload after a crash, and emitted as one
 // plain-text report behind a Copy button and a Download button in
 // Settings → Diagnostics.
+//
+// Those per-incident buttons are now "Save logging file" buttons
+// (runtime/saveDebugLog.js). Pasting only the incident is what players did, and
+// it left out everything around it, so the buttons now save THIS log with the
+// incident's own details attached at the top — see `incident` on
+// buildDebugLogReport.
 //
 // WHAT GOES IN. Two sources:
 //   1. Explicit logDebugEvent() calls at the milestones a report needs — game
@@ -650,12 +656,62 @@ const contextLine = (label, value) => (value ? `${label}: ${value}` : "");
 // is recording at all.
 export const formatLogSize = (chars) => (chars < 1024 ? "<1 KB" : `${Math.round(chars / 1024)} KB`);
 
+// `[label, value]` pairs as report lines: arrays one entry per indented line,
+// multi-line text (a raw model response) under its label, empty values skipped
+// so a field the failure never filled in is not printed as a blank.
+export const formatReportFields = (fields = []) => {
+    const lines = [];
+    for (const [label, value] of fields) {
+        if (value === "" || value === null || value === undefined) continue;
+        if (Array.isArray(value)) {
+            if (value.length === 0) continue;
+            lines.push(`${label}:`);
+            for (const entry of value) lines.push(`  ${String(entry)}`);
+            continue;
+        }
+        const text = String(value);
+        lines.push(text.includes("\n") ? `${label}:\n${text}` : `${label}: ${text}`);
+    }
+    return lines;
+};
+
+// Incident fields the header already states, by label. One whose value matches
+// the header is dropped rather than printed twice; one that DIFFERS is kept,
+// because then it is news — an advisor error recorded on a model the player has
+// since switched away from says which model actually failed.
+const HEADER_FIELD_KEYS = {
+    "ai provider": "provider",
+    provider: "provider",
+    "ai model": "model",
+    model: "model",
+    "player polity": "playerCountry",
+    difficulty: "difficulty",
+    round: "round",
+    "game date": "gameDate",
+};
+
+const sameAsHeader = (label, value) => {
+    const key = HEADER_FIELD_KEYS[String(label).trim().toLowerCase()];
+    if (!key || !context[key] || Array.isArray(value)) return false;
+    return String(value ?? "").trim().toLowerCase() === String(context[key]).trim().toLowerCase();
+};
+
 // Everything the player pastes, as one plain-text block: a header saying what
 // build and what campaign this is, then the entries oldest-first.
 //
 // Plain text, not JSON — it is going into a Discord message or a GitHub issue,
 // where a human reads it and a code fence is the only formatting available.
-export const buildDebugLogReport = () => {
+//
+// `incident` is what the per-incident "Save logging file" buttons attach: the
+// one failure the player was looking at when they pressed it, as
+// `{ title, fields: [[label, value], ...] }`. It goes between the header and the
+// log, so a reader sees what was reported before the sequence that led up to
+// it. It is written here at export time rather than logged as an entry, for
+// three reasons: an entry is clipped to a few hundred characters and a raw model
+// response is the part a fallback report exists for; an entry can be rolled off
+// the front by the size cap; and a player with logging turned off still gets a
+// file worth sending. Redacted like everything else.
+export const buildDebugLogReport = ({ incident } = {}) => {
     const header = [
         "OPEN HISTORIA — DIAGNOSTICS LOG",
         `Generated: ${new Date().toISOString()}`,
@@ -689,9 +745,14 @@ export const buildDebugLogReport = () => {
         droppedEntries
             ? `NOTE: ${droppedEntries} older ${droppedEntries === 1 ? "entry" : "entries"} were dropped to stay inside that budget — this log does not reach back to the start of the session.`
             : "",
-        "",
-        "-- Log (oldest first) --",
     ].filter((line) => line !== "");
+
+    const incidentLines = incident
+        ? formatReportFields((incident.fields ?? []).filter(([label, value]) => !sameAsHeader(label, value)))
+        : [];
+    const incidentBlock = incident
+        ? ["", redactSecrets(`-- Reported problem: ${incident.title || "unspecified"} --`), ...incidentLines.map(redactSecrets), ""]
+        : [];
 
     const body = entries.length
         ? entries.map((entry) => {
@@ -706,15 +767,44 @@ export const buildDebugLogReport = () => {
                 : "";
             return `[${time}]${date} [${entry.category}] ${entry.message}${repeat}${detail}`;
         })
-        : ["(empty — nothing has been logged yet this session)"];
+        // Said outright when logging is off: the Save buttons beside a fallback
+        // or an advisor error work either way, and a reader handed an empty log
+        // with no reason given goes looking for a recording bug.
+        : [loggingEnabled
+            ? "(empty — nothing has been logged yet this session)"
+            : "(logging is turned off in Settings → Diagnostics, so nothing was recorded)"];
 
-    return [...header, ...body, "", "-- End of log --"].join("\n");
+    return [...header, ...incidentBlock, "-- Log (oldest first) --", ...body, "", "-- End of log --"].join("\n");
 };
 
-// A filename that sorts by time and says which game it came from, because the
+// The incident on its own, for when there is no log to attach it to.
+//
+// With logging turned off the failure buttons go back to copying a report of
+// the one failure (runtime/saveDebugLog.js) — a log file would be an empty
+// header around it. So this carries the context lines the log's header would
+// have, and repeats every field, since there is no header to deduplicate
+// against.
+export const buildIncidentReport = (incident) => {
+    if (!incident) return "";
+    const lines = [
+        `OPEN HISTORIA — ${String(incident.title || "debug report").toUpperCase()}`,
+        `Generated: ${new Date().toISOString()}`,
+        contextLine("Build", context.build),
+        contextLine("Player polity", context.playerCountry),
+        contextLine("Game date", context.gameDate),
+        contextLine("Difficulty", context.difficulty),
+        contextLine("AI provider", context.provider),
+        contextLine("AI model", context.model),
+    ].filter((line) => line !== "");
+    return redactSecrets([...lines, "", ...formatReportFields(incident.fields)].join("\n"));
+};
+
+// A filename that sorts by time and says what it was saved for, because the
 // first thing that happens to these is being dragged into a Discord thread with
-// three others.
-export const debugLogFilename = () => {
+// three others. `tag` is the incident's kind ("turn-fallback", "advisor-error");
+// the Settings button passes none.
+export const debugLogFilename = (tag = "") => {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    return `open-historia-log-${stamp}.txt`;
+    const suffix = String(tag ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    return `open-historia-log-${stamp}${suffix ? `-${suffix}` : ""}.txt`;
 };
