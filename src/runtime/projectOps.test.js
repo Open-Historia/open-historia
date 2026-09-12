@@ -376,6 +376,24 @@ test("replaying the same completion does not apply the effects twice", () => {
   assert.equal(twice.projects[0].onCompleteAppliedAt, stamped);
 });
 
+// A Hidden event (a Canonical event kept off the timeline) still moves the Board,
+// through this same path so a completion releases its effects exactly as a
+// visible event's would — but it is not on the timeline, so it must not be
+// stamped into the entry's activity, which lists timeline events only.
+test("a board-only event completes a project and releases its effects without stamping its activity", () => {
+  const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));
+  const hiddenCarrier = { ...eventWith([{ op: "complete", name: "Northern Question" }]), id: "hidden-1" };
+  const { world: next } = applyEventImpactsToWorld({
+    events: [hiddenCarrier],
+    world,
+    boardOnlyEventIds: ["hidden-1"],
+  });
+
+  assert.equal(next.projects[0].status, "complete");
+  assert.equal(next.polityOverrides.Ruritania.name, "Federal Republic of Ruritania", "the completion effects were lost");
+  assert.deepEqual(next.projects[0].eventIds, [], "a Hidden event is not a timeline card to link to");
+});
+
 for (const op of ["cancel", "fail"]) {
   test("op " + op + " never releases onComplete effects", () => {
     const world = worldWith(applyProjectOps([], [annexation(renameRuritania)]));

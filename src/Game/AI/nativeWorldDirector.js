@@ -12,6 +12,7 @@ import {
   createWorldActorResolver,
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
+import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
 
 // Native World Director (ported from kernely's Continuum branch).
 //
@@ -347,11 +348,32 @@ const eventLooksLikeRoutineAdministrativeCard = (event) => {
     && !HUMAN_TEXTURE_RE.test(text);
 };
 
+// A major event whose only consequence is a Board entry. The Board is not a
+// channel the jump can write — the board pass records it after the segments —
+// so such an event passes the check PROVISIONALLY: the engine's own matcher says
+// it concerns an open Board entry, and the turn must later see the board pass
+// materially change a Board entry because of it, or the event is kept off the
+// timeline. "Probably about Westbird" is never taken for "Westbird changed".
+// A crisis is not eligible: a crisis is a Storyline by definition.
+const eventRestsOnBoardConsequence = (candidate, index, board, playerCountry) => {
+  const event = normalizeArray(candidate?.events)[index];
+  if (!eventLooksStrategicallyMajor(event) || eventLooksLikeUnresolvedCrisis(event)) return false;
+  if (eventCanonicalConsequenceChannels(candidate, index).length) return false;
+  return boardEntriesConcernedByEvent(event, board, { playerCountry }).length > 0;
+};
+
+export const boardProvisionalConsequenceIndexes = (candidate, { board = [], playerCountry = "" } = {}) =>
+  normalizeArray(candidate?.events)
+    .map((_, index) => index)
+    .filter((index) => eventRestsOnBoardConsequence(candidate, index, board, playerCountry));
+
 export const validateWorldEventConsequencePayload = (
   candidate,
   {
     selectedStorylines = [],
     strict = true,
+    board = [],
+    playerCountry = "",
   } = {},
 ) => {
   if (!strict) return "";
@@ -365,8 +387,13 @@ export const validateWorldEventConsequencePayload = (
       return `Major unresolved crisis event ${index + 1} ("${normalizeString(event?.title)}") has no persistent storyline consequence. Create/update the canonical storyline for the unresolved process and link this event; do not let a multi-turn crisis vanish after one card.`;
     }
 
-    if (eventLooksStrategicallyMajor(event) && channels.length === 0) {
-      return `Strategically major event ${index + 1} ("${normalizeString(event?.title)}") has no canonical consequence at all. Keep the event only if something materially changes in an existing owner (storyline, Stats, relations, agreements, units, war, territory/control, polity metadata, markers, or a created diplomatic chat); otherwise downgrade/drop the card instead of narrating a consequence-free crisis.`;
+    if (
+      eventLooksStrategicallyMajor(event) &&
+      channels.length === 0 &&
+      !eventRestsOnBoardConsequence(candidate, index, board, playerCountry)
+    ) {
+      const boardOwner = normalizeArray(board).some(isProjectOpen) ? ", a Board entry named exactly as the Board names it" : "";
+      return `Strategically major event ${index + 1} ("${normalizeString(event?.title)}") has no canonical consequence at all. Keep the event only if something materially changes in an existing owner (storyline, Stats, relations, agreements, units, war, territory/control, polity metadata, markers${boardOwner}, or a created diplomatic chat); otherwise downgrade/drop the card instead of narrating a consequence-free crisis.`;
     }
   }
 
@@ -3750,7 +3777,7 @@ export const buildWorldInitiativeContext = (
     "A visible event does NOT need to be a decade-defining milestone or something the campaign will still care about years later. Keep specific history worth showing through any of three lanes: (A) major/high-pressure change such as a breakthrough, legal/territorial change, new belligerent, severe crisis or government change; (B) ORDINARY CONSEQUENTIAL history such as a concrete policy result, appointment, industrial initiative, completed infrastructure/capability step, labor/social development, diplomatic move, scientific/technical development, or other new fact that changes what actors can do next; (C) HUMAN/PUBLIC TEXTURE such as a public appearance, ceremony, funeral, wedding, fair, sport, culture, university life, scandal, accident, disaster/public response, notable speech, popular craze, or other specific social/personality event that makes the world feel inhabited.",
     "Small-scale is NOT the same as filler. Filler means empty process churn, generic status reporting, calendar padding, or another wording of an unchanged state. A modest event with a concrete outcome, memorable human texture, or a new cause/effect is legitimate history even when it has no structured map impact.",
     "Administrative life exists, but it must not monopolize the feed. Another technical standard, compliance framework, quarterly outlook, routine refinancing window, committee review, inspection protocol, implementation report, or coordination mechanism with no strategic/social/capability delta is normally hidden process, not a visible world event. If several grounded candidate cards are available, compare trajectory value and prefer the ones that change incentives, capabilities, leadership, public behavior, risk, or the trajectory of a live process. A trajectory-4/5 candidate should not lose a scarce visible slot to a trajectory-0/1 administrative success merely because the latter is easy to summarize.",
-    "Routine continuation belongs in storylineUpdates ONLY: repeated artillery exchanges, patrols/probes/skirmishes with no operational consequence, unchanged sieges/fronts, seasonal/weather slowdowns that merely preserve the same posture, recurring intelligence reviews, routine meetings/consultations, and administrative follow-up should not consume timeline slots merely because the process remains active.",
+    "Routine continuation belongs in storylineUpdates ONLY: repeated artillery exchanges, patrols/probes/skirmishes with no operational consequence, unchanged sieges/fronts, seasonal/weather slowdowns that merely preserve the same posture, recurring intelligence reviews, routine meetings/consultations, and administrative follow-up should not consume timeline slots merely because the process remains active. The exception is an entry on the Projects & Operations board: its progress, stalls, milestones and endings are written as events naming the entry exactly as the board names it, however routine, because the board reads every event and the cleanup only decides what is shown.",
     "High pressure is NOT novelty. A pressure-95 war may still produce zero visible events in a particular pass when the equilibrium genuinely holds. But high pressure is also not permission for suspended animation: obey the 21/45-day endogenous reappraisal rules, and cool momentum/de-escalate/dormant a process that has genuinely ceased to evolve instead of manufacturing fresh wording for the same state.",
     "",
     "INDEPENDENT WORLD SWEEP",
@@ -3819,7 +3846,7 @@ export const buildWorldInitiativeContext = (
     "The tool field storylineUpdates is ONE STRING, not an array. Return either an empty string when no storyline needs persistence, or one record per line (maximum 16) using exactly: id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state",
     "Never use ~ inside a storyline field. status = active | dormant | resolved. pressure and momentum are 0-100. startedDate is YYYY-MM-DD when known for a new process and may be blank for an existing one. For an existing storyline, kind/title/participants may be blank because runtime preserves them. Participants are cumulative canonical actors: include newly involved polities, but omission never means removal of previously involved participants. eventNumbersCSV is an optional compatibility hint and may be blank because native code owns causal linkage. state must describe what is true through the actual stopDate.",
     `For every scheduler-selected storyline, return a compact storylineUpdates record whose state describes what is true through THIS PASS stopDate. High momentum must produce real semantic evolution across multi-week passes. Every canonical ACTIVE war receives endogenous reappraisal at about ${STAGNATION_REAPPRAISAL_DAYS} days regardless of pressure; other high-pressure processes use the same soft guard. Active wars and other protected high-pressure processes reach objective anti-stasis at ${STAGNATION_BACKSTOP_DAYS} days without a visible milestone. Runtime stamps accounting/review dates.`,
-    "When a new event creates an unresolved multi-step process, create a compact storylineUpdates record. You MAY leave eventNumbersCSV blank: native runtime binds storyline records to causally matching events and attaches storylineIds before persistence. Do not spend reasoning effort counting event positions.",
+    "When a new event creates an unresolved multi-step process, create a compact storylineUpdates record. You MAY leave eventNumbersCSV blank: native runtime binds storyline records to causally matching events and attaches storylineIds before persistence. Do not spend reasoning effort counting event positions. One polity's own deliberate Project or Operation belongs on the Projects & Operations board, not in storylineUpdates: it may cause or feed a storyline (a rival's reaction, a standoff), but it is not one.",
     "pressure = seriousness/unresolved stakes. momentum = current rate of meaningful change. High pressure can coexist with low momentum (for example a frozen war).",
   ].join("\n");
 

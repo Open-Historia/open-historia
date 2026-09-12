@@ -21,6 +21,28 @@ export const JUMP_PROJECTS_DIRECTIVE_HEADER = "[Projects & Operations]";
 // buildProjectsSummaryText's wording for an empty board; nothing to narrate.
 const EMPTY_BOARD_PREFIX = "No projects";
 
+// What HIGH PRIORITY asks for, in one place: the jump, the game master and the
+// board pass all say it. It used to be "must not sit on that list two jumps
+// running — it either moves or it stalls", and a rule that forbids an honest
+// "nothing happened" is a rule that produces invented progress, which is the one
+// thing the board exists to prevent. The player's dial buys attention, not motion.
+// The phrase the rule and the updated board-pass template share, so the board
+// pass's call-time copy is skipped for a campaign whose template already says it.
+export const HIGH_PRIORITY_ASSESSMENT_MARKER = "HIGH PRIORITY gets an explicit assessment every jump";
+
+export const HIGH_PRIORITY_ASSESSMENT_RULE =
+  "An entry marked HIGH PRIORITY gets an explicit assessment every jump: say what happened to it - it advanced, "
+  + "stalled for a named reason, reached or missed a checkpoint, or ended - or say \"no material change this period, "
+  + "because...\" and name why. That last answer is honest and valid; inventing progress to satisfy the priority is not.";
+
+// The line between the board and the world director's storylines. A Project or
+// Operation is one polity's deliberate effort and lives on the board; a storyline
+// is a situation nobody controls. One can cause the other, but a thing is never
+// both: two records of one Project drift apart.
+const BOARD_ENTRY_NOT_STORYLINE =
+  "These entries are recorded on this board, never as a storyline: write no storylineUpdates record for one. "
+  + "A situation one causes - a rival's reaction, a standoff - can be a storyline; the entry itself is not.";
+
 export const buildJumpProjectsDirective = (projectsSummary) => {
   const board = String(projectsSummary ?? "").trim();
   if (!board || board.startsWith(EMPTY_BOARD_PREFIX)) return "";
@@ -30,11 +52,26 @@ export const buildJumpProjectsDirective = (projectsSummary) => {
       + "military and covert operations, sustained political campaigns. The board as it stands:",
     board,
     "You do not return projectOps: a separate pass after this jump records the board from the events you write. "
-      + "What you decide is what HAPPENS to these efforts. An effort the player's orders name, one marked HIGH PRIORITY, "
+      + "What you decide is what HAPPENS to these efforts. An effort the player's orders name, "
       + "or one on the \"Needs a decision this jump\" list advances, stalls for a named reason, reaches or misses its "
       + "next checkpoint, or ends - and an event says which, in terms of what the effort actually IS according to its "
-      + "summary: a recruitment drive is not a missile test, and a shipyard is not a treaty. Entries marked THEIRS "
+      + "summary: a recruitment drive is not a missile test, and a shipyard is not a treaty. "
+      + HIGH_PRIORITY_ASSESSMENT_RULE + " "
+      + "Write what happens to an entry as an event however routine it is: the timeline decides what the player is "
+      + "shown, and the board reads every event either way. Entries marked THEIRS "
       + "belong to another power: report what the player's services observed of them, never narrate them from "
-      + "inside. Name each effort exactly as the board names it, so the pass can find it.",
+      + "inside. Name each effort exactly as the board names it, so the pass can find it. "
+      + BOARD_ENTRY_NOT_STORYLINE,
   ].join("\n");
 };
+
+// The board pass's own call-time directive. Its rules live in its template
+// (defaultPrompts.json tasks.projects), but every campaign keeps a frozen copy of
+// that template, so a rule that must reach existing games is appended here, and
+// it has to say it supersedes the old wording the frozen copy still carries.
+export const buildBoardPassDirective = () => [
+  "[HIGH PRIORITY]",
+  "This replaces any earlier instruction that a HIGH PRIORITY project must move or stall every jump. "
+    + HIGH_PRIORITY_ASSESSMENT_RULE
+    + " For an assessment with no material change, use op update with a lastUpdate saying so, and leave progress where it is.",
+].join("\n");
