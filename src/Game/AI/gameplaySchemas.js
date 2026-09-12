@@ -104,10 +104,11 @@ const regionTransferSchema = {
       type: "boolean",
       description:
         "Set true ONLY for a total conquest, annexation, unification or partition in "
-        + "which one polity takes EVERY region another still holds. Then put the losing "
-        + "polity's name in regionId instead of a region name, and this single entry "
-        + "transfers all of its territory. Leave unset (the normal case) to transfer "
-        + "one named region.",
+        + "which one polity takes EVERY region another still holds. fromCode is the "
+        + "authoritative losing polity and MUST contain its full current name; regionId "
+        + "must repeat that same polity name rather than naming one province/colony. "
+        + "This single entry is expanded natively to every region the losing polity "
+        + "still holds. Leave unset (the normal case) to transfer one named region.",
     },
   },
   required: ["regionId", "toCode"],
@@ -232,7 +233,7 @@ const regionControlOpSchema = {
         note: textSchema("Brief reason control changed."),
         wholeCountry: {
           type: "boolean",
-          description: "True only for a total military occupation/collapse where the new controller takes every region the previous controller still holds.",
+          description: "True only for a total military occupation/collapse where the new controller takes every region the previous controller still holds. fromCode is the authoritative losing/current controller and regionId must repeat that polity name, never one province/colony.",
         },
       },
       required: ["op", "regionId", "fromCode", "toCode"],

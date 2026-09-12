@@ -290,6 +290,7 @@ export const resolvePolityIdentity = (
     requireActive = false,
     allowCoreMatch = true,
     allowStockBase = true,
+    allowMapRefs = true,
     identityIndex = null,
   } = {},
 ) => {
@@ -321,7 +322,7 @@ export const resolvePolityIdentity = (
       : buildPolityIdentityIndex(world);
 
   const stockCodes = stockCodesForToken(token, stockName);
-  const mapRefMatches = stockCodes.length
+  const mapRefMatches = allowMapRefs && stockCodes.length
     ? index.declared.filter((candidate) =>
         candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code)) &&
         (!requireActive || candidate.active))
@@ -331,7 +332,7 @@ export const resolvePolityIdentity = (
     (candidate) =>
       candidate.normalizedNames.includes(normalizedInput) ||
       (coreInput && candidate.cores.includes(coreInput)) ||
-      candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code)),
+      (allowMapRefs && candidate.mapRefs.gadm0.some((code) => stockCodes.includes(code))),
   );
 
   // 1. exact declared identity/current name/alias.

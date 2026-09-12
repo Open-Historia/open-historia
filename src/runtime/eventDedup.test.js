@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeGeneratedEvents, dedupeEventLog, eventContentKey } from "./eventDedup.js";
+import { dedupeGeneratedEvents, dedupeEventLog, eventContentKey, eventCanonicalKey } from "./eventDedup.js";
 
 const ev = (over = {}) => ({ id: "x", date: "1950-01-01", title: "War begins", description: "The front opens.", ...over });
 const ids = (arr) => arr.map((e) => e.id);
@@ -52,6 +52,28 @@ test("K13 key is always a string", () => {
 });
 test("K14 same date+title, different description → different key", () => {
   assert.notEqual(eventContentKey(ev({ description: "A" })), eventContentKey(ev({ description: "B" })));
+});
+
+// ---- Group K2: explicit canonical event identity ---------------------------
+
+test("K15 canonical key distinguishes same prose with different territory effects", () => {
+  const oldEvent = ev({ impacts: { regionTransfers: [{ regionId: "Guangzhouwan", fromCode: "France", toCode: "Germany" }] } });
+  const corrected = ev({ impacts: { regionTransfers: [{ regionId: "Metropolitan-France", fromCode: "France", toCode: "Germany" }] } });
+  assert.equal(eventContentKey(oldEvent), eventContentKey(corrected));
+  assert.notEqual(eventCanonicalKey(oldEvent), eventCanonicalKey(corrected));
+});
+
+test("K16 canonical key ignores object-key insertion order in structured effects", () => {
+  const a = ev({ impacts: { regionTransfers: [{ regionId: "A", fromCode: "France", toCode: "Germany" }], actionIds: ["order-1"] } });
+  const b = ev({ impacts: { actionIds: ["order-1"], regionTransfers: [{ toCode: "Germany", fromCode: "France", regionId: "A" }] } });
+  assert.equal(eventCanonicalKey(a), eventCanonicalKey(b));
+});
+
+test("K17 canonical key still ignores event id and createdAt", () => {
+  const impacts = { regionTransfers: [{ regionId: "A", fromCode: "France", toCode: "Germany" }] };
+  const a = ev({ id: "old", createdAt: "2020-01-01T00:00:00Z", impacts });
+  const b = ev({ id: "new", createdAt: "2030-01-01T00:00:00Z", impacts: JSON.parse(JSON.stringify(impacts)) });
+  assert.equal(eventCanonicalKey(a), eventCanonicalKey(b));
 });
 
 // ---- Group L: dedupeGeneratedEvents ----------------------------------------

@@ -3632,12 +3632,19 @@ export const readEventsState = async ({ force = false } = {}) =>
   normalizeEvents(await readJson(JSON_URLS.events, { defaultValue: [], force }));
 
 export const writeEventsState = async (events, options = {}) => {
-  // Choke-point safety net: no writer can persist a log that already contains
-  // exact-duplicate events (the AI restating its own timeline). See eventDedup.js.
-  const normalized = dedupeEventLog(normalizeEvents(events));
+  const { preserveApprovedEvents = false, ...writeOptions } = options || {};
+  // Choke-point safety net: ordinary AI writers cannot persist a log that already
+  // contains prose-identical repeats. The GM Console is different: Apply persists
+  // the EXACT administrator-approved transaction, and its own canonical duplicate
+  // check includes structured effects. A corrected transaction may therefore reuse
+  // the same date/title/description while intentionally carrying different impacts.
+  const normalizedEvents = normalizeEvents(events);
+  const normalized = preserveApprovedEvents
+    ? normalizedEvents
+    : dedupeEventLog(normalizedEvents);
   // New/edited event text follows the UI language immediately (see above).
   enqueueContentStrings(normalized);
-  return writeJson(JSON_URLS.events, normalized, { pretty: true, ...options });
+  return writeJson(JSON_URLS.events, normalized, { pretty: true, ...writeOptions });
 };
 
 // Spy intercepts live in their own asset rather than in world.json: they are
