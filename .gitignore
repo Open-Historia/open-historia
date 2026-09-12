@@ -56,3 +56,6 @@ CLAUDE.md
 /trust/*.key.pem
 # generated per release build by the desktop workflow
 electron/build-id.json
+
+# Relocatable wiki preview (scripts/build-wiki-preview.mjs) — a build output, like dist-site.
+dist-wiki-preview/

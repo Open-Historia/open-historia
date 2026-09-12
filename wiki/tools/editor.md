@@ -1,0 +1,164 @@
+The map editor is a full vector editor for building worlds. Draw regions, assign owners, place
+cities, set flags and colours, import a background, and hit **Apply & Play** to start a campaign
+on what you made.
+
+Open it from any scenario's editor drawer via **🗺️ Open Map Editor**, or go straight to the
+standalone editor at **`/?editor=1`**.
+
+![The map editor](/wiki/img/map-editor.jpg)
+*The standalone editor. The status bar counts regions, features and region types — two by default, Land and Coastal.*
+
+## The tools
+
+| Tool | |
+|---|---|
+| **Select** | Pick a region and inspect it. |
+| **Lasso select** | Drag a circle to select several at once. |
+| **Pan** | Move the view. |
+| **Draw region** | Trace a new territory. Click along an existing border and it follows it. |
+| **Edit vertices** | Reshape an existing region point by point. |
+| **Move** | Move a region. |
+| **Delete** | Remove a region. |
+| **Delete border** | Dissolve the boundary between two regions, merging them. |
+| **Paint owner** | Click regions to assign them to a country. |
+| **City tool** | Click the map to add a city, click a city to edit it. |
+
+Plus **Undo**, **Redo** and **Fit to data**.
+
+### Two things that make it pleasant
+
+**Drawing traces borders.** Clicking along an existing boundary follows it exactly rather than
+making you approximate it by hand. Adjacent countries end up sharing a real border instead of
+almost sharing one.
+
+**Regions cannot overlap.** Drawing a new region carves it out of whatever was underneath, so no
+piece of ground is ever owned twice. You do not have to clean up after yourself.
+
+## Creating countries
+
+There is no "add country" step. **Paint a region with a name that does not exist and that country
+now exists** — with a generated colour, ready to be given a flag and edited.
+
+This follows from names being the game's identity system. See
+[countries and identity](/wiki/countries/).
+
+## Region properties
+
+Select a region and the inspector gives you its name, its type, its owner, a colour override, a
+flag, tags, and **Disputed by** — the claimants list that makes a region render
+[striped](/wiki/territory/).
+
+**Region types** are reusable property sets: opacity, stroke, z-order, whether the region is
+interactable or passable, whether it appears in labels, and which zoom levels it shows at. Every
+document starts with Land and Coastal, and you can define your own.
+
+## Panels
+
+| Panel | |
+|---|---|
+| **Layers** | What is drawn and in what order. |
+| **Regions** | The full region list, searchable. |
+| **Feature manager** | Cities and other placed features. |
+| **Basemap picker** | The imagery underneath, or a custom background image. |
+| **Flag picker** | Assign flags to countries. |
+| **Reference** | Drop in an image to trace over — a historical atlas, a sketch, a screenshot. |
+| **Search** | Find a place by name. |
+
+## Importing
+
+**Cities** can be imported from the built-in database of roughly seventy thousand, filtered to
+your map.
+
+**Regions** can be imported from existing geodata.
+
+**Fantasy Map Generator** documents import directly, which is the fastest route to a
+non-Earth world: generate the landmass there, bring it in here, and paint the politics.
+
+**Custom backgrounds** replace Earth entirely, either as an image pinned to an extent or as
+vector artwork. This is what makes fantasy scenarios work — the political layer sits on a world
+that has nothing to do with this planet.
+
+## Reference tracing
+
+Load a historical map as a reference image, position it over the canvas, and draw on top of it.
+This is by far the most practical way to build a historically accurate scenario, and it is what
+the official presets were made with.
+
+## Saving and playing
+
+- **Save** keeps working.
+- **Save & Exit** returns to the scenario.
+- **Apply & Play** writes the geometry, owners, cities, palette, flags and background back into
+  the scenario and starts a game on it.
+
+Apply & Play is the fast iteration loop: change something, play a turn, come back.
+
+## The scenario editor
+
+The map is only part of a scenario. The scenario editor drawer — reachable from any scenario's
+card — holds the rest:
+
+**Overview** — name, subtitle, description, accent colour and the hero text players see on the
+card.
+
+**World** — the starting country, the game date, the language, which **troop types** are
+deployable in this era, the *World Before Round One* briefing that generates the campaign's
+backstory, and **Simulation Rules**: house rules injected directly into the world's instructions.
+This last one is the most powerful field in the editor. It is where you write things like
+"nuclear weapons do not exist in this world" or "the Roman Empire never fell".
+
+**Prompts** — per-section prompt overrides, for authors who want to change how the world thinks.
+
+**Assets** — cover image, cities, colours, countries, regions.
+
+**Bundles** — download the whole scenario as a `.zip` or `.json`.
+
+## The Scenario Workshop
+
+<p class="beta-note"><b>Beta channel only.</b></p>
+
+The beta editor adds three panels for building a world's politics rather than its shapes:
+
+**Polities** — a registry of every country in the scenario, edited in one place rather than by
+painting regions one at a time. On beta the region owner field also takes a name that does not
+exist yet and creates the polity from it, so you can still work map-first.
+
+A polity exists **on the map or not at all**. Only countries that own a region, or claim a
+disputed one, are written into the scenario — a record left holding nothing is dropped rather
+than shipped as a phantom government in exile that keeps writing to the player. Paint it back in
+the same session and its name, aliases and lore return. Creating a polity puts it on the map: with
+regions selected it takes them, and without a selection it is handed to the paint tool. Its
+delete button is **Remove from the map** — its regions become unowned, its claims are dropped, and
+the record goes with its colour, flag and tags.
+
+**Topology** — tools for the relationships between regions: adjacency and the structure that sits
+underneath the geometry.
+
+**Province import** — turns a raster image into provinces. Feed it a map coloured by province and
+it traces the regions out for you, which is dramatically faster than drawing a few hundred by
+hand. It also takes GeoJSON, and **Import explicit city Point markers** brings that file's cities
+in as real cities — replacing the current ones or merging with them — so they ship with the
+scenario like hand-placed ones.
+
+**Saving waits for the map.** A scenario's own map streams in after the Workshop opens, and a
+large one takes a while. Until it has loaded, Save reads **Loading map…** and Save & Exit and
+Apply & Play are disabled, so an early click cannot write an empty map over your scenario.
+
+If you are authoring a large historical scenario, these are the reason to build it on beta even
+if you play on stable — a scenario is portable between the two.
+
+## Sharing what you make
+
+Export a bundle and publish it to the [Community Hub](/wiki/community-hub/). Bundles carry the
+map, cities, colours, flags and any custom basemap, so someone importing it gets exactly what you
+built.
+
+<p class="beta-note"><b>On beta every export is full-size.</b> Stable's bundles leave out a map
+uploaded as a tile archive (<code>.pmtiles</code>) rather than drawn in the editor. Beta has no
+light mode and always includes it.</p>
+
+## Next
+
+- [The community hub](/wiki/community-hub/) — publishing it.
+- [Territory](/wiki/territory/) — what regions and claims mean in play.
+- [Starting a game](/wiki/new-game/) — playing what you made.

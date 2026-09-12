@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-H9EQ4JFZXZ"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-H9EQ4JFZXZ');
+  </script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#e9dcc0" />
+  <link rel="icon" type="image/jpeg" href="/logo.png" />
+  <title>Settings Reference — Open Historia Wiki</title>
+  <link rel="canonical" href="https://openhistoria.com/wiki/settings/" />
+  <meta name="description" content="Every option in the game, what it does, and which ones are worth changing first." />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Open Historia" />
+  <meta property="og:url" content="https://openhistoria.com/wiki/settings/" />
+  <meta property="og:title" content="Settings Reference — Open Historia Wiki" />
+  <meta property="og:description" content="Every option in the game, what it does, and which ones are worth changing first." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+  <meta property="og:image:type" content="image/jpeg" />
+  <meta property="og:image:width" content="1280" />
+  <meta property="og:image:height" content="720" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Settings Reference — Open Historia Wiki" />
+  <meta name="twitter:description" content="Every option in the game, what it does, and which ones are worth changing first." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/Open-Historia/open-historia/main/public/loading_screen.jpg" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" />
+  <link rel="stylesheet" href="/wiki.css" />
+
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position": 1,
+      "name": "Open Historia",
+      "item": "https://openhistoria.com/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 2,
+      "name": "Wiki",
+      "item": "https://openhistoria.com/wiki/"
+    },
+    {
+      "@type": "ListItem",
+      "position": 3,
+      "name": "Settings Reference",
+      "item": "https://openhistoria.com/wiki/settings/"
+    }
+  ]
+}
+  </script>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <a class="brand" href="/"><span class="globe">🏛️</span> Open Historia</a>
+    <nav class="nav-links">
+      <a href="/#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
+      <a href="/#download">Download</a>
+      <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
+      <a class="nav-cta" href="/play/">▶ Play</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap wiki-layout">
+  <aside class="wiki-sidebar">
+    <div class="wiki-search">
+      <input type="search" id="wikiSearch" placeholder="Search the wiki…" aria-label="Search the wiki" autocomplete="off" />
+      <ul id="wikiResults" hidden></ul>
+    </div>
+    <ul class="wiki-nav">
+        <li class="sec"><ul><li><a href="/wiki/">Wiki home</a></li></ul></li>
+        <li class="sec">
+          <span>Getting started</span>
+          <ul><li><a href="/wiki/install/">Install</a></li><li><a href="/wiki/ai-setup/">Connect an AI</a></li><li><a href="/wiki/how-to-play/">How to play</a></li><li><a href="/wiki/first-campaign/">Your first campaign</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Playing</span>
+          <ul><li><a href="/wiki/new-game/">Starting a game</a></li><li><a href="/wiki/interface/">The interface</a></li><li><a href="/wiki/world-map/">The world map</a></li><li><a href="/wiki/time/">Time &amp; turns</a></li><li><a href="/wiki/orders/">Giving orders</a></li><li><a href="/wiki/events/">Events &amp; history</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Game systems</span>
+          <ul><li><a href="/wiki/diplomacy/">Diplomacy</a></li><li><a href="/wiki/war/">Relations, treaties &amp; war <em>beta</em></a></li><li><a href="/wiki/territory/">Territory</a></li><li><a href="/wiki/military/">Military &amp; combat</a></li><li><a href="/wiki/espionage/">Espionage</a></li><li><a href="/wiki/projects/">Projects &amp; operations <em>beta</em></a></li><li><a href="/wiki/statistics/">National statistics</a></li><li><a href="/wiki/countries/">Countries &amp; identity</a></li><li><a href="/wiki/cities/">Cities &amp; structures</a></li><li><a href="/wiki/advisor/">The advisor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Tools</span>
+          <ul><li><a href="/wiki/settings/" class="on" aria-current="page">Settings</a></li><li><a href="/wiki/cheats/">Cheats &amp; GM console</a></li><li><a href="/wiki/saves/">Saves &amp; rollback</a></li><li><a href="/wiki/editor/">The map editor</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Sharing &amp; hosting</span>
+          <ul><li><a href="/wiki/community-hub/">The community hub</a></li><li><a href="/wiki/self-hosting/">Hosting a server</a></li><li><a href="/wiki/mobile/">Playing on your phone</a></li></ul>
+        </li>
+        <li class="sec">
+          <span>Reference</span>
+          <ul><li><a href="/wiki/ai-providers/">AI providers &amp; models</a></li><li><a href="/wiki/troubleshooting/">Troubleshooting</a></li></ul>
+        </li>
+      </ul>
+  </aside>
+
+  <main class="wiki-main">
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <a href="/">Open Historia</a> <span aria-hidden="true">/</span> <a href="/wiki/">Wiki</a> <span aria-hidden="true">/</span> Settings Reference
+    </nav>
+    <h1>Settings Reference</h1>
+    <p class="tagline">Every option in the game, what it does, and which ones are worth changing first.</p>
+    
+    <nav class="wiki-toc" aria-label="On this page"><b>On this page</b><ul><li class="d2"><a href="#which-menu-am-i-looking-at">Which menu am I looking at?</a></li><li class="d3"><a href="#stable-one-flat-menu">Stable — one flat menu</a></li><li class="d3"><a href="#beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</a></li><li class="d3"><a href="#translating-between-the-two">Translating between the two</a></li><li class="d2"><a href="#ai-provider">AI provider</a></li><li class="d2"><a href="#limit-ai-generation">Limit AI generation</a></li><li class="d2"><a href="#language">Language</a></li><li class="d2"><a href="#display">Display</a></li><li class="d2"><a href="#map">Map</a></li><li class="d2"><a href="#what-to-change-first">What to change first</a></li><li class="d2"><a href="#where-settings-are-stored">Where settings are stored</a></li><li class="d2"><a href="#the-map-renderer">The map renderer</a></li><li class="d3"><a href="#restart-the-app-after-switching">Restart the app after switching</a></li><li class="d2"><a href="#beta-only-options">Beta-only options</a></li><li class="d3"><a href="#cost-and-speed">Cost and speed</a></li><li class="d3"><a href="#seeing-what-the-ai-did">Seeing what the AI did</a></li><li class="d3"><a href="#diagnostics-and-network">Diagnostics and network</a></li><li class="d3"><a href="#gameplay-and-presentation">Gameplay and presentation</a></li><li class="d2"><a href="#detailed-logging">Detailed logging</a></li><li class="d3"><a href="#please-turn-it-on-before-reporting-a-bug">Please turn it on before reporting a bug</a></li><li class="d3"><a href="#what-it-adds">What it adds</a></li><li class="d3"><a href="#what-it-means-for-your-privacy">What it means for your privacy</a></li><li class="d2"><a href="#next">Next</a></li></ul></nav>
+    <p>Settings live behind the settings button — <strong>⋮</strong> on stable, <strong>☰</strong> on beta — but <em>what you find there depends on which build you are
+running</em>, and the two are laid out very differently. Work out which one you have first;
+everything below is easier once you know.</p>
+<h2 id="which-menu-am-i-looking-at">Which menu am I looking at?</h2>
+<p class="beta-note"><b>The stable and beta builds have different menus.</b> They hold much the
+same options, but they are organised differently and reached differently. The beta build installs
+alongside the stable app, so it is entirely possible to have both on one machine.</p><h3 id="stable-one-flat-menu">Stable — one flat menu</h3>
+<p><img src="/wiki/img/settings-menu.jpg" alt="The stable settings menu">
+<em>The stable build&#39;s settings: one scrolling list, no tabs. Your API key is stored locally and shown masked.</em></p>
+<p>Press <strong>⋮</strong> and everything is in a single scrolling list. In order, top to bottom: the <strong>AI
+provider</strong> and its key, model and endpoint; <strong>custom parameters</strong>; <strong>UI language</strong> and <strong>AI chat
+language</strong>; <strong>Fullscreen</strong>, <strong>3D Globe</strong> and <strong>3D Terrain</strong>; a <strong>Map</strong> group holding country
+labels, reduced motion and the two camera options; <strong>Limit AI generation</strong>; then <strong>🧪 Cheats</strong>, a
+<strong>📖 Wiki</strong> link and the community links.</p>
+<p>No tabs, no sections, no search. Scroll to what you want.</p>
+<h3 id="beta-a-quick-menu-then-a-workspace">Beta — a quick menu, then a workspace</h3>
+<p><img src="/wiki/img/beta-quick-settings.jpg" alt="Beta quick menu, Settings tab">
+<em>Beta&#39;s quick menu, Settings tab — the four sections open a full-screen workspace.</em></p>
+<p>Press <strong>☰</strong> and you get a small <strong>quick menu</strong> with four tabs — <strong>Game</strong>, <strong>Tools</strong>, <strong>Settings</strong>
+and <strong>Help</strong>. Game holds the current campaign and the switch, duplicate, import and manage
+actions. Tools puts cheats, the events timeline and the AI debug console one click away. Help has
+the guides, bug reporting and the community links.</p>
+<p>Choosing one of the four <strong>Settings</strong> tiles opens a full-screen <strong>workspace</strong> with that section
+selected:</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Section</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>◫</td>
+<td><strong>General</strong></td>
+<td>Language, display, accessibility</td>
+</tr>
+<tr>
+<td>◇</td>
+<td><strong>Map</strong></td>
+<td>Basemap, labels, globe, terrain, camera</td>
+</tr>
+<tr>
+<td>✦</td>
+<td><strong>AI</strong></td>
+<td>Provider, model, reasoning, limits, telemetry</td>
+</tr>
+<tr>
+<td>⌘</td>
+<td><strong>Advanced</strong></td>
+<td>Provider parameters, per-task models, profiles, network, diagnostics</td>
+</tr>
+</tbody></table></div>
+<p>So on beta, reaching a setting is two steps — the quick menu, then the section — while tools that
+are buried on stable, such as cheats and the timeline, are one click from the quick menu.</p>
+<h3 id="translating-between-the-two">Translating between the two</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>I want to…</th>
+<th>Stable</th>
+<th>Beta</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Set my API key</td>
+<td>⋮ → top of the list</td>
+<td>☰ → Settings → <strong>AI</strong></td>
+</tr>
+<tr>
+<td>Change language</td>
+<td>⋮ → UI language</td>
+<td>☰ → Settings → <strong>General</strong></td>
+</tr>
+<tr>
+<td>Turn off the globe</td>
+<td>⋮ → 3D Globe</td>
+<td>☰ → Settings → <strong>Map</strong></td>
+</tr>
+<tr>
+<td>Open cheats</td>
+<td>⋮ → 🧪 Cheats</td>
+<td>☰ → <strong>Tools</strong> → Cheats</td>
+</tr>
+<tr>
+<td>Read the wiki</td>
+<td>⋮ → 📖 Wiki</td>
+<td>☰ → <strong>Help</strong> → Guides</td>
+</tr>
+<tr>
+<td>Switch campaign</td>
+<td>Exit to the main menu</td>
+<td>☰ → <strong>Game</strong></td>
+</tr>
+<tr>
+<td>See what the AI cost</td>
+<td><em>(not available)</em></td>
+<td>☰ → <strong>Tools</strong> → AI debug console</td>
+</tr>
+</tbody></table></div>
+<p>Everything from here down applies to both builds unless it says otherwise.</p>
+<h2 id="ai-provider">AI provider</h2>
+<p>The only part you must set up. Covered in full in
+<a href="/wiki/ai-setup/">connecting an AI provider</a> and <a href="/wiki/ai-providers/">AI providers and models</a>.</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Provider</strong></td>
+<td>Gemini, OpenAI, Anthropic, OpenAI Compatible, Anthropic Compatible.</td>
+</tr>
+<tr>
+<td><strong>API Key</strong></td>
+<td>Yours. Stored locally, never sent to an Open Historia server.</td>
+</tr>
+<tr>
+<td><strong>Model</strong></td>
+<td>Defaults are sensible; see below.</td>
+</tr>
+<tr>
+<td><strong>API Endpoint</strong></td>
+<td>Only for the two Compatible providers.</td>
+</tr>
+<tr>
+<td><strong>Model reasoning</strong></td>
+<td>Extended reasoning on models that support it. Slower, better on hard turns.</td>
+</tr>
+<tr>
+<td><strong>Custom parameters (JSON)</strong></td>
+<td>Raw fields merged into the request body. An escape hatch — you do not need it.</td>
+</tr>
+<tr>
+<td><strong>Strict tool schema</strong></td>
+<td>For OpenAI-compatible endpoints that handle structured output badly. Toggle it if turns keep failing to parse.</td>
+</tr>
+</tbody></table></div>
+<p>Default models: Gemini <code>gemini-3.5-flash-lite</code>, Anthropic <code>claude-haiku-4-5</code>, and
+<code>http://localhost:11434/v1</code> as the OpenAI-compatible endpoint (Ollama&#39;s default).</p>
+<p>Settings are stored <strong>per provider</strong>, so switching to a local model and back does not lose your
+cloud keys.</p>
+<h2 id="limit-ai-generation">Limit AI generation</h2>
+<p><strong>Off by default.</strong> Turned on, a generation that goes quiet is abandoned and the turn falls back
+to a canned event instead of hanging indefinitely.</p>
+<p>It measures <strong>silence</strong>, not total elapsed time — a model that is slowly but genuinely producing
+output is not cut off. Worth turning on if you use a local model, or if you have had turns hang.</p>
+<h2 id="language">Language</h2>
+<p><strong>UI language</strong> translates the interface. Applying it reloads the page. Around fifty languages
+are available.</p>
+<p><strong>AI chat language</strong> is separate: it is the language leaders and events are written in. You can
+run an English interface with French diplomacy, or the reverse.</p>
+<h2 id="display">Display</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Fullscreen</strong></td>
+<td>Borderless fullscreen.</td>
+</tr>
+<tr>
+<td><strong>3D Globe</strong></td>
+<td>Sphere instead of a flat map, with a real day/night terminator.</td>
+</tr>
+<tr>
+<td><strong>3D Terrain</strong></td>
+<td>Elevation with heavy exaggeration. Labelled &quot;Very Experimental&quot; and it means it. Flat map only, and disabled by a custom background.</td>
+</tr>
+</tbody></table></div>
+<h2 id="map">Map</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Hide country labels</strong></td>
+<td>Removes country names from the map.</td>
+</tr>
+<tr>
+<td><strong>Reduce motion</strong></td>
+<td>Umbrella switch quieting several animations at once. Turn this on first if the game feels busy or you are prone to motion sickness.</td>
+</tr>
+<tr>
+<td><strong>Disable idle globe rotation</strong></td>
+<td>Stops the globe turning on its own.</td>
+</tr>
+<tr>
+<td><strong>Disable camera movement during events</strong></td>
+<td>Stops the camera flying to each event during the <a href="/wiki/events/">staged reveal</a>.</td>
+</tr>
+</tbody></table></div>
+<p>The <strong>basemap</strong> — the imagery under the political colours — is chosen from the map controls on
+stable, and from Settings → Map on beta. See <a href="/wiki/world-map/">the world map</a> for the ten
+options.</p>
+<h2 id="what-to-change-first">What to change first</h2>
+<ol>
+<li><strong>Set up your AI provider.</strong> Nothing else matters until this is done.</li>
+<li><strong>Turn on Limit AI generation</strong> if you are running a local model.</li>
+<li><strong>Try the 3D globe.</strong> It is the better way to look at the world, and it costs little.</li>
+<li><strong>Leave 3D terrain off</strong> unless you specifically want it — it is the most expensive thing in
+the game to render.</li>
+<li><strong>Reduce motion</strong> if the interface feels restless.</li>
+</ol>
+<h2 id="where-settings-are-stored">Where settings are stored</h2>
+<p>All of it lives in your browser&#39;s local storage, or in the desktop app&#39;s own profile. Settings
+are therefore <strong>per device and per install</strong>, not per save — moving a campaign to another machine
+does not carry your API key with it, which is deliberate.</p>
+<p>It also means <strong>the beta build keeps entirely separate settings from the stable one</strong>. Installing
+beta does not inherit your stable API key; you will need to paste it in again.</p>
+<h2 id="the-map-renderer">The map renderer</h2>
+<p class="beta-note"><b>Beta channel only.</b> The stable build has one renderer and no setting
+for it.</p><p><img src="/wiki/img/beta-renderer-setting.jpg" alt="The Legacy map renderer toggle">
+<em>Settings → Map → Renderer on beta. Note that the description mentions only a redraw — restart anyway.</em></p>
+<p>Beta is developing a new map renderer — <strong>Map vNext</strong> — and ships it as the default. It draws
+dissolved polity surfaces, stitched frontiers and curved polity labels, rather than filling each
+region separately.</p>
+<p>It is a work in progress. If you would rather have the older look, or vNext is giving you
+trouble, you can switch back:</p>
+<p><strong>Settings → Map → Renderer → &quot;Legacy map renderer&quot;</strong></p>
+<p>Off by default. On, you get the renderer the game used before vNext — per-region fills and the
+older country labels. This is a <strong>rendering choice only</strong>: no world state, save data or geometry
+differs between them, and you can switch back and forth as often as you like without touching
+your campaign.</p>
+<h3 id="restart-the-app-after-switching">Restart the app after switching</h3>
+<p>The map redraws when you flip the toggle, but <strong>the change does not fully take effect until you
+restart Open Historia</strong>. Switch it, then close the app and reopen it. Until you do, expect the
+map to be only partly converted.</p>
+<p>The in-app description does not currently mention this — it says only that switching redraws the
+map. Restart anyway.</p>
+<p>Also worth knowing: <strong>vNext takes noticeably longer to draw when a campaign opens</strong>, because it
+dissolves every polity&#39;s surface before revealing the map. A long &quot;drawing borders and labels&quot;
+pause on open is normal for vNext, not a hang. The legacy renderer opens faster.</p>
+<h2 id="beta-only-options">Beta-only options</h2>
+<p class="beta-note"><b>Beta channel only.</b> These have no equivalent on stable.</p><p>Every one of these is under <strong>Settings → AI</strong> or <strong>Settings → Advanced</strong>, and none has an
+equivalent on stable.</p>
+<h3 id="cost-and-speed">Cost and speed</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Generate long time skips in segments</strong></td>
+<td>A long skip runs as several shorter requests merged into one round. Costs more tokens; far less likely to time out. See <a href="/wiki/time/">time and turns</a>.</td>
+</tr>
+<tr>
+<td><strong>Batch background AI tasks</strong></td>
+<td>Anthropic only. Background work (such as history consolidation) rides the Message Batches API at roughly half price. It is not instant, which is why it is only used for work you are not waiting on.</td>
+</tr>
+<tr>
+<td><strong>Per-task model routing</strong></td>
+<td>A cheap model for background tasks, a strong one for the jump itself. The single most effective way to cut cost without making turns worse.</td>
+</tr>
+<tr>
+<td><strong>Configuration profiles</strong></td>
+<td>Saved provider setups — key, model, endpoint, parameters — that you can switch between by name.</td>
+</tr>
+</tbody></table></div>
+<h3 id="seeing-what-the-ai-did">Seeing what the AI did</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>AI debug console</strong></td>
+<td>Every call with its task, model, prompt, answer, token counts, latency and cost. Also on the quick menu&#39;s Tools tab.</td>
+</tr>
+<tr>
+<td><strong>Record AI telemetry</strong></td>
+<td>Keeps that per-call record. On by default. Turning it off empties the debug console.</td>
+</tr>
+<tr>
+<td><strong>Rate AI generations</strong></td>
+<td>Shows a 1–10 rating bar after each jump so you can score what the model produced. Feedback for you, not sent anywhere.</td>
+</tr>
+</tbody></table></div>
+<h3 id="diagnostics-and-network">Diagnostics and network</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Keep a diagnostics log</strong></td>
+<td>On by default. Records errors, API failures and the exact context the model was given. <strong>Copy log</strong> or <strong>Save as file</strong> to send it with a bug report; the 💾 <strong>Save logging file</strong> button on a failed turn or advisor reply saves the same file with that failure attached. Off means nothing is recorded and the stored log is thrown away.</td>
+</tr>
+<tr>
+<td><strong>Detailed logging</strong></td>
+<td>Off by default. See below — <strong>please turn it on if you are going to report a bug</strong>.</td>
+</tr>
+<tr>
+<td><strong>Let other devices connect</strong></td>
+<td>Opens the server to your network. Beta binds to loopback only by default; stable is open with no toggle and no password. See <a href="/wiki/self-hosting/">hosting a server</a>.</td>
+</tr>
+</tbody></table></div>
+<h3 id="gameplay-and-presentation">Gameplay and presentation</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th></th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Beta unit system</strong></td>
+<td>AI-driven unit movement with postures and standing orders, instead of hands-on control. Stored per save, not per browser. See <a href="/wiki/military/">military and combat</a>.</td>
+</tr>
+<tr>
+<td><strong>Legacy map renderer</strong></td>
+<td>The pre-vNext renderer. <strong>Restart the app after switching.</strong> See above.</td>
+</tr>
+<tr>
+<td><strong>Basemap</strong> and <strong>label font</strong></td>
+<td>Beta moves the basemap picker into Settings → Map and adds a label-font override; on stable the basemap is chosen from the map controls.</td>
+</tr>
+</tbody></table></div>
+<h2 id="detailed-logging">Detailed logging</h2>
+<p><strong>Settings → Advanced → Detailed logging</strong>, off by default.</p>
+<p>The ordinary log records failures. Detailed logging records <strong>everything</strong>, and it is the
+difference between a bug report someone can act on and one that just says the game misbehaved.</p>
+<h3 id="please-turn-it-on-before-reporting-a-bug">Please turn it on before reporting a bug</h3>
+<p>If you are about to report something — especially anything about the advisor, diplomacy or a turn
+going wrong — switch it on, reproduce the problem, then save the log as a file and attach it. A
+maintainer can very often find the cause immediately from a detailed log and not at all from a
+normal one.</p>
+<h3 id="what-it-adds">What it adds</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th></th>
+<th>Normal</th>
+<th>Detailed</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Entries kept</td>
+<td>400</td>
+<td>5,000</td>
+</tr>
+<tr>
+<td>Total log size</td>
+<td>~192 KB</td>
+<td>~1 MB</td>
+</tr>
+<tr>
+<td>Detail per entry</td>
+<td>600 characters</td>
+<td>20,000</td>
+</tr>
+<tr>
+<td>Stack frames</td>
+<td>1</td>
+<td>8</td>
+</tr>
+</tbody></table></div>
+<p>And it records categories the normal log leaves out entirely:</p>
+<ul>
+<li><strong>Every AI task and API call</strong>, not only the ones that failed.</li>
+<li><strong>World-state changes</strong>, turn by turn.</li>
+<li><strong>Panel navigation</strong> and general console output.</li>
+<li><strong>The full text of every conversation with the model</strong> — what you asked the advisor and what it
+answered, every diplomatic message in both directions, and the notes a turn or the idle drip
+dropped into your inbox.</li>
+</ul>
+<p>That last one is deliberate. The bugs people actually report about diplomacy are about the
+<em>content</em> of an exchange — &quot;it forgot what I told it&quot;, &quot;it replied as the wrong country&quot;, &quot;it
+drafted a letter and sent something else&quot; — and a log that records only that an exchange happened
+cannot settle any of them.</p>
+<h3 id="what-it-means-for-your-privacy">What it means for your privacy</h3>
+<p>It quotes considerably more of your campaign than the normal log: your conversations, in full.
+That is all fiction you or the model wrote, but it is yours, so read the log before you paste it
+somewhere public.</p>
+<p><strong>API keys are never recorded.</strong> Nothing on this path reads a key deliberately, and every entry is
+run through a redaction pass as it is written — not at export time — so a key that arrives by
+accident inside a provider error or a URL is scrubbed before it is ever stored.</p>
+<p>Both switches persist across restarts and across campaigns.</p>
+<h2 id="next">Next</h2>
+<ul>
+<li><a href="/wiki/interface/">The interface</a> — the rest of the screen.</li>
+<li><a href="/wiki/ai-providers/">AI providers and models</a> — choosing a model properly.</li>
+<li><a href="/wiki/troubleshooting/">Troubleshooting</a> — when a setting does not fix it.</li>
+</ul>
+
+    <nav class="wiki-pager" aria-label="Pagination">
+        <a class="prev" href="/wiki/advisor/"><span>← Previous</span><b>The advisor</b></a>
+        <a class="next" href="/wiki/cheats/"><span>Next →</span><b>Cheats &amp; GM console</b></a>
+      </nav>
+    <p class="wiki-stale">Open Historia is under active development on two channels, and this
+      wiki is written by hand — a page can fall behind a release. Last checked against the game on <b>2026-09-11</b> · main <code>5ee1ab55</code> · beta <code>0b6db0ac</code>. If something
+      here does not match what you see in the game, trust the game and
+      <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">say so on Discord</a>.</p>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span class="globe">🏛️</span> <b>Open Historia</b> · AGPL-3.0 licensed ·
+    <a href="/">Home</a> ·
+    <a href="/wiki/">Wiki</a> ·
+    <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a> ·
+    <a href="/sitemap.xml">Sitemap</a>
+  </div>
+</footer>
+
+<script>
+// Client-side search over a generated index — no dependency, no server, no network call.
+// The index is small enough (a few tens of KB) that a plain substring scan is instant.
+(function () {
+  var input = document.getElementById("wikiSearch");
+  var list = document.getElementById("wikiResults");
+  if (!input || !list) return;
+  var index = null, pending = false;
+
+  function load() {
+    if (index || pending) return;
+    pending = true;
+    fetch("/wiki/search-index.json")
+      .then(function (r) { return r.json(); })
+      .then(function (data) { index = data; pending = false; render(); })
+      .catch(function () { pending = false; });
+  }
+
+  function render() {
+    var q = input.value.trim().toLowerCase();
+    if (!q || !index) { list.hidden = true; list.innerHTML = ""; return; }
+    var hits = [];
+    for (var i = 0; i < index.length && hits.length < 12; i++) {
+      var page = index[i];
+      if (page.haystack.indexOf(q) === -1) continue;
+      // A title match is what the reader almost always meant, so float those first.
+      hits.push({ page: page, rank: page.title.toLowerCase().indexOf(q) === -1 ? 1 : 0 });
+    }
+    hits.sort(function (a, b) { return a.rank - b.rank; });
+    if (hits.length === 0) {
+      list.innerHTML = "<li class='none'>No matches</li>";
+    } else {
+      list.innerHTML = hits.map(function (h) {
+        return "<li><a href='" + h.page.url + "'>" + h.page.title +
+               "<span>" + (h.page.section || "Wiki") + "</span></a></li>";
+      }).join("");
+    }
+    list.hidden = false;
+  }
+
+  input.addEventListener("focus", load);
+  input.addEventListener("input", function () { load(); render(); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { input.value = ""; list.hidden = true; input.blur(); }
+    if (e.key === "Enter") { var a = list.querySelector("a"); if (a) window.location.href = a.getAttribute("href"); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!list.hidden && !input.contains(e.target) && !list.contains(e.target)) list.hidden = true;
+  });
+})();
+</script>
+</body>
+</html>

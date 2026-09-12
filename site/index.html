@@ -171,7 +171,11 @@
   .nav-links a:hover{color:var(--ink)}
   .nav-cta{font-family:var(--display);font-size:.86rem;letter-spacing:.08em;text-transform:uppercase;font-weight:700;
     padding:0.5625rem 1.125rem;border-radius:0.5rem;background:var(--grad-gold);color:#fbf3dc;border:1px solid rgba(255,225,160,.35)}
-  @media(max-width:720px){.nav-links a:not(.nav-cta){display:none}}
+  /* No hamburger menu: below 720px the nav collapses to the Play button plus anything marked
+     .nav-keep. The wiki is the only place a new player can look things up, so it has to
+     survive on a phone — the in-page anchors do not. */
+  @media(max-width:720px){.nav-links a:not(.nav-cta):not(.nav-keep){display:none}
+    .nav-links{gap:1rem}}
 
   /* ---------- hero ---------- */
   .hero{padding:4.625rem 0 1.875rem;text-align:center}
@@ -295,6 +299,7 @@
     <nav class="nav-links">
       <a href="#play">How it works</a>
       <a href="#features">Features</a>
+      <a class="nav-keep" href="/wiki/">Wiki</a>
       <a href="#host">Host a node</a>
       <a href="#download">Download</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
@@ -475,6 +480,7 @@
     <div><span class="globe">🏛️</span> <b>Open Historia</b> · AGPL-3.0 licensed · built by <a href="https://github.com/Open-Historia/open-historia/graphs/contributors" target="_blank" rel="noopener">contributors</a></div>
     <div class="fnav">
       <a href="#download">Download</a>
+      <a href="/wiki/">Wiki</a>
       <a href="https://github.com/Open-Historia/open-historia-node" target="_blank" rel="noopener">Host a node</a>
       <a href="https://github.com/Open-Historia/open-historia" target="_blank" rel="noopener">GitHub</a>
       <a href="https://discord.gg/QaqAK7fQAg" target="_blank" rel="noopener">Discord</a>
