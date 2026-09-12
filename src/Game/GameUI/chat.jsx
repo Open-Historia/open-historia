@@ -2560,15 +2560,6 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isOpen, soundEnabled]);
 
-    useEffect(() => {
-        const handler = (country) => {
-            setPendingCountry(country);
-            if (!isOpen) onToggle();
-        };
-        _chatOpenSubs.add(handler);
-        return () => _chatOpenSubs.delete(handler);
-    }, [isOpen, onToggle]);
-
     const toggleSound = () => {
         const next = !soundEnabled;
         setSoundEnabled(next);
@@ -2678,6 +2669,10 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     }, [unseenCount, notificationItems.length, soundEnabled, desktopPermission]);
 
     useEffect(() => {
+        // The one subscription this component holds. A second copy of this effect
+        // crept in with the notification watcher and toggled the panel a second
+        // time on every request, so the diplomacy button on a country popup opened
+        // the chat and closed it again in the same tick.
         const handler = (country, draft) => {
             setPendingCountry(country);
             setPendingDraft(draft || "");
