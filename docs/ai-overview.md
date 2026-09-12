@@ -13,6 +13,8 @@ This page documents the plumbing. For the prompt templates and how they are asse
 | `src/Game/AI/main.jsx` | Transport. `callAI` dispatch, per‑provider callers, `providerFetch`/relay, streaming reassembly, advisor + diplomatic chat (`sendMessage`, `sendDiplomaticMessage`). |
 | `src/Game/AI/providerConfig.js` | Provider registry, per‑provider storage keys/defaults, `getStoredProvider`, `getProviderSettings`, reasoning toggle. |
 | `src/Game/AI/gameplay.js` | `runJsonTask` task runner + every gameplay task (jumps, catalysts, actions, GM, stat sheets, consolidation, idle diplomacy), validation/salvage, and applying results to world state. |
+| `src/Game/AI/lookupTools.js` | The lookup functions a structured task may call before answering: their declarations, the directive, and the executor that answers them from the live campaign and the rendered map. |
+| `src/Game/AI/toolTurns.js` | A lookup round in the conversation: one stored shape (Gemini parts), rendered as each provider's tool-call exchange, and the readers that pull a model's calls out of each envelope. |
 | `src/Game/AI/gameplaySchemas.js` | JSON Schemas, tool definitions, `getGameplayTool`, `validateGameplayPayload`. See [AI schemas](ai-schemas.md). |
 | `src/Game/AI/gameplayPrompts.js`, `promptContext.js`, `defaultPrompts.json`, `gameplayPrompts.js` | Prompt pack normalization + template rendering. See [AI prompts](ai-prompts.md). |
 
@@ -144,6 +146,20 @@ Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` (`g
 
 The OpenAI‑style caller runs a **`structuredMode` state machine** (`main.jsx:563`): `tool` → on 400/422, either strip reasoning, or (only when `allowJsonSchemaFallback`, i.e. **compatible only**) fall through `json_schema` → `json_object` → `text_json` (schema inlined into the system prompt). Native OpenAI keeps `allowJsonSchemaFallback: false` (`main.jsx:730`) and stays in tool mode. Each caller returns either a plain string (chat) or `{ rawText, toolInput }` (structured).
 
+### Lookup functions: the campaign behind function calls
+
+A structured task that produces map operations (`jumpForward`/`autoJumpForward`, `gameMaster`, `catalystExecutor`, `actions`, `descriptionToAction`, `idleDiplomacy`) declares eleven **lookup functions** (`LOOKUP_TOOLS`, `lookupTools.js`) beside its output function: `list_powers`, `list_regions`, `find_region`, `region_info`, `find_city`, `power_info`, `recent_events`, `war_ledger`, `chat_history`, `list_units`, `contested_regions`. The model calls them to learn the exact names and ids it needs (the power names the map declares, one power's regions, a region by name whether exact, suffixed or a transliteration off, a region's neighbours and cities, the war ledger) and then calls the output function once. Every answer is built from the live campaign and the rendered catalog (`buildLookupContext` / `executeLookup`), and owner names are exact: asking for "Russia" on a map that only knows "Russian Federation" is an error that lists the real names. `LOOKUP_DIRECTIVE`, appended to the prompt by `runJsonTask`, tells the model to look a region up before writing any `regionTransfers` / `regionControlOps` / `regionClaims` entry.
+
+The loop lives in `callAI` (`runWithLookups`, `main.jsx`). `runJsonTask` passes `lookups: { tools, execute, maxRounds? }`, built per call by `buildTaskLookups` (`gameplay.js`) lazily from the bundle the task is shown, so prompt and lookups never disagree. Each provider receives the lookups as extra tool declarations (`lookupTools`); when the model answers with lookup calls instead of the output tool, the provider returns `{ lookupCalls }`, `callAI` executes them, appends a round to the conversation (`appendLookupRound`, `toolTurns.js`: a model turn of `functionCall` parts and a user turn of `functionResponse` parts, rendered per provider by `geminiContentsFromHistory` / `openAiMessagesFromHistory` / `anthropicMessagesFromHistory`) and asks again. After `maxRounds` (default 8) the final request forces the output function (`requireOutputTool`). Parallel calls in one turn work on all three wire formats (`readOpenAIStreamedResponse` keeps every `tool_calls` index). Each round restarts the task's timeout window, since the prompt is evaluated again.
+
+| Provider | Declaration | While lookups are allowed | Final round | Reader |
+|----------|-------------|---------------------------|-------------|--------|
+| Gemini | `functionDeclarations: [output, ...lookups]` | `mode:"ANY"`, `allowedFunctionNames`: all | `allowedFunctionNames: [output]` | `lookupCallsFromGemini` |
+| OpenAI / compatible | `tools: [output, ...lookups]` | `tool_choice: "required"` | only the output tool declared | `lookupCallsFromOpenAI` |
+| Anthropic / compatible | `tools: [output, ...lookups]` | `tool_choice: {type:"any"}` | `tool_choice: {type:"tool", name}` | `lookupCallsFromAnthropic` |
+
+Tests: `server/lookupTools.test.js`, `server/toolTurns.test.js`.
+
 ### Streaming vs buffered
 
 Cloud providers use a **buffered** path (`await response.json()`). **Streaming is used only for local OpenAI‑compatible endpoints**, and only to make Cancel physical:
@@ -253,6 +269,8 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 | `sendMessage`, `sendDiplomaticMessage` | `main.jsx:1084`, `:1138` | Advisor / leader chat turns. |
 | `readOpenAIStreamedResponse` | `main.jsx:343` | SSE → chat‑completions reassembly (local streaming). |
 | `getStoredProvider`, `getProviderSettings`, `getReasoningEnabled` | `providerConfig.js:132`, `:157`, `:174` | Read selected provider / its settings / reasoning toggle. |
-| `runJsonTask(taskKey, opts)` | `gameplay.js:382` | Structured task runner (2 attempts, validate/salvage, fallback). |
+| `runJsonTask(taskKey, opts)` | `gameplay.js` | Structured task runner (2 attempts, validate/salvage, fallback; `lookups` declares the lookup functions). |
+| `LOOKUP_TOOLS`, `LOOKUP_DIRECTIVE`, `buildLookupContext`, `executeLookup` | `lookupTools.js` | The lookup functions and their executor (see [Lookup functions](#lookup-functions-the-campaign-behind-function-calls)). |
+| `appendLookupRound`, `geminiContentsFromHistory`, `openAiMessagesFromHistory`, `anthropicMessagesFromHistory`, `lookupCallsFrom*` | `toolTurns.js` | A lookup round stored once, rendered and read per provider. |
 | `simulateTimelineJump`, `applyGameMasterCommand`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |
 | `getGameplayTool`, `validateGameplayPayload` | `gameplaySchemas.js:733`, `:852` | taskKey → tool, payload schema check. See [AI schemas](ai-schemas.md). |

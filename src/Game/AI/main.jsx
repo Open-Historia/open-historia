@@ -8,6 +8,16 @@ import {
 } from "./providerConfig.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import {
+    anthropicMessagesFromHistory,
+    appendLookupRound,
+    geminiContentsFromHistory,
+    lookupCallsFromAnthropic,
+    lookupCallsFromGemini,
+    lookupCallsFromOpenAI,
+    lookupRoundCount,
+    openAiMessagesFromHistory,
+} from "./toolTurns.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
@@ -361,8 +371,9 @@ export async function readOpenAIStreamedResponse(response) {
     let buffer = "";
     let content = "";
     let reasoning = "";
-    let toolName = "";
-    let toolArguments = "";
+    // One entry per tool call, in stream order: a task with lookup functions
+    // (lookupTools.js) may make several in one turn, each under its own index.
+    const toolCalls = [];
     let finishReason = null;
     try {
         for (;;) {
@@ -385,9 +396,21 @@ export async function readOpenAIStreamedResponse(response) {
                 // separate reasoning field; keep it so an all-reasoning delta isn't lost (#540).
                 if (typeof delta.reasoning === "string") reasoning += delta.reasoning;
                 else if (typeof delta.reasoning_content === "string") reasoning += delta.reasoning_content;
-                const call = Array.isArray(delta.tool_calls) ? delta.tool_calls[0] : null;
-                if (call?.function?.name) toolName = call.function.name;
-                if (typeof call?.function?.arguments === "string") toolArguments += call.function.arguments;
+                for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+                    if (!call || typeof call !== "object") continue;
+                    // Deltas name their call by index. A gateway that sends none
+                    // is taken to be continuing the latest call, unless it opens
+                    // a new one by id, as a buffered message with several does.
+                    const latest = toolCalls.length - 1;
+                    let position = Number.isInteger(call.index) ? call.index : latest;
+                    if (position < 0) position = 0;
+                    else if (!Number.isInteger(call.index) && call.id && toolCalls[position]?.id && toolCalls[position].id !== call.id) position = latest + 1;
+                    while (toolCalls.length <= position) toolCalls.push({ id: "", name: "", arguments: "" });
+                    const entry = toolCalls[position];
+                    if (call.id && !entry.id) entry.id = String(call.id);
+                    if (call.function?.name) entry.name = call.function.name;
+                    if (typeof call.function?.arguments === "string") entry.arguments += call.function.arguments;
+                }
                 if (choice.finish_reason) finishReason = choice.finish_reason;
             }
         }
@@ -400,8 +423,12 @@ export async function readOpenAIStreamedResponse(response) {
             message: {
                 content,
                 ...(reasoning ? { reasoning } : {}),
-                ...(toolName || toolArguments
-                    ? { tool_calls: [{ type: "function", function: { name: toolName, arguments: toolArguments } }] }
+                ...(toolCalls.length
+                    ? { tool_calls: toolCalls.map((call) => ({
+                        ...(call.id ? { id: call.id } : {}),
+                        type: "function",
+                        function: { name: call.name, arguments: call.arguments },
+                    })) }
                     : {}),
             },
         }],
@@ -454,27 +481,16 @@ const openaiStreamDelta = (json) => {
 const anthropicStreamDelta = (json) =>
     json?.type === "content_block_delta" && json?.delta?.type === "text_delta" ? (json.delta.text || "") : "";
 
+// The conversation is kept in Gemini's shape ({ role, parts }) and rendered per
+// provider here. Text turns render as they always did; a lookup round (a model
+// turn of functionCall parts answered by a user turn of functionResponse
+// parts, toolTurns.js) renders as that provider's tool-call exchange.
 function toOpenAIMessages(systemPrompt, history) {
-    const messages = [{ role: "system", content: systemPrompt }];
-
-    for (const entry of history) {
-        messages.push({
-            role: entry.role === "model" ? "assistant" : "user",
-            content: entry.parts?.[0]?.text ?? "",
-        });
-    }
-
-    return messages;
+    return openAiMessagesFromHistory(systemPrompt, history);
 }
 
 function toAnthropicMessages(history) {
-    return history.map((entry) => ({
-        role: entry.role === "model" ? "assistant" : "user",
-        content: [{
-            type: "text",
-            text: entry.parts?.[0]?.text ?? "",
-        }],
-    }));
+    return anthropicMessagesFromHistory(history);
 }
 
 async function resolveModel(provider, { endpoint = "", headers = {}, fallbackModel = "", providerLabel, signal } = {}) {
@@ -591,8 +607,14 @@ async function callGemini(systemPrompt, history, {
     retryDelay = 15000,
     signal,
     tool,
+    lookupTools,
+    requireOutputTool = false,
 } = {}) {
     const settings = getProviderSettings("gemini");
+    // Lookup functions (lookupTools.js) declared beside the output function.
+    // They stay declared for the whole conversation (the history carries calls
+    // to them); which ones the model may CALL this round is allowedFunctionNames.
+    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const apiKey = settings.apiKey.trim();
 
     if (!apiKey) {
@@ -618,7 +640,7 @@ async function callGemini(systemPrompt, history, {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: history,
+                contents: geminiContentsFromHistory(history),
                 generationConfig: {
                     maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
                     ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
@@ -642,21 +664,29 @@ async function callGemini(systemPrompt, history, {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
-                contents: history,
+                contents: geminiContentsFromHistory(history),
                 // Reasoning toggle (settings): let thinking-capable Gemini models think.
                 ...(getReasoningEnabled()
                      ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
                      : {}),
                 ...customParams,
                 ...(tool ? {
-                    tools: [{ functionDeclarations: [{
-                        name: tool.name,
-                        description: tool.description,
-                        parameters: toGeminiSchema(tool.schema),
-                    }] }],
+                    tools: [{ functionDeclarations: [
+                        {
+                            name: tool.name,
+                            description: tool.description,
+                            parameters: toGeminiSchema(tool.schema),
+                        },
+                        ...lookupDeclarations.map((entry) => ({
+                            name: entry.name,
+                            description: entry.description,
+                            parameters: toGeminiSchema(entry.schema),
+                        })),
+                    ] }],
                     toolConfig: { functionCallingConfig: {
                         mode: "ANY",
-                        allowedFunctionNames: [tool.name],
+                        // The final round of a lookup conversation may only answer.
+                        allowedFunctionNames: [tool.name, ...(requireOutputTool ? [] : lookupDeclarations.map((entry) => entry.name))],
                     } },
                 } : {}),
             }),
@@ -688,6 +718,12 @@ async function callGemini(systemPrompt, history, {
         if (tool) {
             const toolInput = extractGeminiToolInput(data, tool);
             if (toolInput) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput };
+            // Not the answer but a question: the model called lookup functions.
+            // Handed back to callAI, which answers them and asks again.
+            if (lookupDeclarations.length) {
+                const lookupCalls = lookupCallsFromGemini(data, tool.name);
+                if (lookupCalls.length) return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null, lookupCalls };
+            }
             return { rawText: joinGeminiParts(data?.candidates?.[0]?.content?.parts), toolInput: null };
         }
         const text = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
@@ -718,7 +754,15 @@ async function callOpenAIStyleChatCompletions({
     allowJsonSchemaFallback = false,
     maxTokens,
     tokenLimitField = "max_tokens",
+    lookupTools,
+    requireOutputTool = false,
 }) {
+    // Lookup functions (lookupTools.js) beside the output function. On the
+    // round that must end in an answer they are left out altogether: with one
+    // tool declared, tool_choice "required" IS the forcing, on every gateway
+    // that honours it at all. (The history still carries the earlier calls;
+    // the chat-completions API does not require those tools to be declared.)
+    const lookupDeclarations = tool && Array.isArray(lookupTools) && !requireOutputTool ? lookupTools : [];
     let structuredMode = tool ? "tool" : "text";
     let disableToolReasoning = false;
 
@@ -775,7 +819,10 @@ async function callOpenAIStyleChatCompletions({
                     // the schema as-is and constrain generation with it, which is
                     // what stops a model emitting an unbalanced or mistyped argument.
                     ...(toolStrict ? { strict: true } : {}),
-                    } }],
+                    } }, ...lookupDeclarations.map((entry) => ({
+                        type: "function",
+                        function: { name: entry.name, description: entry.description, parameters: entry.schema },
+                    }))],
                     // The string form, NOT OpenAI's {type:"function",function:{name}}
                     // object: llama.cpp-based servers (LM Studio, Jan, local Qwen et
                     // al.) only parse a string here — the object form logged
@@ -863,6 +910,11 @@ async function callOpenAIStyleChatCompletions({
         if (tool) {
             const toolInput = structuredMode === "tool" ? extractOpenAIToolInput(data, tool) : null;
             if (toolInput) return { rawText: text, toolInput };
+            // Not the answer but a question: the model called lookup functions.
+            if (structuredMode === "tool" && lookupDeclarations.length) {
+                const lookupCalls = lookupCallsFromOpenAI(data, tool.name);
+                if (lookupCalls.length) return { rawText: text, toolInput: null, lookupCalls };
+            }
             if (structuredMode === "tool") return { rawText: extractOpenAIToolRaw(data, tool) || text, toolInput: null };
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
@@ -961,7 +1013,11 @@ async function callAnthropic(systemPrompt, history, {
     retryDelay = 15000,
     signal,
     tool,
+    lookupTools,
+    requireOutputTool = false,
 } = {}) {
+    // Lookup functions (lookupTools.js) declared beside the output function.
+    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const settings = getProviderSettings("anthropic");
     const apiKey = settings.apiKey.trim();
 
@@ -1004,8 +1060,13 @@ async function callAnthropic(systemPrompt, history, {
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
-                tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
-                tool_choice: { type: "tool", name: tool.name },
+                tools: [
+                    { name: tool.name, description: tool.description, input_schema: tool.schema },
+                    ...lookupDeclarations.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
+                ],
+                // "any" while lookups are allowed (the model picks a lookup or
+                // the answer); the answer alone once the round budget is spent.
+                tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
         const response = await fetch(`${ANTHROPIC_API_ENDPOINT}/messages`, {
@@ -1051,6 +1112,11 @@ async function callAnthropic(systemPrompt, history, {
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            // Not the answer but a question: the model called lookup functions.
+            if (lookupDeclarations.length) {
+                const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
+                if (lookupCalls.length) return { rawText: extractAnthropicText(data), toolInput: null, lookupCalls };
+            }
             return { rawText: extractAnthropicText(data), toolInput: null };
         }
         const text = extractAnthropicText(data);
@@ -1071,7 +1137,11 @@ async function callAnthropicCompatible(systemPrompt, history, {
     retryDelay = 15000,
     signal,
     tool,
+    lookupTools,
+    requireOutputTool = false,
 } = {}) {
+    // Lookup functions (lookupTools.js) declared beside the output function.
+    const lookupDeclarations = tool && Array.isArray(lookupTools) ? lookupTools : [];
     const settings = getProviderSettings("anthropic-compatible");
     const endpoint = normalizeEndpoint(settings.endpoint);
 
@@ -1114,8 +1184,13 @@ async function callAnthropicCompatible(systemPrompt, history, {
             messages: toAnthropicMessages(history),
             ...customParams,
             ...(tool ? {
-                tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
-                tool_choice: { type: "tool", name: tool.name },
+                tools: [
+                    { name: tool.name, description: tool.description, input_schema: tool.schema },
+                    ...lookupDeclarations.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
+                ],
+                // "any" while lookups are allowed (the model picks a lookup or
+                // the answer); the answer alone once the round budget is spent.
+                tool_choice: lookupDeclarations.length && !requireOutputTool ? { type: "any" } : { type: "tool", name: tool.name },
             } : {}),
         };
         const response = await providerFetch(`${endpoint}/messages`, { headers, payload: body, signal });
@@ -1155,6 +1230,11 @@ async function callAnthropicCompatible(systemPrompt, history, {
         if (tool) {
             const toolInput = extractAnthropicToolInput(data, tool);
             if (toolInput) return { rawText: extractAnthropicText(data), toolInput };
+            // Not the answer but a question: the model called lookup functions.
+            if (lookupDeclarations.length) {
+                const lookupCalls = lookupCallsFromAnthropic(data, tool.name);
+                if (lookupCalls.length) return { rawText: extractAnthropicText(data), toolInput: null, lookupCalls };
+            }
             return { rawText: extractAnthropicText(data), toolInput: null };
         }
         const text = extractAnthropicText(data);
@@ -1167,18 +1247,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
     }
 }
 
-export async function callAI(systemPrompt, history, opts = {}) {
-    // Non-English players get replies in their language at the source —
-    // native answers beat post-translating them (see runtime/i18n.js).
-    const { languageMode = "ui", ...providerOpts } = opts;
-    const directive = languageMode === "none" ? ""
-        : languageMode === "chat" ? chatLanguageDirective()
-        : languageDirective();
-    if (directive) {
-        systemPrompt = `${systemPrompt}\n\n${directive}`;
-    }
-
-    switch (getStoredProvider()) {
+function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
+    switch (provider) {
     case "openai":
         return callOpenAI(systemPrompt, history, providerOpts);
     case "anthropic":
@@ -1191,6 +1261,73 @@ export async function callAI(systemPrompt, history, opts = {}) {
     default:
         return callGemini(systemPrompt, history, providerOpts);
     }
+}
+
+// Lookup rounds (lookupTools.js, toolTurns.js). A structured task may hand
+// callAI `lookups: { tools, execute, maxRounds?, onRound? }`: the lookup
+// functions are declared beside the task's output function, and when the model
+// calls them instead of answering, each call is answered here (from the live
+// campaign, by the task's executor) and the exchange goes back as the next
+// turns of the same conversation. That repeats until the model calls the
+// output function, or the round budget is spent and the final request is made
+// with only the output function callable. One provider request per round; the
+// system prompt is byte-identical across rounds, so a cached prefix pays off.
+const DEFAULT_LOOKUP_ROUNDS = 8;
+
+async function runWithLookups(lookups, history, dispatch, { label, provider }) {
+    const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
+    if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
+    const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
+    let conversation = Array.isArray(history) ? history : [];
+    for (let round = 0; ; round += 1) {
+        const requireOutputTool = round >= maxRounds;
+        if (round > 0) lookups.onRound?.(round);
+        const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
+        const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
+        // The answer, or a request that could not be turned into one (a final
+        // round still asking questions falls through to the runner's retry).
+        if (!calls.length || result?.toolInput || requireOutputTool) {
+            if (round > 0) {
+                console.info(`[ai] ${label}: ${provider} answered after ${round} lookup round${round === 1 ? "" : "s"} (${lookupRoundCount(conversation)} in the conversation).`);
+            }
+            return result;
+        }
+        const results = [];
+        for (const call of calls) {
+            let response;
+            try {
+                response = await lookups.execute(call.name, call.args);
+            } catch (error) {
+                response = { error: String(error?.message || error) };
+            }
+            if (response == null || typeof response !== "object" || Array.isArray(response)) response = { result: response ?? null };
+            results.push({ id: call.id, name: call.name, response });
+        }
+        console.info(`[ai] ${label}: lookup round ${round + 1} on ${provider}: ${calls.map((call) => call.name).join(", ")}.`);
+        conversation = appendLookupRound(conversation, calls, results);
+    }
+}
+
+export async function callAI(systemPrompt, history, opts = {}) {
+    // Non-English players get replies in their language at the source —
+    // native answers beat post-translating them (see runtime/i18n.js).
+    // `lookups` is ours: the loop above runs it, the providers only ever see
+    // the per-round `lookupTools` / `requireOutputTool` it derives.
+    const { languageMode = "ui", lookups = null, ...providerOpts } = opts;
+    const directive = languageMode === "none" ? ""
+        : languageMode === "chat" ? chatLanguageDirective()
+        : languageDirective();
+    if (directive) {
+        systemPrompt = `${systemPrompt}\n\n${directive}`;
+    }
+
+    const provider = getStoredProvider();
+    return runWithLookups(
+        lookups,
+        history,
+        (roundHistory, roundOpts) => dispatchToProvider(provider, systemPrompt, roundHistory, { ...providerOpts, ...roundOpts }),
+        { label: providerOpts.tool?.name || "AI call", provider },
+    );
 }
 
 let promptPack = normalizePromptPack({});

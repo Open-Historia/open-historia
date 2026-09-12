@@ -5,6 +5,7 @@ import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { matchRegionName } from "./regionMatch.js";
+import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
@@ -416,6 +417,70 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // time so it reaches existing frozen-prompt games too.
 const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color. Change name/color ONLY on a regime change (never for a mere new leader). On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-1000,\"lng\":0,\"lat\":0,\"regionId\":\"\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"toLng\":0,\"toLat\":0,\"regionId\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-1000,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"lng\":0,\"lat\":0,\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n• catalyst — An interactive branching scene handed to the player when a moment genuinely demands their decision, or null when none is warranted. Shape: {\"title\":\"\",\"premise\":\"\",\"opening\":\"\",\"choices\":[\"...\", \"...\", up to 5 distinct]}.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
+// The campaign behind function calls (lookupTools.js). A task that produces
+// map operations gets these declared beside its output function, so the model
+// can ask for the exact powers, a power's regions, a region by name, a region's
+// neighbours, a city's region, a power's situation, the recent events, the war
+// ledger, a chat, instead of guessing names from a summary and having the
+// guess dropped by the resolver. Built lazily: the indexes cost a catalog load
+// and a city read, paid only when the model actually asks. `bundle` is what
+// the task is shown, so lookups and prompt never disagree.
+const buildTaskLookups = (bundle, { maxRounds } = {}) => {
+  let contextPromise = null;
+  const context = () => {
+    if (!contextPromise) {
+      contextPromise = (async () => {
+        const world = normalizeWorldState(bundle?.world);
+        // The catalog carries names, owners, centroids and declared adjacencies;
+        // the rendered geojson (already parsed once for the map, shared here
+        // rather than cloned) adds the polygons that place cities and, failing
+        // declared adjacencies, find neighbours.
+        const [catalogRows, renderedGeojson, citiesGeojson] = await Promise.all([
+          loadRegionCatalog().catch(() => []),
+          readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null),
+          readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null),
+        ]);
+        const geometryById = new Map();
+        for (const feature of normalizeArray(renderedGeojson?.features)) {
+          const props = feature?.properties ?? {};
+          const id = normalizeString(props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id);
+          if (id && feature?.geometry) geometryById.set(id, feature.geometry);
+        }
+        const catalog = filterToRenderedRegions(catalogRows, world).map((region) => (
+          geometryById.has(region.id) ? { ...region, geometry: geometryById.get(region.id) } : region
+        ));
+        const cities = normalizeArray(citiesGeojson?.features).map((feature) => {
+          const props = feature?.properties ?? {};
+          const name = normalizeString(props.city || props.name);
+          const renamed = normalizeString(world.cityRenames?.[name.toLowerCase()]);
+          return {
+            name: renamed || name,
+            aliases: renamed ? [name] : [],
+            coordinates: feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null,
+            population: Number(props.population) || 0,
+            capital: normalizeString(props.capital),
+          };
+        });
+        return buildLookupContext({
+          regions: catalog,
+          world,
+          cities,
+          events: bundle?.events,
+          chats: bundle?.chats,
+          units: normalizeArray(world.units),
+          player: normalizeString(bundle?.game?.country),
+        });
+      })();
+    }
+    return contextPromise;
+  };
+  return {
+    tools: LOOKUP_TOOLS,
+    ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
+    execute: async (name, args) => executeLookup(await context(), name, args),
+  };
+};
+
 const runJsonTask = async (taskKey, {
   fallback,
   signal,
@@ -423,6 +488,11 @@ const runJsonTask = async (taskKey, {
   userMessage,
   validatePayload,
   variables,
+  // Lookup functions for this task (buildTaskLookups): { tools, execute,
+  // maxRounds? }. Declared beside the output function on every provider; the
+  // model's calls are answered inside callAI and the answers go back as the
+  // next turns of the same conversation (main.jsx runWithLookups).
+  lookups = null,
 }) => {
   const prompts = await loadPromptCatalog();
   const helperValues = resolveHelperValues(prompts.helpers, variables);
@@ -537,6 +607,12 @@ const runJsonTask = async (taskKey, {
     systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
   }
 
+  // Lookup functions: tell the model they exist and what they are for. Last,
+  // so it stands next to the output contract rather than under the campaign.
+  if (Array.isArray(lookups?.tools) && lookups.tools.length) {
+    systemPrompt = `${systemPrompt}\n\n${LOOKUP_DIRECTIVE}`;
+  }
+
   const controller = new AbortController();
   // Let an external signal (the player pressing Cancel) abort the in-flight AI
   // call too — the abort propagates through callAI to the server relay.
@@ -546,7 +622,15 @@ const runJsonTask = async (taskKey, {
   }
   const deadline = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : null;
   const timeoutError = new Error(`AI task "${taskKey}" timed out.`);
-  const timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
+  let timeoutId = deadline ? setTimeout(() => controller.abort(timeoutError), timeoutMs) : null;
+  // A lookup round is a fresh request that evaluates the whole prompt again,
+  // so the window restarts per round rather than counting a conversation of
+  // several rounds as one slow answer.
+  const restartTimeout = () => {
+    if (!timeoutId) return;
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  };
   const tool = getGameplayTool(taskKey);
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   let failureReason = "The model did not return valid structured output.";
@@ -571,6 +655,9 @@ const runJsonTask = async (taskKey, {
         deadline,
         signal: controller.signal,
         tool,
+        lookups: Array.isArray(lookups?.tools) && lookups.tools.length
+          ? { ...lookups, onRound: restartTimeout }
+          : null,
       });
       const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
       const parsed = response?.toolInput ?? extractJsonPayload(rawText);
@@ -1923,6 +2010,7 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   const bundle = await readGameStateBundle({ force });
   const variables = await buildTemplateVariables(bundle);
   const { payload } = await runJsonTask("actions", {
+    lookups: buildTaskLookups(bundle),
     fallback: () => fallbackActionSuggestions(bundle),
     userMessage: "Generate current strategic action suggestions as JSON only.",
     variables,
@@ -2239,6 +2327,7 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
   const bundle = await readGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput });
   const { payload } = await runJsonTask("descriptionToAction", {
+    lookups: buildTaskLookups(bundle),
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
     // Improve can be stopped mid-generation, exactly like a timeline jump.
     // runJsonTask already links an external signal to the controller it hands
@@ -2369,6 +2458,7 @@ export const advanceActiveCatalyst = async (choiceText) => {
   });
 
   const { payload } = await runJsonTask("catalystExecutor", {
+    lookups: buildTaskLookups(bundle),
     fallback: () => {
       const resolved = normalizeArray(catalyst.history).length >= 1;
       const existingChoices = normalizeArray(catalyst.choices)
@@ -2530,6 +2620,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", signal } = {})
     maxEvents = Math.max(maxEvents, minEvents + 3);
   }
   const { generation, payload } = await runJsonTask(mode === "auto" ? "autoJumpForward" : "jumpForward", {
+    lookups: buildTaskLookups(bundle),
     fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }),
     signal,
     // The jump IS the game — by default generation waits as long as the model
@@ -2609,6 +2700,7 @@ export const applyGameMasterCommand = async (requestText) => {
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const variables = await buildTemplateVariables(bundle, { gameMasterRequest: requestText });
   const { generation, payload } = await runJsonTask("gameMaster", {
+    lookups: buildTaskLookups(bundle),
     fallback: () => ({
       impacts: {
         polityChanges: [],
@@ -2822,6 +2914,7 @@ export const maybeSendIdleDiplomacy = async ({ chance = IDLE_DIPLOMACY_CHANCE } 
       + " write, return {\"chat\": null}.",
     ].join("\n");
     const { payload } = await runJsonTask("idleDiplomacy", {
+      lookups: buildTaskLookups(bundle),
       timeoutMs: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? 60000 : 0,
       userMessage:
         "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now."
