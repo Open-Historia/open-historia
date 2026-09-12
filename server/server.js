@@ -796,6 +796,30 @@ const HUB_DOWNLOAD_HOSTS = new Set([
 ]);
 const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
 
+// One hop of a hub download. fetch() has no timeout of its own, so a connection
+// that never opens — an IPv6 route that blackholes, a proxy that drops the SYN —
+// held the request until the OS gave up (ETIMEDOUT, twenty-odd seconds on
+// Windows) and the player saw "fetch failed (ETIMEDOUT)" for a pack that was
+// fine a minute earlier. Each hop is bounded generously (bundles run to tens of
+// megabytes on slow links) and a transport failure is retried once before it
+// is reported; an HTTP error is never retried.
+const HUB_HOP_TIMEOUT_MS = 120_000;
+const HUB_TRANSIENT_CODES = new Set([
+  "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "TimeoutError",
+]);
+const fetchHubHop = async (url) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(HUB_HOP_TIMEOUT_MS) });
+    } catch (error) {
+      const code = error?.cause?.code || error?.code || error?.name || "";
+      if (attempt >= 1 || !HUB_TRANSIENT_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+};
+
 // This route echoes a file that ANY member of the public can attach to a hub
 // issue, and it serves it from the game's OWN origin. Without these two headers a
 // crafted post could be an .html (or a scripted .svg) and a link to
@@ -1095,7 +1119,7 @@ app.get("/api/hub/file", async (req, res) => {
       if (hop > 5) {
         return sendError(res, 502, new Error("Too many redirects fetching scenario file."));
       }
-      upstream = await fetch(current, { redirect: "manual" });
+      upstream = await fetchHubHop(current);
       if (upstream.status < 300 || upstream.status >= 400) break;
       const location = upstream.headers.get("location");
       if (!location) break;
