@@ -630,3 +630,195 @@ export const describeDoubtedForPrompt = (pending) => {
     .map(({ project, spy }) => `- "${project.name}" (${project.ownerCode}) — doubted; you now have a fresh agent inside ${spy.target}.`)
     .join("\n");
 };
+
+// ---- Which Board entries an event concerns ------------------------------------
+//
+// The engine's own answer to "is this event about something on the Board?", so
+// nothing new has to be asked of the model. Its one job is the world director's
+// consequence check: a major event with no other consequence may pass it
+// provisionally when it concerns an open Board entry, and the board pass then
+// has to prove it by actually changing a Board entry. A false match therefore
+// costs one provisional pass that verification takes back, while a miss costs a
+// retried segment — so this leans towards matching.
+//
+// Words are folded the way ownerIdentity folds a polity name (accents dropped,
+// case ignored), then compared as crude stems so "shipyards" meets "shipyard".
+
+// Words that say what KIND of thing an entry is rather than which one, so they
+// can never be the reason an event matches.
+const GENERIC_ENTRY_WORDS = new Set([
+  "project", "projects", "operation", "operations", "programme", "programmes",
+  "program", "programs", "plan", "initiative", "campaign", "effort", "scheme",
+  "the", "and", "for", "with", "from", "into", "its", "their", "our", "new",
+  "national", "state", "phase", "stage", "first", "second", "third",
+]);
+
+const foldWords = (value) => String(value ?? "")
+  .normalize("NFD")
+  .replace(/[̀-ͯ]/g, "")
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim()
+  .split(" ")
+  .filter(Boolean);
+
+const stemWord = (word) => (word.length > 4 ? word.replace(/(?:ies|es|s)$/, "") : word);
+
+const distinctiveStems = (value, minLength) => [
+  ...new Set(
+    foldWords(value)
+      .filter((word) => word.length >= minLength && !GENERIC_ENTRY_WORDS.has(word))
+      .map(stemWord),
+  ),
+];
+
+// Enough of the summary to name the thing without its name: three distinctive
+// words, or two when the event also names the owner.
+const SUMMARY_WORDS_ALONE = 3;
+const SUMMARY_WORDS_WITH_OWNER = 2;
+
+export const boardEntriesConcernedByEvent = (event, board, { playerCountry = "" } = {}) => {
+  const eventWords = foldWords(`${asText(event?.title)} ${asText(event?.description)}`);
+  if (!eventWords.length) return [];
+  const eventStems = new Set(eventWords.map(stemWord));
+  const eventPhrase = ` ${eventWords.join(" ")} `;
+
+  const matches = [];
+  for (const entry of asArray(board)) {
+    if (!isProjectOpen(entry)) continue;
+
+    const nameWords = foldWords(entry?.name).filter((word) => !GENERIC_ENTRY_WORDS.has(word));
+    const namedExactly = nameWords.length > 0 && eventPhrase.includes(` ${nameWords.join(" ")} `);
+
+    const nameStems = distinctiveStems(entry?.name, 3);
+    const nameHits = nameStems.filter((stem) => eventStems.has(stem)).length;
+    const namedEnough = nameStems.length > 0 && nameHits >= Math.ceil(nameStems.length / 2);
+
+    // At the start of a word, so "Iranian" names Iran but "Romania" never names
+    // Oman. A blank owner is the player's, as everywhere on the Board.
+    const ownerWords = foldWords(asText(entry?.ownerCode) || playerCountry);
+    const ownerNamed = ownerWords.length > 0 && eventPhrase.includes(` ${ownerWords.join(" ")}`);
+
+    const summaryHits = distinctiveStems(entry?.summary, 4).filter((stem) => eventStems.has(stem)).length;
+    const describedEnough = summaryHits >= (ownerNamed ? SUMMARY_WORDS_WITH_OWNER : SUMMARY_WORDS_ALONE);
+
+    if (!namedExactly && !namedEnough && !describedEnough) continue;
+    matches.push({ entry, ownerNamed, score: (namedExactly ? 10 : 0) + nameHits * 3 + summaryHits });
+  }
+
+  // The owner decides between entries the words alone cannot tell apart — two
+  // countries' naval Projects. Only when at least one matched entry's owner is
+  // named: an event that names nobody keeps every candidate.
+  const anyOwnerNamed = matches.some((match) => match.ownerNamed);
+  return matches
+    .filter((match) => !anyOwnerNamed || match.ownerNamed)
+    .sort((a, b) => b.score - a.score)
+    .map((match) => match.entry);
+};
+
+// ---- Where the board pass's ops go ------------------------------------------
+//
+// The board pass reads one numbered list: the visible events, then the Hidden
+// events (Canonical events the timeline cleanup kept off the timeline). This
+// plans how its ops are applied: grouped by the event that caused them, one
+// carrier per event, in DATE order across both lists, so a Hidden event that
+// opens an entry is applied before the visible event that moves it. A Hidden
+// event's carrier is marked off the timeline: applied like any other, but never
+// stamped into an entry's activity, which lists timeline events only.
+//
+// An op that names no usable event keeps the board pass's long-standing
+// fallback, riding on the last visible event — but in a carrier of its own,
+// after that event's, so it can never be what proves that event changed a Board
+// entry (see materiallyChangedEntryIds).
+
+const withoutAddress = ({ eventIndex, ...op }) => op;
+
+export const boardPassCarriers = ({ ops, visibleEvents = [], hiddenEvents = [] } = {}) => {
+  const visible = asArray(visibleEvents);
+  const hidden = asArray(hiddenEvents);
+  const carriers = new Map();
+  const carrierFor = (onTimeline, index, fallback = false) => {
+    const key = `${onTimeline ? "v" : "h"}${index}${fallback ? "f" : ""}`;
+    if (!carriers.has(key)) {
+      const event = onTimeline ? visible[index] : hidden[index];
+      carriers.set(key, {
+        onTimeline,
+        eventIndex: onTimeline ? index : null,
+        hiddenIndex: onTimeline ? null : index,
+        fallback,
+        date: asText(event?.date),
+        // Visible events first, in their own order, then Hidden ones: the tie-break
+        // for events on the same day, and for undated ones.
+        sequence: (onTimeline ? index : visible.length + index) * 2 + (fallback ? 1 : 0),
+        ops: [],
+      });
+    }
+    return carriers.get(key);
+  };
+
+  for (const op of asArray(ops)) {
+    if (!op || typeof op !== "object") continue;
+    const raw = Number(op.eventIndex);
+    const index = Number.isInteger(raw) && raw >= 0 && raw < visible.length + hidden.length ? raw : -1;
+    if (index >= visible.length) carrierFor(false, index - visible.length).ops.push(withoutAddress(op));
+    else if (index >= 0) carrierFor(true, index).ops.push(withoutAddress(op));
+    else if (visible.length) carrierFor(true, visible.length - 1, true).ops.push(withoutAddress(op));
+    else if (hidden.length) carrierFor(false, hidden.length - 1, true).ops.push(withoutAddress(op));
+  }
+
+  return [...carriers.values()].sort((a, b) =>
+    (a.date && b.date ? compareGameDates(a.date, b.date) : 0) || a.sequence - b.sequence);
+};
+
+// Which Board entries changed MATERIALLY between two states of the Board: opened,
+// a status or a (rounded) progress change, or a checkpoint reached or missed —
+// including a recurring one that rolled over. Words alone (a new lastUpdate) and
+// a restated figure are not a change, and neither is re-dating a checkpoint.
+//
+// Compared on the Board itself rather than read off the ops, so every spelling
+// the Board's own normalizer accepts ("reached", "launch", a nested patch)
+// counts exactly as it does when applied. This is how the turn proves that a
+// provisional major event was backed: the Board before its ops, the Board after.
+const REACHED_MILESTONE_STATUSES = new Set(["done", "missed"]);
+
+export const materiallyChangedEntryIds = (before, after) => {
+  const previous = new Map(asArray(before).map((entry) => [asText(entry?.id), entry]));
+  const changed = [];
+  for (const entry of asArray(after)) {
+    const id = asText(entry?.id);
+    const prior = previous.get(id);
+    if (!prior) {
+      changed.push(id);
+      continue;
+    }
+    const statusMoved = (asText(entry.status) || "active") !== (asText(prior.status) || "active");
+    const progressMoved = Math.round(Number(entry.progress) || 0) !== Math.round(Number(prior.progress) || 0);
+    const priorMilestones = new Map(asArray(prior.milestones).map((milestone) => [asText(milestone?.id), milestone]));
+    const checkpointReached = asArray(entry.milestones).some((milestone) => {
+      const was = priorMilestones.get(asText(milestone?.id));
+      if ((Number(milestone?.completedCount) || 0) > (Number(was?.completedCount) || 0)) return true;
+      return REACHED_MILESTONE_STATUSES.has(asText(milestone?.status)) && asText(was?.status) !== asText(milestone?.status);
+    });
+    if (statusMoved || progressMoved || checkpointReached) changed.push(id);
+  }
+  return changed;
+};
+
+// Does this op address this Board entry? By id, or by name as the board pass
+// copies it (case aside) — the same two ways the Board's own ops find an entry.
+export const opTargetsEntry = (op, entry) => {
+  const id = asText(op?.projectId || op?.id);
+  const name = asText(op?.name).toLowerCase();
+  return Boolean((id && id === asText(entry?.id)) || (name && name === asText(entry?.name).toLowerCase()));
+};
+
+// HIGH PRIORITY buys an explicit assessment every jump — "no material change,
+// because..." included — so an open, player-owned HIGH PRIORITY entry the board
+// pass returned no op for is worth a line in the turn log. Reported, never
+// retried: the story may genuinely have nothing to say, and a second call to make
+// it say something is how progress gets invented.
+export const unassessedHighPriorityEntries = (board, ops, { playerCountry = "" } = {}) =>
+  asArray(board).filter((entry) =>
+    canPlayerDirect(entry, playerCountry)
+    && asText(entry?.priority) === "high"
+    && !asArray(ops).some((op) => opTargetsEntry(op, entry)));

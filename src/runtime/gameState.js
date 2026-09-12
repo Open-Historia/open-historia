@@ -4054,9 +4054,14 @@ const applyPolityAndTerritoryImpacts = ({
   }
 };
 
+// `boardOnlyEventIds` names events that are not on the timeline — carriers for a
+// Hidden event's Board changes (gameplay.js applySimulationResult). Their project
+// ops apply exactly as any event's, completion effects included, but they are
+// not stamped into an entry's activity, which lists timeline events only.
 export const applyEventImpactsToWorld = ({
-  colors = {}, events = [], world, motion = null, round = 0, betaEngine = true,
+  colors = {}, events = [], world, motion = null, round = 0, betaEngine = true, boardOnlyEventIds = [],
 }) => {
+  const boardOnly = new Set(normalizeArray(boardOnlyEventIds).map(normalizeOptionalString).filter(Boolean));
   const nextColors = cloneValue(colors) ?? {};
   const nextWorld = normalizeWorldState(world);
   let cursorDate = motion ? normalizeOptionalString(motion.originDate) : "";
@@ -4182,7 +4187,7 @@ export const applyEventImpactsToWorld = ({
       nextWorld.projects = applyProjectOps(
         nextWorld.projects,
         event.impacts.projectOps.map((op) => resolveProjectOpOwner(op, resolveOwner)),
-        { date: event.date, eventId: event.id, round },
+        { date: event.date, eventId: boardOnly.has(event.id) ? "" : event.id, round },
       );
     }
   }

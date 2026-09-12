@@ -5,9 +5,10 @@ import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
-import { curateGeneratedEvents } from "./nativeTimelineCurator.js";
+import { curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
 import {
   applyWorldStorylineUpdates,
+  boardProvisionalConsequenceIndexes,
   assessRecentWorldConsequenceLiveness,
   bindNewStorylineEvents,
   bindSelectedStorylineEvents,
@@ -44,7 +45,12 @@ import {
   segmentEventRange,
 } from "./jumpSegments.js";
 import { UNIT_CONTRACT_MARKER, collapseRepeatedWorldContext, templateAlreadySays } from "./promptDedupe.js";
-import { buildJumpProjectsDirective } from "./projectsDirective.js";
+import {
+  HIGH_PRIORITY_ASSESSMENT_MARKER,
+  HIGH_PRIORITY_ASSESSMENT_RULE,
+  buildBoardPassDirective,
+  buildJumpProjectsDirective,
+} from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { withoutPlayerParticipant } from "./chatVisibility.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
@@ -55,8 +61,11 @@ import {
   doubtedAwaitingFreshSource,
   spyIntelDoubtOps,
   spyOperationOps,
+  boardPassCarriers,
   isProjectOpen,
+  materiallyChangedEntryIds,
   spyProvenanceOps,
+  unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
@@ -691,6 +700,7 @@ const validateSegmentStorylines = (candidate, {
   originDate,
   targetDate,
   gameCountry,
+  board = [],
 }) => {
   normalizeWorldStorylineEventLinks(candidate, { world });
   const selectedBinding = bindSelectedStorylineEvents(candidate, {
@@ -712,11 +722,24 @@ const validateSegmentStorylines = (candidate, {
       `${deferredSalvage.strippedIds.join(", ")}. The segment's other events and records stand.`,
     );
   }
+  // The Board is a place a major event may land, but the jump cannot write to it:
+  // the board pass does, after the segments. So such an event passes on the
+  // engine's own reading that it concerns an open Board entry, and its id is
+  // recorded for applySimulationResult to prove against the board pass's ops.
+  // Only on a strict attempt — the final attempt is fail-soft for every event.
+  const playerCountry = toCountryName(normalizeString(gameCountry)) || normalizeString(gameCountry);
   const consequenceError = validateWorldEventConsequencePayload(candidate, {
     selectedStorylines: analysis?.attentionStorylines,
     strict,
+    board,
+    playerCountry,
   });
   if (consequenceError) return `[world consequence] ${consequenceError}`;
+  candidate.boardProvisionalEventIds = strict
+    ? boardProvisionalConsequenceIndexes(candidate, { board, playerCountry })
+      .map((index) => normalizeString(normalizeArray(candidate?.events)[index]?.id))
+      .filter(Boolean)
+    : [];
   const storylineError = validateWorldStorylinePayload(candidate, {
     existingStorylines: world?.storylines,
     selectedStorylines: analysis?.attentionStorylines,
@@ -785,6 +808,14 @@ const screenSegmentPayload = (payload, {
     );
   }
   payload.events = screened.events;
+  // Canonical events the screen kept off the timeline still happened: the board
+  // pass reads them. A provisional major event the screen hid needs no proving.
+  state.hiddenEvents.push(...normalizeArray(screened.hidden).map((row) => row.event));
+  const keptIds = new Set(screened.events.map((event) => normalizeString(event?.id)));
+  state.boardProvisionalEventIds.push(
+    ...normalizeArray(payload?.boardProvisionalEventIds).filter((id) => keptIds.has(id)),
+  );
+  delete payload.boardProvisionalEventIds;
   payload.warUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.warUpdates, taggedEvents, screened.events);
   payload.relationUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.relationUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
@@ -1564,7 +1595,7 @@ The board above carries a \"Needs a decision this jump\" list. It is worked out 
 - It is stuck: op update with status stalled and a lastUpdate NAMING the blocker - the money, the shortage, the strike, the rival, the weather. \"Progress continues\" is not an answer. A stalled project with a named cause is, and it gives the player something they can act on.
 - It reached or missed a checkpoint: op milestone.
 - It is over: op complete, cancel or fail, with a note.
-A project marked HIGH PRIORITY must not sit on that list two jumps running - the player has said it matters, so it either moves or it stalls for a stated reason. A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
+${HIGH_PRIORITY_ASSESSMENT_RULE} A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
   }
   // The jump's own view of the board — read-only. projectOps left the jump's
   // OUTPUT contract on purpose (generateProjectOps keeps the board, from the
@@ -1576,6 +1607,13 @@ A project marked HIGH PRIORITY must not sit on that list two jumps running - the
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
     const projectsDirective = buildJumpProjectsDirective(variables.projectsSummary);
     if (projectsDirective) systemPrompt = `${systemPrompt}\n\n${projectsDirective}`;
+  }
+  // The board pass's rules live in its template, which every campaign keeps a
+  // frozen copy of; the HIGH PRIORITY rule changed, so it is appended here to
+  // reach games whose copy still demands movement — and skipped for one whose
+  // template already carries the new rule.
+  if (taskKey === "projects" && !templateAlreadySays(systemPrompt, HIGH_PRIORITY_ASSESSMENT_MARKER)) {
+    systemPrompt = `${systemPrompt}\n\n${buildBoardPassDirective()}`;
   }
   // The between-rounds pulse may now move the world's forces a little, so it needs
   // the same discipline the jump gets — injected here so it reaches existing games
@@ -2434,19 +2472,32 @@ const CONSOLIDATION_BATCH_SIZE = 60;
 // onto the events that caused them (so the board change is recorded as part of
 // that event) and then applies them through the same event path as every other
 // impact, inside the same single write and the same rollback snapshot.
-const generateProjectOps = async (bundle, events, { signal } = {}) => {
+// `hiddenEvents` are Canonical events the timeline cleanup kept off the timeline
+// (routine, low-value, already covered). They still happened, and routine
+// progress is exactly what moves a standing Operation, so the Board reads them:
+// numbered after the visible events, and marked, so a lastUpdate written from one
+// does not point the player at a timeline card that is not there.
+const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [] } = {}) => {
   const board = normalizeArray(bundle.world?.projects);
+  const hidden = normalizeArray(hiddenEvents);
   // Nothing to keep in step, and nothing an event could plausibly open against
   // an empty board that is worth a whole extra request.
-  if (board.length === 0 || events.length === 0) return { ops: [], skipped: true };
+  if (board.length === 0 || (events.length === 0 && hidden.length === 0)) return { ops: [], skipped: true };
 
   const variables = await buildTemplateVariables(bundle, {});
   // The events, numbered, because eventIndex is how an op says which one moved
   // the effort. Impacts are deliberately left out: this call decides what the
   // STORY did to the board, and the other levers are noise for that question.
-  const eventList = events
-    .map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`)
-    .join("\n\n");
+  const eventList = [
+    ...events.map((event, index) => `[${index}] ${event.date || "undated"} — ${event.title}\n${event.description}`),
+    ...hidden.map((event, index) =>
+      `[${events.length + index}] ${event.date || "undated"} — ${event.title} (kept off the timeline)\n${event.description}`),
+  ].join("\n\n");
+  const hiddenNote = hidden.length
+    ? "\n\nEvents marked (kept off the timeline) happened, but were too routine to show the player as a card. "
+      + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
+      + "without pointing at a timeline entry."
+    : "";
 
   // Doubted entries the player now has a clean pair of eyes on. Named explicitly
   // rather than left for the model to notice, because settling one is only honest
@@ -2470,7 +2521,7 @@ const generateProjectOps = async (bundle, events, { signal } = {}) => {
     signal,
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved.\n\n${eventList}${doubtBlock}`,
+      + `{"projectOps":[]} if nothing on it genuinely moved.${hiddenNote}\n\n${eventList}${doubtBlock}`,
     variables,
     // No fallback: an empty board is exactly what a failed call should leave
     // behind, and runJsonTask throwing is what lets the caller tell the player
@@ -2525,6 +2576,33 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     endSimulation();
   }
 };
+
+// The newest turn's record lists the events that turn produced, and time.jsx
+// renders a turn from exactly that list, so anything added to or taken out of
+// the turn after the record was built (espionage's events, an unbacked
+// provisional event) has to be reflected here too.
+const withLatestTurnEventIds = (world, rewrite) => {
+  const [turnEntry, ...olderTurns] = normalizeArray(world?.simulationHistory);
+  if (!turnEntry) return world;
+  return {
+    ...world,
+    simulationHistory: [{ ...turnEntry, eventIds: rewrite(normalizeArray(turnEntry.eventIds)) }, ...olderTurns],
+  };
+};
+
+// Whether an event stands on a consequence of its own, not only on the Board.
+// Checked on the merged turn rather than trusted from the segment check, because
+// the unit and territory directors add ops to events after it; spy orders and
+// resolved player orders count too — hiding such an event would leave what it
+// did applied with nothing on the timeline to say so.
+const OWN_CONSEQUENCE_IMPACTS = [
+  "regionTransfers", "regionClaims", "regionControlOps", "polityChanges",
+  "createdChats", "unitOps", "markerOps", "spyOps", "actionIds",
+];
+const eventCarriesOwnConsequence = (event) =>
+  OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
+  || normalizeArray(event?.storylineIds).length > 0
+  || Boolean(normalizeString(event?.warId));
 
 // Put each op onto the event that caused it, so the board move is part of that
 // event's impacts. An op with no usable eventIndex lands on the LAST event: the
@@ -4736,7 +4814,7 @@ const applySimulationResult = async ({
   // canon, and deterministic gates (hard mechanical consequences, retrieved
   // prior matches, saturation) decide what those judgments may remove. The
   // default is KEEP, and any failure of the analysis keeps everything.
-  let curatedEvents = await curateGeneratedEvents({
+  const mainCuration = await curateGeneratedEventsWithHidden({
     events: dedupedEvents,
     priorEvents,
     game: baseGame,
@@ -4745,6 +4823,11 @@ const applySimulationResult = async ({
     mode: result.mode,
     analyzeBatch: curatorAnalyzeBatch,
   });
+  let curatedEvents = mainCuration.events;
+  // Canonical events the curator (and the breadth repair's own screen and
+  // curator) kept off the timeline. They still happened; the board pass reads
+  // them alongside the segments' screened-out ones (result.hiddenEvents).
+  const timelineHiddenEvents = mainCuration.hidden.map((row) => row.event);
   // Breadth is measured by what SURVIVES curation. A month-scale jump left with
   // only a few worthwhile events, or a busy window without consequential
   // outcomes, gets one bounded second search of the exploration lanes still
@@ -4780,7 +4863,7 @@ const applySimulationResult = async ({
       game: baseGame,
       analysis: breadthRepair.analysis,
     });
-    const repairCuratedEvents = await curateGeneratedEvents({
+    const repairCuration = await curateGeneratedEventsWithHidden({
       events: repairScreened.events,
       priorEvents: [...priorEvents, ...curatedEvents],
       game: baseGame,
@@ -4789,6 +4872,11 @@ const applySimulationResult = async ({
       mode: result.mode,
       analyzeBatch: curatorAnalyzeBatch,
     });
+    const repairCuratedEvents = repairCuration.events;
+    timelineHiddenEvents.push(
+      ...normalizeArray(repairScreened.hidden).map((row) => row.event),
+      ...repairCuration.hidden.map((row) => row.event),
+    );
     const survivingRepairStorylineIds = new Set(
       repairCuratedEvents
         .flatMap((event) => normalizeArray(event?.storylineIds))
@@ -5076,12 +5164,8 @@ const applySimulationResult = async ({
   // argument to applyEventImpactsToWorld, which has to run BEFORE espionage
   // resolves on its output, so its eventIds snapshot also predates the loop.
   // time.jsx renders a turn's events from exactly this list.
-  if (espionageEventIds.length && worldWithImpacts.simulationHistory?.[0]) {
-    const [turnEntry, ...olderTurns] = worldWithImpacts.simulationHistory;
-    worldWithImpacts.simulationHistory = [
-      { ...turnEntry, eventIds: [...turnEntry.eventIds, ...espionageEventIds] },
-      ...olderTurns,
-    ];
+  if (espionageEventIds.length) {
+    worldWithImpacts = withLatestTurnEventIds(worldWithImpacts, (ids) => [...ids, ...espionageEventIds]);
   }
   // Keep the board's covert operations in step with the agents they track,
   // BEFORE the board task runs, so the model is shown an entry that already
@@ -5154,6 +5238,26 @@ const applySimulationResult = async ({
   // stall the operation it belonged to, and BEFORE anything is written so its ops
   // ride in on the events that caused them.
   if (projects) {
+    // Every Canonical event the timeline left out, minus anything the log or this
+    // turn's own timeline already holds (the de-dup that visible events had).
+    const boardHiddenEvents = dedupeGeneratedEvents(
+      [...priorEvents, ...freshEvents],
+      [...normalizeArray(result.hiddenEvents), ...timelineHiddenEvents]
+        .map((entry, index) => normalizeGeneratedEvent(entry, index))
+        .filter(Boolean),
+    );
+    // The major events that passed the consequence check only on a Board entry,
+    // by their canonical ids now. The board pass must back each one — unless the
+    // event has since gained a consequence of its own (the unit and territory
+    // directors add ops after the segment check), in which case it stands on that
+    // and is not the board pass's to prove.
+    const provisionalIds = new Set(
+      normalizeArray(result.boardProvisionalEventIds)
+        .map((id) => canonicalEventIdentity.idMap.get(id) || id),
+    );
+    const provisionalIndexes = new Set(freshEvents
+      .map((event, index) => (provisionalIds.has(event.id) && !eventCarriesOwnConsequence(event) ? index : -1))
+      .filter((index) => index >= 0));
     try {
       const { ops, skipped } = await generateProjectOps(
         // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
@@ -5161,30 +5265,86 @@ const applySimulationResult = async ({
         // impacts and none of the covert-operation sync just above.
         { ...projects.bundle, game: nextGame, world: worldWithImpacts },
         freshEvents,
-        { signal: projects.signal },
+        { signal: projects.signal, hiddenEvents: boardHiddenEvents },
       );
-      if (!skipped && ops.length) {
-        const attached = attachProjectOpsToEvents(freshEvents, ops);
-        // Recorded on the events above; APPLIED here, through the same event path
-        // every other impact takes (release of completion effects included), so
-        // the board the player sees after this write is the one the model moved.
-        // Only the project ops are replayed: the events' other impacts were
-        // applied when the world was first impacted, and must not run twice.
-        const boardEvents = freshEvents
-          .filter((event) => normalizeArray(event.impacts?.projectOps).length)
-          .map((event) => ({ ...event, impacts: { projectOps: event.impacts.projectOps } }));
-        if (boardEvents.length) {
-          worldWithImpacts = applyEventImpactsToWorld({
-            colors: nextColors,
-            events: boardEvents,
-            world: worldWithImpacts,
-            motion: null,
-            betaEngine: betaUnits,
-            round: nextGame.round,
-          }).world;
-        }
-        logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
+      // One carrier per event, in date order across the visible and Hidden lists,
+      // so an entry a Hidden event opens exists before a later event moves it.
+      const carriers = boardPassCarriers({
+        ops: skipped ? [] : ops,
+        visibleEvents: freshEvents,
+        hiddenEvents: boardHiddenEvents,
+      });
+      // Recorded on the visible events that caused them, as always.
+      const attached = attachProjectOpsToEvents(freshEvents, carriers
+        .filter((carrier) => carrier.onTimeline)
+        .flatMap((carrier) => carrier.ops.map((op) => ({ ...op, eventIndex: carrier.eventIndex }))));
+
+      // APPLIED here, one event at a time, through the same event path every other
+      // impact takes (release of completion effects included), so the board the
+      // player sees after this write is the one the model moved. Only the project
+      // ops are replayed: the events' other impacts were applied when the world
+      // was first impacted, and must not run twice. A Hidden event's carrier is
+      // never stamped into an entry's activity, which lists timeline events only.
+      //
+      // A provisional event is judged on the Board itself, before and after its
+      // OWN ops: if nothing changed materially, its claim was never recorded, so
+      // its ops are applied unstamped and the event leaves the timeline below.
+      const unbackedIds = new Set();
+      // A provisional event the board pass left no ops of its own on is unbacked
+      // before anything is applied, so not even a fallback op stamps it.
+      for (const index of provisionalIndexes) {
+        const touched = carriers.some((carrier) => carrier.onTimeline && !carrier.fallback && carrier.eventIndex === index);
+        if (!touched && freshEvents[index]) unbackedIds.add(freshEvents[index].id);
       }
+      const movedByHidden = new Set();
+      let hiddenEventsThatMoved = 0;
+      const applyCarrier = (world, carrier, event, { stamped }) => applyEventImpactsToWorld({
+        colors: nextColors,
+        events: [{ id: event.id, date: event.date || nextGame.gameDate, title: event.title, description: "", impacts: { projectOps: carrier.ops } }],
+        world,
+        motion: null,
+        betaEngine: betaUnits,
+        round: nextGame.round,
+        boardOnlyEventIds: stamped ? [] : [event.id],
+      }).world;
+      for (const carrier of carriers) {
+        const event = carrier.onTimeline ? freshEvents[carrier.eventIndex] : boardHiddenEvents[carrier.hiddenIndex];
+        if (!event) continue;
+        const before = worldWithImpacts;
+        const stamped = carrier.onTimeline && !unbackedIds.has(event.id);
+        let after = applyCarrier(before, carrier, event, { stamped });
+        const changed = materiallyChangedEntryIds(before.projects, after.projects);
+        if (carrier.onTimeline && !carrier.fallback && provisionalIndexes.has(carrier.eventIndex) && !changed.length) {
+          unbackedIds.add(event.id);
+          after = applyCarrier(before, carrier, event, { stamped: false });
+        }
+        if (!carrier.onTimeline && changed.length) {
+          hiddenEventsThatMoved += 1;
+          changed.forEach((id) => movedByHidden.add(id));
+        }
+        worldWithImpacts = after;
+      }
+      if (attached) logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
+
+      // An unbacked event made a claim nothing recorded, so it leaves the timeline.
+      // It carries no consequence of its own (checked above, after the directors
+      // ran), so only the lists that name it need it taken out.
+      if (unbackedIds.size) {
+        for (const list of [freshEvents, nextEvents]) {
+          for (let index = list.length - 1; index >= 0; index -= 1) {
+            if (unbackedIds.has(list[index]?.id)) list.splice(index, 1);
+          }
+        }
+        worldWithImpacts = withLatestTurnEventIds(worldWithImpacts, (ids) => ids.filter((id) => !unbackedIds.has(id)));
+      }
+      const unassessed = skipped ? [] : unassessedHighPriorityEntries(worldWithImpacts.projects, ops, { playerCountry: playerPolity });
+      console.info(
+        `[OH board] ${boardHiddenEvents.length} Hidden event(s) read, ${hiddenEventsThatMoved} of them moved `
+        + `${movedByHidden.size} Board entr${movedByHidden.size === 1 ? "y" : "ies"}; `
+        + `${provisionalIndexes.size} provisional major event(s), ${unbackedIds.size} unbacked and kept off the timeline; `
+        + `${unassessed.length} HIGH PRIORITY entr${unassessed.length === 1 ? "y" : "ies"} not assessed`
+        + `${unassessed.length ? ` (${unassessed.map((entry) => entry.name).join(", ")})` : ""}.`,
+      );
     } catch (error) {
       // A deliberate cancel is the player's and aborts the turn like any other.
       if (error?.name === "AbortError") throw error;
@@ -9068,6 +9228,7 @@ const runJumpSegments = async ({ context, onProgress, signal, state }) => {
             originDate: state.segmentOrigin,
             targetDate: segmentTarget,
             gameCountry: bundle.game.country,
+            board: normalizeArray(bundle.world?.projects),
           });
         },
         variables: segmentVariables,
@@ -9254,6 +9415,8 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     storylineUpdates: merged.storylineUpdates,
     breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
+    hiddenEvents: state.hiddenEvents,
+    boardProvisionalEventIds: state.boardProvisionalEventIds,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -9363,6 +9526,11 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onProgress, si
     ledgerWorld: bundle.world,
     // One exploration audit per segment; the quietest is re-searched after curation.
     breadthRepairContexts: [],
+    // Canonical events the integrity screen kept off the timeline, and the major
+    // events that passed the consequence check only on a Board entry — both for
+    // the board pass (applySimulationResult).
+    hiddenEvents: [],
+    boardProvisionalEventIds: [],
     // Every storyline any segment selected, and what the skip's one motion
     // repair pass may spend (repairSkipStorylineMotion).
     attentionStorylines: [],

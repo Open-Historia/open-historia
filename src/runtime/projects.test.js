@@ -10,6 +10,10 @@ import {
   PROJECT_SORTS,
   STALE_ROUNDS,
   advanceRecurringDate,
+  boardEntriesConcernedByEvent,
+  boardPassCarriers,
+  materiallyChangedEntryIds,
+  unassessedHighPriorityEntries,
   normalizeMilestoneRepeat,
   collectProjectTags,
   deriveNextMilestone,
@@ -697,4 +701,188 @@ test("a recalled agent closes its own operation, never the intelligence it repor
   assert.equal(ops.length, 1);
   assert.equal(ops[0].id, "op1");
   assert.equal(ops[0].op, "cancel");
+});
+
+// --- Which Board entries an event concerns ---------------------------------
+//
+// The engine's own answer, so a major event about a Board entry can pass the
+// world director's consequence check provisionally without the model tagging
+// anything. The board pass later proves or disproves it.
+
+const concerned = (event, board, options) =>
+  boardEntriesConcernedByEvent(event, board, options).map((entry) => entry.id);
+
+test("an event naming a Board entry exactly concerns it", () => {
+  const board = [project({ id: "westbird", name: "Project Westbird", summary: "Agent recruitment drive." })];
+  assert.deepEqual(
+    concerned({ title: "Project Westbird recruits its first cell", description: "" }, board),
+    ["westbird"],
+  );
+});
+
+test("the generic word in a Board entry's name is never what matches", () => {
+  const board = [project({ id: "kingfisher", name: "Operation Kingfisher", summary: "Covert missile trials." })];
+  assert.deepEqual(concerned({ title: "Kingfisher's first test succeeds", description: "" }, board), ["kingfisher"]);
+  assert.deepEqual(
+    concerned({ title: "A new operation begins in the north", description: "" }, board),
+    [],
+    "'operation' says what kind of thing it is, not which one",
+  );
+});
+
+test("a paraphrase matches through the owner and the summary's distinctive words", () => {
+  const board = [project({
+    id: "simurgh",
+    name: "Project Simurgh",
+    ownerCode: "Iran",
+    summary: "Offensive cyber capability against Gulf infrastructure.",
+  })];
+  assert.deepEqual(
+    concerned({ title: "Iranian offensive cyber units field new hardware", description: "" }, board),
+    ["simurgh"],
+  );
+});
+
+test("naming the owner alone is not enough", () => {
+  const board = [project({ id: "simurgh", name: "Project Simurgh", ownerCode: "Iran", summary: "Offensive cyber capability." })];
+  assert.deepEqual(concerned({ title: "Iran holds parliamentary elections", description: "" }, board), []);
+});
+
+test("the owner decides between Board entries the words cannot tell apart", () => {
+  const board = [
+    project({ id: "fr", name: "Naval Expansion Programme", ownerCode: "France", summary: "Capital ship construction." }),
+    project({ id: "de", name: "Naval Expansion Programme", ownerCode: "Germany", summary: "Capital ship construction." }),
+  ];
+  assert.deepEqual(
+    concerned({ title: "Germany lays down the second phase of its naval expansion", description: "" }, board),
+    ["de"],
+  );
+  assert.deepEqual(
+    concerned({ title: "Naval expansion strains shipyards", description: "" }, board).sort(),
+    ["de", "fr"],
+    "an event that names neither owner keeps both",
+  );
+});
+
+test("an owner is named only at the start of a word", () => {
+  const board = [
+    project({ id: "oman", name: "Port Expansion", ownerCode: "Oman", summary: "Deep-water harbour works." }),
+    project({ id: "ro", name: "Port Expansion", ownerCode: "Romania", summary: "Deep-water harbour works." }),
+  ];
+  assert.deepEqual(
+    concerned({ title: "Romania's port expansion reaches the breakwater", description: "" }, board),
+    ["ro"],
+    "Romania must not read as naming Oman",
+  );
+});
+
+test("closed Board entries never match, and an empty Board matches nothing", () => {
+  const event = { title: "Project Westbird is wound up", description: "" };
+  for (const status of ["complete", "failed", "cancelled"]) {
+    assert.deepEqual(concerned(event, [project({ id: "w", name: "Project Westbird", status })]), [], status);
+  }
+  assert.deepEqual(concerned(event, []), []);
+  assert.deepEqual(concerned(event, undefined), []);
+});
+
+test("foreign Board entries match like the player's own", () => {
+  const board = [project({ id: "rival", name: "Project Leviathan", ownerCode: "Germany" })];
+  assert.deepEqual(concerned({ title: "Leviathan hull launched at Kiel", description: "" }, board), ["rival"]);
+});
+
+test("accents are folded away, not turned into word breaks", () => {
+  const board = [project({ id: "qc", name: "Projet Québec", ownerCode: "Canada", summary: "Hydro-électricité du Nord." })];
+  assert.deepEqual(concerned({ title: "Quebec project advances", description: "" }, board), ["qc"]);
+});
+
+// --- Where the board pass's ops go ------------------------------------------
+//
+// The board pass reads the visible events, then the Hidden events, as one
+// numbered list. Its ops are applied one event at a time, in date order, so a
+// Hidden event that opens an entry comes before the visible one that moves it.
+
+const at = (date, title) => ({ date, title, description: "" });
+
+test("each event's ops travel together, and a Hidden event's are marked off the timeline", () => {
+  const carriers = boardPassCarriers({
+    ops: [
+      { op: "update", name: "Project Westbird", progress: 45, eventIndex: 0 },
+      { op: "update", name: "Project Westbird", lastUpdate: "Recruiters busy.", eventIndex: 0 },
+      { op: "update", name: "Project Westbird", progress: 50, eventIndex: 2 },
+    ],
+    visibleEvents: [at("1963-01-05", "a"), at("1963-01-20", "b")],
+    hiddenEvents: [at("1963-01-25", "c")],
+  });
+  assert.deepEqual(
+    carriers.map((carrier) => [carrier.onTimeline, carrier.eventIndex, carrier.hiddenIndex, carrier.ops.length]),
+    [[true, 0, null, 2], [false, null, 0, 1]],
+  );
+  assert.equal(carriers[0].ops[0].eventIndex, undefined, "the address is not content once the op sits on its event");
+});
+
+test("ops are applied in date order across visible and Hidden events", () => {
+  const carriers = boardPassCarriers({
+    ops: [
+      { op: "update", name: "Project Kestrel", progress: 30, eventIndex: 0 },
+      { op: "create", name: "Project Kestrel", summary: "A second network.", eventIndex: 1 },
+    ],
+    visibleEvents: [at("1963-02-10", "Kestrel expands")],
+    hiddenEvents: [at("1963-02-01", "Kestrel is set up")],
+  });
+  assert.deepEqual(carriers.map((carrier) => carrier.ops[0].op), ["create", "update"]);
+});
+
+test("an op with no usable event number rides on the last visible event, and is marked as a fallback", () => {
+  const carriers = boardPassCarriers({
+    ops: [
+      { op: "update", name: "Project Westbird", progress: 45, eventIndex: 1 },
+      { op: "update", name: "Project Westbird", progress: 46 },
+      { op: "update", name: "Project Westbird", progress: 47, eventIndex: 9 },
+    ],
+    visibleEvents: [at("1963-01-05", "a"), at("1963-01-20", "b")],
+    hiddenEvents: [],
+  });
+  assert.deepEqual(
+    carriers.map((carrier) => [carrier.eventIndex, carrier.fallback, carrier.ops.length]),
+    [[1, false, 1], [1, true, 2]],
+    "kept apart from the event's own ops, so it can never be what backs that event",
+  );
+});
+
+test("a material change is a new entry, a status or progress change, or a checkpoint reached or missed", () => {
+  const before = [project({ id: "w", progress: 40, status: "active", milestones: [{ id: "m1", title: "First cell", date: "1963-03-01", status: "pending" }] })];
+  const changed = (patch) => materiallyChangedEntryIds(before, [{ ...before[0], ...patch }]);
+
+  assert.deepEqual(changed({ lastUpdate: "Recruiters are busy." }), [], "words alone are not a change");
+  assert.deepEqual(changed({ progress: 40 }), [], "restating the figure is not a change");
+  assert.deepEqual(changed({ progress: 55 }), ["w"]);
+  assert.deepEqual(changed({ status: "stalled" }), ["w"]);
+  assert.deepEqual(changed({ milestones: [{ id: "m1", title: "First cell", date: "1963-03-01", status: "done" }] }), ["w"]);
+  assert.deepEqual(changed({ milestones: [{ id: "m1", title: "First cell", date: "1963-04-01", status: "pending" }] }), [], "re-dating is not reaching");
+  assert.deepEqual(materiallyChangedEntryIds(before, [...before, project({ id: "k", name: "Project Kestrel" })]), ["k"]);
+});
+
+test("a recurring checkpoint that rolled over counts as reached", () => {
+  const drill = { id: "m1", title: "Annual drill", date: "1963-06-01", status: "pending", repeat: "annual", completedCount: 2 };
+  const before = [project({ id: "w", milestones: [drill] })];
+  assert.deepEqual(
+    materiallyChangedEntryIds(before, [{ ...before[0], milestones: [{ ...drill, date: "1964-06-01", completedCount: 3 }] }]),
+    ["w"],
+  );
+});
+
+test("the turn log can name a HIGH PRIORITY Board entry the board pass did not assess", () => {
+  const board = [
+    project({ id: "a", name: "Project Westbird", priority: "high" }),
+    project({ id: "b", name: "Project Kestrel", priority: "high" }),
+    project({ id: "c", name: "Project Osprey", priority: "normal" }),
+    project({ id: "d", name: "Project Heron", priority: "high", status: "complete" }),
+    project({ id: "e", name: "Project Leviathan", priority: "high", ownerCode: "Germany" }),
+  ];
+  const ops = [{ op: "update", name: "project westbird", lastUpdate: "No material change this period, because funds are frozen." }];
+  assert.deepEqual(
+    unassessedHighPriorityEntries(board, ops, { playerCountry: "France" }).map((entry) => entry.id),
+    ["b"],
+    "only the player's own open HIGH PRIORITY work; a stale stamp on a rival's entry is not the player's dial",
+  );
 });

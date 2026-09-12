@@ -1174,7 +1174,32 @@ const shouldCurateMode = (mode) =>
 
 // ---- main curator -----------------------------------------------------------
 
-export const curateGeneratedEvents = async ({
+// Drop routes that decide only whether a Canonical event is WORTH SHOWING. An
+// event removed by one of these still happened, so it is handed on as a Hidden
+// event: the Board reads every Canonical event, and routine progress on a Board
+// entry is exactly what these routes keep off the timeline.
+//
+// An allowlist on purpose. EXACT_DUPLICATE (it is already in the batch or the
+// log) and UNSUPPORTED_REVERSAL (it contradicts history, so it never happened)
+// are withheld, and so is any route added later until someone decides which kind
+// it is — the safe default for a Board that must never record a contradiction.
+const VISIBILITY_ROUTES = new Set([
+  "EVIDENCED_REDUNDANCY",
+  "RETRIEVAL_ASSISTED_REDUNDANCY",
+  "NATIVE_PROCESS_FILLER",
+  "LOW_VALUE_INCREMENTAL_CHURN",
+  "ROUTINE_MILITARY_NO_DELTA",
+  "SATURATED_ROUTINE_MILITARY_CHURN",
+  "SATURATED_INCREMENTAL_REDUNDANCY",
+]);
+
+// The timeline, as before.
+export const curateGeneratedEvents = async (args = {}) =>
+  (await curateGeneratedEventsWithHidden(args)).events;
+
+// The timeline plus the Hidden events it left out: { events, hidden }, where each
+// hidden row is { event, route, reason }.
+export const curateGeneratedEventsWithHidden = async ({
   events = [],
   priorEvents = [],
   game = {},
@@ -1186,7 +1211,7 @@ export const curateGeneratedEvents = async ({
   const incoming = asArray(events);
 
   if (!shouldCurateMode(mode)) {
-    return incoming;
+    return { events: incoming, hidden: [] };
   }
 
   const eventSummaries =
@@ -1522,8 +1547,12 @@ droppedCount:
     if (analysisError) console.warn(`[OH Native Timeline Curator] analyst error: ${analysisError}`);
   }
 
+  const hidden = evaluations
+    .filter((entry) => entry.wouldAction === "DROP" && VISIBILITY_ROUTES.has(entry.route))
+    .map((entry) => ({ event: entry.event, route: entry.route, reason: entry.enforcementReason }));
+
   // alright, no more training wheels.
-return keptEvents;
+  return { events: keptEvents, hidden };
 };
 
 export const getLastNativeCuratorAudit =

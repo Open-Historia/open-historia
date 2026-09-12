@@ -6,6 +6,40 @@ Core files: `src/runtime/gameState.js` (state shape, normalizers, impact applica
 
 Related pages: [Country tags](country-tags.md) · [Map rendering & Nations layer](nations-layer.md) · [Units & combat](units.md) · [AI turn / time jump](ai-turn.md) · [Scenario library](library.md).
 
+## Glossary
+
+The words below mean one thing each. Use them in code, prompts, tickets and PRs, and avoid the listed alternatives.
+
+**Project**:
+A deliberate effort one polity runs towards a goal, such as a research programme, a construction or a sustained campaign. It can complete, fail or be abandoned.
+_Avoid_: Programme, initiative, plan (as the term for the record itself)
+
+**Operation**:
+A Project with a military or covert purpose.
+_Avoid_: Mission, op
+
+**Board**:
+The player-visible list of Projects and Operations, including foreign ones the player's services know about.
+_Avoid_: Projects & Operations panel, tracker
+
+**Board entry**:
+One Project or Operation on the Board.
+_Avoid_: Effort, item, card
+
+**Storyline**:
+An ongoing situation no single polity controls, with unresolved stakes, such as a war, a crisis, a rivalry or unrest. Hidden from the player. A Project can cause or feed a Storyline, but the same thing is never both.
+_Avoid_: Process, thread, arc
+
+### Events
+
+**Canonical event**:
+Something the simulation accepted as having happened during a jump, whether or not the player sees it on the timeline.
+_Avoid_: Accepted card
+
+**Hidden event**:
+A Canonical event kept off the timeline because it was routine, low-value or already covered. It still happened. Distinct from a rejected event, which the simulation judged untrue and which never happened.
+_Avoid_: Dropped event (for anything that still happened)
+
 ---
 
 ## 1. Storage model: the runtime JSON assets
@@ -127,6 +161,10 @@ Capped at **120 projects**, 8 milestones each and 12 `eventIds` each — sized a
 If a board ever genuinely needs more than this, the answer is not a bigger number: it is moving `projects` out to its own runtime asset. That is real work, because rollback snapshots and the staged event reveal both get `world.projects` for free today purely by riding inside world state.
 
 **The player cannot author a project's content.** Only two things write what a project *is*: events, via `impacts.projectOps` (§5) — which since the board moved out of the jump are produced by the dedicated `projects` task and attached back onto the events that caused them — and the advisor, via its ```` ```projects ```` block. The player owns exactly two fields, from the panel itself: `priority` (`high|normal|low` — how much attention they want it to get, which the jump and advisor directives then act on) and abandoning it, which goes through the ordinary `cancel` op so the entry stays under Closed with the progress it actually reached. Both route through `applyProjectOpsToWorld`, the same door the advisor uses, so they stamp `updatedAt`/`updatedRound` and close out dangling milestones like any other write. `eventIds` is stamped by `applyProjectOps` from the causing event, which is what builds the per-project activity feed without the model having to maintain it.
+
+**The board reads every Canonical event, not just the timeline.** The timeline cleanup (the integrity screen's routine and low-value rules, the curator's redundancy, filler and churn routes) decides what is *worth showing*, and keeps routine patrol, reconnaissance and administrative follow-up off the timeline. Those are Hidden events (see the Glossary): they still happened, and routine progress is exactly what moves a standing Operation or records a stall. So the board pass reads them too, and a Board entry can move without a timeline card. Its `lastUpdate` carries the explanation, and its activity feed stays a list of timeline events: a Hidden event is never stamped into `eventIds`. Only events judged untrue (rejected) and exact duplicates are withheld from the board. The same separation keeps a Project off the Storylines ledger: one polity's deliberate effort is a Board entry, a Storyline is a situation nobody controls, and the jump is told that one may cause the other but a thing is never both (ai-prompts.md §7.12c, §7.17).
+
+**HIGH PRIORITY buys an assessment, not motion.** Every jump, each of the player's open HIGH PRIORITY entries gets an explicit assessment, and "no material change this period, because…" is a valid one. The earlier rule that such an entry "must not sit on the list two jumps running" forbade that honest answer and so invited invented progress. An entry the board pass leaves unassessed is named in the turn log, never retried.
 
 Everything date-derived — overdue, due-soon, a slipped milestone, a programme untouched for several rounds — is **not stored**. It is computed from the game clock by `src/runtime/projects.js` (import-free, unit-tested in a bare checkout), so it cannot go stale between AI turns. That split is the point of the feature: the model owns what only it can know, the calendar owns the rest.
 
