@@ -3,7 +3,7 @@ import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import XYZ from "ol/source/XYZ";
-import VectorLayer from "ol/layer/Vector";
+import VectorImageLayer from "ol/layer/VectorImage";
 import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
 import Fill from "ol/style/Fill";
@@ -11,8 +11,9 @@ import Stroke from "ol/style/Stroke";
 import GeoJSON from "ol/format/GeoJSON";
 import { fromLonLat } from "ol/proj";
 import { defaults as defaultControls } from "ol/control/defaults";
-import { loadSeedFeatures } from "../../Editor/regionImport.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
+import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 
 const codeToColor = (code) => {
   let h = 0;
@@ -51,7 +52,11 @@ const applyOwnerOverrides = (features, overrides) => {
   return features;
 };
 
-const parseGeoJSONFeatures = (geojson) => {
+// The picker never zooms past 8, where a pixel is ~600 m: geometry finer
+// than a couple of kilometres is invisible here and only costs the draw.
+const PICKER_SIMPLIFY_TOLERANCE_M = 2000;
+
+const parseGeoJSONFeatures = (geojson, { stock = false } = {}) => {
   const fmt = new GeoJSON();
   const features = fmt.readFeatures(geojson, {
     dataProjection: "EPSG:4326",
@@ -60,8 +65,13 @@ const parseGeoJSONFeatures = (geojson) => {
   for (const feature of features) {
     const props = feature.getProperties();
     if (props.id != null) feature.setId(String(props.id));
-    if (feature.get("owner") == null) feature.set("owner", props.gid0 || props.owner || null);
+    // The stock tile carries the modern country as `owner`; resolve it from the
+    // GADM code the way the seed did, so the playable set matches by name.
+    if (stock) feature.set("owner", toCountryName(props.gid0) || props.owner || null);
+    else if (feature.get("owner") == null) feature.set("owner", props.gid0 || props.owner || null);
     if (feature.get("typeId") == null) feature.set("typeId", "land");
+    const geometry = feature.getGeometry();
+    if (!stock && geometry?.simplify) feature.setGeometry(geometry.simplify(PICKER_SIMPLIFY_TOLERANCE_M));
   }
   return features;
 };
@@ -123,8 +133,20 @@ const CountryPickerMap = ({
 
   // One-time map + layer creation
   useEffect(() => {
-    const source = new VectorSource();
-    const layer = new VectorLayer({ source });
+    // wrapX:false, as the editor found the hard way (OlMap.jsx): the canvas
+    // renderer otherwise repeats the world sideways and redraws EVERY region for
+    // each copy, two or three times per frame at this zoom. VectorImage
+    // rasterises the regions once and re-blits while panning; a hover or a pick
+    // re-rasterises, which on the coarse geometry is cheap.
+    const source = new VectorSource({ wrapX: false });
+    const layer = new VectorImageLayer({
+      source,
+      imageRatio: 2,
+      wrapX: false,
+      renderBuffer: 128,
+      updateWhileInteracting: false,
+      updateWhileAnimating: false,
+    });
     layerRef.current = layer;
     sourceRef.current = source;
 
@@ -136,6 +158,7 @@ const CountryPickerMap = ({
           source: new XYZ({
             url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
             maxZoom: 16,
+            wrapX: false,
           }),
         }),
         layer,
@@ -263,17 +286,22 @@ const CountryPickerMap = ({
     }
   }, [regionsGeojson, ownerOverrides]);
 
-  // Load seed features on mount (after regionsGeojson is checked above)
+  // The stock world, from the z0 tile of the regions archive: ~15k vertices in
+  // a few hundred kilobytes, the same geometry the game's own labels use and
+  // already cached once they have. This used to fetch and parse the 55 MB
+  // full-resolution seed — tens of seconds, for a map the size of a card.
   useEffect(() => {
     const source = sourceRef.current;
     if (!source) return;
     if (regionsGeojson) return; // custom data already loaded above
     let cancelled = false;
-    loadSeedFeatures()
-      .then((features) => {
-        // The seed is the shared stock world, so overriding owners on it is what
-        // turns "present-day Earth" into this scenario's map.
-        if (!cancelled) source.addFeatures(applyOwnerOverrides(features, ownerOverrides));
+    loadRegionLabelGeometry()
+      .then((collection) => {
+        if (cancelled || !collection?.features?.length) return;
+        // The stock world is the shared modern one, so overriding owners on it
+        // is what turns "present-day Earth" into this scenario's map.
+        const features = parseGeoJSONFeatures(collection, { stock: true });
+        source.addFeatures(applyOwnerOverrides(features, ownerOverrides));
       })
       .catch(() => {});
     return () => { cancelled = true; };
