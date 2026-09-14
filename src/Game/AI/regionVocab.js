@@ -100,8 +100,12 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   if (catalog.length === 0) {
     return "No region catalog is available, so no per-region vocabulary can be listed.";
   }
-  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : 60;
-  const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 240;
+  // A power in play gets its regions in full: a model told to copy names
+  // exactly cannot annex a region it was never shown, and the top powers of a
+  // turn are what the turn moves. 120 per power covers every Ukraine-sized
+  // holding on the built-in world; 480 in all is about ten kilobytes.
+  const ownerCap = Number.isFinite(options.ownerCap) ? options.ownerCap : 120;
+  const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 480;
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
 

@@ -1108,7 +1108,10 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
               continue;
             }
             seen.set(id, {
-              country: "",
+              // A drawn region's baked owner is its `owner` property; carrying it
+              // as the catalog's base country lets the prompt tell a real change
+              // from the seed.
+              country: props.owner ? String(props.owner) : props.country ? String(props.country) : "",
               countryCode: props.gid0 ? String(props.gid0) : "",
               id,
               name: name || id,

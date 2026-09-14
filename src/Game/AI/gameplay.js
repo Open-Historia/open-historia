@@ -4,6 +4,7 @@ import { logAi } from "../../runtime/logClient.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { getGameplayTool, validateGameplayPayload } from "./gameplaySchemas.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { matchRegionName } from "./regionMatch.js";
 import { activeSpies, espionageBrief, intelligenceOf, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
@@ -17,6 +18,7 @@ import {
   getUnconsolidatedEvents,
   renderTemplate,
   resolveHelperValues,
+  filterToRenderedRegions,
 } from "./promptContext.js";
 import {
   JSON_URLS,
@@ -1025,7 +1027,11 @@ const regionKey = (value) => normalizeString(value)
   .replace(/\s+/g, " ");
 
 const resolveRegionTransfers = async (containers, world) => {
-  const catalog = await loadRegionCatalog().catch(() => []);
+  // The catalog merges the stock GADM index with the scenario's own regions. A
+  // scenario that renders its own geometry is judged against that geometry
+  // alone: a stock province the world never lists is not land here, and letting
+  // it compete let a name resolve to a region that exists nowhere on the map.
+  const catalog = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world);
   // Without a catalog we cannot tell a good id from a bad one, and dropping real
   // transfers would be worse than the phantom keys — leave the payload alone.
   if (catalog.length === 0) return [];
@@ -1061,6 +1067,36 @@ const resolveRegionTransfers = async (containers, world) => {
   const canonicalOwnerKey = (token) => {
     const key = regionKey(token);
     return ownerAlias.get(key) ?? key;
+  };
+
+  // Standardised polity names. An owner field must name a power this map
+  // declares: an owner token on the map, a polity record's key, its declared
+  // name or a declared alias (a stock CODE is first turned into its stock name,
+  // which then has to be declared like any other). Nothing is inferred: "Russia"
+  // on a world whose power is the "Russian Federation" — and nothing called
+  // "Russia" — names nobody, and a world with both has two different countries.
+  const ownerNameIndex = new Map();
+  const declareOwner = (rawName, canonical) => {
+    const key = regionKey(rawName);
+    if (key && canonical && !ownerNameIndex.has(key)) ownerNameIndex.set(key, canonical);
+  };
+  for (const [token, entry] of Object.entries(world?.polityOverrides ?? {})) {
+    declareOwner(token, token);
+    declareOwner(entry?.name, token);
+    for (const alias of normalizeArray(entry?.aliases)) declareOwner(alias, token);
+  }
+  for (const owner of Object.values(world?.regionOwnershipOverrides ?? {})) {
+    const name = toCountryName(normalizeString(owner));
+    declareOwner(name, name);
+  }
+  for (const region of catalog) {
+    const baked = normalizeString(region?.country) || toCountryName(normalizeString(region?.countryCode));
+    declareOwner(baked, baked);
+  }
+  const knownOwnerLabels = [...new Set(ownerNameIndex.values())].sort((a, b) => a.localeCompare(b));
+  const ownerIsKnown = (token) => {
+    const name = toCountryName(normalizeString(token));
+    return Boolean(name) && ownerNameIndex.has(regionKey(name));
   };
   const ownerKeyOf = (regionId) => {
     // A legacy save can still hold a code here; canonicalise so it keys as the same
@@ -1103,6 +1139,15 @@ const resolveRegionTransfers = async (containers, world) => {
     }));
   };
 
+  // The regions a transfer can legitimately mean: the losing side's when the
+  // model named one, else everything the recipient does not already hold.
+  const transferPool = (transfer) => {
+    const fromKey = canonicalOwnerKey(transfer?.fromCode);
+    if (fromKey) return regionsOwnedBy(transfer.fromCode);
+    const toKey = canonicalOwnerKey(toCountryName(transfer?.toCode));
+    return catalog.filter((region) => ownerKeyOf(region.id) !== toKey);
+  };
+
   const resolve = (transfer) => {
     // A model that did emit a real id keeps working.
     if (byId.has(normalizeString(transfer?.regionId))) return normalizeString(transfer.regionId);
@@ -1121,15 +1166,14 @@ const resolveRegionTransfers = async (containers, world) => {
         const owned = matches.filter((region) => ownerKeyOf(region.id) === fromKey);
         if (owned.length === 1) return owned[0].id;
       }
-      // Near-miss within the losing side's own regions: containment either way
-      // ("Ostpreussen" for "Ostpreussen-Sud") is safe when it is unique there.
-      if (fromKey && query.length >= 4) {
-        const contains = regionsOwnedBy(transfer.fromCode).filter((region) => {
-          const name = regionKey(region.name);
-          return name.includes(query) || query.includes(name);
-        });
-        if (contains.length === 1) return contains[0].id;
-      }
+      // The shared matcher (regionMatch.js): an appended "Oblast", a stripped
+      // "the ... region", a transliteration one edit away — each accepted only
+      // when a single region survives. Inside the losing side when the model
+      // named it; otherwise among every region the recipient does not already
+      // hold, because a transfer without fromCode used to be dropped outright
+      // even when its name was on the map.
+      const matched = matchRegionName(candidate, transferPool(transfer), { maxFuzzy: fromKey ? 2 : 1 });
+      if (matched) return matched.region.id;
     }
     return "";
   };
@@ -1141,11 +1185,39 @@ const resolveRegionTransfers = async (containers, world) => {
   const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
 
   const unresolved = [];
+  // Polities this payload itself brings into being may be named before the
+  // world knows them: a creation, restoration or rename in any event's
+  // polityChanges declares the name for every transfer in the transaction.
+  const payloadDeclared = new Set();
+  for (const { impacts } of containers) {
+    for (const change of normalizeArray(impacts?.polityChanges)) {
+      for (const rawName of [change?.code, change?.name]) {
+        const key = regionKey(toCountryName(normalizeString(rawName)));
+        if (key) payloadDeclared.add(key);
+      }
+    }
+  }
+  const payloadDeclares = (token) => payloadDeclared.has(regionKey(toCountryName(normalizeString(token))));
   for (const { impacts, path } of containers) {
     const transfers = normalizeArray(impacts?.regionTransfers);
     if (transfers.length === 0) continue;
     const resolved = [];
     for (const transfer of transfers) {
+      const unknownOwner = [transfer?.toCode, transfer?.fromCode]
+        .map(normalizeString)
+        .find((token) => token && !ownerIsKnown(token) && !payloadDeclares(token));
+      if (unknownOwner) {
+        unresolved.push({
+          label: normalizeString(transfer?.regionName) || normalizeString(transfer?.regionId),
+          fromCode: normalizeString(transfer?.fromCode),
+          path,
+          candidates: [],
+          unknownOwner,
+          knownOwners: knownOwnerLabels,
+        });
+        console.warn(`[ai] ${path}.regionTransfers dropped a transfer naming "${unknownOwner}": not a power on this map.`);
+        continue;
+      }
       // An explicit whole-country transfer expands FIRST: "annex Belgium" must move
       // every Belgian region even though a region may share the country's name.
       if (transfer?.wholeCountry === true) {
@@ -1221,11 +1293,22 @@ const buildTransferFeedback = (unresolved) => {
   const lines = [];
   for (const entry of unresolved.slice(0, 3)) {
     const target = entry.label || "(blank)";
+    if (entry.unknownOwner) {
+      const powers = normalizeArray(entry.knownOwners);
+      const listed = powers.slice(0, 80).map((name) => `"${name}"`).join(", ");
+      lines.push(
+        `${entry.path}.regionTransfers: "${entry.unknownOwner}" is not a power on this map. Owner names must match a power's name ` +
+          `exactly as the map spells it — no short forms, translations or codes. Powers on the map: ${listed}` +
+          `${powers.length > 80 ? `, +${powers.length - 80} more` : ""}. Use one of these exact names in fromCode/toCode, ` +
+          "or create the polity in polityChanges in the same response.",
+      );
+      continue;
+    }
     if (entry.candidates.length > 0) {
-      const listed = entry.candidates.slice(0, 40)
+      const listed = entry.candidates.slice(0, 200)
         .map((region) => `${region.name} (${region.id})`)
         .join(", ");
-      const more = entry.candidates.length > 40 ? `, +${entry.candidates.length - 40} more` : "";
+      const more = entry.candidates.length > 200 ? `, +${entry.candidates.length - 200} more` : "";
       lines.push(
         `${entry.path}.regionTransfers: no map region matches "${target}". ` +
           `Regions currently owned by ${entry.fromCode}: ${listed}${more}.`,

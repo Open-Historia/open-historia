@@ -11,7 +11,8 @@ import {
   normalizeEvents,
   normalizeWorldState,
 } from "../../runtime/gameState.js";
-import { buildRegionOwnershipText } from "./regionVocab.js";
+import { buildRegionOwnershipText, regionOwnerName } from "./regionVocab.js";
+import { selectFocusPowers } from "./regionFocus.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -340,13 +341,89 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null)
   return names.join(", ");
 };
 
+const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
+const isStockRegionId = (id) => STOCK_REGION_ID.test(String(id ?? ""));
+
+// A scenario that renders its own geometry shows the model ONLY the regions on
+// that map. loadRegionCatalog merges the stock GADM index with the scenario's
+// own regions; on a hand-drawn world the stock rows are not land here — the
+// fill paints them neutral and the transfer resolver ignores them — but they
+// still reached the prompt as province names and ids that exist nowhere, and
+// inflated every power's region count. Stock rows the world DOES list (a
+// hybrid map, a re-ownership preset) stay.
+export const filterToRenderedRegions = (regions, world) => {
+  const list = normalizeArray(regions);
+  if (!world?.customRegions) return list;
+  const overrides = world.regionOwnershipOverrides ?? {};
+  if (!list.some((region) => !isStockRegionId(region?.id))) return list;
+  return list.filter((region) => !isStockRegionId(region?.id) || overrides[String(region?.id)] !== undefined);
+};
+
+const recentEventList = (events, count = 12) => {
+  const list = Array.isArray(events) ? events : Object.values(events ?? {}).flat();
+  return list.filter((event) => event && typeof event === "object").slice(-count);
+};
+
+// The powers whose regions the prompt lists in full, most relevant first: the
+// player, the powers the player's pending actions name, the belligerents of
+// active wars, chat partners, the powers the recent events moved or mentioned,
+// claimants of contested land, then size (regionFocus.js). Declared scenario
+// actors that scored nothing are appended so a scripted power is never lost.
+export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames = [], polityNames = {} } = {}) => {
+  const overrides = world.regionOwnershipOverrides ?? {};
+  const groups = new Map();
+  const ownerById = new Map();
+  for (const region of regions) {
+    const owner = regionOwnerName(region, overrides);
+    if (!owner) continue;
+    ownerById.set(String(region.id), owner);
+    const key = owner.toLowerCase();
+    const group = groups.get(key) ?? { key, label: owner, regions: 0 };
+    group.regions += 1;
+    groups.set(key, group);
+  }
+  const polityRecords = world.polityOverrides ?? {};
+  const owners = [...groups.values()].map((group) => {
+    const record = polityRecords[group.label]
+      ?? Object.values(polityRecords).find((entry) => normalizeString(entry?.name).toLowerCase() === group.key)
+      ?? null;
+    return {
+      ...group,
+      displayName: polityNames[group.key] || normalizeString(record?.name),
+      aliases: normalizeArray(record?.aliases),
+      stockName: toCountryName(normalizeString(record?.code)) || "",
+    };
+  });
+  const ranked = selectFocusPowers({
+    owners,
+    player: playerName,
+    actions: normalizeArray(bundle?.actions),
+    chats: normalizeArray(bundle?.chats),
+    events: recentEventList(bundle?.events),
+    wars: normalizeArray(world.wars),
+    claimants: world.regionClaimants ?? {},
+    ownerOfRegion: (regionId) => ownerById.get(String(regionId)) ?? "",
+  });
+  const labels = ranked.map((entry) => entry.label);
+  for (const name of actorNames) {
+    if (name && !labels.some((label) => label.toLowerCase() === name.toLowerCase())) labels.push(name);
+  }
+  return labels;
+};
+
 export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   const world = normalizeWorldState(bundle.world);
-  const regions = regionCatalog ?? await loadRegions();
+  const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
-  const territoryEntries = Object.entries(world.regionOwnershipOverrides);
+  // Only overrides that CHANGE an owner are changes: on a hand-drawn world every
+  // region carries an override equal to its baked owner, and listing sixty of
+  // those as "territorial changes" was noise the model read as history.
+  const territoryEntries = Object.entries(world.regionOwnershipOverrides).filter(([regionId, ownerCode]) => {
+    const baked = normalizeString(regionLookup.get(regionId)?.country);
+    return !baked || baked.toLowerCase() !== normalizeString(ownerCode).toLowerCase();
+  });
   const territorySummary = territoryEntries.length === 0
-    ? "No territorial overrides from the base scenario are currently recorded."
+    ? "No territorial changes from the base scenario are currently recorded."
     : territoryEntries.slice(0, 60).map(([regionId, ownerCode]) => {
       const region = regionLookup.get(regionId);
       return `- ${region?.name || regionId}${region?.country ? ` (${region.country})` : ""} -> ${ownerCode}`;
@@ -391,13 +468,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   // so it matches "Spain" — otherwise that power silently drops out of the enumerated
   // section and the model is left inventing its region names again.
   const playerName = toCountryName(normalizeString(bundle.game.country));
-  const overrideOwnerNames = [...new Set(
-    territoryEntries.map(([, owner]) => toCountryName(normalizeString(owner))).filter(Boolean),
-  )];
   const actorNames = polities.map((entry) => toCountryName(normalizeString(entry?.code))).filter(Boolean);
-  const chatNames = normalizeArray(bundle.chats).flatMap((chat) =>
-    normalizeArray(chat?.countries).map((country) => toCountryName(normalizeString(country?.code))).filter(Boolean));
-  const focusCodes = [playerName, ...overrideOwnerNames, ...actorNames, ...chatNames].filter(Boolean);
   // Owner name -> display name for both sections: base country names from the catalog,
   // with dynamic polity overrides layered on top (a re-owned/renamed power wins).
   const polityNames = {};
@@ -408,6 +479,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null) => {
   for (const entry of polities) {
     if (entry?.code) polityNames[toCountryName(String(entry.code)).toLowerCase()] = entry.name || toCountryName(entry.code);
   }
+  const focusCodes = rankFocusPowers(regions, world, bundle, { playerName, actorNames, polityNames });
   const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
     focusCodes,
     polityNames,
