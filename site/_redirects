@@ -1,14 +1,30 @@
-# No rules on purpose.
+# The guides moved into the wiki. These are the only rules in this file.
 #
-# This file used to hold:
+# Every target lives under /wiki/, and no pattern below matches its own target, which is the
+# trap that made an earlier version of this file useless: it held
 #     /play/*  /play/index.html  200
-# Cloudflare rejected it outright — `/play/index.html` itself matches `/play/*`, so it
-# is an infinite loop. Wrangler reported "Parsed 0 valid redirect rules" and ignored
-# the file, so the rule never ran in production a single time.
+# and `/play/index.html` itself matches `/play/*`, so it was an infinite loop. Cloudflare
+# reported "Parsed 0 valid redirect rules" and ignored THE WHOLE FILE — one bad rule takes every
+# other rule with it. Keep the paths exact and keep the targets out of the patterns.
 #
-# It is also unnecessary: the web game does no path-based routing (it only uses
-# history.replaceState to strip ?magic= from the query string), so there are no
-# /play/<route> URLs to rewrite, and /play/ resolves as an ordinary directory index.
+# /play/ needs no rule: the web game does no path-based routing (it only uses
+# history.replaceState to strip ?magic= from the query string), so there are no /play/<route>
+# URLs to rewrite, and /play/ resolves as an ordinary directory index.
 #
-# If the game ever does adopt client-side routing, the replacement rule must not match
-# its own target — do not paste the line above back in.
+# public/<name>/index.html still holds a matching stub page for each of these. That is not
+# redundant: this file is Cloudflare-only, and a local desktop install serves public/ at ITS
+# root, where these rules do not exist. The stubs are what answer there.
+#
+# /pax-historia-alternative/ deliberately has NO rule. It is a keyword-targeted landing page
+# rather than wiki content, and its exact-match path is doing search work; it keeps its URL.
+
+/guides/         /wiki/                  301
+/guides          /wiki/                  301
+/get-started/    /wiki/install/          301
+/get-started     /wiki/install/          301
+/how-to-play/    /wiki/how-to-play/      301
+/how-to-play     /wiki/how-to-play/      301
+/ai-setup/       /wiki/ai-setup/         301
+/ai-setup        /wiki/ai-setup/         301
+/self-hosting/   /wiki/self-hosting/     301
+/self-hosting    /wiki/self-hosting/     301
