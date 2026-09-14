@@ -62,6 +62,10 @@
 your browser, and you bring your own AI key (it goes straight to your provider, never to
 us). The world map is served by the community [content-node network](https://github.com/Open-Historia/open-historia-node).
 
+**Want to try OpenCode Zen's free models?** Follow the [step-by-step setup guide](docs/opencode-zen.md)
+(key creation, free vs. paid models, Go vs. Zen billing, and troubleshooting; includes a Russian quick start).
+Use the desktop app or your own local server for Zen: its API currently does not allow cross-origin browser requests.
+
 Local AI (Ollama, LM Studio) needs one extra step in the browser: the server has to allow
 the site's origin, e.g. start Ollama with `OLLAMA_ORIGINS=https://openhistoria.com`. The
 desktop app below needs no such setup.

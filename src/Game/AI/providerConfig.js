@@ -26,6 +26,13 @@ export const PROVIDER_OPTIONS = [
         searchTerms: ["claude", "haiku", "sonnet", "opus"],
     },
     {
+        value: "opencode-zen",
+        label: "OpenCode Zen",
+        group: "Gateways and self-hosted",
+        description: "Zen free and paid Chat Completions models (separate from Go)",
+        searchTerms: ["opencode", "zen", "free", "big pickle", "mimo", "deepseek", "glm", "kimi", "minimax"],
+    },
+    {
         value: "openai-compatible",
         label: "OpenAI Compatible",
         group: "Gateways and self-hosted",
@@ -42,6 +49,13 @@ export const PROVIDER_OPTIONS = [
 ];
 
 const PROVIDER_SETTINGS = {
+    "opencode-zen": {
+        apiKey: { storageKey: "opencode_zen_api_key", defaultValue: "" },
+        model: { storageKey: "opencode_zen_model", defaultValue: "" },
+        customParams: { storageKey: "opencode_zen_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "opencode_zen_structured_mode", defaultValue: "auto" },
+        allowPaid: { storageKey: "opencode_zen_allow_paid", defaultValue: "" },
+    },
     gemini: {
         apiKey: { storageKey: "gemini_api_key", defaultValue: "" },
         model: { storageKey: "gemini_model", defaultValue: "gemini-3.5-flash-lite" },
@@ -91,6 +105,11 @@ const PROVIDER_SETTINGS = {
 };
 
 const FORM_FIELD_MAP = {
+    opencodeZenApiKey: { provider: "opencode-zen", field: "apiKey" },
+    opencodeZenModel: { provider: "opencode-zen", field: "model" },
+    opencodeZenCustomParams: { provider: "opencode-zen", field: "customParams" },
+    opencodeZenStructuredMode: { provider: "opencode-zen", field: "structuredMode" },
+    opencodeZenAllowPaid: { provider: "opencode-zen", field: "allowPaid" },
     geminiApiKey: { provider: "gemini", field: "apiKey" },
     geminiModel: { provider: "gemini", field: "model" },
     geminiCustomParams: { provider: "gemini", field: "customParams" },
@@ -170,7 +189,7 @@ export function getProviderMeta(provider) {
 
 export function providerSupportsModelDiscovery(provider) {
     const normalized = normalizeProvider(provider);
-    return normalized === "openai" || normalized === "openai-compatible";
+    return normalized === "openai" || normalized === "openai-compatible" || normalized === "opencode-zen";
 }
 
 export function getProviderField(provider, field) {
