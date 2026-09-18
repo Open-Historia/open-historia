@@ -373,6 +373,9 @@ const JSON_ASSET_FILES = {
 
 const OPTIONAL_JSON_ASSET_FILES = {
   colors: "colors.json",
+  // Scenario-authored institution emblems live outside world.json so image
+  // payloads do not ride the frequently-read canonical world document.
+  institutionLogos: "institution-logos.json",
   // Author-set country flags: owner code -> PNG data URL, written by the map editor.
   // A JSON asset rather than a field on world.json, deliberately: world is re-read
   // every 5s by the running game, and a few hundred flags is megabytes that would
@@ -402,6 +405,10 @@ const RUNTIME_ONLY_JSON_ASSET_FILES = {
   // second writer on world.json would race it.
   intercepts: "storage/intercepts.json",
 };
+
+const TURN_COMMIT_ASSET_KEYS = ["actions", "chat", "events", "game", "colors", "world"];
+const TURN_COMMIT_JOURNAL_FILE = "storage/turn-commit-journal.json";
+
 
 const PMTILES_ASSET_FILES = {
   cities: "cities.pmtiles",
@@ -453,6 +460,7 @@ const JSON_ASSET_DEFAULTS = {
   advisor: [],
   chat: [],
   colors: {},
+  institutionLogos: {},
   events: [],
   game: {},
   prompts: {},
@@ -473,6 +481,8 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "author",
   "background",
   "basemap",
+  "canonModelVersion",
+  "canonContext",
   "customCities",
   "customGeometry",
   "customRegions",
@@ -482,6 +492,10 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "notes",
   "ownerCodes",
   "polityOverrides",
+  "politicalActors",
+  "institutions",
+  "powerStatus",
+  "agreements",
   "units",
   "regionClaimants",
   "regionOwnershipOverrides",
@@ -549,6 +563,35 @@ const writeJsonFile = (targetPath, value) => {
   // one choke point every meta and manifest write goes through — including
   // create and delete, which rewrite the manifest — so hooking it here is what
   // makes the cache safe without touching 43 call sites individually.
+  invalidateCatalogs();
+};
+
+// Turn commits need crash-safe individual file replacement. A temporary file in
+// the same directory followed by rename means each resource is either wholly old
+// or wholly new; the transaction journal below makes the six-file generation
+// recoverable as one unit if the process dies between renames.
+const writeJsonFileAtomic = (targetPath, value) => {
+  const directory = path.dirname(targetPath);
+  ensureDirectory(directory);
+  const tempPath = `${targetPath}.turn-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tempPath, "w");
+    fs.writeFileSync(fd, JSON.stringify(value, null, 2), "utf-8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, targetPath);
+    try {
+      const dirFd = fs.openSync(directory, "r");
+      try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
+    } catch {
+      /* directory fsync unsupported on this platform */
+    }
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+    if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
+  }
   invalidateCatalogs();
 };
 
@@ -1650,6 +1693,11 @@ const buildGameCatalog = () => {
     if (!fs.existsSync(getGameMetaPath(gameId)) && !fs.existsSync(getGameJsonPath(gameId, "game"))) {
       return null;
     }
+
+    // A process may have died after publishing only part of a journaled turn.
+    // The save picker is also a canonical read surface, so recover before it
+    // derives date/action/event counts from potentially mixed files.
+    recoverPendingTurnCommit(gameId);
 
     const meta = readGameMeta(gameId);
     const assetStatus = getGameAssetStatus(gameId);
@@ -2924,7 +2972,100 @@ const ensureSnapshotIndexFresh = (gameId) => {
   writeSnapshotIndex(gameId, readJsonFile(source, []), stamp);
 };
 
+const turnCommitJournalPath = (gameId) => path.join(getGameDirectory(gameId), TURN_COMMIT_JOURNAL_FILE);
+
+const validateTurnCommitShape = (payload) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Turn commit must be an object.");
+  }
+  for (const key of TURN_COMMIT_ASSET_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) {
+      throw new Error(`Turn commit is missing ${key}.`);
+    }
+    const expectsArray = ["actions", "chat", "events"].includes(key);
+    const value = payload[key];
+    const ok = expectsArray
+      ? Array.isArray(value)
+      : Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    if (!ok) throw new Error(`Turn commit ${key} must be ${expectsArray ? "an array" : "an object"}.`);
+  }
+};
+
+const canonicalizeTurnCommit = (payload) => {
+  validateTurnCommitShape(payload);
+  const world = canonicalizeWorldCountryRefs(payload.world);
+  return {
+    actions: payload.actions,
+    chat: payload.chat,
+    events: payload.events,
+    game: canonicalizeGameCountry(payload.game, world),
+    colors: canonicalizeColorKeys(payload.colors, world),
+    world,
+  };
+};
+
+const ensureRuntimeWriteGameId = () => {
+  let activeGameId = getActiveGameId();
+  if (activeGameId) return activeGameId;
+  const scenario = getSelectedScenarioSummary();
+  if (!scenario) throw new Error("No active game — start a game from a scenario first.");
+  const details = createGame({ name: `${scenario.name} Session`, scenarioId: scenario.id, setActive: true });
+  activeGameId = details.game.id;
+  console.log(`No active game — created "${activeGameId}" from scenario "${scenario.id}".`);
+  return activeGameId;
+};
+
+// A journal means a complete generation was accepted, but the process stopped
+// between per-file atomic replacements. Recovery always rolls forward to that
+// exact generation so readers never stay on a permanently mixed save.
+const recoverPendingTurnCommit = (gameId) => {
+  if (!gameId) return false;
+  const journalPath = turnCommitJournalPath(gameId);
+  if (!fs.existsSync(journalPath)) return false;
+  const journal = readJsonFile(journalPath, null);
+  if (!journal || journal.version !== 1 || !journal.assets) {
+    throw new Error(`Invalid pending turn commit journal for ${gameId}.`);
+  }
+  const assets = canonicalizeTurnCommit(journal.assets);
+  for (const key of TURN_COMMIT_ASSET_KEYS) writeJsonFileAtomic(getGameJsonPath(gameId, key), assets[key]);
+  fs.rmSync(journalPath, { force: true });
+  writeGameMeta(gameId, {});
+  return true;
+};
+
+// Whole-turn publication seam for the desktop store. A durable journal is
+// written before any canonical domain is replaced. Each file is then replaced
+// atomically. A crash/error mid-commit leaves the journal for the next read or
+// write to finish. `failAfterAssetIndex` is only a deterministic test seam.
+const writeRuntimeTurnState = (payload, { failAfterAssetIndex = -1 } = {}) => {
+  ensureGameStore();
+  const activeGameId = ensureRuntimeWriteGameId();
+  const expectedGameId = String(payload?.expectedGameId ?? "").trim();
+  if (expectedGameId && expectedGameId !== activeGameId) {
+    throw new Error(`Turn commit belongs to game "${expectedGameId}", but "${activeGameId}" is active.`);
+  }
+  recoverPendingTurnCommit(activeGameId);
+  const assets = canonicalizeTurnCommit(payload);
+  const transactionId = `turn-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+  const journalPath = turnCommitJournalPath(activeGameId);
+  writeJsonFileAtomic(journalPath, { version: 1, transactionId, createdAt: new Date().toISOString(), assets });
+
+  for (let index = 0; index < TURN_COMMIT_ASSET_KEYS.length; index += 1) {
+    const key = TURN_COMMIT_ASSET_KEYS[index];
+    writeJsonFileAtomic(getGameJsonPath(activeGameId, key), assets[key]);
+    if (index === failAfterAssetIndex) throw new Error(`Injected turn-commit failure after ${key}.`);
+  }
+
+  fs.rmSync(journalPath, { force: true });
+  writeGameMeta(activeGameId, {});
+  return { transactionId, assets };
+};
+
 const readRuntimeJsonAsset = (assetKey) => {
+  ensureGameStore();
+  const activeGameForRecovery = getActiveGameSummary();
+  if (activeGameForRecovery?.id) recoverPendingTurnCommit(activeGameForRecovery.id);
+
   const geojson = resolveRuntimeGeojsonAsset(assetKey);
   if (geojson) {
     return {
@@ -2935,7 +3076,6 @@ const readRuntimeJsonAsset = (assetKey) => {
     };
   }
 
-  ensureGameStore();
   const activeGame = getActiveGameSummary();
   if (activeGame?.id) ensureGameOwnerSchema(activeGame.id);
 
@@ -3026,6 +3166,8 @@ const readRuntimeJsonAsset = (assetKey) => {
 
 const writeRuntimeJsonAsset = (assetKey, value) => {
   ensureGameStore();
+  const pendingGameId = getActiveGameId();
+  if (pendingGameId) recoverPendingTurnCommit(pendingGameId);
 
   // Custom region/city geometry is scenario-scoped, and readRuntimeJsonAsset
   // already resolves it that way. The write path did not, so GET
@@ -3288,6 +3430,7 @@ const exportScenarioBundle = (scenarioId) => {
       // and the background do: a shared map that loses them looks broken, and the
       // whole point of setting one is that other people see it.
       flags: buildScenarioBundleAsset(scenarioId, "flags"),
+      institutionLogos: buildScenarioBundleAsset(scenarioId, "institutionLogos"),
       // Tags travel with the scenario for the same reason: they are the map-maker's
       // characterisation of every country and the model reads them as context, so a
       // shared map that loses them plays differently than its author intended.
@@ -3520,13 +3663,14 @@ const GAME_BUNDLE_DATA_KEYS = [
   "flags",
   "tags",
   "stats",
+  "institutionLogos",
   "intercepts",
 ];
 
 // Keys whose file is legitimately absent on a game that never had one. Writing
 // an empty one on import is harmless but noisy, and `flags: {}` is not the same
 // statement as "this game has no flags file".
-const OPTIONAL_GAME_BUNDLE_KEYS = new Set(["colors", "flags", "tags", "stats", "intercepts"]);
+const OPTIONAL_GAME_BUNDLE_KEYS = new Set(["colors", "flags", "tags", "stats", "institutionLogos", "intercepts"]);
 
 // Scenarios every install already has, so a game played on one never needs to
 // carry a map. CLASSIC_SCENARIO_ID is where campaigns started on the older
@@ -3774,4 +3918,6 @@ export {
   uploadScenarioAsset,
   writeGameSnapshots,
   writeRuntimeJsonAsset,
+  writeRuntimeTurnState,
+  recoverPendingTurnCommit,
 };

@@ -120,7 +120,7 @@ export const normalizeChatAction = (entry) => {
 // Returns { events, applied, rejected, unansweredPolls } — events are
 // chatThreads.js events, ready to append.
 
-export const applyChatActionBatch = (actions, roster = {}, { time = "" } = {}) => {
+export const applyChatActionBatch = (actions, roster = {}, { time = "", disallowMembershipChanges = false } = {}) => {
     const ai = asArray(roster.aiParticipants).map(asText).filter(Boolean);
     const humans = asArray(roster.humanParticipants).map(asText).filter(Boolean);
     const known = asArray(roster.knownPolities).map(asText).filter(Boolean);
@@ -184,6 +184,10 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "" } = {}) =
         }
 
         if (action.type === "add_member") {
+            if (disallowMembershipChanges) {
+                refuse(action, "institution membership is governed by the institution ledger, not by chat membership actions");
+                continue;
+            }
             const member = knownByFold.get(fold(action.targetName));
             if (!member) { refuse(action, `"${action.targetName}" is not a polity on this map`); continue; }
             if (membersNow.has(fold(member))) { refuse(action, `${member} is already in this chat`); continue; }
@@ -194,6 +198,10 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "" } = {}) =
         }
 
         if (action.type === "remove_member") {
+            if (disallowMembershipChanges) {
+                refuse(action, "institution membership is governed by the institution ledger, not by chat membership actions");
+                continue;
+            }
             const target = aiByFold.get(fold(action.targetName)) ?? knownByFold.get(fold(action.targetName));
             if (humanFolds.has(fold(action.targetName))) {
                 refuse(action, `${action.targetName} is played by a human and cannot be removed from their own chat`);

@@ -329,3 +329,26 @@ test("quick setup needs the provider's requirement, and a self-hosted one needs 
   assert.equal(top.endpoint, "http://localhost:11434/v1");
   assert.equal(config.isFallbackListConfigured(), true);
 });
+
+test("Political World generation and verification keep independent/inherited task routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldGeneration"));
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldVerification"));
+
+  const [top] = config.getResolvedFallbackList();
+  const politics = config.addEntry({ connectionId: top.connectionId, model: "politics-model" });
+  const verification = config.addEntry({ connectionId: top.connectionId, model: "verification-model" });
+
+  config.setTaskPick("politicalWorldGeneration", politics);
+  let plan = config.resolveTaskFallbackEntries("politicalWorldGeneration");
+  assert.equal(plan.preferredEntryId, politics);
+  assert.equal(plan.implicit, false);
+
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, politics, "verification inherits generation quality when it has no own pick");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("politicalWorldVerification", verification);
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, verification);
+  assert.equal(plan.implicit, false);
+});

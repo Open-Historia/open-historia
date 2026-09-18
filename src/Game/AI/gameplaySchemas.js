@@ -1418,8 +1418,9 @@ const chatActionSchema = {
       type: "string",
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
-        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a binding vote. add_poll_option = add a choice to one. poll_vote = cast a vote.",
-      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote"],
+        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
+        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state.",
+      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
     content: textSchema("send_message: what it says, in its leader's voice. Match the length and tone of what it answers."),
@@ -1445,6 +1446,14 @@ const chatActionSchema = {
     optionRef: textSchema("add_poll_option: your own label for the new choice. poll_vote: the option's ref, or the exact label of an option already open."),
     label: textSchema("add_poll_option: what the new choice says on the ballot."),
     allowCustom: { type: "boolean", description: "create_poll: whether a participant may add a choice of its own." },
+    proposalId: textSchema("institution_*: canonical proposal id copied from the formal institutional governance block."),
+    proposalType: textSchema("institution_lodge_proposal: proposal type, normally resolution unless the formal governance block permits another type."),
+    summary: textSchema("institution_lodge_proposal: concise formal proposal summary."),
+    amendmentId: textSchema("institution_resolve_amendment: canonical amendment id copied from the formal governance block."),
+    amendmentText: textSchema("institution_amendment: exact formal amendment text."),
+    amendmentStatus: textSchema("institution_resolve_amendment: accepted, rejected, or withdrawn."),
+    voteChoice: textSchema("institution_vote: yes, no, abstain, or veto. Veto is valid only where the charter grants it."),
+    reason: textSchema("institution_vote: optional concise reason for the formal ballot."),
   },
   required: ["type", "actorName"],
   additionalProperties: false,
@@ -2485,6 +2494,32 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
   additionalProperties: false,
 };
 
+// Optional prose-only political assessment derived from spy collection.
+// Native code owns access/confidence; the model may not expose raw hidden PWv2 values.
+const spyPoliticalAssessmentSchema = {
+  type: "object",
+  description: "A narrative intelligence assessment of hidden political decision drivers inside the target. Never output raw simulation trait numbers, internal field names, or exact hidden scores.",
+  properties: {
+    summary: nonEmptyTextSchema("One concise overall assessment of the target leadership's current political decision posture."),
+    findings: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: {
+        type: "object",
+        properties: {
+          topic: nonEmptyTextSchema("Short player-readable topic, e.g. Leadership risk appetite, Elite pressure, Alliance perception."),
+          assessment: nonEmptyTextSchema("Narrative assessment only. No raw hidden numeric values or simulation field names."),
+        },
+        required: ["topic", "assessment"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "findings"],
+  additionalProperties: false,
+};
+
 // What a deployed spy reports: the target's diplomatic traffic with THIRD parties.
 // Redaction happens on the player's side, by their intelligence stat — the model
 // writes the whole exchange, the game decides how much of it the player can read.
@@ -2521,6 +2556,7 @@ const SPY_INTERCEPT_SCHEMA = {
         additionalProperties: false,
       },
     },
+    politicalAssessment: spyPoliticalAssessmentSchema,
   },
   required: ["exchanges"],
   additionalProperties: false,

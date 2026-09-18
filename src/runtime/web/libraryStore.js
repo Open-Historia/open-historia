@@ -685,6 +685,75 @@ const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
 const coerceRuntimeValue = (assetKey, value) =>
   (OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) ? parseJsonValue(value, {}) : value);
 
+const TURN_COMMIT_ASSET_KEYS = ["actions", "chat", "events", "game", "colors", "world"];
+
+const validateTurnCommitShape = (payload) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("Turn commit must be an object.");
+  }
+  for (const key of TURN_COMMIT_ASSET_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) {
+      throw new Error(`Turn commit is missing ${key}.`);
+    }
+    const expectsArray = ["actions", "chat", "events"].includes(key);
+    const value = payload[key];
+    const ok = expectsArray
+      ? Array.isArray(value)
+      : Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    if (!ok) throw new Error(`Turn commit ${key} must be ${expectsArray ? "an array" : "an object"}.`);
+  }
+};
+
+// Web mode already stores every runtime domain inside ONE IndexedDB game record.
+// Publishing a turn therefore becomes one record transaction instead of six
+// independent read-modify-writes. putGame writes the game and its lean catalog
+// row in one IndexedDB transaction, so readers see old or new, never a mixture.
+const writeRuntimeTurnState = (payload) => serializeWrite(async () => {
+  validateTurnCommitShape(payload);
+  let activeGame = await getActiveGameRecord();
+  if (!activeGame) {
+    const scenario = await getSelectedScenarioRecord();
+    if (!scenario) throw new Error("No active game — start a game from a scenario first.");
+    const details = await createGame({
+      name: `${readScenarioMeta(scenario.id, scenario.meta).name} Session`,
+      scenarioId: scenario.id,
+      setActive: true,
+    });
+    activeGame = await getGame(details.game.id);
+  }
+
+  const expectedGameId = String(payload?.expectedGameId ?? "").trim();
+  if (expectedGameId && expectedGameId !== activeGame.id) {
+    throw new Error(`Turn commit belongs to game "${expectedGameId}", but "${activeGame.id}" is active.`);
+  }
+
+  const world = canonicalizeWorldCountryRefs(payload.world);
+  const assets = {
+    actions: payload.actions,
+    chat: payload.chat,
+    events: payload.events,
+    game: canonicalizeGameCountry(payload.game, world),
+    colors: canonicalizeColorKeys(payload.colors, world),
+    world,
+  };
+
+  activeGame = {
+    ...activeGame,
+    colors: assets.colors,
+    json: {
+      ...activeGame.json,
+      actions: assets.actions,
+      chat: assets.chat,
+      events: assets.events,
+      game: assets.game,
+      world: assets.world,
+    },
+  };
+  writeGameMeta(activeGame, {});
+  await putGame(activeGame);
+  return { transactionId: `web-turn-${Date.now()}`, assets };
+});
+
 // Serialized: this is a read-modify-write of the WHOLE game record (every runtime
 // JSON asset lives in one), and the end of a turn fires six of these at once. Run
 // concurrently they each read the record before any has written, and the last to
@@ -1638,6 +1707,47 @@ const writeGameSnapshots = async (id, snapshots) => {
   return { ok: true };
 };
 
+const INSTITUTION_LOGO_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/i;
+const MAX_INSTITUTION_LOGO_BYTES = 512 * 1024;
+
+const institutionLogoResponse = (dataUrl) => {
+  const match = INSTITUTION_LOGO_DATA_URL.exec(String(dataUrl || ""));
+  if (!match) throw new Error("Institution logo is missing or invalid.");
+  const bytes = base64ToBytes(match[2]);
+  if (!bytes.byteLength || bytes.byteLength > MAX_INSTITUTION_LOGO_BYTES) {
+    throw new Error("Institution logo is empty or exceeds the size limit.");
+  }
+  const subtype = match[1].toLowerCase();
+  return binaryResponse(bytes, subtype === "jpg" ? "image/jpeg" : `image/${subtype}`);
+};
+
+export const handleScenarioInstitutionLogo = async ({ method, segments }) => {
+  if (method !== "GET") return null;
+  const scenarioId = segments[0] ? decodeURIComponent(segments[0]) : "";
+  const institutionId = segments[2] ? decodeURIComponent(segments[2]) : "";
+  if (!scenarioId || segments[1] !== "institution-logo" || !institutionId) return null;
+  try {
+    const record = await getScenario(scenarioId);
+    if (!record) throw new Error(`Scenario not found: ${scenarioId}`);
+    const logos = coerceRuntimeValue("institutionLogos", runtimeValueFromRecord(record, "institutionLogos", true)) || {};
+    return institutionLogoResponse(logos?.[institutionId]);
+  } catch (error) {
+    return errorResponse(error.message, 404);
+  }
+};
+
+export const handleRuntimeInstitutionLogo = async ({ method, segments }) => {
+  if (method !== "GET") return null;
+  const institutionId = segments[1] ? decodeURIComponent(segments[1]) : "";
+  if (segments[0] !== "institution-logo" || !institutionId) return null;
+  try {
+    const logos = await readRuntimeJsonAsset("institutionLogos");
+    return institutionLogoResponse(logos?.[institutionId]);
+  } catch (error) {
+    return errorResponse(error.message, 404);
+  }
+};
+
 export const handleGames = async ({ method, segments, body, rawBody, contentType, rangeHeader }) => {
   const id = segments[0] ? decodeURIComponent(segments[0]) : null;
   try {
@@ -1675,6 +1785,15 @@ export const handleGames = async ({ method, segments, body, rawBody, contentType
   } catch (error) {
     const status = method === "GET" ? 404 : 400;
     return errorResponse(error.message, status);
+  }
+};
+
+export const handleRuntimeTurnCommit = async ({ method, body }) => {
+  if (method !== "PUT") return null;
+  try {
+    return jsonResponse(await writeRuntimeTurnState(body ?? {}));
+  } catch (error) {
+    return errorResponse(error.message, 400);
   }
 };
 

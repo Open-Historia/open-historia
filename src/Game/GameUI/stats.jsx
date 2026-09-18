@@ -1,16 +1,19 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { JSON_URLS, getNationFlags, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags, getNationTags, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
+import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
-import { ensureIntelligenceRated, generateCountryStatSheet } from "../AI/gameplayLazy.js";
+import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
+import PoliticalOverview from "./PoliticalOverview.jsx";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
@@ -1294,7 +1297,7 @@ const StatsPaneBody = ({ active }) => {
     const [worldSnapshot, setWorldSnapshot] = useState(null);
     const worldSnapshotRef = useRef(null);
     const statsLoadRef = useRef({ sequence: 0, controller: null });
-    const [statsView, setStatsView] = useState("diplomacy");
+    const [statsView, setStatsView] = useState("politics");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
     const [trackingSettings, setTrackingSettings] = useState({ intervalMonths: 0, trackedPolities: [] });
@@ -1308,6 +1311,8 @@ const StatsPaneBody = ({ active }) => {
     // Author-set flags from the scenario (flags.json). Memoized in assets.js, so
     // this is one fetch per scenario; {} for every scenario that sets none.
     const [customFlags, setCustomFlags] = useState({});
+    const [baseTags, setBaseTags] = useState({});
+    const [politicalKnowledge, setPoliticalKnowledge] = useState({ target: "", view: null });
     const [statSheetDefinition, setStatSheetDefinition] = useState({ custom: false, sections: [] });
     const [statSheetDefinitionReady, setStatSheetDefinitionReady] = useState(false);
     const [statSheetDefinitionError, setStatSheetDefinitionError] = useState("");
@@ -1340,6 +1345,30 @@ const StatsPaneBody = ({ active }) => {
         worldSnapshotRef.current = worldSnapshot;
     }, [worldSnapshot]);
     const displayName = useCountryDisplayName(targetCountry);
+
+    // Political Actors are canonical political truth. Stats remains a separate,
+    // scenario-customizable projection; the Politics tab reads only the bounded
+    // player-knowledge view and never copies political truth into Stats fields.
+    useEffect(() => {
+        if (!active || !worldSnapshot || !targetCountry) {
+            setPoliticalKnowledge({ target: "", view: null });
+            return undefined;
+        }
+        let cancelled = false;
+        const publicView = buildPublicPoliticalView(worldSnapshot, targetCountry);
+        setPoliticalKnowledge({ target: targetCountry, view: publicView ? { level: "public", public: publicView } : null });
+        readOpenedIntercepts()
+            .then((intercepts) => {
+                if (cancelled) return;
+                const view = buildPlayerPoliticalKnowledgeView(worldSnapshot, targetCountry, {
+                    viewerPolity: player.code,
+                    intercepts,
+                });
+                setPoliticalKnowledge({ target: targetCountry, view });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active, targetCountry, player.code, player.round, worldSnapshot]);
 
     const persistTrackingSettings = useCallback((next) => {
         const normalized = normalizeCountryStatsTracking(next, { playerCountry: player.code });
@@ -1405,9 +1434,14 @@ const StatsPaneBody = ({ active }) => {
     // Which game and which date are we in? Also seeds the target: your country.
     useEffect(() => {
         let cancelled = false;
-        getNationFlags()
-            .then((flags) => { if (!cancelled) setCustomFlags(flags || {}); })
-            .catch(() => {});
+        Promise.all([
+            getNationFlags().catch(() => ({})),
+            getNationTags().catch(() => ({})),
+        ]).then(([flags, tags]) => {
+            if (cancelled) return;
+            setCustomFlags(flags || {});
+            setBaseTags(tags || {});
+        });
         return () => { cancelled = true; };
     }, [activeGameId]);
 
@@ -1822,7 +1856,18 @@ const StatsPaneBody = ({ active }) => {
     // stat metadata while Economy itself waits for the validated/migrated sheet.
     // This preserves capital/government/leader text without triggering heavy Stats
     // generation on the default Diplomacy tab.
-    const headerSheet = sheet || worldSnapshot?.countryStats?.[targetCountry] || null;
+    const resolvedTargetKey = targetCountry && worldSnapshot
+        ? (canonicalPolityKey(targetCountry, worldSnapshot) || targetCountry)
+        : targetCountry;
+    const headerSheet = sheet
+        || worldSnapshot?.countryStats?.[resolvedTargetKey]
+        || worldSnapshot?.countryStats?.[targetCountry]
+        || null;
+    const currentPoliticalKnowledge = politicalKnowledge.target === targetCountry ? politicalKnowledge.view : null;
+    const publicPoliticalProfile = currentPoliticalKnowledge?.public
+        || (worldSnapshot && targetCountry ? buildPublicPoliticalView(worldSnapshot, targetCountry) : null);
+    const politicalKey = publicPoliticalProfile?.polityKey || resolvedTargetKey || targetCountry;
+    const politicalTags = resolveCountryTags(baseTags, worldSnapshot, politicalKey);
     const intelligence = targetCountry && worldSnapshot ? intelligenceOf(worldSnapshot, targetCountry) : null;
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
@@ -1911,17 +1956,24 @@ const StatsPaneBody = ({ active }) => {
                 <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.76rem", marginTop: "0.15rem" }}>
                 {[headerSheet.capital, headerSheet.continent].filter(Boolean).join(" · ")}
                 </div>
-                {headerSheet.government && (
+                {!publicPoliticalProfile && headerSheet.government && (
                     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.1rem" }}>
                     {headerSheet.government}
                     </div>
                 )}
-                {headerSheet.leader && (
+                {!publicPoliticalProfile && headerSheet.leader && (
                     <div style={{ color: "#fbbf24", fontSize: "0.72rem", marginTop: "0.1rem" }}>
                     Leader: {headerSheet.leader}
                     </div>
                 )}
                 </>
+            )}
+            {politicalTags.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
+                    {politicalTags.map((tag) => (
+                        <span key={tag} style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.5)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
+                    ))}
+                </div>
             )}
             </div>
             {statsView === "economy" && state.status !== "loading" && (
@@ -1937,6 +1989,12 @@ const StatsPaneBody = ({ active }) => {
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.9rem" }}>
             <button
             type="button"
+            aria-pressed={statsView === "politics"}
+            onClick={() => setStatsView("politics")}
+            style={statsSubtabStyle(statsView === "politics")}
+            >🏛 Politics</button>
+            <button
+            type="button"
             aria-pressed={statsView === "diplomacy"}
             onClick={() => setStatsView("diplomacy")}
             style={statsSubtabStyle(statsView === "diplomacy")}
@@ -1948,6 +2006,15 @@ const StatsPaneBody = ({ active }) => {
             style={statsSubtabStyle(statsView === "economy")}
             >{statSheetDefinition.custom ? "📊 National" : "📈 Economy"}</button>
             </div>
+
+            {statsView === "politics" && (
+                <PoliticalOverview
+                    profile={publicPoliticalProfile}
+                    fallbackGovernment={headerSheet?.government || ""}
+                    fallbackLeader={headerSheet?.leader || ""}
+                    intelligence={currentPoliticalKnowledge?.intelligence || null}
+                />
+            )}
 
             {statsView === "economy" && statSheetDefinitionError && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>

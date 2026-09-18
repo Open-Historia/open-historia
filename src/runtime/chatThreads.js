@@ -62,10 +62,12 @@ export const normalizeMember = (value) => {
     const name = asText(value.name ?? value.label ?? value.country);
     const code = asText(value.code ?? value.id);
     if (!name && !code) return null;
-    return { code, name: name || code };
+    const polityKey = asText(value.polityKey);
+    return { code, name: name || code, ...(polityKey ? { polityKey } : {}) };
 };
 
-const sameMember = (left, right) => fold(left?.name) === fold(right?.name)
+const sameMember = (left, right) => (Boolean(asText(left?.polityKey)) && fold(left?.polityKey) === fold(right?.polityKey))
+    || fold(left?.name) === fold(right?.name)
     || (Boolean(asText(left?.code)) && fold(left?.code) === fold(right?.code));
 
 // ---------------------------------------------------------------------------

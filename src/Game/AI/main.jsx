@@ -5,7 +5,7 @@ import {
     getRateLimitPolicy,
     getReasoningEnabled,
     getResolvedFallbackList,
-    getTaskPick,
+    resolveTaskFallbackEntries,
     providerSupportsModelDiscovery,
     saveRecentModel,
     updateEntry,
@@ -84,6 +84,8 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
+import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
+import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -2336,8 +2338,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
 
-    const entries = getResolvedFallbackList();
-    const preferredEntryId = providerOpts.taskKey ? getTaskPick(providerOpts.taskKey) : "";
+    const { entries, preferredEntryId } = resolveTaskFallbackEntries(providerOpts.taskKey);
     // Named for where the call STARTS; the answer names who actually answered.
     const firstChoice = entries.find((entry) => entry.id === preferredEntryId) ?? entries[0];
     const provider = firstChoice?.provider ?? "(none)";
@@ -2796,7 +2797,12 @@ async function buildAdvisorSystemPrompt() {
         renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
         variables,
     );
+    const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
+        world: worldData,
+        playerPolity: gameData?.country || "",
+    });
     const directives = [
+        advisorPoliticalDiplomacy.text,
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
         ADVISOR_DEPLOY_DIRECTIVE,
@@ -2900,6 +2906,12 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
         variables,
     );
+    const politicalDecision = buildDiplomaticPoliticalContext({
+        world: worldData,
+        speakingAs: speaker,
+        playerCountry: playerCountry || gameData?.country || "",
+    });
+    const politicalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
 
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
@@ -2919,7 +2931,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         : "";
 
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${rendered}${politicalSection}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];
@@ -3189,10 +3201,9 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
 // fall back mid-request — and a refused submission runs the task synchronously,
 // through the list as usual.
 const batchEntryFor = (taskKey) => {
-    const entries = getResolvedFallbackList();
-    const pick = taskKey ? getTaskPick(taskKey) : "";
+    const { entries, preferredEntryId } = resolveTaskFallbackEntries(taskKey);
     const ready = (entry) => getEntryStatus(entry.id).status === "ready";
-    return entries.find((entry) => entry.id === pick && ready(entry)) ?? entries.find(ready) ?? null;
+    return entries.find((entry) => entry.id === preferredEntryId && ready(entry)) ?? entries.find(ready) ?? null;
 };
 
 export const providerSupportsBatch = (taskKey) => batchEntryFor(taskKey)?.provider === "anthropic";

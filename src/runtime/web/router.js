@@ -10,7 +10,7 @@ import { errorResponse, jsonResponse } from "./util.js";
 import { handleMapEditor } from "./editorStore.js";
 import { handleBasemaps } from "./basemapStore.js";
 import { handleFlags } from "./flagStore.js";
-import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, getScenarioPmtilesOverride } from "./libraryStore.js";
+import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
 import { getConnected } from "./nodeConnect.js";
 import { getSession } from "./account.js";
@@ -111,11 +111,21 @@ const route = async (request, url) => {
     if (response) return response;
   }
   if (domain === "scenarios") {
+    const logoResponse = await handleScenarioInstitutionLogo(ctx);
+    if (logoResponse) return logoResponse;
     const response = await handleScenarios(ctx);
     if (response) return response;
   }
   if (domain === "games") {
     const response = await handleGames(ctx);
+    if (response) return response;
+  }
+  if (domain === "runtime" && segments[0] === "institution-logo") {
+    const response = await handleRuntimeInstitutionLogo(ctx);
+    if (response) return response;
+  }
+  if (domain === "runtime" && segments[0] === "turn-commit") {
+    const response = await handleRuntimeTurnCommit(ctx);
     if (response) return response;
   }
   if (domain === "runtime" && segments[0] === "json") {

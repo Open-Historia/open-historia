@@ -14,6 +14,9 @@
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
+import { normalizeInstitutions } from "../../runtime/institutions.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
@@ -62,6 +65,9 @@ export const LOOKUP_TOOL_NAMES = Object.freeze([
   "border_between",
   "map_around",
   "list_cities",
+  "political_actor",
+  "list_institutions",
+  "institution_info",
 ]);
 
 export const LOOKUP_TOOLS = Object.freeze([
@@ -236,6 +242,25 @@ export const LOOKUP_TOOLS = Object.freeze([
       limit: integer("How many (default 40, max 200)."),
     }),
   },
+  {
+    name: "political_actor",
+    description:
+      "Canonical political state for one polity. The simulation may read the full actor; polity-scoped audiences receive only their own canonical state or a foreign polity's public political projection. A lookup never grants authority to act for a polity.",
+    schema: object("Which polity.", { polity: text("Canonical polity name or known alias.") }, ["polity"]),
+  },
+  {
+    name: "list_institutions",
+    description:
+      "Canonical institutions in the campaign: identity, kind, status and membership count. Optionally filter to institutions containing one polity.",
+    schema: object("Optional membership filter.", { member: text("Optional polity name.") }),
+  },
+  {
+    name: "institution_info",
+    description:
+      "Canonical institution identity, membership and governance/business state. The simulation can inspect the full canonical workspace; polity-scoped audiences only receive full formal business for institutions they belong to. Membership never grants authority to decide for another member.",
+    schema: object("Which institution.", { institution: text("Institution id, name or short name.") }, ["institution"]),
+  },
+
 ]);
 
 // The instruction that goes with the tools.
@@ -666,6 +691,74 @@ const agreementBrief = (agreement) => ({
   ...(agreement?.startedDate ? { since: clean(agreement.startedDate) } : {}),
 });
 
+const politicalActorLookup = (context, polity) => {
+  const requested = clean(polity);
+  if (!requested) return { error: "polity is required" };
+  const actor = getPoliticalProfile(context.world, requested);
+  if (!actor) return { error: `No canonical Political Actor found for "${requested}". Do not invent one.` };
+
+  const actorName = clean(actor.polityKey || actor.name || requested);
+  const ownAudience = audienceIncludes(context.audience, actorName) || audienceIncludes(context.audience, requested);
+  const level = isSimulationAudience(context.audience) || ownAudience
+    ? POLITICAL_KNOWLEDGE_LEVELS.GM
+    : POLITICAL_KNOWLEDGE_LEVELS.PUBLIC;
+  const view = buildPoliticalKnowledgeView(context.world, actorName, { level });
+  if (!view) return { error: `No readable Political Actor state found for "${requested}".` };
+  return {
+    polity: actorName,
+    authority: "read-only evidence; never permission to act for this polity",
+    ...view,
+  };
+};
+
+const normalizedInstitutionRows = (world) => Object.values(normalizeInstitutions(world?.institutions, world).byId || {});
+
+const institutionMemberNames = (institution) => array(institution?.members)
+  .map((member) => clean(member?.polity || member?.name || member))
+  .filter(Boolean);
+
+const institutionIsVisibleInFull = (context, institution) => (
+  isSimulationAudience(context.audience)
+  || institutionMemberNames(institution).some((member) => audienceIncludes(context.audience, member))
+);
+
+const institutionIdentityBrief = (institution) => ({
+  id: clean(institution?.id),
+  name: clean(institution?.name),
+  shortName: clean(institution?.shortName),
+  kind: clean(institution?.kind),
+  status: clean(institution?.status),
+  memberCount: institutionMemberNames(institution).length,
+});
+
+const institutionFullBrief = (institution) => {
+  const proposalSource = institution?.proposals ?? institution?.agenda ?? institution?.matters;
+  const proposals = Array.isArray(proposalSource)
+    ? proposalSource
+    : Object.values(proposalSource && typeof proposalSource === "object" ? proposalSource : {});
+  return {
+    ...institutionIdentityBrief(institution),
+    foundedDate: clean(institution?.foundedDate),
+    members: array(institution?.members).slice(0, 80).map((member) => ({
+      polity: clean(member?.polity || member?.name || member),
+      status: clean(member?.status || "member"),
+      role: clean(member?.role || "member"),
+    })).filter((member) => member.polity),
+    ...(institution?.charter && typeof institution.charter === "object" ? { charter: institution.charter } : {}),
+    activeBusiness: proposals.filter((proposal) => {
+      const status = clean(proposal?.status).toLowerCase();
+      return !["resolved", "adopted", "rejected", "withdrawn", "closed", "failed", "passed"].includes(status);
+    }).slice(0, 20).map((proposal) => ({
+      id: clean(proposal?.id),
+      title: clean(proposal?.title || proposal?.name),
+      summary: clean(proposal?.summary).slice(0, 500),
+      status: clean(proposal?.status),
+      sponsor: clean(proposal?.sponsor || proposal?.proposer),
+      ...(proposal?.votingRule || proposal?.rule ? { votingRule: proposal?.votingRule || proposal?.rule } : {}),
+    })),
+  };
+};
+
 export const executeLookup = (context, name, args = {}) => {
   const a = args && typeof args === "object" ? args : {};
   switch (name) {
@@ -1047,6 +1140,37 @@ export const executeLookup = (context, name, args = {}) => {
       }
       for (const list of Object.values(byOwner)) list.sort((x, y) => x.steps - y.steps || x.name.localeCompare(y.name));
       return { centre: regionBrief(centre), steps, regions: distance.size, byOwner };
+    }
+    case "political_actor":
+      return politicalActorLookup(context, a.polity);
+    case "list_institutions": {
+      const member = clean(a.member);
+      const rows = normalizedInstitutionRows(context.world).filter((institution) => (
+        !member || institutionMemberNames(institution).some((name) => foldRegionKey(name) === foldRegionKey(member))
+      ));
+      return {
+        count: rows.length,
+        institutions: rows.slice(0, 80).map(institutionIdentityBrief),
+      };
+    }
+    case "institution_info": {
+      const token = foldRegionKey(a.institution);
+      if (!token) return { error: "institution is required" };
+      const institution = normalizedInstitutionRows(context.world).find((entry) => (
+        [entry?.id, entry?.name, entry?.shortName].some((value) => foldRegionKey(value) === token)
+      ));
+      if (!institution) return { error: `No canonical institution matches "${clean(a.institution)}".` };
+      if (!institutionIsVisibleInFull(context, institution)) {
+        return {
+          ...institutionIdentityBrief(institution),
+          members: institutionMemberNames(institution),
+          note: "Formal business is not exposed to this audience because it is not a member of this institution.",
+        };
+      }
+      return {
+        ...institutionFullBrief(institution),
+        authority: "read-only canonical governance evidence; membership is not consent and this lookup cannot cast votes or decide outcomes",
+      };
     }
     default:
       return { error: `Unknown lookup "${clean(name)}". Available: ${LOOKUP_TOOL_NAMES.join(", ")}.` };

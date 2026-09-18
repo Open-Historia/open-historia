@@ -39,6 +39,8 @@ import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStor
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { UNSEEN_EVENTS_CHANGED, withoutUnseenChats, withoutUnseenIntercepts, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
 import { unseenEventIdsFor, useUnseenEventIds } from "./useUnseenEvents.js";
+import InstitutionsWorkspace, { Emblem as InstitutionEmblem, Facts as InstitutionFacts, SmallPill as InstitutionPill } from "./InstitutionsWorkspace.jsx";
+import { buildInstitutionDiplomacyView } from "../../runtime/institutionalDiplomacyView.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -546,6 +548,23 @@ const MessageBubble = ({ msg, onRetry }) => {
     );
 };
 
+
+const InstitutionRecord = ({ msg }) => {
+    const raw = String(msg?.text ?? "").trim();
+    if (!raw) return null;
+    const established = /institutional channel established\.?$/i.test(raw);
+    const text = established ? raw.replace(/\s+institutional channel established\.?$/i, " council opened.") : raw;
+    return (
+        <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
+            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid rgba(139,92,246,.28)", background: "rgba(139,92,246,.065)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
+                <span aria-hidden="true" style={{ color: "#a78bfa", fontSize: ".72rem" }}>◇</span>
+                <span style={{ color: "#a78bfa", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
+                <span>{text}</span>
+            </div>
+        </div>
+    );
+};
+
 // ── Reaction bubble ───────────────────────────────────────────────────────────
 
 const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
@@ -754,7 +773,7 @@ const CountrySelectorModal = ({
 // 12rem at the default 16px root, matching the composer's max-height below.
 const COMPOSER_MAX_HEIGHT = 192;
 
-const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied }) => {
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -765,6 +784,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         [chat?.countries],
     );
     const isGroup = countries.length > 1;
+    const isInstitutional = Boolean(chat?.institutionId);
+    const institutionView = useMemo(() => {
+        if (!isInstitutional || !chat?.institutionId) return null;
+        try {
+            return buildInstitutionDiplomacyView({
+                world,
+                institutionId: chat.institutionId,
+                playerCountry,
+            });
+        } catch {
+            return null;
+        }
+    }, [isInstitutional, chat?.institutionId, world, playerCountry]);
+    const institution = institutionView?.institution || null;
+    const institutionPendingBallots = Number(institutionView?.playerPendingBallotCount || 0);
+    const institutionPendingAmendments = Number(institutionView?.playerPendingAmendmentReviewCount || 0);
+    const institutionPendingActions = institutionPendingBallots + institutionPendingAmendments;
 
     const [messages, setMessages]               = useState(chat.messages ?? []);
     // A letter an event of the skip being revealed delivered waits for the
@@ -1026,7 +1062,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     ...(message.eventId ? { eventId: message.eventId } : {}),
                     ...(message.catchUp ? { catchUp: message.catchUp, catchUpLabel: message.catchUpLabel } : {}),
                 })));
-                onThreadUpdate?.(chat.id, { events: outcome.events, countries: projected.countries, title: projected.title, polls: projected.polls, cursors: outcome.cursors });
+                onThreadUpdate?.(chat.id, { events: outcome.events, countries: projected.countries, title: projected.title, polls: projected.polls, cursors: outcome.cursors, committed: outcome.committed === true });
                 setPhase("player");
                 return true;
             } catch (error) {
@@ -1140,42 +1176,53 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
         return (
             <>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-            <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", display: "flex", padding: "0.2rem", borderRadius: "6px" }}
-            onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.6)"; e.currentTarget.style.background = "none"; }}>
-            <BackIcon />
-            </button>
-            <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            Chat with {countries.map(c => c.name).join(", ") || "unknown participant"}
-            </span>
-            <button onClick={() => onToggleRead?.()}
-            title={unread ? "Mark as read" : "Mark as unread"}
-            aria-label={unread ? "Mark as read" : "Mark as unread"}
-            style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
-            <EnvelopeIcon filled={unread} />
-            </button>
-            {/* Two-step, same as the list row: one click arms, the next confirms. */}
-            <button title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"}
-            aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"}
-            onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }}
-            onBlur={() => setConfirmingDelete(false)}
-            style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirmingDelete ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,0.65)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
-            onMouseEnter={e => { if (!confirmingDelete) { e.currentTarget.style.color = "rgba(239,68,68,1)"; e.currentTarget.style.background = "rgba(239,68,68,0.1)"; } }}
-            onMouseLeave={e => { if (!confirmingDelete) { e.currentTarget.style.color = "rgba(239,68,68,0.65)"; e.currentTarget.style.background = "none"; } }}>
-            {confirmingDelete ? "Delete?" : <TrashIcon />}
-            </button>
-            <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: "1rem", lineHeight: 1, padding: "0.25rem 0.3rem", borderRadius: "6px" }}
-            onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
-            onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>✕</button>
-            </div>
+            {isInstitutional ? (
+                <>
+                {/* Institutional councils are canonical records and intentionally expose no delete control. */}
+                <div style={{ display: "flex", alignItems: "center", gap: ".75rem", padding: ".75rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", flexShrink: 0 }}>
+                    <button onClick={onBack} aria-label="Back to institution" style={{ background: "none", border: 0, color: "rgba(255,255,255,.55)", cursor: "pointer", display: "flex", padding: ".22rem", borderRadius: 6 }}><BackIcon /></button>
+                    {institution && <InstitutionEmblem institution={institution} size={48} />}
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
+                            <strong style={{ fontSize: ".94rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{institution?.name || chat.title || "Institution council"}</strong>
+                            {institution?.status && <InstitutionPill tone={String(institution.status).toLowerCase() === "active" ? "good" : "neutral"}>{institution.status}</InstitutionPill>}
+                        </div>
+                        <div style={{ marginTop: ".12rem", fontSize: ".56rem", color: "rgba(255,255,255,.38)" }}>
+                            {String(institution?.kind || "institution").replace(/[-_]/g, " ")}{institution?.shortName ? ` · ${institution.shortName}` : ""}{institution?.foundedDate ? ` · founded ${institution.foundedDate}` : ""}
+                        </div>
+                    </div>
+                    <button onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(147,197,253,.78)", padding: ".3rem", borderRadius: 6 }}><EnvelopeIcon filled={unread} /></button>
+                </div>
+                {institutionView && <div style={{ padding: ".55rem 1rem", flexShrink: 0 }}><InstitutionFacts view={institutionView} /></div>}
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: ".15rem", padding: "0 .7rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
+                    {[
+                        ["council", "Council"],
+                        ["agenda", `Agenda${institutionView?.activeProposals?.length ? ` (${institutionView.activeProposals.length})` : ""}`],
+                        ["decisions", `Decisions${institutionView?.decisionHistory?.length ? ` (${institutionView.decisionHistory.length})` : ""}`],
+                        ["charter", "Charter"],
+                        ["members", "Members"],
+                        ["documents", "Documents"],
+                    ].map(([key, label]) => <button key={key} onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(139,92,246,.95)" : "transparent"}`, background: "transparent", color: key === "council" ? "#ede9fe" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
+                </div>
+                {institutionPendingActions > 0 && <button type="button" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
+                    <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{institutionPendingBallots ? `${institutionPendingBallots} ballot${institutionPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{institutionPendingBallots && institutionPendingAmendments ? " · " : ""}{institutionPendingAmendments ? `${institutionPendingAmendments} amendment review${institutionPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
+                    <strong style={{ fontSize: ".6rem" }}>Review agenda →</strong>
+                </button>}
+                </>
+            ) : (
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+                <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", display: "flex", padding: "0.2rem", borderRadius: "6px" }}><BackIcon /></button>
+                <span style={{ flex: 1, minWidth: 0, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{`Chat with ${countries.map(c => c.name).join(", ") || "unknown participant"}`}</span>
+                <button onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}><EnvelopeIcon filled={unread} /></button>
+                <button title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"} aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"} onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }} onBlur={() => setConfirmingDelete(false)} style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirmingDelete ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,0.65)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}>{confirmingDelete ? "Delete?" : <TrashIcon />}</button>
+                <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: "1rem", lineHeight: 1, padding: "0.25rem 0.3rem", borderRadius: "6px" }}>✕</button>
+                </div>
+            )}
 
             <div style={{ flex: 1, overflowY: "auto", overflowX: "visible", scrollbarWidth: "none", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
             {messages.length === 0 && !isLoading && (
                 <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.35)", fontStyle: "italic", textAlign: "center", marginTop: "2rem" }}>
-                Begin the diplomatic conversation.
+                {isInstitutional ? "The council floor is quiet. Address the institution when you are ready." : "Begin the diplomatic conversation."}
                 </p>
             )}
             {hiddenMessageCount > 0 && (
@@ -1206,8 +1253,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 return (
                     <React.Fragment key={index}>
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
-                    <MessageBubble msg={msg} chatCountries={countries}
-                    onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />
+                    {isInstitutional && (msg.role === "system" || String(msg.speaker || "").toLowerCase() === "system")
+                        ? <InstitutionRecord msg={msg} />
+                        : <MessageBubble msg={msg} chatCountries={countries}
+                            onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
                     </React.Fragment>
                 );
             })}
@@ -1237,7 +1286,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 style={{ flex: 1, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.11)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
                 onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
-                >Speak</button>
+                >{isInstitutional ? "Speak instead" : "Speak"}</button>
                 <button
                 onClick={handleLetSpeak}
                 style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(139,92,246,0.3)", background: "rgba(139,92,246,0.12)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
@@ -1247,23 +1296,28 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 </div>
                 </div>
             ) : phase === "player" && !isLoading ? (
-                <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
-                <textarea
-                ref={composerRef}
-                placeholder="Send a diplomatic message…"
-                rows={1} value={playerInput}
-                onChange={e => setPlayerInput(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
-                onInput={fitComposer}
-                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
-                onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
-                onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
-                />
-                <button onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                style={{ backgroundColor: playerInput.trim() ? "#3b82f6" : "rgba(59,130,246,0.3)", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
-                onMouseEnter={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
-                onMouseLeave={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
-                >🚀</button>
+                <div style={{ padding: isInstitutional ? ".65rem 1rem .8rem" : "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }}>
+                {isInstitutional && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
+                    <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
+                    <button type="button" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
+                </div>}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <textarea
+                    ref={composerRef}
+                    placeholder={isInstitutional ? "Address the council…" : "Send a diplomatic message…"}
+                    rows={1} value={playerInput}
+                    onChange={e => setPlayerInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
+                    onInput={fitComposer}
+                    style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
+                    onFocus={e => e.target.style.borderColor = isInstitutional ? "rgba(139,92,246,.65)" : "rgba(59,130,246,0.6)"}
+                    onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
+                    />
+                    <button onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutional ? "rgba(91,33,182,.85)" : "#3b82f6") : (isInstitutional ? "rgba(91,33,182,.28)" : "rgba(59,130,246,0.3)"), border: isInstitutional ? "1px solid rgba(167,139,250,.26)" : "none", borderRadius: "10px", minWidth: isInstitutional ? "4.3rem" : "2.5rem", height: "2.5rem", padding: isInstitutional ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutional ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    >{isInstitutional ? "Send ↗" : "🚀"}</button>
+                </div>
+                {isInstitutional && <div style={{ marginTop: ".28rem", fontSize: ".5rem", color: "rgba(255,255,255,.28)" }}>Enter to send · Shift+Enter for a new line</div>}
                 </div>
             ) : null}
             </>
@@ -1985,10 +2039,11 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onConsumeRequest, requestedChatId = "", onConsumeRequestedChat, isGenerating = false }) => {
     // "chats" is the diplomacy the player is party to; "spy" is everyone else's.
     const [view, setView] = useState("chats");
+    const [institutionFocusRequest, setInstitutionFocusRequest] = useState(null);
     // The Spy tab exists only where espionage does (the scenario's Features tab,
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
-    const currentView = espionageOn ? view : "chats";
+    const currentView = view === "spy" && !espionageOn ? "chats" : view;
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -2007,7 +2062,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const unseen = useUnseenEventIds();
     const shownChats = useMemo(() => withoutUnseenChats(chats, unseen), [chats, unseen]);
     const shownVersion = (chat) => (chat ? withoutUnseenChats([chat], unseen)[0] ?? chat : chat);
-    const openChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    const allOpenChats = shownChats.filter((chat) => chat.status !== "closed" && Array.isArray(chat.countries) && chat.countries.length > 0);
+    // Formal institution councils have their own first-class workspace. Keep
+    // them out of the ordinary Diplomacy list instead of flattening NATO/EU/etc.
+    // into ad-hoc country chats, while retaining them in unread tracking.
+    const openChats = allOpenChats.filter((chat) => !chat.institutionId);
 
     // Which chats to flag as unread: seeded from the persisted baseline when the
     // panel OPENS, then only ever added to (arrivals) or cleared per-chat (an
@@ -2037,10 +2096,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             // First look ever: seed the baseline rather than declare every chat
             // that already existed unread. The same seed the toolbar badge does —
             // whichever gets there first wins, and it only ever happens once.
-            writeSeen(seenTotals(openChats));
+            writeSeen(seenTotals(allOpenChats));
             setUnreadIds(new Set());
         } else {
-            setUnreadIds(new Set(openChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
+            setUnreadIds(new Set(allOpenChats.filter((chat) => isChatUnread(chat, seen)).map((chat) => String(chat.id))));
         }
         setDisplayOrder(sortChatsByRecency(openChats).map((chat) => String(chat.id)));
         // Deliberately NOT writing the baseline here. Opening the panel is not
@@ -2048,7 +2107,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         // The baseline only advances when a chat is actually opened
         // (setChatReadState, below) or "Mark all read" is clicked, so the badge
         // survives a look at the list and clears only for what was really read.
-    }, [isOpen, hasLoadedInitialData, freshSinceOpen, openChats]);
+    }, [isOpen, hasLoadedInitialData, freshSinceOpen, allOpenChats]);
 
     // A chat that arrives (or gains a message) while the panel sits open still
     // has to show as new — storage is the authority now that the baseline is no
@@ -2059,12 +2118,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         const seen = readSeen();
         if (!seen) return;
         const activeId = activeChat ? String(activeChat.id) : null;
-        const arrived = openChats
+        const arrived = allOpenChats
             .filter((chat) => String(chat.id) !== activeId && isChatUnread(chat, seen))
             .map((chat) => String(chat.id));
         if (arrived.length === 0) return;
         setUnreadIds((prev) => (arrived.every((id) => prev.has(id)) ? prev : new Set([...prev, ...arrived])));
-    }, [isOpen, openChats, activeChat]);
+    }, [isOpen, allOpenChats, activeChat]);
 
     // Follows the frozen displayOrder — each id's LIVE chat object, so unread
     // status and preview text still update in place — with anything that
@@ -2186,6 +2245,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return () => { cancelled = true; };
     }, [hasLoadedInitialData, isOpen]);
 
+    const worldSnapshot = useRuntimeState("world", (world) => world || {});
     const identity = useRuntimeState("game", selectGameIdentity);
     useEffect(() => {
         if (!isOpen) return;
@@ -2251,16 +2311,46 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // itself (the truth of the thread), the roster after a join or a departure,
     // the title, the polls, and each speaker's cross-chat cursors. The cursors
     // live in world state, so they are written there rather than on the chat.
-    const handleThreadUpdate = (chatId, { events, countries, title, polls, cursors }) => {
+    const handleThreadUpdate = (chatId, { events, countries, title, polls, cursors, committed = false }) => {
         setChats((prev) => {
             const updated = prev.map((c) => (c.id === chatId
                 ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls }
                 : c));
-            saveAllChats(updated);
+            // Institutional one-request turns are already committed atomically
+            // with their legal governance/world/event changes in gameplay.js.
+            if (!committed) saveAllChats(updated);
             setActiveChat((ac) => (ac?.id === chatId ? updated.find((c) => c.id === chatId) ?? ac : ac));
             return updated;
         });
-        if (cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
+        if (!committed && cursors && Object.keys(cursors).length) void saveChatKnowledgeCursors(cursors);
+    };
+
+    const adoptInstitutionalResult = (result) => {
+        if (Array.isArray(result?.chats)) setChats(result.chats);
+        if (result?.channel) {
+            setActiveChat(result.channel);
+            setHeldUnreadId(null);
+            setChatReadState(shownVersion(result.channel), true);
+        }
+        void refreshRuntimeState(["world", "chat", "events"]);
+    };
+
+    const navigateInstitution = (institutionId, section = "overview") => {
+        const id = String(institutionId || "").trim();
+        setActiveChat(null);
+        setView("institutions");
+        if (id) setInstitutionFocusRequest({ institutionId: id, section, nonce: Date.now() });
+    };
+
+    const openInstitutionCouncil = (channel, result) => {
+        if (result) adoptInstitutionalResult(result);
+        else if (channel) {
+            setActiveChat(channel);
+            setHeldUnreadId(null);
+            setChatReadState(shownVersion(channel), true);
+        }
+        const institutionId = channel?.institutionId || result?.channel?.institutionId;
+        if (institutionId) setInstitutionFocusRequest({ institutionId: String(institutionId), section: "overview", nonce: Date.now() });
     };
 
     const handleStartChat = (selected) => {
@@ -2345,6 +2435,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
     // Only the conversation on screen is exposed to the toolbar's incoming-message
     // watcher: a reply landing in this exact thread is being read, never toasted.
+    const institutionUnreadCount = allOpenChats.filter((chat) => chat.institutionId && unreadIds.has(String(chat.id))).length;
+
     const activeChatIdForWatcher = activeChat ? String(activeChat.id) : "";
     useEffect(() => {
         activeDiplomaticChatId = isOpen ? activeChatIdForWatcher : "";
@@ -2356,20 +2448,21 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return (
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => activeChat.institutionId ? navigateInstitution(activeChat.institutionId, "overview") : setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
-                onDraftApplied={() => setComposerDraft(null)} />
+                onDraftApplied={() => setComposerDraft(null)}
+                onInstitutionNavigate={(section) => activeChat.institutionId && navigateInstitution(activeChat.institutionId, section)} />
             ) : (
                 <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: "0.35rem" }}>
-                {[["chats", "Diplomacy"], ...(espionageOn ? [["spy", "Spy"]] : [])].map(([key, label]) => (
+                {[["chats", "Diplomacy"], ["institutions", institutionUnreadCount ? `Institutions (${institutionUnreadCount})` : "Institutions"], ...(espionageOn ? [["spy", "Spy"]] : [])].map(([key, label]) => (
                     <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
                         border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "transparent"), background: currentView === key ? "rgba(139,92,246,0.22)" : "transparent", color: currentView === key ? "white" : "rgba(255,255,255,0.5)" }}>
                     {label}
@@ -2382,6 +2475,17 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 </div>
                 {currentView === "spy" ? (
                     <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} />
+                ) : currentView === "institutions" ? (
+                    <InstitutionsWorkspace
+                        world={worldSnapshot}
+                        playerCountry={playerCountry}
+                        gameDate={gameDate}
+                        chats={chats}
+                        unreadIds={unreadIds}
+                        onAdoptResult={adoptInstitutionalResult}
+                        onOpenCouncil={openInstitutionCouncil}
+                        focusRequest={institutionFocusRequest}
+                    />
                 ) : (
                 <>
                 {/* The unread filter belongs to the diplomacy list only — the Spy

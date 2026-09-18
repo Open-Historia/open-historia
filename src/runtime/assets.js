@@ -967,6 +967,49 @@ export const primeJson = (url, data, { cache, clone = true } = {}) => {
   return clone ? cloneJson(snapshot) : snapshot;
 };
 
+// Publish a set of already-persisted JSON assets into the client caches as ONE
+// visible generation. This is the client half of the whole-turn commit seam:
+// every cache is primed and every derived memo invalidated BEFORE any consumer
+// event fires, so a listener reacting to world/game/colors cannot observe the
+// other turn assets from the previous generation.
+export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
+  const list = Array.isArray(entries)
+    ? entries.filter((entry) => entry?.url)
+    : [];
+
+  for (const entry of list) {
+    primeJson(entry.url, entry.value, {
+      clone: entry.cacheClone ?? entry.url !== JSON_URLS.world,
+    });
+  }
+  for (const entry of list) {
+    invalidateDerivedCachesForWrite(entry.url, { emitEvents: false });
+  }
+
+  if (emitEvents && typeof window !== "undefined") {
+    const urls = new Set(list.map((entry) => entry.url));
+    if (urls.has(JSON_URLS.colors)) window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
+
+    for (const entry of list) {
+      const { url, value } = entry;
+      if (url === JSON_URLS.world) {
+        window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
+      }
+      if (url === JSON_URLS.game) {
+        window.dispatchEvent(new CustomEvent("oh:game-updated", { detail: { game: value } }));
+      }
+      if (isMutableRuntimeJsonUrl(url)) {
+        window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+          detail: { key: runtimeAssetLabel(url), url, value },
+        }));
+      }
+    }
+  }
+
+  return list.map((entry) => entry.value);
+};
+
 export const writeJson = async (
   url,
   data,

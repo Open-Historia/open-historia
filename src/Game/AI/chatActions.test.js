@@ -172,3 +172,16 @@ test("an option given as {label} alone, and a vote by its own ref, both work", (
     ], roster(), {});
     assert.deepEqual(rejected, []);
 });
+
+test("institution channels reject generic membership mutations without rejecting sibling speech", () => {
+  const result = applyChatActionBatch([
+    { type: "add_member", actorName: "France", targetName: "Spain" },
+    { type: "send_message", actorName: "France", content: "The council should decide membership formally." },
+  ], {
+    aiParticipants: ["France"], humanParticipants: ["Germany"], knownPolities: ["France", "Germany", "Spain"],
+  }, { time: "2026-01-01", disallowMembershipChanges: true });
+  assert.equal(result.applied.length, 1);
+  assert.equal(result.events[0].kind, "message");
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /institution ledger/i);
+});

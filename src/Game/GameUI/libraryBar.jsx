@@ -39,6 +39,8 @@ import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
+import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
@@ -214,6 +216,7 @@ const editorSectionLabels = {
   bundles: "Bundles",
   features: "Features",
   overview: "Overview",
+  politics: "Politics",
   prompts: "Prompts",
   stats: "Stats",
   world: "World",
@@ -1102,6 +1105,7 @@ const EditorDrawer = ({
   onExportPrompts,
   onFileSelect,
   onImportPrompts,
+  onDetailsChange,
   onOpenFileDialog,
   onOpenMapEditor,
   onSave,
@@ -1118,7 +1122,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "stats", "features", "prompts", "assets", "bundles"]
+      ? ["overview", "world", "politics", "stats", "features", "prompts", "assets", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
 
   return (
@@ -1298,6 +1302,28 @@ const EditorDrawer = ({
             </div>
           </div>
         </div>
+      )}
+
+      {editorSection === "politics" && kind === "scenario" && (
+        <>
+          <InstitutionAuthoringPanel
+            details={details}
+            onDetailsChange={onDetailsChange}
+          />
+          <Suspense
+            fallback={
+              <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem", color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>
+                Loading political world tools...
+              </div>
+            }
+          >
+            <PoliticalWorldGenerationPanel
+              details={details}
+              formState={formState}
+              onDetailsChange={onDetailsChange}
+            />
+          </Suspense>
+        </>
       )}
 
       {editorSection === "stats" && kind === "scenario" && (
@@ -3214,6 +3240,10 @@ const LibraryTopBar = () => {
         onExportBundle={handleExportBundle}
         onExportPrompts={handleExportPrompts}
         onImportPrompts={handleImportPrompts}
+        onDetailsChange={(nextDetails) => {
+          setEditorDetails(nextDetails);
+          setEditorState((current) => current ? { ...current } : current);
+        }}
         onOpenMapEditor={() => {
           const scenario = editorDetails?.scenario || null;
           setMapEditorScenario(scenario);

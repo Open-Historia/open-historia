@@ -111,10 +111,10 @@ import {
   spyProvenanceOps,
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
-import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, resolveEspionage } from "../../runtime/spycraft.js";
+import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
-import { isSeal, newSeal, openExchange, sealExchange } from "../../runtime/spySeal.js";
+import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -185,7 +185,9 @@ import {
   writeEventsState,
   writeGameData,
   writeWorldState,
+  writeCanonicalTurnState,
 } from "../../runtime/gameState.js";
+import { advancePoliticalBackgroundSimulation } from "../../runtime/politicalBackground.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
@@ -251,6 +253,9 @@ import { getLibraryState } from "../../runtime/library.js";
 import { getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
+import { partitionInstitutionChatActions } from "./institutionChatActions.js";
+import { commitInstitutionalChatGovernanceBatch } from "../../runtime/institutionalGovernance.js";
+import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNarration, renderReminders } from "../../runtime/gmChanges.js";
 import { describeGoalForSimulation, describeGoalForSuggestions, playerGoalOf } from "../../runtime/playerGoal.js";
 import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPhases.js";
@@ -259,6 +264,10 @@ import { deliveryEventId, documentExchange, documentNote, documentNotices, isDoc
 import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
 import { canRewindCatalystTo, isSceneInProgress, openCatalyst, recordCatalystBeat, rewindCatalyst } from "./catalystRewind.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
+import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import { normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
+import { buildFutureHistoryBoundaryDirective } from "./futureHistoryBoundary.js";
 import {
   eventsFromLegacyChat,
   normalizeChatEvents,
@@ -2086,6 +2095,19 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // "the AI just makes events saying that you form a treaty with another
   // country ... it just doesn't give you a choice and makes it an event."
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    try {
+      const [world, game] = await Promise.all([
+        readWorldState({ force: false }),
+        readGameData(),
+      ]);
+      systemPrompt = `${systemPrompt}\n\n${buildFutureHistoryBoundaryDirective({
+        world: normalizeWorldState(world),
+        game,
+        originDate: normalizeString(game?.gameDate),
+      })}`;
+    } catch {
+      // Legacy/minimal contexts still receive the template's built-in [What Is True Now].
+    }
     const playerName = normalizeString(variables.playerPolity) || "the player's polity";
     systemPrompt = `${systemPrompt}\n\n[Player Agency]\n${playerName} is controlled by a human player. Never commit ${playerName} to a major decision the player did not actually make: do not sign treaties, alliances, ceasefires, surrenders, trade pacts, unions, or other binding agreements on the player's behalf, do not accept or reject offers for them, and do not have ${playerName} take landmark unilateral action (declaring war, ceding territory, changing government) unless it directly executes one of the player's planned actions, chat replies, or explicit requests. When another polity seeks such an agreement or decision from the player, present it as something the player can answer: a diplomaticOutreach entry or an impacts.createdChats chat where the counterpart speaks first and makes the proposal, or an event describing the offer as OPEN and awaiting the player's response. Events remain free to narrate what other polities do among themselves and to resolve the player's own queued actions exactly as ordered.`;
     // Map truth: the recurring field report is the OPPOSITE failure — invasions
@@ -6133,17 +6155,19 @@ export const rollBackToSnapshot = async (index = 0) => {
     const worldToRestore = liveWorld && typeof liveWorld === "object" && liveWorld.playerGoals !== undefined
       ? { ...(s.world ?? {}), playerGoals: liveWorld.playerGoals }
       : (s.world ?? {});
-    await Promise.all([
-      // writeGameData rather than a raw writeJson: the snapshot was captured a
-      // whole turn ago and carries that turn's unit-system flag, and a setting
-      // must not roll back with the turn. See writeGameData in gameState.js.
-      writeGameData(s.game ?? {}),
-      writeJson(JSON_URLS.world, worldToRestore, { pretty: true }),
-      writeJson(JSON_URLS.events, s.events ?? [], { pretty: true }),
-      writeJson(JSON_URLS.actions, s.actions ?? [], { pretty: true }),
-      writeJson(JSON_URLS.chat, s.chat ?? [], { pretty: true }),
-      writeJson(JSON_URLS.colors, s.colors ?? {}, { pretty: true }),
-    ]);
+    // Rollback uses the same whole-generation publication seam as a forward
+    // turn. A restore must never expose restored history with pre-rollback
+    // world/actions if one underlying desktop file replacement is interrupted.
+    await writeCanonicalTurnState({
+      game: s.game ?? {},
+      world: worldToRestore,
+      events: s.events ?? [],
+      actions: s.actions ?? [],
+      chats: s.chat ?? [],
+      colors: s.colors ?? {},
+    }, {
+      expectedGameId: activeCampaignId(),
+    });
     // The agents' file as it stood before the turn — the traffic and the stolen
     // copies the turn filed go with it. Either way, a copy of a document the
     // restored file no longer holds as stolen is taken out (reportDelivery.js).
@@ -7116,6 +7140,38 @@ const applySimulationResult = async ({
     console.warn("[stats auto] unexpected scheduler failure; the completed turn is preserved.", error);
   }
 
+  // Native PWv2 background motion: after the turn's canonical impacts and any
+  // due Stats refresh have settled, structural world conditions advance the
+  // political-pressure clock and authored/generated political response profiles.
+  // This is CPU-only and spends ZERO AI requests. If the worker is unavailable,
+  // the previous canonical political state is preserved and a later turn can
+  // catch up from the unchanged clock.
+  try {
+    const political = await advancePoliticalBackgroundSimulation({
+      world: nextWorld,
+      fromDate: baseGame.gameDate || baseGame.startDate || "",
+      toDate: nextGame.gameDate || nextGame.startDate || "",
+      round: nextGame.round || 0,
+      signal: projects?.signal,
+    });
+    nextWorld = political.world;
+    if (!political.skipped && (political.pressureChangedPolities || political.responseChangedEntities || political.dispositionChangedPolities)) {
+      logDebugEvent(
+        "turn",
+        `Political background: ${political.pressureChangedPolities} pressure polity(s), ${political.responseChangedEntities} political response change(s), ${political.dispositionChangedPolities || 0} disposition change(s).`,
+        {
+          responseTicks: political.plan?.responseTicks || 0,
+          structuralSignalPolities: political.structuralSignalPolities || 0,
+          droppedResponseTicks: political.plan?.droppedResponseTicks || 0,
+        },
+        { verbose: true },
+      );
+    }
+  } catch (error) {
+    if (projects?.signal?.aborted) throw error;
+    console.warn("[politics background] native political update failed; the completed turn is preserved.", error);
+  }
+
   // Permanent compact Stats history: snapshots only the numeric sheets that
   // already exist, so it adds no AI work when tracking is off or not due.
   nextWorld = captureCountryStatsHistory(nextWorld, {
@@ -7158,18 +7214,31 @@ const applySimulationResult = async ({
     unseenEvents.markTurnUnseen(normalizeArray(nextWorld.simulationHistory?.[0]?.eventIds));
   }
 
-  // The chats go last: whatever hears of a new letter — the toolbar's watcher —
-  // reads the world to know whether its event has been revealed, and must find
-  // the turn that wrote it already there.
-  await Promise.all([
-    writeActionsState(nextActions),
-    writeEventsState(nextEvents),
-    writeGameData(nextGame),
-    writeJson(JSON_URLS.colors, nextColors, { pretty: true }),
-    ...(renamedFlags ? [writeJson(JSON_URLS.flags, renamedFlags, { pretty: true })] : []),
-    writeWorldState(nextWorld),
-  ]);
-  await writeChatsState(chatsToWrite);
+  // Publish the complete canonical turn as ONE generation. Desktop persists the
+  // six domains behind a recovery journal; web mode updates its single game
+  // record transactionally. Client caches switch generation before listeners
+  // are notified, so no observer can see a hybrid turn.
+  await writeCanonicalTurnState({
+    actions: nextActions,
+    chats: chatsToWrite,
+    events: nextEvents,
+    game: nextGame,
+    colors: nextColors,
+    world: nextWorld,
+  }, {
+    expectedGameId: campaignId,
+  });
+
+  // Flags are presentation data rather than turn authority. A polity rename may
+  // update them, but a failed emblem write must not roll back an otherwise valid
+  // canonical generation.
+  if (renamedFlags) {
+    try {
+      await writeJson(JSON_URLS.flags, renamedFlags, { pretty: true });
+    } catch (error) {
+      console.warn("[turn] renamed flags could not be persisted; canonical turn remains committed.", error);
+    }
+  }
 
   // The turn's new state is now persisted. Web-mode encrypted sync listens for this
   // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
@@ -7495,6 +7564,60 @@ const getWorldDirectorWorker = () => {
     worldDirectorWorkerBroken = true;
     return null;
   }
+};
+
+const collectWorldInitiativePoliticalActors = (analysis, playerPolity = "", maxActors = 8) => {
+  const out = [];
+  const seen = new Set();
+  const push = (value) => {
+    const actor = normalizeString(value);
+    const key = actor.toLocaleLowerCase();
+    if (!actor || seen.has(key) || out.length >= Math.max(1, Number(maxActors) || 8)) return;
+    seen.add(key);
+    out.push(actor);
+  };
+
+  // The human polity belongs in the context because endogenous domestic pressure
+  // can matter to history, but the prompt below explicitly keeps that evidence
+  // separate from authority to invent a sovereign player choice.
+  push(playerPolity);
+
+  for (const storyline of normalizeArray(analysis?.attentionStorylines)) {
+    for (const participant of normalizeArray(storyline?.participants)) push(participant);
+  }
+  for (const slot of normalizeArray(analysis?.explorationSlate)) {
+    if (normalizeString(slot?.type) === "actor-domain") push(slot?.actor);
+  }
+  for (const actor of normalizeArray(analysis?.diplomaticActors)) push(actor);
+  for (const row of normalizeArray(analysis?.economicActors)) push(row?.actor);
+
+  return out;
+};
+
+const buildWorldInitiativePoliticalDecisionContext = ({ world, analysis, playerPolity }) => {
+  const actorPolities = collectWorldInitiativePoliticalActors(analysis, playerPolity, 8);
+  if (!actorPolities.length) return "";
+
+  const set = buildBoundedPoliticalDecisionContextSet(world, {
+    actorPolities,
+    maxActors: 8,
+    perActorMaxChars: 1900,
+    maxTotalChars: 11000,
+    limits: {
+      traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 4,
+      pressureIssues: 4, governingEntities: 3, oppositionEntities: 2,
+      perceptions: 3, relations: 3, agreements: 3, wars: 2, institutions: 6,
+    },
+  });
+  if (!set.text) return "";
+
+  return [
+    "[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]",
+    set.text,
+    "Use each actor capsule only as evidence about that actor's incentives, constraints and endogenous political motion.",
+    "For the HUMAN-controlled polity, internal pressure may produce non-sovereign social, party, institutional or public developments, but it is NOT consent or authority to invent a new executive, parliamentary, diplomatic, military, territorial or other sovereign choice. Such choices require exact prior player authority already present in canonical orders/process state.",
+    "Do not reveal one actor's private political state to another unless that knowledge is explicitly present in the actor's own Political Knowledge or the objective canonical ledger.",
+  ].join("\n");
 };
 
 const buildWorldInitiativeContextBackground = async (bundle, options = {}, signal) => {
@@ -9885,6 +10008,83 @@ const ensureSpySeal = async () => {
   return spySeal;
 };
 
+const qualitativePoliticalBand = (value) => {
+  if (value == null || typeof value === "boolean" || Array.isArray(value)) return "";
+  const text = normalizeString(value);
+  if (!text) return "";
+  const numeric = typeof value === "number" || /^-?\d+(?:\.\d+)?$/.test(text) ? Number(value) : NaN;
+  if (!Number.isFinite(numeric)) return text;
+  if (numeric >= 80) return "very high";
+  if (numeric >= 65) return "high";
+  if (numeric >= 45) return "moderate";
+  if (numeric >= 25) return "low";
+  return "very low";
+};
+
+const politicalMetricLabel = (value) => String(value ?? "")
+  .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+  .replace(/[_-]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim()
+  .toLocaleLowerCase();
+
+// Political Actors owns hidden political truth. The espionage task gets only
+// qualitative, source-limited signals so raw canonical scores never cross the
+// model boundary and Beta's signal-clarity system remains the information gate.
+const buildCollectedPoliticalSignals = (world, polity, { clarity = 0, seed = "" } = {}) => {
+  const actor = getPoliticalProfile(world, polity);
+  if (!actor || typeof actor !== "object" || Array.isArray(actor)) return "";
+  const lines = [];
+  const addRecord = (label, value, limit = 10) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const rows = Object.entries(value)
+      .slice(0, limit)
+      .map(([key, raw]) => {
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          const nested = Object.entries(raw).slice(0, 8)
+            .map(([nestedKey, nestedValue]) => `${politicalMetricLabel(nestedKey)} ${qualitativePoliticalBand(nestedValue)}`)
+            .filter(Boolean)
+            .join(", ");
+          return nested ? `${key}: ${nested}` : "";
+        }
+        const described = qualitativePoliticalBand(raw);
+        return described ? `${politicalMetricLabel(key)} ${described}` : "";
+      })
+      .filter(Boolean);
+    if (rows.length) lines.push(`${label}: ${rows.join("; ")}`);
+  };
+  const addList = (label, value, limit = 10) => {
+    const rows = normalizeArray(value).map(normalizeString).filter(Boolean).slice(0, limit);
+    if (rows.length) lines.push(`${label}: ${rows.join("; ")}`);
+  };
+
+  const government = actor.government && typeof actor.government === "object" ? actor.government : {};
+  const internalGovernment = {};
+  if (government.approval !== undefined) internalGovernment.approval = government.approval;
+  if (government.stability !== undefined) internalGovernment.stability = government.stability;
+  addRecord("Internal government condition", internalGovernment);
+  addRecord("Leadership tendencies", actor.traits);
+  addList("Internal fears", actor.fears);
+  addList("Latent ambitions", actor.ambitions);
+  addRecord("Perceptions", actor.perceptions, 8);
+  addList("Domestic pressures", actor.domesticPressures);
+  addRecord("Current behavioral disposition", actor.behavioralDisposition);
+
+  const partySignals = normalizeArray(actor.parties)
+    .map((party) => {
+      const name = normalizeString(party?.name);
+      const internal = normalizeString(party?.internalStrategy || party?.internalPressure || party?.privateGoal);
+      return name && internal ? `${name}: ${internal}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 6);
+  if (partySignals.length) lines.push(`Party-internal signals: ${partySignals.join("; ")}`);
+
+  const truth = lines.join("\n").slice(0, 5000);
+  if (!truth) return "";
+  return redactText(truth, clarity, `${seed}:political-signals`);
+};
+
 // One agent's report, in three steps — what the task is sent, the request, and
 // what is kept of the answer — so that the request can be the task's own
 // (gatherIntelligence below) or a job inside the turn review, which carries every
@@ -9922,6 +10122,24 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
       + openQuestions.join("\n")
     : "";
 
+  const clarity = signalClarity(intelligenceOf(bundle.world, player), intelligenceOf(bundle.world, name));
+  const collectedPoliticalSignals = buildCollectedPoliticalSignals(bundle.world, name, {
+    clarity,
+    seed: spy?.id || name,
+  });
+  const politicalAssessmentOrder = [
+    "POLITICAL ASSESSMENT — alongside the diplomatic exchanges, include politicalAssessment only when the available collection supports a defensible read of hidden decision-making pressures.",
+    "Translate collection into player-readable prose. NEVER output raw Political Actor numbers, exact hidden scores, internal schema/property names, or equations. Describe tendencies qualitatively.",
+    spy?.suspected === true
+      ? "Source integrity is in doubt. Keep confidence low and distinguish uncertain inference from observed traffic."
+      : clarity >= 0.62
+        ? "Collection quality is strong enough for a relatively specific assessment, but uncertainty still exists."
+        : "Collection is partial. Keep the assessment cautious and broad; do not manufacture certainty to fill gaps.",
+    collectedPoliticalSignals
+      ? `SIMULATION-ONLY COLLECTED POLITICAL SIGNALS (already source-limited; do not quote this block verbatim):\n${collectedPoliticalSignals}`
+      : "No additional hidden political signal was collected this period. Base any assessment only on the private traffic and supplied campaign evidence, or omit politicalAssessment if that would be speculation.",
+  ].join("\n");
+
   return {
     name,
     variables,
@@ -9929,6 +10147,7 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
       `Report what the spy in ${name} intercepted this period.`,
       era ? `ERA & WORLD RULES:\n${era}` : "",
       `TARGET DOSSIER:\n${dossier || "(nothing recorded)"}`,
+      politicalAssessmentOrder,
       orders,
     ].filter(Boolean).join("\n\n"),
   };
@@ -9938,35 +10157,55 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
 // entry, and its seal closes it.
 const storeSpyReport = async (bundle, spy, payload) => {
   const name = normalizeString(spy?.target);
+  const reportId = newSpyReportId();
   const exchanges = normalizeArray(payload?.exchanges)
     // The schema forbids it, but a model that names the target or the player as
     // the counterpart has produced a chat the player already has or nonsense.
-    // A spy reports on what the target says to OTHERS; the player's own dealings
-    // with them are already in the player's inbox. Case- and space-insensitive,
-    // because the model writes a display name and the old comparison was exact.
     .filter((exchange) => {
       const counterpart = regionKey(exchange?.counterpart);
       return counterpart && counterpart !== regionKey(name) && counterpart !== regionKey(bundle.game?.country);
     })
     .map((exchange, index) => ({
       ...exchange,
-      id: `${name}:${bundle.game?.round ?? 0}:${index}`.toLowerCase().replace(/\s+/g, "-"),
+      id: `${reportId}:${index}`,
     }));
-  // Stored sealed: the file, the network reply and the React tree hold ciphertext,
-  // so copying the page or opening intercepts.json gives up nothing the player's
-  // service did not decode. Only the renderer and the jump prompt open it.
+  // Stored sealed: the file, the network reply and the React tree hold ciphertext.
   const seal = isSeal(bundle.world?.spySeal) ? bundle.world.spySeal : await ensureSpySeal();
   const sealed = await Promise.all(exchanges.map((exchange) => sealExchange(seal, exchange)));
+
+  const rawPoliticalAssessment = normalizePoliticalIntelligenceAssessment(payload?.politicalAssessment);
+  const player = normalizeString(bundle.game?.country);
+  const clarity = signalClarity(intelligenceOf(bundle.world, player), intelligenceOf(bundle.world, name));
+  const politicalAssessment = rawPoliticalAssessment
+    ? normalizePoliticalIntelligenceAssessment({
+        ...rawPoliticalAssessment,
+        confidence: spy?.suspected === true ? "Low" : clarity >= 0.75 ? "High" : clarity >= 0.42 ? "Moderate" : "Low",
+        source: spy?.suspected === true
+          ? "HUMINT reporting - source integrity concerns"
+          : "HUMINT reporting",
+        gatheredAt: normalizeString(bundle.game?.gameDate),
+      })
+    : null;
+  const sealedPoliticalAssessment = politicalAssessment
+    ? await sealPoliticalAssessment(seal, reportId, politicalAssessment)
+    : null;
+
   // Re-read at write time: another gather may have landed for a different target.
   const current = normalizeIntercepts(await readInterceptsState({ force: true }));
-  // Each report replaces the agent's traffic — what it heard this period — but
-  // not the documents it stole (reportDelivery.js): those stay on file with it.
+  // Each report replaces the agent's traffic, but not stolen documents already on file.
   const stolen = normalizeArray(current[name]?.exchanges).filter(isDocumentExchange).slice(0, STOLEN_DOCUMENTS_KEPT);
-  const entry = { gatheredAt: normalizeString(bundle.game?.gameDate), round: Number(bundle.game?.round) || 0, planted: spy.status === "turned", exchanges: [...stolen, ...sealed] };
+  const entry = {
+    reportId,
+    spyId: normalizeString(spy?.id),
+    gatheredAt: normalizeString(bundle.game?.gameDate),
+    round: Number(bundle.game?.round) || 0,
+    planted: spy?.status === "turned",
+    exchanges: [...stolen, ...sealed],
+    ...(sealedPoliticalAssessment ? { politicalAssessment: sealedPoliticalAssessment } : {}),
+  };
   await writeInterceptsState({ ...current, [name]: entry });
   return entry;
 };
-
 // How many stolen documents an agent's file keeps, newest first.
 const STOLEN_DOCUMENTS_KEPT = 8;
 
@@ -10046,11 +10285,18 @@ export const readOpenedIntercepts = async () => {
   if (!isSeal(world.spySeal)) return intercepts;
   const out = {};
   for (const [target, entry] of Object.entries(intercepts)) {
-    out[target] = { ...entry, exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))) };
+    const reportId = entry.reportId || `${target}:${entry.round || 0}:${entry.gatheredAt || "legacy"}`;
+    const politicalAssessment = entry.politicalAssessment
+      ? await openPoliticalAssessment(world.spySeal, reportId, entry.politicalAssessment)
+      : null;
+    out[target] = {
+      ...entry,
+      exchanges: await Promise.all(entry.exchanges.map((exchange) => openExchange(world.spySeal, exchange))),
+      ...(politicalAssessment ? { politicalAssessment } : {}),
+    };
   }
   return out;
 };
-
 // After a jump, every active spy reports again. Sequential and best-effort:
 // a failed report never fails the turn, and the writes go to the intercepts
 // asset only — never to world.json, whose turn write has just landed.
@@ -11039,6 +11285,37 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
 //
 // Who acts is settled HERE, natively: the AI participants of this thread. The
 // model is told the roster is authoritative and may never act for the human.
+const institutionGovernancePrompt = (world, institutionId, playerCountry = "") => {
+  const institution = resolveInstitutionRecord(world, institutionId);
+  if (!institution) return "";
+  const proposals = Object.values(institution.proposals || {}).slice(0, 16);
+  const proposalLines = proposals.length
+    ? proposals.map((proposal) => {
+      const amendments = Array.isArray(proposal?.amendments)
+        ? proposal.amendments.filter((entry) => entry?.status === "proposed").map((entry) => `${entry.id}: ${entry.text}`).slice(0, 4)
+        : [];
+      const voting = proposal?.voting;
+      const eligible = Array.isArray(voting?.eligibleVoters) ? voting.eligibleVoters.join(", ") : "";
+      const already = voting?.ballots && typeof voting.ballots === "object" ? Object.keys(voting.ballots).join(", ") : "";
+      return `- ${proposal.id}: ${proposal.title} [${proposal.status}; type=${proposal.type || "resolution"}]`
+        + (amendments.length ? `; unresolved amendments: ${amendments.join(" | ")}` : "")
+        + (eligible ? `; eligible voters: ${eligible}` : "")
+        + (already ? `; ballots already cast: ${already}` : "");
+    }).join("\n")
+    : "- no formal proposals are currently on the agenda";
+  const members = (Array.isArray(institution.members) ? institution.members : [])
+    .map((member) => `${member.polity} (${member.status || "member"}${member.role ? `, ${member.role}` : ""})`)
+    .join(", ");
+  return `[FORMAL INSTITUTIONAL GOVERNANCE - NATIVE LAW]\n`
+    + `This thread is the formal channel of ${institution.name} (${institution.id}).\n`
+    + `Canonical members: ${members || "none"}.\n`
+    + `The human-controlled polity is ${playerCountry || "the player"}. NEVER use an institution_* action for it.\n`
+    + `Speech, reactions and create_poll/poll_vote are conversation only. They DO NOT create proposals, amendments, legal ballots, membership changes or binding institutional outcomes.\n`
+    + `Do not use add_member/remove_member in this channel: membership belongs to the institution ledger.\n`
+    + `Use institution_lodge_proposal only when an AI member genuinely tables new formal business. Use institution_submit_proposal only for an exact existing proposal id when its sponsor is ready to open the charter-defined vote. Use institution_amendment / institution_resolve_amendment only for exact proposal/amendment ids below. Use institution_vote only for an AI polity's formal legal ballot, never for the player. Native code checks every action and the charter; prose cannot override it.\n`
+    + `[Formal agenda]\n${proposalLines}`;
+};
+
 export const runChatActionBatch = async ({
   chat,
   playerMessage = "",
@@ -11058,6 +11335,9 @@ export const runChatActionBatch = async ({
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
   if (!stored) return { events: [], applied: [], rejected: [], actions: [] };
+  const formalInstitutionPrompt = stored.institutionId
+    ? institutionGovernancePrompt(bundle.world, stored.institutionId, player)
+    : "";
 
   // The log is the truth; a thread saved before it existed is migrated on read.
   // The normalized entry has already folded in what was written beside the log —
@@ -11133,6 +11413,39 @@ export const runChatActionBatch = async ({
     `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
   ].join("\n");
 
+  const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, {
+    actorPolities: aiParticipants,
+    counterpartByActor: Object.fromEntries(aiParticipants.map((name) => [name, player])),
+    maxActors: 6,
+    perActorMaxChars: 1800,
+    maxTotalChars: 9000,
+    limits: {
+      traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 3,
+      pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
+      perceptions: 3, relations: 2, agreements: 2, wars: 2, institutions: 6,
+    },
+  });
+
+  // Each AI participant also sees only the documents its own government can read.
+  // One-request group diplomacy contains several governments in one model call,
+  // so the blocks are explicitly compartmentalized just like PWv2 and cross-chat
+  // knowledge: evidence for one participant is not shared with another by virtue
+  // of being present in the combined request. This also keeps institutional
+  // councils on the same reports/documents architecture as ordinary diplomacy.
+  const documentBlocks = aiParticipants.map((speaker) => {
+    const key = normalizeString(speaker).toLowerCase();
+    const text = key ? describeReportsForPrompt(bundle.world?.reports, {
+      sees: (visibleTo) => visibleTo === null || normalizeArray(visibleTo).some((name) => normalizeString(name).toLowerCase() === key),
+      heading: `### ${speaker}'s government documents`,
+      limit: 8,
+      bodyChars: 220,
+    }) : "";
+    return text ? text : "";
+  }).filter(Boolean);
+  const documentKnowledge = documentBlocks.length
+    ? `${documentBlocks.join("\n\n")}\n\nEach document block above belongs to ONE government. Never reveal another participant's private papers unless that government actually shares them in this conversation.`
+    : "";
+
   const variables = {
     ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
     chatParticipants: rosterText,
@@ -11150,6 +11463,11 @@ export const runChatActionBatch = async ({
       playerMessage
         ? `${player} has just said: ${playerMessage}`
         : "Nobody has spoken since your last turn; decide whether anyone would speak now.",
+      politicalDecisionSet.text
+        ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
+        : "",
+      documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
+      formalInstitutionPrompt,
       "Return this turn's actions as JSON only.",
     ].filter(Boolean).join("\n\n"),
     variables,
@@ -11157,30 +11475,61 @@ export const runChatActionBatch = async ({
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
-  const outcome = applyChatActionBatch(normalizeArray(payload?.actions), {
+  const rawActions = normalizeArray(payload?.actions);
+  const partitioned = stored.institutionId
+    ? partitionInstitutionChatActions(rawActions)
+    : { formal: [], conversational: rawActions };
+  const turnTime = normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate);
+  const outcome = applyChatActionBatch(partitioned.conversational, {
     aiParticipants,
     humanParticipants: [player],
     knownPolities: known,
     messageIds: shownMessages.map((message) => message.id),
     polls: projected.polls,
-  }, { time: normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate) });
+  }, { time: turnTime, disallowMembershipChanges: Boolean(stored.institutionId) });
 
   const memorySummary = normalizeString(payload?.memorySummary);
   if (memorySummary) {
     const lastMessage = [...outcome.events].reverse().find((event) => event.kind === "message");
     if (lastMessage) lastMessage.memorySummary = memorySummary;
   }
-  logDebugEvent("diplomacy",
-    `Chat #${stored.id}: one request acted for ${aiParticipants.length} participant(s) — ${outcome.applied.length} action(s) applied, ${outcome.rejected.length} refused.`,
-    { applied: outcome.applied.map((action) => `${action.actorName}:${action.type}`), rejected: outcome.rejected.map((entry) => entry.reason) });
+  let committedInstitution = null;
+  let formalRejected = [];
+  if (stored.institutionId) {
+    committedInstitution = await commitInstitutionalChatGovernanceBatch({
+      institutionId: stored.institutionId,
+      playerCountry: player,
+      date: turnTime,
+      chatEvents: outcome.events,
+      formalActions: partitioned.formal,
+      cursors: nextCursors,
+      expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
+    });
+    formalRejected = committedInstitution.rejected || [];
+  }
 
+  const combinedRejected = [...outcome.rejected, ...formalRejected];
+  const feedbackOutcome = { ...outcome, rejected: combinedRejected };
+  logDebugEvent("diplomacy",
+    `Chat #${stored.id}: one request acted for ${aiParticipants.length} participant(s) - ${outcome.applied.length} conversational action(s) applied, ${partitioned.formal.length - formalRejected.length} formal institutional action(s) applied, ${combinedRejected.length} refused.`,
+    { applied: outcome.applied.map((action) => `${action.actorName}:${action.type}`), formal: partitioned.formal.map((action) => `${action.actorName}:${action.type}`), rejected: combinedRejected.map((entry) => entry.reason) });
+
+  const finalChatEvents = committedInstitution?.channel?.events?.length
+    ? committedInstitution.channel.events
+    : [...events, ...outcome.events];
+  const committedNewEvents = committedInstitution
+    ? finalChatEvents.filter((event) => !events.some((before) => before?.id === event?.id))
+    : outcome.events;
   return {
     ...outcome,
-    events: [...events, ...outcome.events],
-    newEvents: outcome.events,
-    feedback: describeChatActionFeedback(outcome),
+    rejected: combinedRejected,
+    events: finalChatEvents,
+    newEvents: committedNewEvents,
+    feedback: describeChatActionFeedback(feedbackOutcome),
     cursors: nextCursors,
-    actions: normalizeArray(payload?.actions),
+    actions: rawActions,
+    formalActions: partitioned.formal,
+    ...(committedInstitution ? { committed: true, institution: committedInstitution.institution } : {}),
   };
 };
 
@@ -11631,6 +11980,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
         `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
       );
+      const politicalDecisionContext = buildWorldInitiativePoliticalDecisionContext({
+        world: ledgerWorld,
+        analysis: worldInitiative.analysis,
+        playerPolity: normalizeString(bundle.game?.country),
+      });
       const segmentVariables = {
         ...variables,
         worldInitiativeContext: worldInitiative.text,
@@ -11670,7 +12024,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // silence, not elapsed time, so a long segment is never mistaken for a
         // stalled one (and a segmented jump gets that window per segment, since it
         // is per request). Cancel works either way.
-        userMessage: [lastTurnReceipt, gmChangeNarration, buildSegmentInstruction({
+        userMessage: [lastTurnReceipt, gmChangeNarration, politicalDecisionContext, buildSegmentInstruction({
           mode,
           segmentIndex,
           segmentCount,
