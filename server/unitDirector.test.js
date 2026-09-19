@@ -255,3 +255,52 @@ test("a distant narrative objective is kept for the unit engine instead of being
   assert.equal(directed[0].impacts.unitOps[0].toLng, 15.55);
   assert.equal(directed[0].impacts.unitOps[0].toLat, 41.45);
 });
+
+// Seen in a live game (2026-09-19): an empire commissioning frigates, taking
+// delivery of submarines and standing up squadrons for three game years never
+// gained a single counter. Such an event was never offered to the director, and
+// a spawn for a power that already had units needed army wording ("new corps").
+const commissioning = [
+  { title: "Royal Navy commissions two Type 45 destroyers into the fleet", description: "HMS Dauntless and HMS Diamond are commissioned at Portsmouth." },
+  { title: "RAF stands up a new F-35 squadron at Marham", description: "No. 617 Squadron is formed with its first twelve aircraft." },
+  { title: "Admiralty takes delivery of the first Astute-class submarine", description: "The boat enters service with the Clyde flotilla." },
+  { title: "Carrier strike group formed around HMS Queen Elizabeth", description: "The task group is activated at Portsmouth." },
+];
+const notFormations = [
+  { title: "British Admiralty Standardizes Global Shipyard Blueprints", description: "Shipyard construction standards are unified across imperial yards." },
+  { title: "Ministry commissions a review of defence procurement", description: "An independent panel will report on procurement costs." },
+  { title: "Tehran launches a diplomatic campaign at the UN", description: "Iranian envoys lobby member states over Gulf shipping." },
+];
+
+test("a warship commissioned or a squadron stood up is offered to the director; paperwork is not", () => {
+  for (const event of commissioning) assert.equal(eventNeedsNativeUnitDirector(event), true, event.title);
+  for (const event of notFormations) assert.equal(eventNeedsNativeUnitDirector(event), false, event.title);
+});
+
+test("a commissioned ship or a new squadron may spawn for a power that already has units", async () => {
+  const fleet = [{ id: "n1", name: "Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1, lat: 50.8 }];
+  const directed = await directGeneratedUnitOps({
+    events: commissioning.map((event, index) => ({ ...event, id: `c${index}`, date: "2016-08-01", kind: "military", impacts: { unitOps: [] } })),
+    game: { gameDate: "2016-08-04", round: 20 },
+    world: { units: fleet },
+    analyzeBatch: async () => ({ payload: { eventOrders: [
+      { eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Type 45 Destroyer Group", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1.1, lat: 50.8 } }] },
+      { eventIndex: 1, unitOps: [{ op: "spawn", unit: { name: "No. 617 Squadron", type: "air", ownerCode: "British Empire", strength: 100, lng: 0.5, lat: 52.6 } }] },
+    ], summary: "" } }),
+  });
+  assert.equal(directed[0].impacts.unitOps.length, 1, "a destroyer commissioned into the fleet is a new formation");
+  assert.equal(directed[1].impacts.unitOps.length, 1, "a squadron stood up is a new formation");
+});
+
+test("a power with units still gains none from an event that forms nothing", async () => {
+  const fleet = [{ id: "n1", name: "Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -1, lat: 50.8 }];
+  const directed = await directGeneratedUnitOps({
+    events: [{ id: "x", date: "2016-08-01", kind: "military", title: "Home Fleet sails to the Western Approaches", description: "The fleet redeploys for exercises.", impacts: { unitOps: [] } }],
+    game: { gameDate: "2016-08-04", round: 20 },
+    world: { units: fleet },
+    analyzeBatch: async () => ({ payload: { eventOrders: [
+      { eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Second Home Fleet", type: "naval", ownerCode: "British Empire", strength: 100, lng: -6, lat: 49 } }] },
+    ], summary: "" } }),
+  });
+  assert.deepEqual(directed[0].impacts.unitOps, [], "a fleet that is merely moving does not duplicate itself");
+});
