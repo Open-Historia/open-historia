@@ -1743,7 +1743,7 @@ const gmPuppetUpdateSchema = {
     kind: {
       type: "string",
       enum: ["protectorate", "satellite", "client"],
-      description: "Which powers the overlord holds — protectorate: foreign policy; satellite: real independence behind a sovereign front; client: a bought or installed government. Used by install and reclassify.",
+      description: "Which powers the overlord holds — protectorate: its foreign policy and defence; satellite (a plain \"puppet state\"): control of its government behind an independent front; client: a government that depends on the overlord's backing but makes most of its own decisions. Used by install and reclassify.",
     },
     loyalty: { type: "integer", minimum: 0, maximum: 100, description: "How far the puppet accepts direction, 0-100. Used by install and loyalty." },
     secrecy: {

@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
-import { describeRole, visiblePuppetsFor } from "../../runtime/puppets.js";
+import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -209,36 +209,10 @@ const CountryInfoPanel = () => {
     // A covert arrangement the player has not discovered renders NOTHING here -
     // not a locked row, not a greyed-out line. A disabled control would announce
     // the existence of the secret it is keeping.
-    const subordination = useMemo(() => {
-        const name = displayName || country?.name || "";
-        if (!worldState || !name) return null;
-        const rows = visiblePuppetsFor(worldState, playerCountry);
-        const row = rows.find((entry) => entry.puppet === name) || rows.find((entry) => entry.overlord === name && entry.role === "puppet");
-        if (!row || row.status !== "active") return null;
-
-        const asOf = row.asOf ? `, as of ${row.asOf}` : "";
-        const provenance = row.fromIntelligence ? `From intelligence${asOf}.` : "";
-
-        return describeRole(row, {
-            overlord: () => ({
-                headline: `Our ${row.kind}`,
-                // A band, never a number: a visible score is a threshold to
-                // optimise against, and nothing in the engine enforces one.
-                detail: `${row.loyaltyBand} toward us${row.startedDate ? ` · since ${row.startedDate}` : ""} · ${row.secrecy === "covert" ? "arrangement is covert" : "openly known"}`,
-                provenance: "",
-            }),
-            puppet: () => ({
-                headline: "Our overlord",
-                detail: `We are the ${row.kind} of ${row.overlord}${row.startedDate ? ` · since ${row.startedDate}` : ""}`,
-                provenance: "",
-            }),
-            foreign: () => ({
-                headline: `${row.kind.charAt(0).toUpperCase()}${row.kind.slice(1)} of ${row.overlord}`,
-                detail: `${row.overlord} directs this country's affairs.`,
-                provenance,
-            }),
-        });
-    }, [worldState, playerCountry, displayName, country]);
+    const subordination = useMemo(
+        () => puppetSummaryFor(worldState, playerCountry, displayName || country?.name || ""),
+        [worldState, playerCountry, displayName, country],
+    );
 
     const filteredEvents = useMemo(() => {
         const mode = FILTER_MODES[filterIndex].id;
@@ -374,7 +348,10 @@ const CountryInfoPanel = () => {
                 }}
             >
                 <div style={{ fontSize: "0.85rem", fontWeight: 800 }}>{subordination.headline}</div>
-                <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.76rem" }}>{subordination.detail}</div>
+                {subordination.detail && (
+                    <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.76rem" }}>{subordination.detail}</div>
+                )}
+                <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.76rem", lineHeight: 1.4 }}>{subordination.meaning}</div>
                 {subordination.provenance && (
                     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", fontStyle: "italic" }}>
                         {subordination.provenance}

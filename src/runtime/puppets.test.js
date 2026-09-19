@@ -222,3 +222,37 @@ test("a viewer sees an arrangement as they last saw it, ended or not", () => {
   assert.equal(visiblePuppetsFor(world([refreshed]), "United Kingdom")[0].status, "released");
   assert.equal(visiblePuppetsFor(world([stale]), "United Kingdom")[0].status, "active");
 });
+
+// What the country panel and the map popup both print for a clicked country.
+// One function, so the two can never disagree - and each kind says what it
+// MEANS, because "Our satellite" alone told a player nothing about what they
+// had.
+test("a clicked country's subordination is summarised the same way everywhere, and says what the kind means", async () => {
+  const { puppetSummaryFor } = await import("./puppets.js");
+  const world = {
+    puppets: [
+      { id: "p1", overlord: "British Empire", puppet: "United States", kind: "satellite", loyalty: 85, secrecy: "open", knownTo: [], status: "active", startedDate: "2016-01-10" },
+      { id: "p2", overlord: "British Empire", puppet: "Australia", kind: "client", loyalty: 75, secrecy: "covert", knownTo: [{ polity: "British Empire" }, { polity: "Australia" }], status: "active", startedDate: "2016-01-10" },
+      { id: "p3", overlord: "France", puppet: "Monaco", kind: "protectorate", loyalty: 50, secrecy: "open", knownTo: [], status: "active" },
+    ],
+  };
+
+  const ours = puppetSummaryFor(world, "British Empire", "United States");
+  assert.equal(ours.headline, "Our satellite (puppet state)");
+  assert.match(ours.detail, /Loyal toward us · since 2016-01-10 · openly known/);
+  assert.match(ours.meaning, /we control its government/);
+
+  assert.match(puppetSummaryFor(world, "British Empire", "Australia").meaning, /depends on our backing/);
+
+  // Seen from the Puppet itself, and from a stranger.
+  const fromBelow = puppetSummaryFor(world, "United States", "United States");
+  assert.equal(fromBelow.headline, "Our overlord");
+  assert.match(fromBelow.meaning, /British Empire controls our government/);
+  const stranger = puppetSummaryFor(world, "Germany", "Monaco");
+  assert.equal(stranger.headline, "Protectorate of France");
+  assert.match(stranger.meaning, /France runs its foreign policy and defence/);
+
+  // A covert arrangement the viewer never uncovered says nothing at all.
+  assert.equal(puppetSummaryFor(world, "Germany", "Australia"), null);
+  assert.equal(puppetSummaryFor(world, "Germany", "Germany"), null);
+});

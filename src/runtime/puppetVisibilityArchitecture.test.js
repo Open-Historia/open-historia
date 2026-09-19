@@ -23,6 +23,7 @@ const SURFACES = [
     ["the diplomacy markers", "../Game/GameUI/chat.jsx"],
     ["the map overlay", "../Game/Map/Nations.jsx"],
     ["the advisor's own directive", "../Game/AI/main.jsx"],
+    ["the map popup card", "../Game/Selection/Regions.jsx"],
 ];
 
 test("every player-facing surface asks the shared resolver", () => {
@@ -55,8 +56,15 @@ test("the visibility rule stays import-free so it can be unit tested", () => {
 test("Loyalty never reaches a surface as a bare number", () => {
     // A visible score is the threshold players optimise against whether or not
     // the engine enforces one — and nothing in the engine does.
-    assert.match(read("../Game/Selection/CountryPanel.jsx"), /loyaltyBand/);
-    assert.doesNotMatch(read("../Game/Selection/CountryPanel.jsx"), /row\.loyalty\b(?!Band)/);
+    // The panel and the popup print the shared summary, which speaks in bands.
+    const puppets = read("./puppets.js");
+    const summary = puppets.slice(puppets.indexOf("export const puppetSummaryFor"));
+    assert.match(summary, /loyaltyBand/);
+    assert.doesNotMatch(summary, /row\.loyalty\b(?!Band)/);
+    for (const path of ["../Game/Selection/CountryPanel.jsx", "../Game/Selection/Regions.jsx"]) {
+        assert.match(read(path), /puppetSummaryFor/);
+        assert.doesNotMatch(read(path), /row\.loyalty\b(?!Band)/);
+    }
 });
 
 test("the advisor's puppet section is filtered by the player", () => {

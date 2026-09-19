@@ -149,6 +149,72 @@ export const describeRole = (row, { overlord, puppet, foreign }) => {
   return foreign?.(row);
 };
 
+// What each kind MEANS, in words a player reads once and understands. The kind
+// says which powers the Overlord holds; a satellite is what most people mean by
+// a "puppet state", so it says so. `who` is "we" (the viewer is the Overlord),
+// or the Overlord's name; `whose` is "its" or, seen from the Puppet, "our".
+const KIND_MEANINGS = {
+  protectorate: ({ who, runs, whose, it }) =>
+    `A protectorate: ${who} ${runs("run")} ${whose} foreign policy and defence, and ${it} ${it === "we" ? "govern" : "governs"} ${it === "we" ? "ourselves" : "itself"} at home.`,
+  satellite: ({ who, runs, whose, it }) =>
+    `A satellite, or puppet state: ${who} ${runs("control")} ${whose} government, though ${it} ${it === "we" ? "keep" : "keeps"} the look of an independent country.`,
+  client: ({ whoPossessive, whose, it }) =>
+    `A client state: ${whose} government depends on ${whoPossessive} backing and follows ${whoPossessive === "our" ? "our" : "its"} lead, but ${it} still ${it === "we" ? "make" : "makes"} most of ${whose} own decisions.`,
+};
+
+export const puppetKindMeaning = (row) => {
+  const meaning = KIND_MEANINGS[row?.kind];
+  if (!meaning) return "";
+  const ours = row.role === "overlord";
+  const theirs = row.role === "puppet";
+  return meaning({
+    who: ours ? "we" : row.overlord,
+    whoPossessive: ours ? "our" : `${row.overlord}'s`,
+    runs: (verb) => (ours ? verb : `${verb}s`),
+    whose: theirs ? "our" : "its",
+    it: theirs ? "we" : "it",
+  });
+};
+
+const kindLabel = (kind) => ({ satellite: "satellite (puppet state)", client: "client state" })[kind] || kind;
+
+// What the country panel and the map popup print for a clicked country, as the
+// viewer may see it — or null, which renders nothing. A covert arrangement the
+// viewer has not discovered must leave no trace at all: not a locked row, not a
+// greyed-out line, since either would announce the secret it is keeping.
+export const puppetSummaryFor = (world, viewer, countryName) => {
+  const name = String(countryName ?? "").trim();
+  if (!world || !name) return null;
+  const rows = visiblePuppetsFor(world, viewer);
+  const row = rows.find((entry) => entry.puppet === name)
+    || rows.find((entry) => entry.overlord === name && entry.role === "puppet");
+  if (!row || row.status !== "active") return null;
+
+  const since = row.startedDate ? ` · since ${row.startedDate}` : "";
+  const asOf = row.asOf ? `, as of ${row.asOf}` : "";
+  const label = kindLabel(row.kind);
+  const summary = describeRole(row, {
+    overlord: () => ({
+      headline: `Our ${label}`,
+      // A band, never a number: a visible score is a threshold to optimise
+      // against, and nothing in the engine enforces one.
+      detail: `${row.loyaltyBand} toward us${since} · ${row.secrecy === "covert" ? "arrangement is covert" : "openly known"}`,
+      provenance: "",
+    }),
+    puppet: () => ({
+      headline: "Our overlord",
+      detail: `We are the ${label} of ${row.overlord}${since}`,
+      provenance: "",
+    }),
+    foreign: () => ({
+      headline: `${label.charAt(0).toUpperCase()}${label.slice(1)} of ${row.overlord}`,
+      detail: row.startedDate ? `Since ${row.startedDate}` : "",
+      provenance: row.fromIntelligence ? `From intelligence${asOf}.` : "",
+    }),
+  });
+  return { ...summary, meaning: puppetKindMeaning(row), role: row.role };
+};
+
 // What a LEADER speaking as `viewer` is told about subordinations — the chat
 // counterpart of the advisor's filtered view, and the same rule
 // chatVisibility.js applies to transcripts: a leader speaks as one polity, so it

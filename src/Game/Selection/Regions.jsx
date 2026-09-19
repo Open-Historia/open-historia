@@ -3,7 +3,8 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
-import { readWorldState } from "../../runtime/gameState.js";
+import { readGameData, readWorldState } from "../../runtime/gameState.js";
+import { livePuppetsFor, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
@@ -224,6 +225,17 @@ const RegionPopup = () => {
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
     const [worldState, setWorldState] = useState(null);
+    // Who is looking, for the puppet lines: what the card may say about a
+    // subordination depends on whether the player is party to it or found it out.
+    const [playerCountry, setPlayerCountry] = useState("");
+    useEffect(() => {
+        if (!selection) return undefined;
+        let cancelled = false;
+        readGameData({ force: true })
+            .then((game) => { if (!cancelled) setPlayerCountry(String(game?.country ?? "").trim()); })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [selection]);
     // sparse control metadata. ownership is the de-facto controller; sovereignty is
     // only stored when it differs, because duplicating every normal border is dumb.
     const [territoryState, setTerritoryState] = useState({
@@ -506,6 +518,19 @@ const RegionPopup = () => {
     };
     // header stays on the current administrator/controller. legal title goes below.
     const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
+    // The same summary the country panel shows (runtime/puppets.js), and for an
+    // Overlord the Puppets this viewer knows it holds. A covert arrangement the
+    // player never uncovered leaves no trace on the card.
+    const controllerKey = isUnclaimed ? "" : (resolvePolityIdentity(controllerCode, worldState, {
+        allowUnknown: true,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+    }).resolved || controllerCode || "");
+    const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;
+    const heldPuppets = controllerKey && worldState
+        ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
+        : [];
     const POPUP_WIDTH = 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
 
@@ -612,6 +637,25 @@ const RegionPopup = () => {
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
+
+        {subordination && (
+            <div style={{ marginTop: "7px", padding: "6px 8px", borderRadius: "8px", background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.35)" }}>
+            <div style={{ fontSize: "12px", fontWeight: 700, color: "rgba(255,255,255,0.95)" }}>{subordination.headline}</div>
+            {subordination.detail && (
+                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.62)", marginTop: "2px" }}>{subordination.detail}</div>
+            )}
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.8)", lineHeight: 1.35, marginTop: "3px" }}>{subordination.meaning}</div>
+            {subordination.provenance && (
+                <div style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "2px" }}>{subordination.provenance}</div>
+            )}
+            </div>
+        )}
+        {heldPuppets.length > 0 && (
+            <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)" }}>{heldPuppets[0].role === "overlord" ? "Our puppets: " : "Puppets: "}</span>
+            {heldPuppets.map((row) => `${row.puppet} (${row.kind})`).join(", ")}
+            </div>
+        )}
 
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "7px 0" }} />
 

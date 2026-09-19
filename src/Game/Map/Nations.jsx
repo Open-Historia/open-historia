@@ -501,17 +501,19 @@ const WorldMap = ({ isGlobe = false }) => {
     showPuppetOverlay: useMapSetting(MAP_SETTING_KEYS.showPuppetOverlay),
   };
 
-  // Who is playing, for the puppet overlay below. Read once and kept: the
-  // overlay is the player's own view of their sphere, and the player does not
-  // change mid-session.
+  // Who is playing, for the puppet overlay below. Read fresh whenever the
+  // world changes, not once: the map mounts before a save is opened,
+  // so a single read at mount could hold no player (or another game's) for the
+  // whole session, and the overlay then showed nothing. A rename changes the
+  // player's name mid-game too.
   const [playerCountryName, setPlayerCountryName] = useState("");
   useEffect(() => {
     let cancelled = false;
-    readJson(JSON_URLS.game, { defaultValue: {} })
+    readJson(JSON_URLS.game, { defaultValue: {}, force: true })
       .then((game) => { if (!cancelled) setPlayerCountryName(String(game?.country ?? "").trim()); })
       .catch(() => { /* no player yet is not an error; the overlay simply stays off */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [worldState]);
   // A player's own choice from Settings > Map. Empty means "whatever the
   // scenario author set", so it changes nothing until it is filled in.
   const labelFontOverride = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
@@ -1014,12 +1016,28 @@ const WorldMap = ({ isGlobe = false }) => {
     [mapDisplaySettings.showPuppetOverlay, worldKnown, worldState, playerCountryName],
   );
 
-  const puppetOverlayFilter = useMemo(
-    () => (puppetOverlayRows.length
-      ? ["any", ...puppetOverlayRows.map((row) => ["in", row.puppet, ["get", "ownerList"]])]
-      : ["==", ["literal", 1], ["literal", 0]]),
-    [puppetOverlayRows],
-  );
+  // Each Puppet's whole outline, coast included, from the cartography worker
+  // (deriveOwnerOutlines). Tracing the shared frontier lines instead left an
+  // island Puppet with no line at all and a continental one without its coast.
+  // Asked again when the Puppets, the map's owners or the worker's topology
+  // change; derivedSourceEpoch moves once the topology exists.
+  const [puppetOutlineData, setPuppetOutlineData] = useState(EMPTY_FEATURE_COLLECTION);
+  const puppetOutlineRequestRef = useRef(0);
+  const puppetOutlineOwnersKey = puppetOverlayRows.map((row) => row.puppet).sort().join("");
+  useEffect(() => {
+    const worker = polityBoundaryWorkerRef.current;
+    if (!puppetOutlineOwnersKey || !worker) {
+      setPuppetOutlineData(EMPTY_FEATURE_COLLECTION);
+      return;
+    }
+    puppetOutlineRequestRef.current += 1;
+    worker.postMessage({
+      type: "outline-owners",
+      requestId: `puppet-outline-${puppetOutlineRequestRef.current}`,
+      owners: puppetOutlineOwnersKey.split(""),
+      ownershipOverrides: regionOwnershipOverrides ?? {},
+    });
+  }, [puppetOutlineOwnersKey, regionOwnershipOverrides, derivedSourceEpoch]);
 
   const visibleBoundaryFilter = useMemo(() => dirtyPoliticalOwners.length
     ? ["!", ["any", ...dirtyPoliticalOwners.map((owner) => ["in", owner, ["get", "ownerList"]])]]
@@ -1358,7 +1376,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const puppetOverlayColor = useMemo(() => {
     if (!puppetOverlayRows.length) return "rgba(0,0,0,0)";
     const branches = puppetOverlayRows.flatMap((row) => [
-      ["in", row.puppet, ["get", "ownerList"]],
+      ["==", ["get", "owner"], row.puppet],
       ownerColorCss(row.overlord),
     ]);
     return ["case", ...branches, "rgba(0,0,0,0)"];
@@ -1686,6 +1704,12 @@ const WorldMap = ({ isGlobe = false }) => {
 
     worker.onmessage = ({ data: result }) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
+
+      if (result?.messageType === "owner-outlines") {
+        if (result.requestId !== `puppet-outline-${puppetOutlineRequestRef.current}`) return;
+        setPuppetOutlineData(result.data?.type === "FeatureCollection" ? result.data : EMPTY_FEATURE_COLLECTION);
+        return;
+      }
 
       if (result?.messageType === "render-repair-ready") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
@@ -3403,19 +3427,7 @@ const WorldMap = ({ isGlobe = false }) => {
             "line-opacity": customActive && worldKnown ? 0.52 : 0,
           }}
         />
-        <Layer
-          id="polity-puppet-overlay"
-          type="line"
-          filter={puppetOverlayFilter}
-          layout={{ "line-cap": "round", "line-join": "round" }}
-          paint={{
-            "line-color": puppetOverlayColor,
-            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.6, 3, 2.4, 6, 3.2, 9, 4, 12, 4.6],
-            "line-dasharray": [2, 1.6],
-            "line-opacity": puppetOverlayRows.length ? 0.85 : 0,
-          }}
-        />
-        <Layer
+<Layer
           id="polity-boundaries"
           type="line"
           filter={visibleBoundaryFilter}
@@ -3431,6 +3443,22 @@ const WorldMap = ({ isGlobe = false }) => {
               12, 2.08,
             ],
             "line-opacity": customActive && worldKnown ? 0.94 : 0,
+          }}
+        />
+      </Source>
+
+      {/* The puppet overlay. A dashed LINE, never a fill or a stripe: striping
+          already means DISPUTED and OCCUPIED on this map. */}
+      <Source id="puppet-outline-source" type="geojson" data={puppetOutlineData} tolerance={0.25}>
+        <Layer
+          id="polity-puppet-overlay"
+          type="line"
+          layout={{ "line-cap": "round", "line-join": "round" }}
+          paint={{
+            "line-color": puppetOverlayColor,
+            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.6, 3, 2.4, 6, 3.2, 9, 4, 12, 4.6],
+            "line-dasharray": [2, 1.6],
+            "line-opacity": puppetOverlayRows.length ? 0.9 : 0,
           }}
         />
       </Source>
