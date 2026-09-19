@@ -5,7 +5,7 @@
 //
 // The player cannot author an entry's CONTENT here, deliberately. Two things
 // write what a project is: events, through impacts.projectOps on any
-// jump/GM/catalyst turn, and the advisor, through the ```projects block in a chat
+// jump/GM/interactive event turn, and the advisor, through the ```projects block in a chat
 // reply. A board the player could hand-edit would be a wishlist; this one is a
 // readout of what the simulation actually believes is happening.
 //

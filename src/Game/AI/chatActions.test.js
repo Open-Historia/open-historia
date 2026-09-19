@@ -12,10 +12,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    CHAT_REVEAL_PAUSE_MS,
     MAX_ACTIONS_PER_BATCH,
     applyChatActionBatch,
     describeChatActionFeedback,
+    describeChatCutIn,
     normalizeChatAction,
+    planChatReveal,
 } from "./chatActions.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
 
@@ -162,6 +165,80 @@ test("a poll written loosely still lands: bare options, votes by label", () => {
     ]).polls;
     assert.deepEqual(poll.options.map((option) => option.label), ["Accept", "Refuse"]);
     assert.deepEqual(poll.tally.map((option) => `${option.label}:${option.votes}`), ["Accept:1", "Refuse:1"]);
+});
+
+test("a second turn on the same game day mints ids of its own, so its replies are not dropped", () => {
+    const base = [
+        { id: "c", kind: "chat_created", title: "Talks" },
+        { id: "j1", kind: "member_joined", member: { name: "France" } },
+        { id: "j2", kind: "member_joined", member: { name: "Prussia" } },
+    ];
+    const first = applyChatActionBatch([{ type: "send_message", actorName: "France", content: "First turn." }], roster(), { time: "1871-01-26" });
+    const log = [...base, ...first.events];
+    const second = applyChatActionBatch([
+        { type: "send_message", actorName: "Prussia", content: "Second turn." },
+        { type: "add_reaction", actorName: "France", targetEntryId: first.events[0].id, emoji: "👍" },
+    ], roster({ messageIds: first.events.map((event) => event.id) }), { time: "1871-01-26", takenIds: log.map((event) => event.id) });
+    const secondIds = second.events.map((event) => event.id);
+    assert.equal(secondIds.some((id) => log.some((event) => event.id === id)), false, "no id of the first turn is minted again");
+    assert.equal(new Set(secondIds).size, secondIds.length);
+    const messages = projectChatThread([...log, ...second.events]).messages;
+    assert.deepEqual(messages.map((message) => message.text), ["First turn.", "Second turn."], "the second turn's reply is in the thread");
+    assert.deepEqual(Object.keys(messages[0].reactions), ["France"], "the reaction is on the line it named");
+    assert.deepEqual(messages[1].reactions, {});
+});
+
+// ---------------------------------------------------------------------------
+// Saying a batch a line at a time
+
+const ids = (steps) => steps.map((step) => step.events.map((event) => event.id));
+
+test("a batch is said a message at a time, each with what follows it", () => {
+    const { events } = applyChatActionBatch([
+        { type: "rename_chat", actorName: "France", title: "Armistice talks" },
+        { type: "send_message", actorName: "France", content: "We ask for terms." },
+        { type: "add_reaction", actorName: "Prussia", targetEntryId: "m1", emoji: "👍" },
+        { type: "send_message", actorName: "Prussia", content: "Alsace first." },
+        { type: "create_poll", actorName: "Prussia", pollRef: "p", question: "Sign now?", options: ["Yes", "No"] },
+        { type: "poll_vote", actorName: "Prussia", pollRef: "p", optionRef: "yes" },
+        { type: "poll_vote", actorName: "France", pollRef: "p", optionRef: "no" },
+        { type: "send_message", actorName: "France", content: "Never." },
+    ], roster(), { time: "1871-01-26" });
+    const steps = planChatReveal(events);
+    assert.deepEqual(steps.map((step) => step.speaker), ["France", "Prussia", "France"], "one step per message, named for its speaker");
+    assert.deepEqual(steps.map((step) => step.events.map((event) => event.kind)), [
+        ["title_changed", "message", "reaction"],
+        ["message", "poll_created", "poll_vote_cast", "poll_vote_cast"],
+        ["message"],
+    ], "what comes before the first message goes with it; the rest follows its message");
+    assert.deepEqual(ids(steps).flat(), events.map((event) => event.id), "every event, once, in order");
+    assert.equal(CHAT_REVEAL_PAUSE_MS, 5000);
+});
+
+test("a batch with fewer than two messages is one step, and nothing is none", () => {
+    const one = [{ id: "m", kind: "message", by: "France", text: "Yes." }, { id: "r", kind: "reaction", by: "Prussia", target: "m", emoji: "🙂" }];
+    assert.deepEqual(ids(planChatReveal(one)), [["m", "r"]]);
+    const quiet = [{ id: "r", kind: "reaction", by: "Prussia", target: "m1", emoji: "🙂" }];
+    assert.deepEqual(planChatReveal(quiet), [{ speaker: "", events: quiet }], "a reaction alone is shown at once");
+    assert.deepEqual(planChatReveal([]), []);
+    assert.deepEqual(planChatReveal(null), []);
+});
+
+test("cutting in tells the next turn whose lines went unsaid, never the lines", () => {
+    const steps = planChatReveal([
+        { id: "a", kind: "message", by: "Prussia", text: "Alsace first." },
+        { id: "v", kind: "poll_vote_cast", by: "Prussia", pollId: "p", optionId: "o" },
+        { id: "b", kind: "message", by: "France", text: "Never." },
+        { id: "c", kind: "message", by: "Prussia", text: "Then war." },
+    ]);
+    const note = describeChatCutIn({ player: "Bavaria", steps });
+    assert.match(note, /^\[The player cut in\]/);
+    assert.match(note, /Bavaria spoke before Prussia and France had finished/);
+    assert.match(note, /Answer what Bavaria has just said/);
+    assert.equal(/Alsace|Never|war/.test(note), false, "the unsaid words are not repeated to the model");
+    assert.match(describeChatCutIn({ player: "Bavaria", steps: steps.slice(1, 2) }), /before France had finished: what it was about to say/);
+    assert.equal(describeChatCutIn({ player: "Bavaria", steps: [] }), "");
+    assert.equal(describeChatCutIn({ player: "Bavaria", steps: [{ speaker: "", events: [{ id: "v", kind: "poll_vote_cast" }] }] }), "", "no line went unsaid");
 });
 
 test("an option given as {label} alone, and a vote by its own ref, both work", () => {

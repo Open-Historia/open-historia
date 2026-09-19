@@ -5,6 +5,9 @@ import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
+import { logForNextStep, startChatReveal } from "./chatReveal.js";
+import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { isChatGenerationLikely } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
@@ -323,13 +326,13 @@ const useNationColor = (code) => {
 
 // ── ThinkingDots ──────────────────────────────────────────────────────────────
 
-const ThinkingDots = () => {
+const ThinkingDots = ({ label = "Thinking" }) => {
     const [dots, setDots] = useState(0);
     useEffect(() => {
         const iv = setInterval(() => setDots(d => (d + 1) % 4), 500);
         return () => clearInterval(iv);
     }, []);
-    return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
+    return <span style={{ opacity: 0.6 }}>{label}{".".repeat(dots)}&nbsp;</span>;
 };
 
 // Cycles 1-3 dots (never empty, unlike ThinkingDots' 0-3) — used where there's
@@ -612,17 +615,24 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
     );
 };
 
-const TypingBubble = ({ speaker, code }) => {
+// `label`: "Thinking" while the request is out, "Typing" while a line of the
+// table's turn waits to be said.
+const TypingBubble = ({ speaker, code, hint = "", label = "Thinking" }) => {
     const flagUrl = useCountryFlagUrl({ code, name: speaker });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}><FlagImg url={flagUrl} alt={speaker} size="0.95em" /> {speaker}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
-        <ThinkingDots />
+        <ThinkingDots label={label} />
         </div>
+        {hint && <span style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.32)", marginTop: "0.3rem" }}>{hint}</span>}
         </div>
     );
 };
+
+// The campaign in front of the player, for a write made seconds after the
+// turn that produced it (runtime/campaignGuard.js).
+const activeCampaignNow = () => String(getLibraryState()?.activeGameId ?? "").trim();
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
@@ -789,6 +799,17 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const messagesEndRef    = useRef(null);
     const messagesRef       = useRef(chat.messages ?? []);
     const composerRef       = useRef(null);
+    // A group turn is said a line at a time (AI/chatActions.js planChatReveal):
+    // the first at once, each later one after its speaker has been seen typing.
+    // The lines still to come are held HERE, not in the thread, until they are
+    // shown — so a line the player cuts in on was never said, and nothing has
+    // to be taken back out of the saved thread. `typingNext` is who is typing.
+    const revealRef = useRef(null);
+    const [typingNext, setTypingNext] = useState(null);
+    // The thread as last rendered, for a line shown seconds after its turn: a
+    // vote the player cast in between is kept under it.
+    const chatRef = useRef(chat);
+    useEffect(() => { chatRef.current = chat; }, [chat]);
 
     useEffect(() => {
         countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
@@ -867,13 +888,92 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
         useEffect(() => {
             messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }, [messages, isLoading, phase]);
+        }, [messages, isLoading, phase, typingNext]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
             setMessages(updated);
             onMessagesUpdate(chat.id, updated);
         };
+
+        // The panel's copy of a thread's messages, from its log's projection.
+        const viewMessagesOf = (projected) => projected.messages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            speaker: message.speaker,
+            code: message.code,
+            text: message.text,
+            time: message.time,
+            reactions: message.reactions,
+            ...(message.memorySummary ? { memorySummary: message.memorySummary } : {}),
+            ...(message.eventId ? { eventId: message.eventId } : {}),
+            ...(message.catchUp ? { catchUp: message.catchUp, catchUpLabel: message.catchUpLabel } : {}),
+        }));
+
+        // Adds a step of a group turn to its thread: the log, the roster, title
+        // and polls, and the panel's messages when that thread is on screen.
+        // Nothing is written once the player has switched campaign: the runtime
+        // files follow the open campaign, so a late write would land on the one
+        // switched to (runtime/campaignGuard.js).
+        const addTurnEvents = (reveal, newEvents, { cursors = null, onScreen = true } = {}) => {
+            if (campaignChanged(reveal.campaignId, activeCampaignNow())) return false;
+            const live = chatRef.current;
+            const events = [
+                ...logForNextStep({ turnLog: reveal.events, wroteAny: reveal.written, chatId: reveal.chatId, liveChatId: live?.id, liveLog: live?.events }),
+                ...newEvents,
+            ];
+            reveal.events = events;
+            reveal.written = true;
+            const projected = projectChatThread(events);
+            const shown = viewMessagesOf(projected);
+            if (onScreen && String(live?.id) === String(reveal.chatId)) pushMessages(shown);
+            else onMessagesUpdate(reveal.chatId, shown);
+            onThreadUpdate?.(reveal.chatId, { events, countries: projected.countries, title: projected.title, polls: projected.polls, ...(cursors ? { cursors } : {}) });
+            return true;
+        };
+
+        // The rest of a group turn, a line at a time (chatReveal.js): each
+        // speaker is seen typing for CHAT_REVEAL_PAUSE_MS, then says the line.
+        const sayLater = (reveal, steps) => {
+            revealRef.current = reveal;
+            reveal.controller = startChatReveal({
+                steps,
+                pauseMs: CHAT_REVEAL_PAUSE_MS,
+                onTyping: (step) => setTypingNext(step
+                    ? { speaker: step.speaker, code: countries.find((country) => (country.name || "").toLowerCase() === step.speaker.toLowerCase())?.code || "" }
+                    : null),
+                onSay: (step) => {
+                    if (addTurnEvents(reveal, step.events)) return true;
+                    logDebugEvent("diplomacy", `Chat #${reveal.chatId}: the campaign changed while the table was still talking; the rest of the turn was not written.`, undefined, { problem: true });
+                    return false;
+                },
+                onEnd: () => { if (revealRef.current === reveal) revealRef.current = null; },
+            });
+        };
+
+        // The player spoke while the table was still talking. What had not been
+        // said yet never is — the way Intervene discards the events a skip's
+        // reveal has not reached — and the next turn is told whose lines went
+        // unsaid (describeChatCutIn).
+        const cutIn = () => {
+            const reveal = revealRef.current;
+            const unsaid = reveal?.controller?.stop() ?? [];
+            if (!unsaid.length) return;
+            const note = describeChatCutIn({ player: playerCountry, steps: unsaid });
+            if (note) actionFeedbackRef.current = [actionFeedbackRef.current, note].filter(Boolean).join("\n\n");
+            logDebugEvent("diplomacy",
+                `${playerCountry || "The player"} cut in on chat #${reveal.chatId}: ${unsaid.length} line(s) of the table's turn were never said.`,
+                { unsaid: unsaid.map((step) => step.speaker) }, { verbose: true });
+        };
+
+        // Leaving the thread is not cutting in: what the table was still to say
+        // is said, all at once, into the thread it belongs to.
+        useEffect(() => () => {
+            const reveal = revealRef.current;
+            const rest = reveal?.controller?.stop() ?? [];
+            if (rest.length) addTurnEvents(reveal, rest.flatMap((step) => step.events), { onScreen: false });
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [chat.id]);
 
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
@@ -1008,6 +1108,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
+            // The campaign this turn belongs to: nothing is written after a switch.
+            const campaignId = activeCampaignNow();
             try {
                 const outcome = await runChatActionBatch({
                     chat: { ...chat, messages: nextMessages, actionFeedback: actionFeedbackRef.current },
@@ -1016,26 +1118,26 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     catchUp: asked?.catchUp || "",
                     time: asked?.time || "",
                 });
-                const spoken = (outcome?.newEvents ?? []).filter((event) => event.kind === "message");
-                if (!spoken.length && !(outcome?.newEvents ?? []).length) return false;
+                const newEvents = outcome?.newEvents ?? [];
+                if (!newEvents.length) return false;
                 actionFeedbackRef.current = outcome?.feedback ?? "";
-                const projected = projectChatThread(outcome.events);
-                // The projection carries the reactions, the roster and the polls
-                // this turn changed; the panel renders messages, so hand it those
-                // and let the stored thread keep the rest.
-                pushMessages(projected.messages.map((message) => ({
-                    id: message.id,
-                    role: message.role,
-                    speaker: message.speaker,
-                    code: message.code,
-                    text: message.text,
-                    time: message.time,
-                    reactions: message.reactions,
-                    ...(message.memorySummary ? { memorySummary: message.memorySummary } : {}),
-                    ...(message.eventId ? { eventId: message.eventId } : {}),
-                    ...(message.catchUp ? { catchUp: message.catchUp, catchUpLabel: message.catchUpLabel } : {}),
-                })));
-                onThreadUpdate?.(chat.id, { events: outcome.events, countries: projected.countries, title: projected.title, polls: projected.polls, cursors: outcome.cursors });
+                // The first line is said now, the rest one at a time after it
+                // (planChatReveal). The projection carries the reactions, the
+                // roster and the polls each step changes; the panel renders
+                // messages, and the stored thread keeps the rest.
+                const [first, ...later] = planChatReveal(newEvents);
+                const reveal = {
+                    chatId: chat.id,
+                    campaignId,
+                    events: outcome.events.slice(0, outcome.events.length - newEvents.length),
+                    written: false,
+                    controller: null,
+                };
+                if (!addTurnEvents(reveal, first.events, { cursors: outcome.cursors })) {
+                    logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
+                    return true;
+                }
+                if (later.length) sayLater(reveal, later);
                 setPhase("player");
                 return true;
             } catch (error) {
@@ -1066,6 +1168,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading) return;
+            // Speaking while the table is still talking cuts it off.
+            cutIn();
             lastPlayerMessage.current = text;
             setPlayerInput("");
             // What the world did since this thread last spoke, told to the
@@ -1232,6 +1336,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 />
             ))}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
+            {/* The next line of the table's turn, still being typed. */}
+            {!isLoading && typingNext && (
+                <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
+            )}
             <div ref={messagesEndRef} />
             </div>
 

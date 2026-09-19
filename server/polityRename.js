@@ -26,14 +26,22 @@ export const samePolityName = (a, b) => {
 
 const mapName = (value, from, to) => (samePolityName(value, from) ? to : value);
 const mapList = (list, from, to) => (Array.isArray(list) ? unique(list.map((value) => mapName(value, from, to))) : list);
+// A map keyed by polity names, re-keyed: the country's own value — under its
+// exact old key, else under a spelling of it — moves to the new name, where the
+// old key stood. Anything else that answers to the new name is not this country
+// and not any other (refuseClash refuses a name another polity has), so it is a
+// leftover: an unused stock-palette colour, a flag or figures kept under a name
+// nobody holds. It goes, rather than repaint or restate the renamed country —
+// even when the country had no value of its own there.
 const mapKeys = (record, from, to) => {
   if (!isRecord(record)) return record;
+  const own = Object.prototype.hasOwnProperty.call(record, from)
+    ? from
+    : Object.keys(record).find((key) => samePolityName(key, from));
   const out = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = mapName(key, from, to);
-    // A key already present under the new name keeps its own value.
-    if (next !== key && Object.prototype.hasOwnProperty.call(out, next)) continue;
-    out[next] = value;
+    if (key === own) out[to] = value;
+    else if (!samePolityName(key, from) && !samePolityName(key, to)) out[key] = value;
   }
   return out;
 };

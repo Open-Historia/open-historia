@@ -20,7 +20,7 @@ Every LLM call the game makes is a template in `src/Game/AI/defaultPrompts.json`
 | Where the active game's prompt overrides are read from | `src/runtime/assets.js` | `JSON_URLS.prompts = /api/runtime/json/prompts` |
 | Per-scenario / per-game prompt editor UI ("Prompts" tab) | `src/Game/GameUI/libraryBar.jsx` | `PromptSectionEditor`, `handlePromptChange`, `serializePromptPack` on save |
 
-See [World state](world-state.md) for the `world.json` shapes (`regionOwnershipOverrides`, `polityOverrides`, `units`, `markers`, `activeCatalyst`, `consolidatedHistory`, `simulationHistory`) that the context builders read.
+See [World state](world-state.md) for the `world.json` shapes (`regionOwnershipOverrides`, `polityOverrides`, `units`, `markers`, `activeInteractive`, `consolidatedHistory`, `simulationHistory`) that the context builders read.
 
 ---
 
@@ -63,7 +63,7 @@ Order of concatenation onto the system prompt:
 3. **Render task text** — `systemPrompt = renderTemplate(prompts.tasks[taskKey], {...variables,...helperValues })` (`gameplay.js`). `renderTemplate` (`promptContext.js`) replaces `${key}` with `variables[key]` (missing/`null` → empty string). Both uppercase `${PLACEHOLDER}` keys (from `helperValues`) and lowercase `${var}` keys (from `variables`) are in scope.
 4. **+ Difficulty directive** — `\n\n${difficultyDirective(game.difficulty)}` for every task (`gameplay.js`).
 5. **+ Player Agency** and **+ Map Truth** — only `jumpForward`, `autoJumpForward` (`gameplay.js`–`420`).
-6. **+ International Reputation** — only `actions`, `jumpForward`, `autoJumpForward`, `catalystCreation`, `catalystExecutor` (`gameplay.js`).
+6. **+ International Reputation** — only `actions`, `jumpForward`, `autoJumpForward`, `interactiveCreation`, `interactiveExecutor` (`gameplay.js`).
 7. **Call `callAI(systemPrompt, [{role:"user", parts:[{text: userMessage}]}], { tool, maxTokens: 8192,... })`.** Inside `callAI` (`main.jsx`): **+ Language directive** `\n\n${languageDirective}` when the UI language ≠ English.
 8. **Provider layer** (`main.jsx`): native tool-use providers (Anthropic/OpenAI/Gemini) pass `tool.schema` as a tool; the JSON-schema fallback path appends `\n\nReturn only one JSON object matching this JSON Schema…\n${JSON.stringify(tool.schema)}` (`main.jsx`). `maxTokens` is floored at 8192 by capped providers; Gemini ignores it.
 
@@ -115,7 +115,7 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `PLAYER_POLITY_REGIONS` | `playerPolityRegions` | Comma list of regions the player owns, or the LANDLESS notice | advisor |
 | `PLAYER_POLITY_BATTALION_SUMMARIES` | `playerBattalionSummaries` | Player + world unit lines (no feasibility doctrine) | advisor |
 | `PLAYER_POLITY_REPUTATION_CONTEXT` | `playerPolityReputationContext` | "International reputation: N/100 (band)." | *(none — injected via the [International Reputation] directive, not the placeholder)* |
-| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions | advisor, actions, jumpForward, autoJumpForward, catalystCreation, gameMaster, descriptionToAction |
+| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions | advisor, actions, jumpForward, autoJumpForward, interactiveCreation, gameMaster, descriptionToAction |
 | `PLAYER_EVERY_ACTION` / `PLAYER_EVERY_ACTION_NOT_PREVIOUS` | `allActions` | All actions incl. resolved | advisor, jumpForward, autoJumpForward |
 | `GRAND_MAP_DESCRIPTION` | `worldSummary` | Full world snapshot (see §5 `worldSummary`) | advisor, countryStatSheet |
 | `GRAND_MAP_DESCRIPTION_NO_CITY` | `worldSummaryNoCity` | **Identical string** to `worldSummary` (name is historical) | leader, actions, jumpForward, autoJumpForward, descriptionToAction, gameMaster, pregameHistory |
@@ -123,12 +123,11 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `CURRENT_MAP_STRUCTURES` | `markersSummary` | `world.markers` structures with coords | jumpForward, autoJumpForward |
 | `CITY_COORDINATES` | `citiesSummary` | City coordinate catalog (custom era set or stock significant slice) | jumpForward, autoJumpForward |
 | `NUMBER_OF_REGIONS` | `numberOfRegions` | Count of regions in the map catalog | jumpForward, autoJumpForward, gameMaster |
-| `WORLD_BEFORE_ROUND_ONE_TEXT` | `worldBeforeRoundOne` | Scenario "World Before Round One" briefing | advisor, leader, actions, jumpForward, autoJumpForward, catalyst×3, descriptionToAction, gameMaster, pregameHistory |
-| `HISTORICAL_PRESET_SIMULATION_RULES` | `simulationRules` | Scenario simulation rules | advisor, leader, countryStatSheet, actions, jump×2, catalyst×3, descriptionToAction, gameMaster, pregameHistory |
-| `ALL_EVENTS_WITH_CONSOLIDATION` | `recentEventsLong` | STORY SO FAR (consolidated) + RECENT EVENTS | leader, jumpForward |
-| `ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS` | `recentEventsLong` | Same value as above | advisor, actions, autoJumpForward, catalystCreation, catalystExecutor |
+| `WORLD_BEFORE_ROUND_ONE_TEXT` | `worldBeforeRoundOne` | Scenario "World Before Round One" briefing | advisor, leader, actions, jumpForward, autoJumpForward, interactive×3, descriptionToAction, gameMaster, pregameHistory |
+| `HISTORICAL_PRESET_SIMULATION_RULES` | `simulationRules` | Scenario simulation rules | advisor, leader, countryStatSheet, actions, jump×2, interactive×3, descriptionToAction, gameMaster, pregameHistory |
+| `ALL_EVENTS_WITH_CONSOLIDATION` | `recentEventsLong` | STORY SO FAR (consolidated) + RECENT EVENTS | leader, advisor, actions, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor |
 | `CONSOLIDATED_HISTORY` | `consolidatedHistory` | Just the consolidated "STORY SO FAR" | *(declared in editor sections; not in current default text)* |
-| `PREVIOUS_ROUND_EVENTS` | `recentEvents` | Recent unconsolidated events (short window) | countryStatSheet, catalystCreation |
+| `PREVIOUS_ROUND_EVENTS` | `recentEvents` | Recent unconsolidated events (short window) | countryStatSheet, interactiveCreation |
 | `NON_CONSOLIDATED_ROUNDS_WITH_DATES` | `worldInitiativeContext` | The native world director's live analysis for the jump segment: focused and deferred storylines, the exploration slate, the era's conflict posture, economic and diplomatic attention, the storyline record contract | `runJumpSegments` (`buildWorldInitiativeContextBackground`, worker) |
 | `canonicalStorylineContext` | `world.storylines` for the GM prompt: id, status, pressure, momentum, title, participants, state (≤24) | `buildGameMasterStorylineContext` |
 | `recentRoundsWithDates` | `from → to` date pairs from `simulationHistory` | advisor, leader, actions, jumpForward, autoJumpForward |
@@ -150,12 +149,12 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `EVENTS_TO_CONSOLIDATE` | `eventsToConsolidate` | Event batch to compress | eventConsolidator |
 | `CHATS_TO_CONSOLIDATE` | `chatsToConsolidate` | Chat batch to compress | eventConsolidator |
 | `GAME_MASTER_PLAYER_REQUEST` | `gameMasterRequest` | Raw GM/cheat request text | gameMaster |
-| `RUNNING_CATALYST_DATE` | `catalystDate` | Catalyst date (= current date) | catalystCreation, catalystExecutor, catalystSummary |
-| `RUNNING_CATALYST_PERCENT` | `catalystPercent` | Catalyst progress %, `min(100, history.length*50)` | catalystExecutor |
-| `CATALYST_PREMISE_DESCRIPTION` | `catalystPremise` | The catalyst's premise text | catalystExecutor, catalystSummary |
-| `CATALYST_SIMULATION_HISTORY` | `catalystHistory` | Choice→summary log so far | catalystExecutor, catalystSummary |
+| `RUNNING_INTERACTIVE_DATE` | `interactiveDate` | Interactive event date (= current date) | interactiveCreation, interactiveExecutor, interactiveSummary |
+| `RUNNING_INTERACTIVE_PERCENT` | `interactivePercent` | Interactive event progress %, `min(100, history.length*50)` | interactiveExecutor |
+| `INTERACTIVE_PREMISE_DESCRIPTION` | `interactivePremise` | The interactive event's premise text | interactiveExecutor, interactiveSummary |
+| `INTERACTIVE_SIMULATION_HISTORY` | `interactiveHistory` | Choice→summary log so far | interactiveExecutor, interactiveSummary |
 
-Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (all tasks), and in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `catalystExecutor` — `${catalystChoice}`.
+Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (all tasks), and in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `interactiveExecutor` — `${interactiveChoice}`.
 
 ---
 
@@ -170,7 +169,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `playerBattalionSummaries` | `buildUnitsSummaryText(world)` (up to 60 units, coords/type/owner/strength/status) | `promptContext.js` / builder `195` |
 | `unitsSummary` | Same unit text; **`buildTemplateVariables` appends `buildMilitaryFeasibilityText`** (era-reach/type/distance doctrine) only when units exist or the actions text matches the military regex | `promptContext.js`; override `gameplay.js`; feasibility builder `319` |
 | `playerPolityReputationContext` | "International reputation: N/100 (poor/mixed/well-regarded)." from `world.internationalReputation[player]`, else last viewed stat sheet, else 50 | `buildPlayerPolityReputationText` `gameplay.js` (added `371`) |
-| `worldSummary` | Multi-section snapshot: player line + tags, round, date, language, difficulty, world-before-round-one, simulation rules, up-to-24 territorial overrides, up-to-16 polity overrides (incl. `note` lore), up-to-40 country tag lines, active-catalyst line | `buildWorldSummary` `promptContext.js` |
+| `worldSummary` | Multi-section snapshot: player line + tags, round, date, language, difficulty, world-before-round-one, simulation rules, up-to-24 territorial overrides, up-to-16 polity overrides (incl. `note` lore), up-to-40 country tag lines, the interactive event in progress | `buildWorldSummary` `promptContext.js` |
 | `worldSummaryNoCity` | **Identical** to `worldSummary` | `promptContext.js` |
 | `citiesSummary` | City coordinate lines: custom-city scenarios use the era geojson (tier/pop sorted, ≤200); otherwise the stock significant slice (capitals + pop ≥ 2M, cached) | `buildCityCatalogText` `promptContext.js` |
 | `markersSummary` | `world.markers` structures (≤60) with kind/owner/coords/note | `buildMarkersSummaryText` `promptContext.js` |
@@ -207,14 +206,14 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `numberOfRegions` | (above) | `promptContext.js` |
 | `eventsToConsolidate` | Explicit batch, else `buildEventHistoryText(events, {limit:12})` | `promptContext.js` |
 | `gameMasterRequest` | The `gameMasterRequest` option | `promptContext.js` |
-| `catalystDate` | `= date` | `promptContext.js` |
-| `catalystPercent` | `min(100, activeCatalyst.history.length*50)%`, else "0%" | `promptContext.js` |
-| `catalystPremise` | `catalystPremise` option | `promptContext.js` |
-| `catalystHistory` | `catalystHistory` option (choice→summary log) | `promptContext.js` |
-| `catalystChoice` | `catalystChoice` option (the just-chosen option) | `promptContext.js` |
-| `catalystOpening` | `catalystOpening` option | `promptContext.js` |
+| `interactiveDate` | `= date` | `promptContext.js` |
+| `interactivePercent` | `min(100, activeInteractive.history.length*50)%`, else "0%" | `promptContext.js` |
+| `interactivePremise` | `interactivePremise` option | `promptContext.js` |
+| `interactiveHistory` | `interactiveHistory` option (choice→summary log) | `promptContext.js` |
+| `interactiveChoice` | `interactiveChoice` option (the just-chosen option) | `promptContext.js` |
+| `interactiveOpening` | `interactiveOpening` option | `promptContext.js` |
 
-`buildPromptContext` accepts an options bag (`promptContext.js`): `actionInput`, `advisorLimit`, `catalystChoice/History/Opening/Premise`, `chat`, `chatLimit`, `chatsToConsolidate`, `eventLimit`, `eventsToConsolidate`, `gameMasterRequest`, `longEventLimit`, `respondingPolityName`, `targetDate`. Each task's entry point passes the ones it needs (e.g. `simulateTimelineJump` passes `targetDate`; `advanceActiveCatalyst` passes `catalystChoice/History/Premise/Opening`).
+`buildPromptContext` accepts an options bag (`promptContext.js`): `actionInput`, `advisorLimit`, `interactiveChoice/History/Opening/Premise`, `chat`, `chatLimit`, `chatsToConsolidate`, `eventLimit`, `eventsToConsolidate`, `gameMasterRequest`, `longEventLimit`, `respondingPolityName`, `targetDate`. Each task's entry point passes the ones it needs (e.g. `simulateTimelineJump` passes `targetDate`; `advanceActiveInteractive` passes `interactiveChoice/History/Premise/Opening`).
 
 ---
 
@@ -241,13 +240,13 @@ Concatenated onto the system prompt in `runJsonTask` / `callAI` **after** the te
 | **[Map Truth — Control is not Sovereignty]** + **[Current Non-Normal Territorial State]** — capture/occupation/liberation language *requires* `impacts.regionControlOps` (control / contest); cession, annexation, sale, unification or settlement *requires* `impacts.regionTransfers`; the current occupations and contested regions (`territorialControlContext`) are listed; resolving the player's own ordered offensives is allowed | `jumpForward`, `autoJumpForward` | `gameplay.js` |
 | **[The World's Share — counted by the engine]** and **[PRIORITY RULES — set by this scenario's author]** — the scenario author's world direction (`worldDirection.js` `buildWorldDirectionDirective`), appended **last of all**, after the lookup directive: the end of a long prompt is what a model follows best, and the priority rules are meant to outrank everything above them. One paragraph by default (the share); nothing when world direction is off. | `jumpForward`, `autoJumpForward` |
 | **[The Player's Standing Goal]** — what the player's government is steering toward (`describeGoalForSimulation`, `runtime/playerGoal.js`), as a guiding philosophy, not an order: the player's own ministers conduct the business the orders did not address in its spirit; it never creates an action the player did not order, never decides what Player Agency reserves for the player, never makes success likelier. Before the author's direction, which outranks it. Nothing while no goal is set | `jumpForward`, `autoJumpForward`, `worldMotionRepair`, `worldBreadthRepair` (`PLAYER_GOAL_TASKS`) | `playerGoalBlock` in `buildTaskSystemPrompt` (`gameplay.js`) |
-| **[REMINDERS FROM THE GAME MASTER]** — the GM's standing facts (`runtime/gmChanges.js` `renderReminders`), after the priority rules: a fact declared mid-game is newer than any rule written before it. Every task that writes the world or speaks for a polity (`GM_REMINDER_TASKS`); the turn review carries it once for the whole request, not once per job (`buildTaskSystemPrompt(…, { reminders: false })` per job). Nothing while there are none. | the skip, the review and its directors, `projects`, `gameMaster`, `actions`, `idleDiplomacy`, the catalyst tasks, `spyIntercept`, `chatActions` |
+| **[REMINDERS FROM THE GAME MASTER]** — the GM's standing facts (`runtime/gmChanges.js` `renderReminders`), after the priority rules: a fact declared mid-game is newer than any rule written before it. Every task that writes the world or speaks for a polity (`GM_REMINDER_TASKS`); the turn review carries it once for the whole request, not once per job (`buildTaskSystemPrompt(…, { reminders: false })` per job). Nothing while there are none. | the skip, the review and its directors, `projects`, `gameMaster`, `actions`, `idleDiplomacy`, the interactive event tasks, `spyIntercept`, `chatActions` |
 | **[Why the Land Moves]** — every `regionTransfers` entry and every `regionControlOps` control carries a `basis`; choose by what happened on the ground, not what was announced; says what the engine **does** with the answer (a `claim` is recorded as a dispute, a `threat` or `raid` changes nothing), because a model told only "fill this in" fills it in to please | `jumpForward`, `autoJumpForward` | appended after [Map Truth] in `runJsonTask`; text is `TERRITORY_BASIS_DIRECTIVE` in `runtime/territoryBasis.js`, beside the vocabulary so the two cannot drift |
 | **[Native World Director — authoritative live causal context]** — the segment's `worldInitiativeContext` (attention and deferred storylines, exploration slate, conflict posture, the `id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state` record contract); see §7.12c | `jumpForward`, `autoJumpForward` | `gameplay.js` `runJsonTask` |
 | **[Region and City Capture]** — regions are the unit of territory; a city-grounded operation keeps the grounded wording in `regionId` with `fromCode` set so the geography resolver can map it; `wholeCountry` only for a total occupation (control) or total annexation (transfer) | `jumpForward`, `autoJumpForward` | `gameplay.js` `runJsonTask` |
-| **[Placing Things — say WHERE in words]** — every unit spawned or moved and every structure built may be placed with `at`, a phrase naming places the map knows ("near Kharkiv", "eastern Ukraine", "Donetsk Oblast facing Russia", "off Sevastopol" for fleets); the engine finds the point, keeps it inside the right borders and moves it clear of anything already standing there; `lng`/`lat` only for a spot no name describes, and `at` wins over both | `jumpForward`, `autoJumpForward` (before the Place Renaming block), `unitDirector`, `gameMaster`, `idleDiplomacy`, `catalystExecutor` | `PLACEMENT_DIRECTIVE` in `placement.js`, appended in `buildTaskSystemPrompt`; resolved by `resolvePlacements` (`gameplay.js`) |
+| **[Placing Things — say WHERE in words]** — every unit spawned or moved and every structure built may be placed with `at`, a phrase naming places the map knows ("near Kharkiv", "eastern Ukraine", "Donetsk Oblast facing Russia", "off Sevastopol" for fleets); the engine finds the point, keeps it inside the right borders and moves it clear of anything already standing there; `lng`/`lat` only for a spot no name describes, and `at` wins over both | `jumpForward`, `autoJumpForward` (before the Place Renaming block), `unitDirector`, `gameMaster`, `idleDiplomacy`, `interactiveExecutor` | `PLACEMENT_DIRECTIVE` in `placement.js`, appended in `buildTaskSystemPrompt`; resolved by `resolvePlacements` (`gameplay.js`) |
 | **[GM Territorial Semantics — live override]** + **[GM Geographic Completeness]** + **[GM Physical-World Completeness]** — control vs sovereignty for the GM, one operation per narrated place, marker lifecycle audit | `gameMaster` | `gameplay.js` `runJsonTask` |
-| **[International Reputation]** — how the world regards the player biases behavior; record changes via `polityChanges.reputation` (0–100) | `actions`, `jumpForward`, `autoJumpForward`, `catalystCreation`, `catalystExecutor` | `gameplay.js` |
+| **[International Reputation]** — how the world regards the player biases behavior; record changes via `polityChanges.reputation` (0–100) | `actions`, `jumpForward`, `autoJumpForward`, `interactiveCreation`, `interactiveExecutor` | `gameplay.js` |
 | **Language** — write all human-readable text in the UI language; keep JSON keys/ISO codes/dates unchanged | every `callAI` call (advisor, leader, all tasks, intel briefing) when language ≠ `en` | `callAI` `main.jsx`; text `i18n.js` |
 | **Military feasibility** — era-reach/unit-type/distance doctrine; folded into `${CURRENT_UNITS}` not appended separately | conditional: only when units exist or actions text matches the military regex | `buildMilitaryFeasibilityText` `gameplay.js`, injected `372` |
 | **Leader turn instruction** — "speak only as `<polity>`… optionally append `REACTION:<emoji>`" (a user-role turn, not system) | leader only | `main.jsx` |
@@ -264,7 +263,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Simulate every event between the origin date and a player-chosen target date; move the map, units, structures, diplomacy.
 - **Prompt:** `tasks.jumpForward`. **Entry:** `simulateTimelineJump({days, mode:"jump", signal})` `gameplay.js`.
 - **Inputs:** full state bundle; `targetDate`; event-count band from `eventCountRangeForDays(days)` with a floor of one event per queued action; duration label; `${CURRENT_UNITS/MAP_STRUCTURES/CITY_COORDINATES}`.
-- **Tool/schema:** `submit_jump_result` / `JUMP_FORWARD_SCHEMA` (`gameplaySchemas.js`). Payload: `events[]` (each `date/title/description` + `impacts`), `stopDate`, `summary`, `clearActions`, nullable `catalyst`, top-level `diplomaticOutreach[]`.
+- **Tool/schema:** `submit_jump_result` / `JUMP_FORWARD_SCHEMA` (`gameplaySchemas.js`). Payload: `events[]` (each `date/title/description` + `impacts`), `stopDate`, `summary`, `clearActions`, top-level `diplomaticOutreach[]`. No scene: now and then the skip offers one of its events as an interactive event instead, at no cost (`runtime/interactiveOffer.js`).
 - **Validation:** `validatePayload` (`gameplay.js`) — strict on attempt 1 / salvage on final: event-count range, `validateTimelineDates` then `clampTimelineDates` on salvage, then `validateGeneratedWorldChanges` resolving region names → ids (`resolveRegionTransfers` `831`) with a corrective owner-region list (`buildTransferFeedback` `940`) and the **capture-reluctance guard** (`CAPTURE_LANGUAGE` `994`, guard `1020`). **Fallback:** `fallbackJumpSimulation`. Timeout: unbounded unless the "Limit AI generation" map setting is on (then 5 min); `signal` aborts cleanly.
 - **Applied by:** `applySimulationResult` — appends events, bumps round/date, resolves planned actions, applies impacts, opens generated chats, writes a `simulationHistory` entry, snapshots for rollback.
 
@@ -275,7 +274,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
  - `[Event Voice]` *(guidance, id `voice`)* — an event is a dated dispatch, not commentary: no adjectives that tell the reader what to think; an opinion needs a named owner; stop when the facts stop (no closing sentence on what it "signals"); nothing happening is not an event; and the record cannot read minds — it knows what a power did and said, never what it was trying to achieve.
 
 ### 7.2 `autoJumpForward` — auto skip to the next notable event
-- **Purpose:** Same engine, but **stop early** at the first strategically notable / player-relevant / catalyst-worthy event and set it `notable:true`.
+- **Purpose:** Same engine, but **stop early** at the first strategically notable / player-relevant / memorable event and set it `notable:true` (a notable event is preferred when the skip offers an interactive event).
 - **Prompt:** `tasks.autoJumpForward`. **Entry:** `simulateAutoJump({days=365, signal})` → `simulateTimelineJump(mode:"auto")` `gameplay.js`.
 - **Tool/schema:** `submit_jump_result` / `AUTO_JUMP_FORWARD_SCHEMA` (= `JUMP_FORWARD_SCHEMA`, `gameplaySchemas.js`).
 - **Validation:** same validator; in `auto` mode `stopDate` may be any date after origin and ≤ target (`validateTimelineDates` `153`); the event-count range is not strictly enforced.
@@ -304,21 +303,20 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Tool/schema:** `submit_event_consolidation` / `EVENT_CONSOLIDATOR_SCHEMA`: `{ summary }`.
 - **Fallback:** concatenate raw event lines + `buildChatSummaryText`. Triggers: `CONSOLIDATION_*` thresholds (`gameplay.js`).
 
-### 7.7 `catalystCreation` — open a branching scene
-- **Purpose:** Design an immersive interactive "catalyst" scene with an opening and 2–5 choices.
-- **Prompt:** `tasks.catalystCreation`. **Entry:** `createCatalyst({force})` `gameplay.js`.
-- **Tool/schema:** `submit_catalyst_creation` / `CATALYST_CREATION_SCHEMA` (= `catalystSchema`, `gameplaySchemas.js`): `{ title, premise, opening, choices[2..5] }`. Written to `world.activeCatalyst`.
+### 7.7 `interactiveCreation` — open a branching scene
+- **Purpose:** Design an immersive scene for the interactive event a time skip offered, with an opening and 2–5 choices.
+- **Prompt:** `tasks.interactiveCreation`, with `[THE MOMENT TO PLAY OUT — BINDING]` (the offered event) and, when the player gave one, `[THE PLAYER'S ANGLE — BINDING]` in the user message. **Entry:** `createInteractive({ eventId, angle })` `gameplay.js`.
+- **Tool/schema:** `submit_interactive_creation` / `INTERACTIVE_CREATION_SCHEMA` (= `interactiveSchema`, `gameplaySchemas.js`): `{ title, premise, opening, choices[2..5] }`. Written to `world.activeInteractive`.
 
-### 7.8 `catalystExecutor` — advance a scene
+### 7.8 `interactiveExecutor` — advance a scene
 - **Purpose:** React to the player's chosen option, advance the scene, add to a progress bar, and offer next choices (or resolve).
-- **Prompt:** `tasks.catalystExecutor` (uses `${catalystChoice}` and `${RUNNING_CATALYST_PERCENT}`). **Entry:** `advanceActiveCatalyst(choiceText)` `gameplay.js`.
-- **Tool/schema:** `submit_catalyst_execution` / `CATALYST_EXECUTOR_SCHEMA`: `{ summary, resolved, nextChoices[] }`. Validator enforces: empty `nextChoices` when resolved, ≥2 distinct otherwise.
+- **Prompt:** `tasks.interactiveExecutor` (uses `${interactiveChoice}` and `${RUNNING_INTERACTIVE_PERCENT}`). **Entry:** `advanceActiveInteractive(choiceText)` `gameplay.js`.
+- **Tool/schema:** `submit_interactive_execution` / `INTERACTIVE_EXECUTOR_SCHEMA`: `{ summary, resolved, nextChoices[] }`. Validator enforces: empty `nextChoices` when resolved, ≥2 distinct otherwise.
 
-### 7.9 `catalystSummary` — resolved scene → one event
-- **Purpose:** When a catalyst resolves, condense it into a single campaign event.
-- **Prompt:** `tasks.catalystSummary`. **Entry:** the resolution branch of `advanceActiveCatalyst` (`gameplay.js`), then `applySimulationResult` with `mode:"catalyst"`.
-- **Tool/schema:** `submit_catalyst_summary` / `CATALYST_SUMMARY_SCHEMA`: `{ title, description, importance }`.
-- ⚠️ **Caveat:** the default `catalystSummary` string contains a large stray **"Game Master" / "Master Cheat Assistant"** block pasted mid-prompt (legacy content). The task still returns the `{title,description,importance}` shape; the real GM task is the separate `gameMaster` key (§7.11). If you rewrite this prompt, delete the embedded GM text.
+### 7.9 `interactiveSummary` — finished scene → one event
+- **Purpose:** When an interactive event resolves, condense it into a single campaign event.
+- **Prompt:** `tasks.interactiveSummary`. **Entry:** the resolution branch of `advanceActiveInteractive` (`gameplay.js`), then `applySimulationResult` with `mode:"interactive"`.
+- **Tool/schema:** `submit_interactive_summary` / `INTERACTIVE_SUMMARY_SCHEMA`: `{ title, description, importance }`.
 
 ### 7.10 `pregameHistory` — backstory generator
 - **Purpose:** On the first open of a fresh game with a "World Before Round One" briefing, write 4–10 dated events **strictly before** the start date. Runs once (the `simulationHistory` entry doubles as the done-marker); events carry **no impacts** (world already reflects them); clock stays at start, round stays 1.
@@ -411,7 +409,7 @@ Shared `impacts` object (`impactsSchema` `gameplaySchemas.js`) carried by jump/a
 | `markerOps` | `build{marker{name,kind(free lowercase),ownerCode?,status?,at\|lng+lat,note?,foundedAt?}}` (or flat beside `op`) · `update{markerId\|name, …, at?}` · `remove{name}` | `markerOpSchema`. `at` as for units. Structures never move borders (no `regionTransfers`). |
 | `reports` | `create{reportId?,title,body,visibleTo[],from?,dateline?}` · `share{reportId,visibleTo[],from?}` | `reportOpSchema`. The document itself, in its own voice, held by the polities named; `visibleTo` empty = published; `from` whose it is (or, on a share, who passed it on). Holders are resolved at validation against the country catalog (unknown: strict error / receipt note; none known: dropped). `[Reports — documents, not summaries]` + `[Reports on File]` (with who stole a copy) ride on the jump; a leader gets `[Documents Your Government Holds]`, the advisor `[Documents Our Government Holds]`. |
 
-Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `createdChats`, not tied to an event) and a nullable `catalyst`. The schema validator (`validateGameplayPayload` `852`) additionally enforces non-blank `stopDate`/event fields, "at least one event, summary, or meaningful catalyst," and distinct catalyst choices.
+Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `createdChats`, not tied to an event). The schema validator (`validateGameplayPayload` `852`) additionally enforces non-blank `stopDate`/event fields, "at least one event, summary, or meaningful interactive event," and distinct interactive event choices.
 
 ---
 
@@ -439,6 +437,5 @@ Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `crea
 - **`worldSummary` embeds the briefing and the simulation rules**, so a prompt that also renders `${WORLD_BEFORE_ROUND_ONE_TEXT}` or `${HISTORICAL_PRESET_SIMULATION_RULES}` would send them twice. `collapseRepeatedWorldContext` (`promptDedupe.js`) keeps the first copy of each and swaps later copies for a pointer; `runJsonTask` applies it to every task and `main.jsx` to the advisor and leader prompts. Values under 400 characters are left alone. Don't strip them from the summary instead: `actions` and `idleDiplomacy` see the rules only there.
 - **Two output attempts per task**, then a deterministic fallback (or throw). `finalAttempt` comes from `runJsonTask`, never from counting validator calls — attempt-1 schema failures skip `validatePayload` entirely (`gameplay.js` comment).
 - **Reputation and military-feasibility reach only the task path** (`buildTemplateVariables`). Advisor/leader use `buildPromptContext` directly and never see them.
-- **`catalystSummary` contains stray embedded "Game Master" text** (§7.9) — the actual GM task is `gameMaster`.
 - **The intel `generateCountryStats` briefing is invisible to the Prompts editor** — it is an inline prompt not in `defaultPrompts.json`. (`idleDiplomacy` has had a section, with one guidance passage, since 2026-09-16.)
 - **Editing `defaultPrompts.json` reaches every campaign** (the guidance model, §2) — but an edit that moves or rewrites a guidance passage must keep, or update, that passage's anchors in `promptGuidance.js`; `promptGuidance.test.js` fails otherwise, and a passage whose anchors are gone silently drops out of the editor.

@@ -943,11 +943,11 @@ const eventSchema = {
   additionalProperties: false,
 };
 
-const catalystSchema = {
+const interactiveSchema = {
   type: "object",
-  description: "An interactive catalyst scene offered to the player.",
+  description: "The opening of an interactive event the player is about to play.",
   properties: {
-    title: textSchema("Short catalyst title."),
+    title: textSchema("Short title of the interactive event."),
     premise: textSchema("Stable premise and stakes of the scene."),
     opening: textSchema("Immersive opening state requiring player input."),
     choices: {
@@ -1007,9 +1007,10 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "boolean",
       description: "Whether planned player actions were resolved by this jump. Defaults to true (resolved) when omitted.",
     },
-    // No `catalyst`: a scene exists only once the player enters Catalyst mode
-    // and starts one (GameUI/catalyst.jsx). A skip used to propose one every
-    // time, into a save nothing showed it from.
+    // No scene (the `catalyst` a skip used to write): a scene is played only
+    // from an interactive event a skip offers, which costs the skip nothing
+    // (runtime/interactiveOffer.js). A skip used to propose one every time,
+    // into a save nothing showed it from.
     diplomaticOutreach: {
       type: "array",
       description:
@@ -1196,7 +1197,7 @@ export const WORLD_MOTION_REPAIR_SCHEMA = {
   type: "object",
   description:
     "One narrow semantic repair for exactly one already-existing persistent storyline. "
-    + "No events, wars, relations, agreements, territory, units, chats, catalysts, or other world changes are allowed.",
+    + "No events, wars, relations, agreements, territory, units, chats, interactive events, or other world changes are allowed.",
   properties: {
     stopDate: nonEmptyTextSchema("Exact simulation stop date in YYYY-MM-DD form."),
     storyline: storylineUpdateSchema,
@@ -1484,16 +1485,16 @@ export const EVENT_CONSOLIDATOR_SCHEMA = {
   additionalProperties: false,
 };
 
-export const CATALYST_CREATION_SCHEMA = catalystSchema;
+export const INTERACTIVE_CREATION_SCHEMA = interactiveSchema;
 
-export const CATALYST_EXECUTOR_SCHEMA = {
+export const INTERACTIVE_EXECUTOR_SCHEMA = {
   type: "object",
-  description: "The next stage of an active catalyst after applying the player's choice.",
+  description: "The next stage of an interactive event after applying the player's choice.",
   properties: {
     summary: textSchema("Narration of the player's action, reactions, and resulting situation."),
     resolved: {
       type: "boolean",
-      description: "Whether the catalyst has reached a definite conclusion.",
+      description: "Whether the interactive event has reached a definite conclusion.",
     },
     nextChoices: {
       type: "array",
@@ -1506,12 +1507,12 @@ export const CATALYST_EXECUTOR_SCHEMA = {
   additionalProperties: false,
 };
 
-export const CATALYST_SUMMARY_SCHEMA = {
+export const INTERACTIVE_SUMMARY_SCHEMA = {
   type: "object",
-  description: "A resolved catalyst condensed into one campaign timeline event.",
+  description: "A finished interactive event condensed into one campaign timeline event.",
   properties: {
     title: textSchema("Concise event headline."),
-    description: textSchema("Complete but concise account of the catalyst outcome."),
+    description: textSchema("Complete but concise account of the interactive event's outcome."),
     importance: textSchema("Event importance, normally major."),
   },
   required: ["title", "description", "importance"],
@@ -2569,9 +2570,9 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   nextSpeaker: NEXT_SPEAKER_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
-  catalystCreation: CATALYST_CREATION_SCHEMA,
-  catalystExecutor: CATALYST_EXECUTOR_SCHEMA,
-  catalystSummary: CATALYST_SUMMARY_SCHEMA,
+  interactiveCreation: INTERACTIVE_CREATION_SCHEMA,
+  interactiveExecutor: INTERACTIVE_EXECUTOR_SCHEMA,
+  interactiveSummary: INTERACTIVE_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
@@ -2628,22 +2629,22 @@ export const EVENT_CONSOLIDATOR_TOOL = makeTool(
   EVENT_CONSOLIDATOR_SCHEMA,
 );
 
-export const CATALYST_CREATION_TOOL = makeTool(
-  "submit_catalyst_creation",
-  "Submit a new interactive catalyst scene and the choices available to the player.",
-  CATALYST_CREATION_SCHEMA,
+export const INTERACTIVE_CREATION_TOOL = makeTool(
+  "submit_interactive_creation",
+  "Submit the opening of a new interactive event and the choices available to the player.",
+  INTERACTIVE_CREATION_SCHEMA,
 );
 
-export const CATALYST_EXECUTOR_TOOL = makeTool(
-  "submit_catalyst_execution",
-  "Submit the result of the player's catalyst choice and either new choices or a resolved state.",
-  CATALYST_EXECUTOR_SCHEMA,
+export const INTERACTIVE_EXECUTOR_TOOL = makeTool(
+  "submit_interactive_execution",
+  "Submit the result of the player's choice in the interactive event and either new choices or a resolved state.",
+  INTERACTIVE_EXECUTOR_SCHEMA,
 );
 
-export const CATALYST_SUMMARY_TOOL = makeTool(
-  "submit_catalyst_summary",
-  "Submit the final campaign event produced by a resolved catalyst.",
-  CATALYST_SUMMARY_SCHEMA,
+export const INTERACTIVE_SUMMARY_TOOL = makeTool(
+  "submit_interactive_summary",
+  "Submit the final campaign event produced by a finished interactive event.",
+  INTERACTIVE_SUMMARY_SCHEMA,
 );
 
 export const PROJECTS_TOOL = makeTool(
@@ -2730,9 +2731,9 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   nextSpeaker: NEXT_SPEAKER_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
-  catalystCreation: CATALYST_CREATION_TOOL,
-  catalystExecutor: CATALYST_EXECUTOR_TOOL,
-  catalystSummary: CATALYST_SUMMARY_TOOL,
+  interactiveCreation: INTERACTIVE_CREATION_TOOL,
+  interactiveExecutor: INTERACTIVE_EXECUTOR_TOOL,
+  interactiveSummary: INTERACTIVE_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
@@ -2861,6 +2862,48 @@ export const getGameplayToolForCustomStatSheet = (taskKey, rows, { custom = fals
         },
         required: ["customStats"],
         additionalProperties: false,
+      },
+    };
+  }
+
+  // The GM uses a deliberately shallow provider transport: countryStatPatchesJson
+  // and eventsJson are JSON ARRAY TEXT rather than nested tool objects. The generic
+  // schema rewrite below therefore cannot reach patch.customStats or
+  // impacts.polityChanges[].stats. Put the live scenario contract on those string
+  // fields themselves so providers see the exact custom machine keys before they
+  // author the JSON text. Native validation still owns the decoded transaction.
+  if (taskKey === "gameMaster") {
+    const keyList = keys.join(", ");
+    const sampleKey = keys[0];
+    const patchDescription =
+      `JSON array text for authoritative country Stats patches in this custom-sheet scenario. `
+      + `Numeric Stats MUST be written only as patch.customStats using these exact machine keys: ${keyList}. `
+      + `Do not use population, economy, indices, stability, or gdpBreakdown. `
+      + `Example: [{"country":"Full Polity Name","patch":{"customStats":{"${sampleKey}":1}},"eventIndexes":[],"reason":""}]. `
+      + "Use only the requested customStats keys; values are absolute, not deltas.";
+    const eventDescription =
+      `JSON array text for canonical event objects. This scenario uses a custom National Stats sheet. `
+      + `If an event changes Stats through impacts.polityChanges[].stats, numeric Stats MUST be under customStats `
+      + `using only these exact machine keys: ${keyList}. Do not use population, economy, indices, stability, or gdpBreakdown. `
+      + "Use [] when there are no events.";
+
+    return {
+      ...tool,
+      description:
+        `${tool.description} This scenario has a custom National Stats sheet; any Stats mutation must use the exact live customStats machine keys.`,
+      schema: {
+        ...tool.schema,
+        properties: {
+          ...tool.schema.properties,
+          eventsJson: {
+            ...tool.schema.properties?.eventsJson,
+            description: eventDescription,
+          },
+          countryStatPatchesJson: {
+            ...tool.schema.properties?.countryStatPatchesJson,
+            description: patchDescription,
+          },
+        },
       },
     };
   }
@@ -3298,11 +3341,12 @@ export const normalizeGameplayPayload = (taskKey, value) => {
   delete candidate.timeline;
   delete candidate.newEvents;
   delete candidate.generatedEvents;
-  // A time skip no longer proposes a scene: scenes exist only once the player
-  // enters Catalyst mode (GameUI/catalyst.jsx), and the jump schema has no
-  // `catalyst`. A model still answering in the old shape — an edited prompt
-  // passage, a habit — has the field dropped here rather than costing the turn
-  // a retry over something nothing reads.
+  // A time skip no longer writes a scene: a scene is played only from an
+  // interactive event a skip offers (runtime/interactiveOffer.js), and the jump
+  // schema has no `catalyst`, the field skips used to fill. A model still
+  // answering in that shape — an edited prompt passage, a habit — has the field
+  // dropped here rather than costing the turn a retry over something nothing
+  // reads.
   delete candidate.catalyst;
 
   const stopDateAlias = firstDefinedKey(candidate, ["stop_date", "endDate", "targetDate"]);
@@ -3378,9 +3422,9 @@ export const validateGameplayPayload = (taskKey, value) => {
     descriptionToAction: ["title", "text", "kind"],
     nextSpeaker: ["nextSpeaker"],
     eventConsolidator: ["summary"],
-    catalystCreation: ["title", "premise", "opening"],
-    catalystExecutor: ["summary"],
-    catalystSummary: ["title", "description", "importance"],
+    interactiveCreation: ["title", "premise", "opening"],
+    interactiveExecutor: ["summary"],
+    interactiveSummary: ["title", "description", "importance"],
     gameMaster: ["summary"],
   };
   for (const field of requiredTextByTask[taskKey] ?? []) {
@@ -3389,12 +3433,12 @@ export const validateGameplayPayload = (taskKey, value) => {
     }
   }
 
-  if (taskKey === "catalystCreation") {
+  if (taskKey === "interactiveCreation") {
     const choiceError = validateDistinctChoices(value.choices, "$.choices");
     if (choiceError) return { valid: false, error: choiceError };
   }
 
-  if (taskKey === "catalystExecutor") {
+  if (taskKey === "interactiveExecutor") {
     if (value.resolved && value.nextChoices.length !== 0) {
       return { valid: false, error: "$.nextChoices must be empty when $.resolved is true." };
     }

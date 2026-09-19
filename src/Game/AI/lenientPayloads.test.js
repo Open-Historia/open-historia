@@ -74,7 +74,8 @@ test("the field-report jump: a posture written as a status no longer fails the m
 });
 
 test("a skip answer that still offers a scene has it dropped, not refused", () => {
-  // Scenes exist only in Catalyst mode now; the jump schema has no catalyst.
+  // A scene is played only from an interactive event a skip offers; the jump
+  // schema has no `catalyst`, the field skips used to fill.
   const raw = { ...jumpWith([spawnedCarrier()]), catalyst: { title: "A summit", premise: "p", opening: "o", choices: ["a", "b"] } };
   assert.equal(validateGameplayPayload("jumpForward", raw).valid, false, "the schema has no catalyst");
   const normalized = normalizeGameplayPayload("jumpForward", raw);

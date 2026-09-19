@@ -232,3 +232,55 @@ test("a renamed country keeps the starting tags the scenario keyed by its old na
   const live = { ...next, countryTags: { "Third Reich": ["fascist"] } };
   assert.deepEqual(resolveCountryTags(base, live, "Third Reich"), ["fascist"], "the AI's live tags still win");
 });
+
+test("a leftover under the new name, an unused stock colour, never repaints the renamed country", () => {
+  // A game's colours hold the stock palette beside its own polities', keyed by
+  // names no polity holds, so "Kingdom of Spain" renamed "Spain" meets one.
+  assert.deepEqual(renamePolityInColors({ "Kingdom of Spain": [9, 9, 9], Spain: [1, 2, 3], France: [4, 5, 6] }, "Kingdom of Spain", "Spain"), { Spain: [9, 9, 9], France: [4, 5, 6] });
+  assert.deepEqual(renamePolityInColors({ Spain: [1, 2, 3], "Kingdom of Spain": [9, 9, 9] }, "Kingdom of Spain", "Spain"), { Spain: [9, 9, 9] }, "whichever comes first in the file");
+  assert.deepEqual(renamePolityInColors({ "Kingdom of Spain": [9, 9, 9], spain: [1, 2, 3] }, "Kingdom of Spain", "Spain"), { Spain: [9, 9, 9] }, "a leftover spelled differently is the same name");
+  assert.deepEqual(renamePolityInColors({ Spain: [1, 2, 3], France: [4, 5, 6] }, "Kingdom of Spain", "Spain"), { France: [4, 5, 6] }, "a country with no colour of its own does not take the leftover's");
+  assert.deepEqual(renamePolityInColors({ "kingdom of spain": [8, 8, 8], "Kingdom of Spain": [9, 9, 9] }, "Kingdom of Spain", "Spain"), { Spain: [9, 9, 9] }, "its exact old key wins over another spelling of it");
+  assert.deepEqual(Object.keys(renamePolityInColors({ Andorra: [0, 0, 0], "Kingdom of Spain": [9, 9, 9], France: [4, 5, 6] }, "Kingdom of Spain", "Spain")), ["Andorra", "Spain", "France"], "the renamed entry keeps its place");
+  assert.deepEqual(renamePolityInFlags({ "Kingdom of Spain": "data:own", Spain: "data:stock" }, "Kingdom of Spain", "Spain"), { Spain: "data:own" });
+});
+
+test("the world's own figures, tags, rating and goal win over leftovers under the new name", () => {
+  const next = renamePolityInWorld({
+    ...world(),
+    countryStats: { Borduria: { population: 5 }, "Bordurian Republic": { population: 999 } },
+    countryTags: { "Bordurian Republic": ["leftover"] },
+    internationalReputation: { "Bordurian Republic": 99, Borduria: 40, Syldavia: 60 },
+    intelligence: { Borduria: 55, "bordurian republic": 1 },
+    playerGoals: { "Bordurian Republic": { text: "Someone else's goal" }, Borduria: { text: "Take the Syldavian coast", round: 2 } },
+  }, "Borduria", "Bordurian Republic").world;
+  assert.deepEqual(next.countryStats, { "Bordurian Republic": { population: 5 } });
+  assert.deepEqual(next.countryTags, {}, "a leftover never becomes the country's, even where it had none");
+  assert.deepEqual(next.internationalReputation, { "Bordurian Republic": 40, Syldavia: 60 });
+  assert.deepEqual(next.intelligence, { "Bordurian Republic": 55 });
+  assert.deepEqual(next.playerGoals, { "Bordurian Republic": { text: "Take the Syldavian coast", round: 2 } });
+});
+
+test("an event that renames a country onto a stock colour's name keeps the country's colour, or gives it the event's", () => {
+  const rename = (extra = {}) => applyEventImpactsToWorld({
+    colors: { Borduria: [1, 2, 3], "Bordurian Republic": [200, 200, 200] },
+    events: [{ id: "e1", date: "1920-05-01", title: "Republic", description: "", impacts: { polityChanges: [{ operation: "rename", code: "Borduria", name: "Bordurian Republic", ...extra }] } }],
+    world: normalizeWorldState(world()),
+  }).colors;
+  const kept = rename();
+  assert.deepEqual(kept["Bordurian Republic"], [1, 2, 3]);
+  assert.equal("Borduria" in kept, false);
+  assert.deepEqual(rename({ color: "#ff0000" })["Bordurian Republic"], [255, 0, 0], "a colour the event gives it still wins");
+});
+
+test("the Workshop's rename keeps the country's own colour, flag and tags over leftovers", () => {
+  const next = renamePolityInDocument({
+    polities: { Austria: { name: "Austria", aliases: [] } },
+    colorOverrides: { Austria: [1, 2, 3], "Austria-Hungary": [7, 7, 7] },
+    flags: { "Austria-Hungary": "data:leftover" },
+    tags: { Austria: ["monarchy"], "austria-hungary": ["leftover"] },
+  }, "Austria", "Austria-Hungary");
+  assert.deepEqual(next.colorOverrides, { "Austria-Hungary": [1, 2, 3] });
+  assert.deepEqual(next.flags, {});
+  assert.deepEqual(next.tags, { "Austria-Hungary": ["monarchy"] });
+});

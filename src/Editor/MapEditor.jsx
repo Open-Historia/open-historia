@@ -530,6 +530,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
+    // Keeps the city set the map's own even if the author empties it here.
+    if (initialMap.customCities) base.metadata.citiesAuthored = true;
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),

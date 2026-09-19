@@ -28,6 +28,12 @@ export const onFeatureSelected = (payload) => {
   _setSelection(payload);
 };
 
+// Search opens a feature without a click's toggle, so landing on the one already open leaves it open.
+export const focusFeature = (payload) => {
+  if (!_setSelection || !payload?.name) return;
+  _setSelection(payload);
+};
+
 // Called when another selection (unit, region, empty space) takes over.
 export const dismissFeaturePopup = () => {
   if (_currentSelection) _dismiss?.();

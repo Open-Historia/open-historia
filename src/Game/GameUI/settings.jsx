@@ -82,11 +82,6 @@ import { isNativeApp } from "../../runtime/web/nativeBoot.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
-import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { isSceneInProgress } from "../AI/catalystRewind.js";
-
-// A primitive, so the menu wakes only when a scene starts or ends.
-const selectSceneInProgress = (world) => isSceneInProgress(world?.activeCatalyst);
 
 const baseStyle = {
     position: "fixed",
@@ -1702,8 +1697,6 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         violet: { background: "rgba(124,58,237,0.09)", border: "rgba(167,139,250,0.18)", icon: "rgba(124,58,237,0.18)", color: "#ddd6fe" },
         blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
-        // Catalyst mode's own: the one tool that should catch the eye.
-        yellow: { background: "rgba(250,204,21,0.13)", border: "rgba(250,204,21,0.55)", icon: "rgba(250,204,21,0.28)", color: "#fde047" },
     };
     const palette = tones[tone] ?? tones.neutral;
     const common = {
@@ -2034,7 +2027,7 @@ const SettingsWorkspace = ({
                     </div>
                     <Toggle label="Rate AI generations" enabled={ratingOn} onToggle={onToggleRating} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
-                    A small 1-10 bar after each time skip, Game Master edit and catalyst. Ratings sit beside the call in the console and its exports.
+                    A small 1-10 bar after each time skip, Game Master edit and interactive event. Ratings sit beside the call in the console and its exports.
                     </div>
                 </SettingsSection>
                 {!import.meta.env.VITE_OH_WEB && (
@@ -2146,7 +2139,6 @@ const SettingsMenu = ({
     onToggleFullscreen,
     onToggleGlobe,
     onToggleTerrain,
-    onOpenCatalyst,
     onOpenCheats,
     onOpenDebugConsole,
     onOpenEvents,
@@ -2162,8 +2154,6 @@ const SettingsMenu = ({
     initialSection = null,
 }) => {
     const isMobile = useIsMobile();
-    // Catalyst mode's card says when there is a scene to return to.
-    const sceneInProgress = useRuntimeState("world", selectSceneInProgress);
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
     // The small menu's card: measured when a section opens so the workspace can
@@ -2333,16 +2323,6 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Tools" description="High-frequency in-game tools should stay one click away.">
                 <div style={grid}>
-                    {/* Catalyst mode (catalyst.jsx): the only way into a scene. */}
-                    {typeof onOpenCatalyst === "function" && (
-                        <QuickAction
-                            title="Catalyst mode"
-                            description={sceneInProgress ? "A scene is in progress — return to it" : "Play out a moment as a scene, beat by beat"}
-                            symbol="⚡"
-                            tone="yellow"
-                            onClick={() => runAndClose(onOpenCatalyst)}
-                        />
-                    )}
                     {typeof onOpenCheats === "function" && (
                         <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="violet" onClick={() => runAndClose(onOpenCheats)} />
                     )}

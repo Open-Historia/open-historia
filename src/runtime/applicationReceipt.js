@@ -208,7 +208,7 @@ export const receiptHasNotes = (receipt) => array(receipt?.notes).length > 0;
 
 // Which turn record the next jump reports on: the newest one a JUMP wrote.
 // world.simulationHistory also records Game Master interventions, resolved
-// catalysts and the pregame bootstrap, newest first; none of those is an answer
+// interactive events and the pregame bootstrap, newest first; none of those is an answer
 // the simulator gave, so they are stepped over rather than mistaken for one. A
 // last jump that predates receipts has nothing to report, and the search stops
 // there — an older turn's receipt is not news.

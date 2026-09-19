@@ -267,8 +267,11 @@ const deriveDisputedData = (ownershipOverrides = {}, regionClaimants = {}) => {
     const props = feature?.properties ?? {};
     const id = props.id != null ? String(props.id) : props.GID_1 != null ? String(props.GID_1) : "";
     if (!id) continue;
-    const live = toStringArray(regionClaimants?.[id]);
-    const claimants = live.length ? live : toStringArray(props.claimants);
+    // The world's list is authoritative for every region it has: even an empty
+    // one, a dispute it has ended (useWorldState.js withSettledClaims). Only a
+    // region it never recorded shows the claimants its feature bakes in.
+    const recorded = Boolean(regionClaimants) && Object.prototype.hasOwnProperty.call(regionClaimants, id);
+    const claimants = toStringArray(recorded ? regionClaimants[id] : props.claimants);
     if (!claimants.length) continue;
     features.push({
       ...feature,

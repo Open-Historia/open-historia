@@ -202,6 +202,23 @@ test("removing a Connection says which entries use it, then removes them and the
   assert.equal(config.getTaskPick("jumpForward"), "");
 });
 
+// The interactive-event tasks had other keys before (formerTaskKeys.js); a
+// player's picks for them, and an old per-provider model for one, carry over.
+test("a renamed task keeps the pick and the old model made under its former key", () => {
+  store.set("api_provider", "gemini");
+  store.set("gemini_model", "gemini-3.5-flash");
+  store.set("gemini_model_catalystExecutor", "gemini-3.5-pro");
+  const list = config.getResolvedFallbackList();
+  assert.equal(config.getTaskPick("interactiveExecutor"), list[1].id, "the old per-provider model became an entry the task points at");
+  assert.equal(list[1].model, "gemini-3.5-pro");
+
+  store.set("ai_task_picks", JSON.stringify({ catalystSummary: list[1].id }));
+  assert.equal(config.getTaskPick("interactiveSummary"), list[1].id, "a pick stored before the rename");
+  config.setTaskPick("interactiveSummary", "");
+  assert.equal(config.getTaskPick("interactiveSummary"), "", "clearing it clears the old key too");
+  assert.deepEqual(JSON.parse(store.get("ai_task_picks")), {});
+});
+
 test("entries can be reordered and removed", () => {
   const [a] = config.getFallbackList();
   const b = config.addEntry({ connectionId: a.connectionId, model: "b" });

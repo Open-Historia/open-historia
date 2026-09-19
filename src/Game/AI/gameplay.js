@@ -263,7 +263,8 @@ import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPh
 import { createStreamedEventReader } from "./streamedEvents.js";
 import { deliveryEventId, documentExchange, documentNote, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
 import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
-import { canRewindCatalystTo, isSceneInProgress, openCatalyst, recordCatalystBeat, rewindCatalyst } from "./catalystRewind.js";
+import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
+import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
 import {
   eventsFromLegacyChat,
@@ -1636,10 +1637,10 @@ const taskIdleTimeoutMs = () =>
   (getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
 // Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
-// diplomacy reading, catalysts their own, everything else the simulation one.
+// diplomacy reading, interactive events their own, everything else the simulation one.
 const difficultyScopeForTask = (taskKey) => {
   if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) return "diplomacy";
-  if (String(taskKey || "").startsWith("catalyst")) return "catalyst";
+  if (String(taskKey || "").startsWith("interactive")) return "interactive";
   return "simulation";
 };
 
@@ -2193,7 +2194,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // answers "ESP" gets canonicalised on ingest, but it also then reasons about "ESP"
   // and "Spain" as if they were two powers, so state the rule rather than only
   // repairing the output.
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Polity Names]\nEvery polity is identified ONLY by its full country name, exactly as written in the map description — "Spain", "United States", "Soviet Union". NEVER use a country code or abbreviation such as "ESP", "USA" or "SOV", anywhere, in any field. This applies to every owner field despite their names: toCode, fromCode, ownerCode and a polity's code all take the FULL NAME. A code is not a shorter way of writing a country here; it is a different, non-existent polity, and using one creates a phantom country on the map beside the real one. A renamed polity is listed under its new name with its former names as aliases: use the new name, and expect the old one only in history.`;
   }
 
@@ -2453,7 +2454,7 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // The unit director's runtime rules travel with the call so a campaign's
   // frozen prompt pack (which predates the task) still gets the current contract.
-  if (["unitDirector", "gameMaster", "idleDiplomacy", "catalystExecutor"].includes(taskKey)) {
+  if (["unitDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
   }
   if (taskKey === "unitDirector") {
@@ -2469,7 +2470,7 @@ So use the wider picture to choose the sender and the moment — never to give t
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
   }
 
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
       systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
@@ -2478,7 +2479,7 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // Espionage's counterpart to the reputation block above. Without it the rating
   // is invisible to the model and therefore frozen for the whole campaign.
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const intelligenceContext = normalizeString(variables.playerPolityIntelligenceContext);
     if (intelligenceContext) {
       systemPrompt = `${systemPrompt}\n\n[Intelligence Services]\n${intelligenceContext}\nThis rating is how much of other polities' private diplomacy a service can read and how well it protects its own, and it moves the same way international reputation does. When this turn's events actually change what a service is capable of, record the new ABSOLUTE value (an integer 0-100) in an "intelligence" field on that polity's impacts.polityChanges entry. Concrete investment the player has ordered and that this turn actually delivers raises it a few points at a time — a training academy opening its doors, a new bureau or directorate standing up, a funding increase taking effect, a recruitment or codebreaking programme bearing fruit; a purge, a mass defection, a network rolled up by a rival, or deep cuts lower it. An intention is not a capability: do not move it for an order that has only just been given, do not restate it when nothing changed, and do not jump it by tens of points for a single measure.`;
@@ -2683,8 +2684,8 @@ const GM_REMINDER_TASKS = new Set([
   "gameMaster",
   "actions",
   "idleDiplomacy",
-  "catalystCreation",
-  "catalystExecutor",
+  "interactiveCreation",
+  "interactiveExecutor",
   "spyIntercept",
   "chatActions",
 ]);
@@ -3016,7 +3017,7 @@ const runJsonTask = async (taskKey, {
       // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
       // envelope, a singular event, synonym keys, doubled impacts wrappers —
       // rewritten to the canonical shape before the schema sees them.
-      // It also drops the `catalyst` a time skip no longer proposes.
+      // It also drops the `interactive event` a time skip no longer proposes.
       parsed = normalizeGameplayPayload(taskKey, parsed);
       // Same idea for markerOps. The engine has always accepted `found`/`destroy`
       // as aliases and a build written flat, but the schema only ever allowed the
@@ -3804,7 +3805,7 @@ const mergePolityCatalog = (countryCatalog, world) => {
 // ---- Simulation busy lock ---------------------------------------------------
 // The idle diplomacy drip (maybeSendIdleDiplomacy below) must never run - and
 // above all never WRITE chat state - while a jump, game-master command, or
-// catalyst stage is in flight: those read the full state bundle at entry and
+// interactive event stage is in flight: those read the full state bundle at entry and
 // write it all back at the end, so a concurrent chat write would be silently
 // clobbered (or worse, interleave with the rollback snapshot). Every simulation
 // entry point wraps itself in beginSimulation/endSimulation; the drip checks
@@ -6056,7 +6057,8 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
     });
   }
 
-  // No scene: a time skip no longer proposes one (Catalyst mode starts them).
+  // No scene: a time skip no longer writes one (a skip offers an interactive
+  // event instead, runtime/interactiveOffer.js).
   return {
     clearActions: true,
     events,
@@ -6134,7 +6136,7 @@ export const loadRollbackSnapshots = async () => {
 // snapshot.
 //
 // Wrapped in the same beginSimulation/endSimulation busy-lock every jump,
-// game-master and catalyst call already uses — without it, the idle pulse (on
+// game-master and interactive event call already uses — without it, the idle pulse (on
 // its own real-time timer) could read chat.json mid-rollback, then write its own
 // read-modify-write back AFTER this function's restore, resurrecting the
 // pre-rollback chat history with its own new note landed on top.
@@ -6360,7 +6362,7 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
 // Everything the board could need is settled by then and nothing is written yet,
 // so a failure still means "nothing happened" and the turn can be held and
 // retried. Callers that own the board through their own impacts
-// (applyGameMasterCommand) or have no board story (advanceActiveCatalyst)
+// (applyGameMasterCommand) or have no board story (advanceActiveInteractive)
 // simply omit it and are unchanged.
 // Ledger records reference the events that caused them by id. When a
 // post-processor drops an event, every record bound only to it is dropped too;
@@ -6400,7 +6402,7 @@ const applySimulationResult = async ({
   baseWorld,
   result,
 }) => {
-  // Only a jump keeps one: a resolved catalyst comes through here too, and it is
+  // Only a jump keeps one: a resolved interactive event comes through here too, and it is
   // not an answer the simulator will be asked to build on. Every call below is a
   // no-op on null. A copy, because a turn held on its projects pass runs this
   // function a second time with the same arguments, and the tally must not count
@@ -6606,14 +6608,15 @@ const applySimulationResult = async ({
     motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
     world: {
       ...baseWorld,
-      activeCatalyst: result.catalyst ?? null,
+      // Whatever comes through here ends a scene: a skip is refused while one is
+      // in progress and clears a leftover one, and a scene resolving is this.
+      activeInteractive: null,
       actionSuggestions: [],
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
       simulationHistory: [
         {
-          catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
           eventIds: freshEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
@@ -7084,6 +7087,27 @@ const applySimulationResult = async ({
     logDebugEvent("turn", `Documents delivered: ${reportDeliveries.map((delivery) => `"${delivery.report.title}" by ${delivery.channel}`).join("; ")}.`, undefined, { verbose: true });
   }
 
+  // Now and then a time skip offers one of its events to be played out as an
+  // interactive event (runtime/interactiveOffer.js). Chosen here, where the
+  // turn's events are final, and at no cost: no request is made until the player
+  // takes it up. Every skip replaces the last skip's offer, taken up or not.
+  if (result.mode === "jump" || result.mode === "auto") {
+    const offer = chooseInteractiveOffer({
+      events: freshEvents,
+      round: nextGame.round,
+      lastOfferRound: baseWorld?.lastInteractiveOfferRound,
+    });
+    worldWithImpacts = {
+      ...worldWithImpacts,
+      interactiveOffer: offer,
+      ...(offer ? { lastInteractiveOfferRound: offer.round } : {}),
+    };
+    if (offer) {
+      const offered = freshEvents.find((event) => event.id === offer.eventId);
+      logDebugEvent("turn", `Interactive event offered: "${normalizeString(offered?.title) || offer.eventId}" can be played out as a scene.`);
+    }
+  }
+
   let nextWorld = worldWithImpacts;
 
   // Everything this turn writes into a thread or a file is shown with an event
@@ -7220,7 +7244,7 @@ const applySimulationResult = async ({
   // The turn's new state is now persisted. Web-mode encrypted sync listens for this
   // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
   // where nothing listens. Firing here — the single choke point every turn type runs
-  // through (jump, auto-jump, catalyst, game-master) — means the sync's full scan
+  // through (jump, auto-jump, interactive event, game-master) — means the sync's full scan
   // sees the committed round.
   if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
 
@@ -7233,7 +7257,7 @@ const applySimulationResult = async ({
   // there when the player opens the Spy tab, but never allowed to fail the turn.
   // While requests are being saved the reports came with the turn review, in its
   // one request, and are only filed here; a turn with no review (a resolved
-  // catalyst, a game-master command) waits for the next skip's. Otherwise each
+  // interactive event, a game-master command) waits for the next skip's. Otherwise each
   // agent makes its own request, as before.
   if (review) await fileReviewedAgentReports(review);
   else if (!savingRequests()) await refreshSpyIntercepts();
@@ -7245,7 +7269,7 @@ const applySimulationResult = async ({
   // Snapshot the state we just replaced so it can be rolled back to (best-effort),
   // with what this turn applied beside it, in the order the reveal shows it, so
   // the player can stop the round part-way (Intervene). Only a time skip is
-  // worth stopping: a resolved catalyst or a game-master command is one moment.
+  // worth stopping: a resolved interactive event or a game-master command is one moment.
   await captureRollbackSnapshot({
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
@@ -7267,7 +7291,6 @@ const applySimulationResult = async ({
         storylineUpdates,
         stopDate: nextGame.gameDate,
         summary: result.summary,
-        catalyst: result.catalyst,
         outreach: result.outreach,
         clearActions: result.clearActions,
         mode: result.mode,
@@ -7748,7 +7771,7 @@ const runTargetedWorldMotionRepair = async ({
     `You are the TARGETED ENDOGENOUS MOTION REPAIR for OpenHistoria.\n\n` +
     `Repair EXACTLY ONE already-existing persistent storyline: ${storylineId}.\n` +
     `The normal whole-world pass remains the sole source of visible timeline events. ` +
-    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, catalysts, Stats edits, or any other ledger mutation. ` +
+    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, interactive events, Stats edits, or any other ledger mutation. ` +
     `Return exactly one semantic storyline object through the dedicated repair tool.\n\n` +
     `This storyline ${repairCause}. Decide what is true about THIS process at ${targetDate}. ` +
     `Do not merely paraphrase the old equilibrium. Numeric pressure/momentum changes must follow the returned state. ` +
@@ -8368,6 +8391,7 @@ const runWorldBreadthRepair = async ({
     }
 
     parsed.clearActions = false;
+    // The scene field skips used to fill (gameplaySchemas.js normalizeGameplayPayload).
     delete parsed.catalyst;
     parsed.diplomaticOutreach = [];
 
@@ -11228,7 +11252,11 @@ export const runChatActionBatch = async ({
     knownPolities: known,
     messageIds: shownMessages.map((message) => message.id),
     polls: projected.polls,
-  }, { time: normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate) });
+  }, {
+    time: normalizeString(time) || normalizeString((bundle.savedGame ?? bundle.game)?.gameDate),
+    // So a second turn on the same game day cannot mint the first one's ids.
+    takenIds: events.map((event) => event?.id),
+  });
 
   const memorySummary = normalizeString(payload?.memorySummary);
   if (memorySummary) {
@@ -11321,22 +11349,29 @@ export const consolidateHistoryNow = async () => {
   }
 };
 
-// ---- Catalyst mode: a moment played out as a scene ---------------------------
+// ---- Interactive events: a moment played out as a scene ---------------------
 //
-// A scene exists only once the player enters Catalyst mode and starts one
-// (GameUI/catalyst.jsx); a time skip no longer proposes them. The player may say
-// what scene they want, or leave it to the simulation. Starting is one request,
-// each beat one more, and the end — the beats written into the record as one
-// event — one more. A step that fails changes nothing: the canned text a task
-// falls back on is not a scene anyone asked for, so it is reported instead.
+// The player does not ask for one. Now and then a time skip offers one of its
+// own events to be played out (runtime/interactiveOffer.js, chosen in
+// applySimulationResult); the event's card says so, and the player takes it up
+// (GameUI/interactive.jsx) or lets it pass. Taking it up is one request, each
+// beat one more, and the end — the beats written into the record as one event —
+// one more. A step that fails changes nothing: the canned text a task falls back
+// on is not a scene anyone asked for, so it is reported instead.
 
-// What the creation task is told about the scene it is to open.
-const sceneRequestDirective = (request) => (request
-  ? "[THE PLAYER'S REQUESTED SCENE — BINDING]\n"
-    + `${request}\n`
-    + "Build the scene on exactly this request. Establish only the facts needed to begin it. Do not widen it, escalate it, reinterpret it or resolve it in advance, and do not invent relationships, motives, arrivals or backstory to make it more dramatic. Keep any ambiguity the player left, and open as close to the requested moment as you can."
-  : "[CHOOSING THE SCENE]\n"
-    + "The player asked for no particular scene. Choose the strongest one the current state, the player's recent orders and the latest events make ready: a moment where a decision by the player's leader matters now. Do not build it on a person, object or detail merely because it appears somewhere in older history.");
+// What the creation task is told about the moment it is to open: the offered
+// event, and the player's angle on it when they gave one.
+const offeredSceneDirective = (event, angle) => [
+  "[THE MOMENT TO PLAY OUT — BINDING]",
+  `The player chose to play out this event from the latest time skip as an interactive event:`,
+  `Date: ${normalizeString(event.date) || "(undated)"}`,
+  `Event: ${normalizeString(event.title)}`,
+  normalizeString(event.description),
+  "Open the scene inside this event: its decisive moment if it is still unfolding, or the moment its consequences reach the player's leadership and they must answer, as close to the current date as the event allows. What the event reports has happened; build on it, do not retell it, contradict it or resolve what it leaves open. Establish only the facts needed to begin, and do not invent relationships, motives, arrivals or backstory to make it more dramatic.",
+  ...(angle
+    ? ["", "[THE PLAYER'S ANGLE — BINDING]", angle, "Build the scene around this within the event above. Do not widen it, escalate it or reinterpret it, and keep any ambiguity the player left."]
+    : []),
+].join("\n");
 
 const sceneStepFailed = (generation, what) => {
   if (generation?.source !== "fallback") return null;
@@ -11344,7 +11379,9 @@ const sceneStepFailed = (generation, what) => {
   return new Error(`${what} (${reason}). Nothing changed; try again.`);
 };
 
-export const createCatalyst = async ({ request = "", force = true } = {}) => {
+// Take up the interactive event the last time skip offered: the scene opens on
+// that event, with the player's angle when they gave one. The offer is spent.
+export const createInteractive = async ({ eventId = "", angle = "", force = true } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before starting a scene.");
   beginSimulation();
   try {
@@ -11352,76 +11389,93 @@ export const createCatalyst = async ({ request = "", force = true } = {}) => {
     // events a reveal has not shown them yet (runtime/unseenEvents.js).
     const bundle = await readSeenGameStateBundle({ force });
     if (bundle.unseen?.size) throw new Error("Finish revealing the last time skip before starting a scene.");
-    if (hasSceneInProgress(bundle.world)) throw new Error("A scene is already in progress: end it or set it aside first.");
-    const asked = normalizeString(request).slice(0, 1200);
+    if (hasSceneInProgress(bundle.world)) throw new Error("An interactive event is already in progress: end it or set it aside first.");
+    const offer = normalizeWorldState(bundle.world).interactiveOffer;
+    const event = offer && (!eventId || offer.eventId === normalizeString(eventId))
+      ? offeredEvent({ offer, events: bundle.events })
+      : null;
+    if (!event) throw new Error("That interactive event has passed.");
+    const asked = normalizeString(angle).slice(0, 1200);
     const variables = await buildTemplateVariables(bundle, { lookups: true });
-    const { generation, payload } = await runJsonTask("catalystCreation", {
+    const { generation, payload } = await runJsonTask("interactiveCreation", {
       lookups: buildTaskLookups(bundle),
       fallback: () => ({ choices: [], opening: "", premise: "", title: "" }),
-      userMessage: [sceneRequestDirective(asked), "Design the scene as JSON only."].join("\n\n"),
+      userMessage: [offeredSceneDirective(event, asked), "Design the scene as JSON only."].join("\n\n"),
       variables,
     });
     const failed = sceneStepFailed(generation, "The scene could not be written");
     if (failed) throw failed;
 
     // Opened with its first opening kept, so a beat can be taken back to the very
-    // start (catalystRewind.js); marked as the player's, which is what makes it a
+    // start (interactiveRewind.js); marked as the player's, which is what makes it a
     // scene in progress rather than a leftover.
-    const catalyst = {
-      ...openCatalyst({
+    const interactive = {
+      ...openInteractive({
         choices: normalizeArray(payload?.choices).map((entry) => normalizeString(entry)).filter(Boolean),
         opening: normalizeString(payload?.opening),
         premise: normalizeString(payload?.premise),
         title: normalizeString(payload?.title),
       }),
       origin: "player",
+      fromEventId: event.id,
       ...(asked ? { request: asked } : {}),
       startedOn: normalizeString(bundle.game?.gameDate),
     };
 
     const world = normalizeWorldState(await readWorldState({ force: true }));
-    await writeWorldState({ ...world, activeCatalyst: catalyst });
-    logDebugEvent("turn", `Catalyst mode: scene "${catalyst.title || "untitled"}" opened${asked ? " as the player asked" : ""}.`);
-    return catalyst;
+    await writeWorldState({ ...world, activeInteractive: interactive, interactiveOffer: null });
+    logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" opened on "${normalizeString(event.title)}"${asked ? " from the player's angle" : ""}.`);
+    return interactive;
   } finally {
     endSimulation();
   }
 };
 
+// Let the offered interactive event pass: the offer is gone, nothing else
+// changes. No request.
+export const declineInteractiveOffer = async () => {
+  if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  if (!world.interactiveOffer) return { interactiveOffer: null };
+  await writeWorldState({ ...world, interactiveOffer: null });
+  logDebugEvent("turn", "Interactive event let pass.");
+  return { interactiveOffer: null };
+};
+
 // A scene the player is in the middle of. A scene a time skip proposed before
 // skips stopped proposing them is not one: the player never saw it.
-const hasSceneInProgress = (world) => isSceneInProgress(normalizeWorldState(world ?? {}).activeCatalyst);
+const hasSceneInProgress = (world) => isSceneInProgress(normalizeWorldState(world ?? {}).activeInteractive);
 
 // Set the scene aside: it ends with nothing written. No request.
-export const setAsideActiveCatalyst = async () => {
+export const setAsideActiveInteractive = async () => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
   const world = normalizeWorldState(await readWorldState({ force: true }));
-  if (!world.activeCatalyst) return { catalyst: null };
-  await writeWorldState({ ...world, activeCatalyst: null });
-  logDebugEvent("turn", `Catalyst mode: scene "${world.activeCatalyst.title || "untitled"}" set aside.`);
-  return { catalyst: null };
+  if (!world.activeInteractive) return { interactive: null };
+  await writeWorldState({ ...world, activeInteractive: null });
+  logDebugEvent("turn", `Interactive event: scene "${world.activeInteractive.title || "untitled"}" set aside.`);
+  return { interactive: null };
 };
 
 // The scene's beats written into the record as one event, and the scene closed:
 // how it resolves when the scene decides it has, and how the player ends it
 // early. The one request any resolution costs.
-const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, history }) => {
+const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history }) => {
   const summaryVariables = await buildTemplateVariables(bundle, {
-    catalystHistory: normalizeArray(history)
+    interactiveHistory: normalizeArray(history)
       .map((entry) => `${entry.choice}: ${entry.summary}`)
       .join("\n"),
-    catalystPremise: catalyst.premise || catalyst.title || "",
+    interactivePremise: interactive.premise || interactive.title || "",
   });
-  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("catalystSummary", {
+  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("interactiveSummary", {
     fallback: () => ({ description: "", importance: "major", title: "" }),
-    userMessage: "Summarize the finished catalyst into one campaign event as JSON only.",
+    userMessage: "Summarize the finished interactive event into one campaign event as JSON only.",
     variables: summaryVariables,
   });
   const failed = sceneStepFailed(summaryGeneration, "The scene could not be written into the record");
   if (failed) throw failed;
   const lastSummary = normalizeString(normalizeArray(history).at(-1)?.summary);
 
-  const catalystEvent = normalizeGeneratedEvent({
+  const interactiveEvent = normalizeGeneratedEvent({
     date: bundle.game.gameDate,
     description: normalizeString(summaryPayload?.description) || lastSummary,
     impacts: {
@@ -11430,10 +11484,10 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
       regionTransfers: [],
     },
     importance: normalizeString(summaryPayload?.importance) || "major",
-    kind: "catalyst",
+    kind: "interactive",
     notable: true,
     playerRelated: true,
-    title: normalizeString(summaryPayload?.title) || catalyst.title || "Catalyst resolved",
+    title: normalizeString(summaryPayload?.title) || interactive.title || "Interactive event resolved",
     source: summaryGeneration.source,
   });
 
@@ -11446,13 +11500,12 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
     baseGame: bundle.game,
     baseWorld: {
       ...bundle.world,
-      activeCatalyst: null,
+      activeInteractive: null,
     },
     result: {
-      catalyst: null,
       clearActions: false,
-      events: catalystEvent ? [catalystEvent] : [],
-      mode: "catalyst",
+      events: interactiveEvent ? [interactiveEvent] : [],
+      mode: "interactive",
       stopDate: bundle.game.gameDate,
       summary: normalizeString(summaryPayload?.description) || lastSummary,
       generation: summaryGeneration,
@@ -11460,51 +11513,51 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
   });
 };
 
-// End the scene where it stands (Catalyst mode's End the scene). With no beat
+// End the scene where it stands (the panel's End the scene). With no beat
 // played there is nothing to record, and it is simply set aside.
-export const endActiveCatalyst = async () => {
+export const endActiveInteractive = async () => {
   beginSimulation();
   try {
     const bundle = await readGameStateBundle({ force: true });
-    const catalyst = normalizeWorldState(bundle.world).activeCatalyst;
-    if (!catalyst) throw new Error("No scene is in progress.");
-    if (!normalizeArray(catalyst.history).length) {
+    const interactive = normalizeWorldState(bundle.world).activeInteractive;
+    if (!interactive) throw new Error("No scene is in progress.");
+    if (!normalizeArray(interactive.history).length) {
       const world = normalizeWorldState(await readWorldState({ force: true }));
-      await writeWorldState({ ...world, activeCatalyst: null });
+      await writeWorldState({ ...world, activeInteractive: null });
       return { resolved: false };
     }
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-    const applied = await resolveCatalystScene({ bundle, baseColors, campaignId: activeCampaignId(), catalyst, history: catalyst.history });
-    logDebugEvent("turn", `Catalyst mode: scene "${catalyst.title || "untitled"}" ended by the player after ${catalyst.history.length} beat(s).`);
+    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId: activeCampaignId(), interactive, history: interactive.history });
+    logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" ended by the player after ${interactive.history.length} beat(s).`);
     return { resolved: true, ...applied };
   } finally {
     endSimulation();
   }
 };
 
-// Take back beat `beatIndex` of the scene in progress (D6, catalystRewind.js):
+// Take back beat `beatIndex` of the scene in progress (D6, interactiveRewind.js):
 // the scene returns to exactly how it stood when that beat was about to be
 // chosen. Nothing outside the scene has changed before it resolves, so the
 // rewind itself asks nothing of a model; with `choice` the beat is chosen again
 // at once, which is the one request any beat costs.
-export const rewindActiveCatalyst = async ({ beatIndex, choice = "" } = {}) => {
+export const rewindActiveInteractive = async ({ beatIndex, choice = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
   const world = normalizeWorldState(await readWorldState({ force: true }));
-  const catalyst = world.activeCatalyst;
-  if (!catalyst) throw new Error("No catalyst scene is in progress.");
-  const rewound = rewindCatalyst(catalyst, Number(beatIndex));
+  const interactive = world.activeInteractive;
+  if (!interactive) throw new Error("No interactive event is in progress.");
+  const rewound = rewindInteractive(interactive, Number(beatIndex));
   if (!rewound) {
-    throw new Error(canRewindCatalystTo(catalyst, Number(beatIndex))
+    throw new Error(canRewindInteractiveTo(interactive, Number(beatIndex))
       ? "That beat cannot be returned to."
       : "That beat was played before the scene kept what was on screen at each beat, so it cannot be returned to; a later one can.");
   }
-  await writeWorldState({ ...world, activeCatalyst: rewound });
-  logDebugEvent("turn", `Catalyst scene "${rewound.title || "untitled"}": beat ${Number(beatIndex) + 1} taken back${normalizeString(choice) ? " and chosen again" : ""}.`);
-  if (normalizeString(choice)) return advanceActiveCatalyst(normalizeString(choice));
-  return { catalyst: rewound };
+  await writeWorldState({ ...world, activeInteractive: rewound });
+  logDebugEvent("turn", `Interactive event "${rewound.title || "untitled"}": beat ${Number(beatIndex) + 1} taken back${normalizeString(choice) ? " and chosen again" : ""}.`);
+  if (normalizeString(choice)) return advanceActiveInteractive(normalizeString(choice));
+  return { interactive: rewound };
 };
 
-export const advanceActiveCatalyst = async (choiceText) => {
+export const advanceActiveInteractive = async (choiceText) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -11512,27 +11565,27 @@ export const advanceActiveCatalyst = async (choiceText) => {
   const campaignId = activeCampaignId();
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
-  const catalyst = world.activeCatalyst;
+  const interactive = world.activeInteractive;
 
-  if (!catalyst) {
-    throw new Error("No active catalyst is available.");
+  if (!interactive) {
+    throw new Error("No interactive event is in progress.");
   }
 
-  const catalystHistoryText = normalizeArray(catalyst.history)
+  const interactiveHistoryText = normalizeArray(interactive.history)
     .map((entry) => `${entry.choice}: ${entry.summary}`)
     .join("\n");
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
-    catalystChoice: choiceText,
-    catalystHistory: catalystHistoryText,
-    catalystOpening: catalyst.opening || "",
-    catalystPremise: catalyst.premise || catalyst.title || "",
+    interactiveChoice: choiceText,
+    interactiveHistory: interactiveHistoryText,
+    interactiveOpening: interactive.opening || "",
+    interactivePremise: interactive.premise || interactive.title || "",
   });
 
-  const { generation, payload } = await runJsonTask("catalystExecutor", {
+  const { generation, payload } = await runJsonTask("interactiveExecutor", {
     lookups: buildTaskLookups(bundle),
     fallback: () => ({ nextChoices: [], resolved: false, summary: "" }),
-    userMessage: "Continue the catalyst scene as JSON only.",
+    userMessage: "Continue the interactive event as JSON only.",
     variables,
   });
   const failed = sceneStepFailed(generation, "The scene did not go on");
@@ -11544,8 +11597,8 @@ export const advanceActiveCatalyst = async (choiceText) => {
   };
 
   // The beat keeps what the player was shown when they chose it, so it can be
-  // taken back and chosen differently (catalystRewind.js).
-  const nextCatalyst = recordCatalystBeat(catalyst, {
+  // taken back and chosen differently (interactiveRewind.js).
+  const nextInteractive = recordInteractiveBeat(interactive, {
     choice: choiceText,
     summary: historyEntry.summary,
     nextChoices: normalizeArray(payload?.nextChoices).map((entry) => normalizeString(entry)).filter(Boolean),
@@ -11554,21 +11607,21 @@ export const advanceActiveCatalyst = async (choiceText) => {
   if (!payload?.resolved) {
     const nextWorld = {
       ...world,
-      activeCatalyst: nextCatalyst,
+      activeInteractive: nextInteractive,
     };
     await writeWorldState(nextWorld);
     return {
-      catalyst: nextCatalyst,
+      interactive: nextInteractive,
       world: nextWorld,
     };
   }
 
-  return resolveCatalystScene({
+  return resolveInteractiveScene({
     bundle,
     baseColors,
     campaignId,
-    catalyst,
-    history: [...normalizeArray(catalyst.history), historyEntry],
+    interactive,
+    history: [...normalizeArray(interactive.history), historyEntry],
   });
   } finally {
     endSimulation();
@@ -12472,7 +12525,6 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   }
 
   const result = {
-    catalyst: merged.catalyst,
     clearActions: merged.clearActions,
     events: territoryEvents,
     mode,
@@ -12546,10 +12598,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (safeDays <= 0) {
     throw new Error("Choose a time-skip amount greater than zero.");
   }
-  // Time stands still while the player is in a scene (Catalyst mode): the scene
-  // is a moment, and a skip would leave it half played at a date long gone.
+  // Time stands still while the player is in an interactive event: the scene is
+  // a moment, and a skip would leave it half played at a date long gone.
   if (hasSceneInProgress(bundle.world)) {
-    throw new Error("A scene is in progress in Catalyst mode: end it or set it aside before skipping time.");
+    throw new Error("An interactive event is in progress: end it or set it aside before skipping time.");
   }
   // One rule for where a skip lands, shared with the timeline's labels
   // (runtime/jumpDates.js), so a label never promises a date the jump misses.
@@ -13517,7 +13569,6 @@ const gameMasterHistoryEntry = ({ transaction, game, eventIds, summary, transact
   const fromDate = dates[0] || fallbackDate;
   const toDate = dates.at(-1) || fallbackDate;
   return {
-    catalyst: null,
     date: toDate,
     eventIds,
     fallbackReason: "",
@@ -14765,7 +14816,6 @@ export const maybeGeneratePregameHistory = async () => {
     const summary = normalizeString(payload?.summary);
     bootstrapWorld.simulationHistory = [
       {
-        catalyst: null,
         date: startDate,
         eventIds: bootstrapEvents.map((event) => event.id),
         fallbackReason: "",

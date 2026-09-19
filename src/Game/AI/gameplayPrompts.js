@@ -41,7 +41,7 @@ TRANSACTION RULES
 4. impacts.regionControlOps = DE-FACTO control/contest only: battlefield capture, occupation, liberation, retaking, active territorial contest, or clearing a contest. For independence wars and violent revolutions, this is normally the correct territorial mechanism while the former sovereign still legally claims the land. Use contest when an uprising/revolution is spreading or fighting for a region but has not clearly displaced the existing administration; use control only when the request or authored event clearly establishes that the breakaway has decisively captured, holds, or administers that region.
 5. impacts.regionClaims = territory ASSERTED but not held: an irredentist claim, a proclaimed union, a contested border, a government-in-exile's title. A claim stripes the region on the map WITHOUT moving the border. Use drop true to withdraw a claim. Use regionTransfers, never a claim, when land actually changes hands.
 6. impacts.polityChanges = polity lifecycle/metadata and ordinary event-driven Stats changes. Use full polity names, never country abbreviations/codes. STABLE IDENTITY AND CURRENT REGIME NAME ARE DIFFERENT THINGS. 'code' identifies the enduring historical/campaign polity lineage (for example Poland); 'name' is OPTIONAL and may identify the current state/regime/display name established by this event (for example Polish Provisional Government). If a historical/dormant polity lineage is returning, use restore with code set to that stable identity; do NOT create a second polity merely because its provisional government or regime has a new name. IMPORTANT: update is ONLY for a polity that is already a current active actor. Never use update to establish independence, awaken a dormant historical polity, or turn a historical/base identity into a current actor. An independence declaration by a returning historical polity therefore needs restore (or create only if the identity is genuinely new), even when you also choose a new provisional/junta/republic/monarchy display name. Native validation will normalize mistaken create/update operations into restore when they target a known dormant lineage. You MAY choose a contextually fitting current name when the event itself establishes one, especially for revolutions, breakaways, provisional governments, juntas, councils, restored monarchies, republics, or other regime transitions. Do not invent a specific regime form that the request/event does not support: call it a military junta only when military authorities actually seize/form the government, and prefer a neutral provisional/national government label when the governing form is genuinely uncertain. LIFECYCLE MINIMALISM STILL APPLIES: create/restore are identity-existence operations, not decoration. Do NOT invent color, reputation, tags, ideology, power rank, leader/government, Stats, or gratuitous aliases merely to make a new/restored polity look complete. A distinct 'name' is the one permitted exception when the event establishes that current regime/display identity. If the administrator explicitly asks for other metadata to change, express it as a separate update entry immediately after the lifecycle entry and include ONLY the specifically requested/established fields. A regionTransfers, regionControlOps control or contest entry naming a polity that does not exist founds it under exactly that name (native code adds the create); a create entry is then only needed for its colour, aliases or note. The polity that loses a region must already exist.
-7. countryStatPatches = authoritative current-baseline edits requested by the administrator, especially exact population, GDP and macroeconomic corrections. These are not simulation outcomes. Use absolute numbers.
+7. countryStatPatches = authoritative current-baseline edits requested by the administrator. These are not simulation outcomes. Use absolute numbers. On the standard National Stats sheet this includes exact population, GDP and macroeconomic corrections. If a [Scenario National Stats Sheet — LIVE] block is present later in this prompt, it OVERRIDES the standard Stats families: write numeric Stats only as patch.customStats using the exact live machine keys listed there.
 8. impacts.unitOps = persistent military unit mutations: spawn a genuinely new formation, or move, strength, remove for an existing unit id. Reuse the existing unit ids listed under current military units.
 9. impacts.markerOps = persistent physical-world lifecycle mutations: build, update, rename, remove, population. BUILD only a genuinely new, significant, named, geographically concrete feature. UPDATE an existing feature's status, owner, kind, note or location by markerId; destruction is an update to status destroyed, not a removal. REMOVE only for a canonical correction.
 10. warUpdates controls ONLY world.wars belligerency. Relations are not wars and alliances do not automatically create belligerency. Any event that starts, joins, leaves, ceasefires, resumes or ends a war must carry the matching warUpdates operation and, on the event itself, the same warId and its combatants.
@@ -50,7 +50,7 @@ TRANSACTION RULES
 13. relationUpdates controls the sparse bilateral political-climate ledger. The NUMERIC SCORE is canonical; status is the presentation band derived from that score, not a second independent fact.
 14. agreementUpdates controls formal treaty, alliance and guarantee lifecycle. A proposal is not an agreement; a concluded or ratified commitment is.
 15. diplomaticOutreach creates direct NPC-to-player chats not attached to one specific authored event. Event-caused outreach belongs in that event's impacts.createdChats. Never invent private NPC-only conversations; every chat is with the player.
-16. In countryStatPatches, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100.
+16. On the standard National Stats sheet, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100. On a custom National Stats sheet, do not emit those standard numeric families at all; use patch.customStats with the exact live machine keys and ranges instead.
 17. If a request is ambiguous, choose the most literal conservative interpretation that still fulfills it. Do not silently broaden the scope. If a requested operation cannot be represented safely, leave it out and say so in the summary.
 18. Narration and state must agree. Never say a border moved, a war began or ended, a treaty was signed, a unit moved, a government changed, or a physical feature was built or destroyed unless the matching structured operation is present.
 19. This is PREVIEW GENERATION. Nothing is being applied yet. Describe what WOULD change, not what has already been persisted by this call.
@@ -70,8 +70,11 @@ eventsJson element:
 - projectOps (the player's Projects & Operations board, only when the request touches it): {"op":"create|update|milestone|complete|cancel|fail|remove","projectId":"","name":"","summary":"","status":"","progress":0,"note":""}; copy an existing project's id and name exactly
 
 countryStatPatchesJson element:
+Standard National Stats sheet:
 {"country":"Full Polity Name","patch":{"population":{"total":1},"economy":{"gdp":1}},"eventIndexes":[],"reason":""}
-Only include requested patch subfields. Supported patch families: capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown.
+Scenario-defined National Stats sheet, when a [Scenario National Stats Sheet — LIVE] block is present:
+{"country":"Full Polity Name","patch":{"customStats":{"<exact live machine key>":1}},"eventIndexes":[],"reason":""}
+Only include requested patch subfields. On the standard sheet the supported patch families are capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown. On a custom sheet, numeric Stats MUST use customStats with the exact live machine keys; never invent a field inside economy or another standard family for a custom stat.
 
 storylineUpdatesJson element:
 {"id":"storyline-stable-id","status":"active|dormant|resolved","pressure":0,"momentum":0,"startedDate":"","kind":"crisis","title":"","participants":["Full Polity Name"],"eventIndexes":[0],"state":""}
@@ -111,7 +114,7 @@ Current runtime map features:
 \${CURRENT_MAP_STRUCTURES}
 
 Recent campaign history / continuity:
-\${ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS}
+\${ALL_EVENTS_WITH_CONSOLIDATION}
 
 Recent diplomacy:
 \${CHATS_NON_CONSOLIDATED_ROUNDS}
@@ -229,7 +232,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "HISTORICAL_PRESET_SIMULATION_RULES",
       "TARGET_ROUND_DATE",
       "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CONSOLIDATED_HISTORY",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
@@ -246,7 +249,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "PLAYER_POLITY_REPUTATION_CONTEXT",
       "TARGET_ROUND_DATE",
       "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CONSOLIDATED_HISTORY",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
@@ -309,44 +312,44 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
-    description: "Create branching catalyst scenes.",
+    description: "Open the scene of an interactive event the player took up.",
     helpers: [
       "PLAYER_POLITY",
       "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_CATALYST_DATE",
+      "RUNNING_INTERACTIVE_DATE",
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "PLAYER_ACTIONS_THIS_ROUND",
     ],
-    key: "catalystCreation",
-    label: "Catalyst Creation",
+    key: "interactiveCreation",
+    label: "Interactive Event Creation",
     type: "task",
   },
   {
-    description: "Advance an active catalyst scene.",
+    description: "Play one move of an interactive event.",
     helpers: [
       "PLAYER_POLITY",
       "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_CATALYST_DATE",
-      "CATALYST_PREMISE_DESCRIPTION",
-      "CATALYST_SIMULATION_HISTORY",
-      "RUNNING_CATALYST_PERCENT",
+      "RUNNING_INTERACTIVE_DATE",
+      "INTERACTIVE_PREMISE_DESCRIPTION",
+      "INTERACTIVE_SIMULATION_HISTORY",
+      "RUNNING_INTERACTIVE_PERCENT",
     ],
-    key: "catalystExecutor",
-    label: "Catalyst Execution",
+    key: "interactiveExecutor",
+    label: "Interactive Event Execution",
     type: "task",
   },
   {
-    description: "Turn a resolved catalyst into a campaign event.",
+    description: "Turn a finished interactive event into a campaign event.",
     helpers: [
       "PLAYER_POLITY",
-      "RUNNING_CATALYST_DATE",
-      "CATALYST_PREMISE_DESCRIPTION",
-      "CATALYST_SIMULATION_HISTORY",
+      "RUNNING_INTERACTIVE_DATE",
+      "INTERACTIVE_PREMISE_DESCRIPTION",
+      "INTERACTIVE_SIMULATION_HISTORY",
     ],
-    key: "catalystSummary",
-    label: "Catalyst Summary",
+    key: "interactiveSummary",
+    label: "Interactive Event Summary",
     type: "task",
   },
   {
@@ -360,7 +363,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "GRAND_MAP_DESCRIPTION_NO_CITY",
       "CURRENT_UNITS",
       "CURRENT_MAP_STRUCTURES",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
     ],
     key: "gameMaster",

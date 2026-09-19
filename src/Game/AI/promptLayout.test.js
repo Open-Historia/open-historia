@@ -89,7 +89,7 @@ test("the stock jump templates keep most of their text ahead of the first per-tu
     }
   }
   const variables = Object.fromEntries([...STATIC_PROMPT_KEYS].map((key) => [key, `<${key}>`]));
-  for (const task of ["jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor", "actions"]) {
+  for (const task of ["jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor", "actions"]) {
     const rendered = renderTemplateCached(prompts.tasks[task], variables);
     const share = rendered.staticPrefixEnd / rendered.text.length;
     assert.ok(share >= 0.5, `${task}: only ${(share * 100).toFixed(0)}% of the template precedes its first per-turn placeholder`);

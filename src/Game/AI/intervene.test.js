@@ -28,7 +28,6 @@ const turn = () => journalTurn({
     storylineUpdates: [{ id: "story-1", eventIds: ["event-ai-r0002-20140425-001", "event-ai-r0002-20140518-004"] }],
     stopDate: "2014-05-21",
     summary: "A month of war.",
-    catalyst: { title: "The table", premise: "p", opening: "o", choices: ["a", "b"] },
     outreach: [{ title: "Mediation", countries: ["France"], speaker: "France", openingMessage: "Talk?" }],
     clearActions: true,
     mode: "jump",
@@ -58,9 +57,7 @@ test("ledger records bound only to discarded events go with them; baselines and 
     assert.equal(result.storylineUpdates.length, 1, "bound to a kept event as well as a discarded one");
 });
 
-test("the catalyst is dropped when the round was cut short, and kept when nothing was", () => {
-    assert.equal(truncateTurn(turn(), 2, {}).result.catalyst, null);
-    assert.equal(truncateTurn(turn(), 4, {}).result.catalyst.title, "The table");
+test("a stop keeps at least one event and never more than the round has", () => {
     assert.equal(truncateTurn(turn(), 99, {}).dropped.length, 0, "asking for more than there is keeps everything");
     assert.equal(truncateTurn(turn(), 0, {}).kept.length, 1, "at least one event is always kept");
 });

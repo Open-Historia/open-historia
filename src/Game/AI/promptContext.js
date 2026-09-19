@@ -989,7 +989,7 @@ const markerAttentionLimitForTask = (taskKey) => {
   if (["jumpForward", "autoJumpForward"].includes(key)) return 28;
   if (key === "gameMaster") return 40;
   if (key === "actions") return 20;
-  if (["catalystCreation", "catalystExecutor"].includes(key)) return 20;
+  if (["interactiveCreation", "interactiveExecutor"].includes(key)) return 20;
   return 16;
 };
 
@@ -1613,9 +1613,9 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
       + "them via polityChanges when events genuinely reshape a country.",
     tagSummary,
     "",
-    world.activeCatalyst
-      ? `Active catalyst: ${world.activeCatalyst.title || "untitled"} - ${world.activeCatalyst.premise || world.activeCatalyst.opening || ""}`
-      : "No active catalyst scene.",
+    world.activeInteractive
+      ? `Interactive event in progress: ${world.activeInteractive.title || "untitled"} - ${world.activeInteractive.premise || world.activeInteractive.opening || ""}`
+      : "No interactive event in progress.",
   ].join("\n");
 };
 
@@ -1623,10 +1623,10 @@ export const buildPromptContext = async (bundle, {
   actionInput = "",
   actionsToConsolidate = "",
   advisorLimit = 18,
-  catalystChoice = "",
-  catalystHistory = "",
-  catalystOpening = "",
-  catalystPremise = "",
+  interactiveChoice = "",
+  interactiveHistory = "",
+  interactiveOpening = "",
+  interactivePremise = "",
   chat = null,
   chatHistoryLongMaxChars = 0,
   chatLimit = 8,
@@ -1880,17 +1880,17 @@ export const buildPromptContext = async (bundle, {
   // not merely skip the obvious expensive builders while materializing every alias.
   put("actionInput", actionInput);
   put("actionsToConsolidate", actionsToConsolidate);
-  put("catalystChoice", catalystChoice);
-  put("catalystDate", date);
-  put("catalystHistory", catalystHistory);
-  put("catalystOpening", catalystOpening);
-  if (wants("catalystPercent")) {
-    result.catalystPercent =
-      normalizeArray(bundle.world?.activeCatalyst?.history).length > 0
-        ? `${Math.min(100, normalizeArray(bundle.world.activeCatalyst.history).length * 50)}%`
+  put("interactiveChoice", interactiveChoice);
+  put("interactiveDate", date);
+  put("interactiveHistory", interactiveHistory);
+  put("interactiveOpening", interactiveOpening);
+  if (wants("interactivePercent")) {
+    result.interactivePercent =
+      normalizeArray(bundle.world?.activeInteractive?.history).length > 0
+        ? `${Math.min(100, normalizeArray(bundle.world.activeInteractive.history).length * 50)}%`
         : "0%";
   }
-  put("catalystPremise", catalystPremise);
+  put("interactivePremise", interactivePremise);
   put("date", date);
   if (wants("dateReadable")) result.dateReadable = formatDateReadable(date);
   put("difficulty", bundle.game.difficulty || "standard");

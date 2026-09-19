@@ -61,7 +61,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; sits at `rightShift` |
 | `AdvisorPanel` | `advisor.jsx` (lazy) | Advisor chat + Stats tabs, resizable drawer |
 | `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from Settings) |
-| `CatalystPanel` | `catalyst.jsx` (lazy) | Catalyst mode: a scene the player asks for, played beat by beat (opened from Settings → Tools, or `oh:open-catalyst-mode`). See [§10-bis](#10-bis-catalyst-mode--srcgamegameuicatalystjsx) |
+| `InteractivePanel` | `interactive.jsx` (lazy) | Interactive events: an event a time skip offered, played out as a scene beat by beat (opened by `oh:open-interactive-event` from the offered event's card or the time panel). See [§10-bis](#10-bis-interactive-events--srcgamegameuiinteractivejsx) |
 | `SettingsButton` (☰) | `settings.jsx` | Toggles the game menu; same corner and size as before, glass finish |
 | `SettingsMenu` | `settings.jsx` | Ported from kernely's Continuum branch as it is there: a quick menu with Game / Tools / Settings / Help tabs (session card, Game Management, Cheats, Events, AI debug console, Guides, bug report, community links) and `SettingsWorkspace`, a full-screen portal with Continuum's four sections — General, Map (with the basemap picker), AI, Advanced. This branch's own settings (profiles, per-task models, segments, batching, telemetry, beta units, network sharing, diagnostics) sit inside those four sections |
 | `ApiSetupPrompt` | `apiSetupPrompt.jsx` | Shown once per game per session when nothing in the Fallback list has what its provider needs (`providerConfig.js isFallbackListConfigured`). The prompt IS the setup: a provider select, the key (or the endpoint for a self-hosted provider) and an optional model, saved by `applyQuickAiSetup` (completes a key-less connection for that provider or adds one, and moves its entry to the top of the list); the `ai:fallback-changed` refresh then hides the prompt. Above the form: an embedded YouTube tutorial on getting a free Gemini key (privacy-enhanced embed, hideable) and a **Get a key at Google AI Studio** button (external link). **Open full settings** opens the game menu on the AI section (`SettingsMenu initialSection`), **Not now** dismisses it |
@@ -273,13 +273,15 @@ Shows player country + formatted date (`«` opens Events history, `»` opens the
 
 On success it swaps to the **history panel** with `visibleEventCount = 1`. Fallback generations surface a warning banner.
 
-While a scene is in progress in Catalyst mode (`isSceneInProgress(world.activeCatalyst)`), the jumps, auto-jump and the custom amount are disabled and a yellow note says why, with **Return to the scene** (`oh:open-catalyst-mode`). Undo stays available, and undoing the turn a scene was built on takes the scene with it.
+While an interactive event is in progress (`isSceneInProgress(world.activeInteractive)`), the jumps, auto-jump and the custom amount are disabled and a yellow note says why, with **Return to the scene** (`oh:open-interactive-event`). Undo stays available, and undoing the turn a scene was built on takes the scene with it. While one is on offer instead (the last skip's, once the reveal has reached its event), a quieter yellow note names it — *⚡ An interactive event is on offer: «title». The next time skip lets it pass.* — with **Play it out**; the skips stay available.
 
 While a skip runs the spinner says what it is doing, in the skip's own words as each phase starts (`showSkipPhase`, fed by `onProgress` from `skipPhases.js`): *Reading the world…*, *Writing 1 month of events… (part 2 of 3)*, *Moving the armies, redrawing the fronts and hearing from 2 agents…*, *Placing the armies and the fronts…*, *Updating the Projects board…*, *Folding older history into the history document…*, *Writing it into the record…*. Auto-jump and a held segment's retry report the same way.
 
-### 6.2-ter Group chats: one request, and binding votes
+### 6.2-ter Group chats: one request, said a line at a time, and binding votes
 
-A group turn no longer rotates one leader at a time. `runGroupTurn` (`chat.jsx`) calls `runChatActionBatch` once for the whole table (see [group diplomacy](ai-overview.md#group-diplomacy-one-request-for-the-whole-table)); the answer is applied to the thread's event log and the panel re-renders from its projection, so messages, reactions, a join or a rename all arrive together. A failure falls back to the old rotation, which is exactly the behaviour it replaces.
+A group turn no longer rotates one leader at a time. `runGroupTurn` (`chat.jsx`) calls `runChatActionBatch` once for the whole table (see [group diplomacy](ai-overview.md#group-diplomacy-one-request-for-the-whole-table)); the answer is applied to the thread's event log and the panel re-renders from its projection. A failure falls back to the old rotation, which is exactly the behaviour it replaces.
+
+The answer is **said a line at a time** (`planChatReveal`, `GameUI/chatReveal.js`): the first line at once, with anything before it and the reactions, votes or newcomers that follow it; then each later line after its speaker has been seen typing for five seconds — a *Typing…* bubble with the speaker's flag (`TypingBubble` with `label="Typing"`, where the request's own wait says *Thinking…*) and the hint *Send a message now to cut in: what is still to come will not be said.* The composer stays open meanwhile. **Sending a message cuts in**: the lines still to come are never said — they were never written into the thread — and the next request is told whose lines went unsaid. **Leaving the thread** (back, or another thread) is not cutting in: the rest is written at once. Each line is written onto the thread as it stands, so a vote cast in between is kept, and nothing is written once the player has switched campaign.
 
 A binding vote renders as a `PollCard` above the composer: who called it, each option as a bar with its share and tally, the voters on hover, and the player's own vote cast once by clicking. A model can never cast it for them — `chatActions.js` refuses any action whose actor is human-controlled — and there is no closing a poll or changing a vote, because neither is a thing a government gets to do.
 
@@ -302,6 +304,8 @@ The reveal is remembered (`runtime/unseenEvents.js`): each step marks what it un
 **✋ Intervene here** sits under those two while events remain unrevealed (and no category filter is on, since the count is by reveal order). It asks once — *Stop the round after «title»? The N events not yet revealed will be discarded — they never happen — and the date becomes …* — then `runIntervene` calls `interveneAfterEvent(visibleEventCount)` (`gameplayLazy.js`): the engine rolls the game back to the turn's snapshot and applies the kept prefix of the turn's journal again, without a request (see [Intervene](ai-overview.md#intervene-stopping-a-round-where-the-player-wants-to-act)). The panel then shows the shorter turn fully revealed, the date widget the last kept event's date, and **Undo last turn** still works. Offered only when the newest snapshot carries a journal (`canInterveneInLastTurn`, re-checked with the round), never while a jump runs.
 
 Each card shows what the event is about as **link chips** after its category tags — ⚑ a power, ⌖ a region, ⛊ a formation, ▣ a structure (`deriveEventLinks`, see [the event cards' links](ai-overview.md#the-event-cards-links)); a click flies the map there (`focusMapOnBounds`), which also serves a player who switched the event camera off. They replace the old unclickable participant tags wherever the map can frame something. The lookups they need (country names, the region catalog, the stock outlines) now load independently: a missing stock archive used to take the names and the catalog down with it, blinding the camera, the chips and the map-changes names alike. On a drawn map they frame by the map's own region boxes, and re-derive when the map's worker has primed them (`oh:region-catalog-primed`).
+
+**⚡ Interactive event.** Now and then a skip offers one of its events to be played out as a scene (see [Interactive events](ai-overview.md#interactive-events-a-moment-a-time-skip-offers-to-play-out)). That event's card carries a yellow strip under its text (`InteractiveOfferStrip`, `time.jsx`): **Play it out** opens the interactive event panel (`oh:open-interactive-event`, §10-bis), **Let it pass** clears the offer (`declineInteractiveOffer`, free). Neither spends a request. The strip is there only once the reveal reaches the event, and goes when the offer is taken up, let pass or replaced by the next skip.
 
 Each card's **N map changes** pill is a button: it opens a *What changed on the map* list under the card (`describeEventMapChanges`, `time.jsx`) — one line per territory transfer, control or contest change, claim, polity change (create / rename / restore / dissolve / update), unit spawn / move / strength / removal and structure build / update / rename / removal, with polity, region and unit names resolved (`resolvePolityName`, `resolveRegionName`, `getUnitById`). The count on the pill is the length of that list, so the two never disagree.
 
@@ -373,7 +377,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 | `history-document` | **History Document**: the living history the AI is shown in place of the folded events — read and edit it, fold the older events now, or reset compression; the timeline keeps every event in full | `world.historyDocument` and `world.consolidatedHistory` via `writeWorldState`; `consolidateHistoryNow` (`gameplay.js`) runs the `eventConsolidator` task on everything but the newest 24 events (`historyConsolidation.js` decides what a pass folds and how the document is revised) |
 | `roll-back-turn` | Restore to the start of an earlier turn (discards later turns) | reads `JSON_URLS.snapshots`; writes game/world/events/actions/chat/colors |
 | `your-country` | Switch which country you play | `writeGameData({…country})` |
-| `difficulty` | Set difficulty (Difficulty 2.0: per-scope directives for simulation, diplomacy and catalysts) | `writeGameData({…difficulty})` (`DIFFICULTY_LEVELS`, `src/runtime/difficulty.js`) |
+| `difficulty` | Set difficulty (Difficulty 2.0: per-scope directives for simulation, diplomacy and interactive events) | `writeGameData({…difficulty})` (`DIFFICULTY_LEVELS`, `src/runtime/difficulty.js`) |
 | `annex-country` | Click a country → fold all its regions into a target | resolves current owner via overrides + `loadRegionCatalog`; writes `regionOwnershipOverrides` |
 | `annex-regions` | Click individual regions → transfer to a target | per-region `regionOwnershipOverrides` write |
 | `edit-country` / `add-country` | **Country Editor** (identity, colour, tags, reputation, the persistent stat sheet) or create a polity (name **is** the identifier) | `polityOverrides` + `colors.json`; stats through `applyCountryStatPatchToWorld` |
@@ -408,21 +412,21 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 
 `Toggle` (`settings.jsx:156`) is the shared switch primitive (also exported). Map-setting toggles read initial values from `getMapSetting` and mirror them locally.
 
-The quick menu's **Tools** tab opens with **⚡ Catalyst mode** in yellow (the `yellow` tone of `QuickAction`), before Cheats, Events / Timeline and the AI debug console; its line reads *A scene is in progress — return to it* while one is.
 
 ---
 
-## 10-bis. Catalyst mode — `src/Game/GameUI/catalyst.jsx`
+## 10-bis. Interactive events — `src/Game/GameUI/interactive.jsx`
 
-`CatalystPanel` — a centred yellow-edged dialog (z 10001), lazy, opened from Settings → Tools or by `oh:open-catalyst-mode` (the time panel's *Return to the scene*). Nothing of a scene exists until the player starts one here; a time skip no longer proposes them (see [Catalyst mode](ai-overview.md#catalyst-mode-a-scene-the-player-asks-for)).
+`InteractivePanel` — a centred yellow-edged dialog (z 10001), lazy, opened by `oh:open-interactive-event`: from **Play it out** on the card of the event a time skip offered, from the time panel's note about that offer, and from its *Return to the scene*. There is no other way in: the player does not start an interactive event, a skip offers one now and then (see [Interactive events](ai-overview.md#interactive-events-a-moment-a-time-skip-offers-to-play-out)).
 
 | State | Controls | Calls |
 |---|---|---|
-| No scene | *What scene do you want to play?* (empty = the moment is chosen for the player), **Begin the scene**; the cost said beside it; a note while a reveal is unfinished | `createCatalyst({ request })` |
-| A scene | title, premise, *You asked for*, each move played (**↶ Take back**), the scene's current text, the offered choices and an own-move box with **Play**, **End the scene** (off with no move played) and **Set aside** | `advanceActiveCatalyst`, `rewindActiveCatalyst({ beatIndex })`, `endActiveCatalyst`, `setAsideActiveCatalyst` |
+| On offer | the event's title, date and description; *Your angle (optional)*; **Play it out** and **Let it pass**, the cost said beside them; a note, and **Play it out** off, while the reveal is unfinished | `createInteractive({ eventId, angle })`, `declineInteractiveOffer()` (then the panel closes) |
+| A scene | title, premise, *Your angle*, each move played (**↶ Take back**), the scene's current text, the offered choices and an own-move box with **Play**, **End the scene** (off with no move played) and **Set aside** | `advanceActiveInteractive`, `rewindActiveInteractive({ beatIndex })`, `endActiveInteractive`, `setAsideActiveInteractive` |
 | Finished | *The scene is over and written into the record* with **See it on the timeline** | — |
+| Nothing | *No interactive event is waiting*, and when one comes | — |
 
-One engine call at a time; a failed step changes nothing and its reason shows in the panel. **✕ Leave** closes the dialog and leaves a scene where it is.
+One engine call at a time; a failed step changes nothing and its reason shows in the panel. **✕ Leave** closes the dialog and leaves a scene where it is, and an offer until the next time skip. A scene an older skip proposed and nobody took up is not shown.
 
 ---
 

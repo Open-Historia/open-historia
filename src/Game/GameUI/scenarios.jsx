@@ -107,9 +107,9 @@ const buildEditorState = (details) => {
   const advancedPrompts = {
     actions: prompts.actions ?? GAMEPLAY_PROMPT_DEFAULTS.actions,
     autoJumpForward: prompts.autoJumpForward ?? GAMEPLAY_PROMPT_DEFAULTS.autoJumpForward,
-    catalystCreation: prompts.catalystCreation ?? GAMEPLAY_PROMPT_DEFAULTS.catalystCreation,
-    catalystExecutor: prompts.catalystExecutor ?? GAMEPLAY_PROMPT_DEFAULTS.catalystExecutor,
-    catalystSummary: prompts.catalystSummary ?? GAMEPLAY_PROMPT_DEFAULTS.catalystSummary,
+    interactiveCreation: prompts.interactiveCreation ?? GAMEPLAY_PROMPT_DEFAULTS.interactiveCreation,
+    interactiveExecutor: prompts.interactiveExecutor ?? GAMEPLAY_PROMPT_DEFAULTS.interactiveExecutor,
+    interactiveSummary: prompts.interactiveSummary ?? GAMEPLAY_PROMPT_DEFAULTS.interactiveSummary,
     countryStatSheet: prompts.countryStatSheet ?? GAMEPLAY_PROMPT_DEFAULTS.countryStatSheet,
     descriptionToAction: prompts.descriptionToAction ?? GAMEPLAY_PROMPT_DEFAULTS.descriptionToAction,
     eventConsolidator: prompts.eventConsolidator ?? GAMEPLAY_PROMPT_DEFAULTS.eventConsolidator,

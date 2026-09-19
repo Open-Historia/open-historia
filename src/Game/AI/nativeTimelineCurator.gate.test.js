@@ -62,7 +62,7 @@ test("a word-for-word repeat on the same date is removed without an analyst, so 
 
 test("only a time skip is curated at all", () => {
     const events = [event("Finance ministers convene in Astana", "Delegations meet to review customs procedures.")];
-    assert.deepEqual(candidatesWorthJudging({ events, priorEvents: [], mode: "catalyst" }), []);
+    assert.deepEqual(candidatesWorthJudging({ events, priorEvents: [], mode: "interactive" }), []);
     assert.deepEqual(candidatesWorthJudging({ events, priorEvents: [], mode: "auto" }), [0]);
     assert.deepEqual(candidatesWorthJudging(), []);
 });

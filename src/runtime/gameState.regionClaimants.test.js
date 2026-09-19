@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyEventImpactsToWorld } from "./gameState.js";
+import { applyEventImpactsToWorld, normalizeWorldState } from "./gameState.js";
 
 // A stripe (Nations.jsx's disputed-region rendering) is built from
 // world.regionClaimants, which nothing else ever writes — so a clean
@@ -123,4 +123,60 @@ test("regionClaims: a claimant renamed by the same event still resolves to one p
   });
   assert.deepEqual(next.regionClaimants["POL.11_1"], ["Third Reich"]);
   assert.equal("Germany" in next.polityOverrides, false, "the rename re-keyed the country");
+});
+
+// --- An ended dispute stays ended --------------------------------------------
+//
+// The claimant list is sparse, so a dispute that ends leaves no row, and the map
+// draws the claimants a region's geojson feature bakes in wherever the world has
+// none (the built-in map bakes 109). settledRegionClaims records each ended one,
+// so the map knows the world has the say there.
+
+const clearContest = (regionId, claimantCode) => ({
+  date: "2025-01-01",
+  title: "Ceasefire",
+  description: "test",
+  impacts: { regionControlOps: [{ op: "clear_contest", regionId, claimantCode }] },
+});
+
+test("a dispute that ends is recorded as settled: a claim dropped, a contest cleared, a clean hand-over", () => {
+  const disputed = () => ({ regionClaimants: { "UKR.4_1": ["Russia"] }, regionOwnershipOverrides: { "UKR.4_1": "Ukraine" } });
+  const dropped = applyEventImpactsToWorld({ events: [eventWithClaims([{ regionId: "UKR.4_1", claimantCode: "Russia", drop: true }])], world: disputed() }).world;
+  const cleared = applyEventImpactsToWorld({ events: [clearContest("UKR.4_1", "Russia")], world: disputed() }).world;
+  const handedOver = applyEventImpactsToWorld({ events: [eventWithTransfer("UKR.4_1", "Ukraine")], world: disputed() }).world;
+  for (const [how, next] of [["dropped", dropped], ["cleared", cleared], ["handed over", handedOver]]) {
+    assert.equal("UKR.4_1" in next.regionClaimants, false, `${how}: the row goes, as it always has`);
+    assert.deepEqual(next.settledRegionClaims, ["UKR.4_1"], `${how}: and the region is settled`);
+  }
+});
+
+test("a clean hand-over settles a dispute only the map declared, and leaves other disputes alone", () => {
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWithTransfer("KAS.1_1", "India")],
+    world: { regionClaimants: { "UKR.4_1": ["Russia"] }, regionOwnershipOverrides: {} },
+  });
+  assert.deepEqual(next.settledRegionClaims, ["KAS.1_1"]);
+  assert.deepEqual(next.regionClaimants, { "UKR.4_1": ["Russia"] });
+});
+
+test("a dispute that goes on is not settled: one claimant dropped of two", () => {
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWithClaims([{ regionId: "UKR.4_1", claimantCode: "Russia", drop: true }])],
+    world: { regionClaimants: { "UKR.4_1": ["Russia", "Belarus"] }, regionOwnershipOverrides: { "UKR.4_1": "Ukraine" } },
+  });
+  assert.deepEqual(next.regionClaimants["UKR.4_1"], ["Belarus"]);
+  assert.deepEqual(next.settledRegionClaims, []);
+});
+
+test("a settled region claimed again leaves the list, and a save's list is kept tidy", () => {
+  const { world: next } = applyEventImpactsToWorld({
+    events: [eventWithClaims([{ regionId: "UKR.4_1", claimantCode: "Russia" }])],
+    world: { regionClaimants: {}, settledRegionClaims: ["UKR.4_1", "UKR.5_1"], regionOwnershipOverrides: { "UKR.4_1": "Ukraine" } },
+  });
+  assert.deepEqual(next.regionClaimants["UKR.4_1"], ["Russia"]);
+  assert.deepEqual(next.settledRegionClaims, ["UKR.5_1"]);
+
+  const tidy = normalizeWorldState({ regionClaimants: { a: ["X"] }, settledRegionClaims: ["a", "b", "b", " ", "c"] });
+  assert.deepEqual(tidy.settledRegionClaims, ["b", "c"], "unique, no blanks, and never a region disputed again");
+  assert.deepEqual(normalizeWorldState({}).settledRegionClaims, [], "a save from before has none");
 });

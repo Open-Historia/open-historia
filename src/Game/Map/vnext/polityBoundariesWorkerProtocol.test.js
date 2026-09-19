@@ -332,3 +332,31 @@ test("ownership sweep direction comes from the touching recipient landmass mass,
     "a north-edge contact must not collapse the sweep into a near-vertical frontier normal when most territory is west/north-west",
   );
 });
+
+test("a dispute the world ended stays ended; one it never recorded shows the map's own claimants", async () => {
+  const withClaims = (feature, claimants) => ({ ...feature, properties: { ...feature.properties, claimants } });
+  await send({
+    requestId: 200,
+    type: "initialize",
+    geometryEpoch: "claims-g1",
+    regions: {
+      type: "FeatureCollection",
+      features: [
+        withClaims(rectangle("d1", "A", 0, 1), ["B"]),
+        withClaims(rectangle("d2", "A", 1, 2), ["B"]),
+        rectangle("d3", "B", 2, 3),
+      ],
+    },
+    ownershipOverrides: {},
+    regionClaimants: {},
+    labelNames: { A: "A", B: "B", C: "C" },
+  });
+  const disputes = async (requestId, regionClaimants) => {
+    const out = await send({ requestId, type: "update-claims", geometryEpoch: "claims-g1", ownershipOverrides: {}, regionClaimants, labelNames: { A: "A", B: "B", C: "C" } });
+    const result = out.find((message) => message?.disputedData) ?? out[0];
+    return Object.fromEntries((result?.disputedData?.features ?? []).map((feature) => [feature.properties.id, feature.properties._liveClaimants]));
+  };
+  assert.deepEqual(await disputes(201, {}), { d1: ["B"], d2: ["B"] }, "nothing recorded: the map's own claims show");
+  assert.deepEqual(await disputes(202, { d1: [] }), { d2: ["B"] }, "an ended dispute stays ended");
+  assert.deepEqual(await disputes(203, { d1: ["C"] }), { d1: ["C"], d2: ["B"] }, "the world's live list wins");
+});

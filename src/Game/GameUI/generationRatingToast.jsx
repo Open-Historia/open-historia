@@ -17,8 +17,8 @@ const TASK_LABELS = {
   jumpForward: "time skip",
   autoJumpForward: "auto time skip",
   gameMaster: "Game Master edit",
-  catalystExecutor: "catalyst",
-  catalystSummary: "catalyst summary",
+  interactiveExecutor: "interactive event move",
+  interactiveSummary: "interactive event summary",
 };
 
 const barStyle = {

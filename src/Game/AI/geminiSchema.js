@@ -6,8 +6,8 @@
 // "the time skip is broken".
 //
 // The field report this exists for: EVERY timeline jump on Gemini failed, because
-// JUMP_FORWARD_SCHEMA carries `catalyst: anyOf[catalystSchema, {type: "null"}]`
-// (gameplaySchemas.js, nullableCatalystSchema) and Gemini's Schema.type enum has
+// JUMP_FORWARD_SCHEMA then carried a nullable scene, `anyOf[sceneSchema, {type: "null"}]`
+// (gameplaySchemas.js), and Gemini's Schema.type enum has
 // no `null` member — STRING, NUMBER, INTEGER, BOOLEAN, ARRAY, OBJECT and nothing
 // else. Nullability there is the separate `nullable: true` flag. idleDiplomacy
 // carries the same shape on `chat` and `sighting`, so unprompted diplomacy was
@@ -28,8 +28,8 @@ const isObject = (value) => Boolean(value) && typeof value === "object" && !Arra
 // shape Gemini refuses outright, found the same way as the `type: "null"` one —
 // every request carrying the chat action batch came back 400 until they were
 // gone (bisected against the live API, 2026-09-17). The same keywords are fine
-// on an array of strings, and fine outside a union, which is why the jump's
-// `catalyst.choices` has always worked.
+// on an array of strings, and fine outside a union, which is why the scene's
+// `choices` in the jump's answer always worked.
 //
 // They are a hint to the model either way: `validateGameplayPayload` is what
 // actually enforces a count, and it runs on the answer whatever the provider
@@ -98,7 +98,7 @@ export function toGeminiSchema(value) {
             const nullBranch = converted.anyOf.find(isNullBranch);
             const { anyOf: _anyOf, ...rest } = converted;
 
-            // One real branch (the common case: catalyst, chat, sighting) — lift it
+            // One real branch (the common case: chat, sighting) — lift it
             // up so Gemini sees a plain nullable object instead of a one-member
             // union. The wrapper's own keys stay, and the branch wins where they
             // collide, since the branch is the actual shape being described.

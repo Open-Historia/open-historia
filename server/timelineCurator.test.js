@@ -126,7 +126,7 @@ test("the curator keeps everything when the analysis fails or the mode is not a 
   assert.deepEqual(failed.map((event) => event.id), ["c0", "c1", "c2", "c4"], "without an analysis only the deterministic exact-duplicate guard acts");
 
   let called = false;
-  const skipped = await curate(async () => { called = true; return { payload: { judgments: [] } }; }, "catalyst");
+  const skipped = await curate(async () => { called = true; return { payload: { judgments: [] } }; }, "interactive");
   assert.equal(called, false, "only jump and auto turns are curated");
   assert.equal(skipped.length, 5);
 

@@ -41,7 +41,7 @@ export const DIFFICULTY_LEVELS = [
         "Resolve uncertainty generously toward the player without inventing miracles. Plausible but imperfect player plans should usually work at least partially when resources and circumstances permit. NPC governments remain self-interested, but may react slowly, miss non-obvious opportunities, or choose lower-risk responses. When multiple consequences are comparably plausible, prefer limited and recoverable setbacks. Do not falsify logistics, erase an established opposing advantage, or grant success that the supplied world state makes impossible.",
       diplomacy:
         "Counterparts remain self-interested but are relatively patient and flexible. Give reasonable player proposals generous interpretation, prefer clarification or compromise over escalation when interests allow it, and accept modestly favorable deals without demanding every possible concession. Never surrender core interests or ignore explicit commitments merely because the difficulty is low.",
-      catalyst:
+      interactive:
         "Present clear, legible choices with at least one reasonably forgiving route when the world state permits it. Resolve plausible choices generously and avoid hidden gotchas that are not grounded in supplied circumstances.",
     },
   }),
@@ -67,7 +67,7 @@ export const DIFFICULTY_LEVELS = [
         "Use a forgiving causal standard. Competent and reasonably grounded player plans should often succeed or achieve useful partial success; vague or risky plans can still fail. NPCs protect clear interests and respond to obvious threats, but are slower to exploit marginal openings and less likely to compound a small mistake immediately. When evidence supports several outcomes, lean mildly toward recoverable consequences rather than the harshest plausible branch.",
       diplomacy:
         "Counterparts bargain from their real interests but are relatively flexible. Treat reasonable proposals constructively, allow face-saving compromises, and do not maximize concessions when a workable settlement already serves the counterpart. Explicit red lines, alliances, wars, and core interests still matter normally.",
-      catalyst:
+      interactive:
         "Offer meaningful trade-offs without making every option punishing. Well-reasoned choices should have a fair chance to improve the situation; minor mistakes should usually remain recoverable unless the canon already makes them severe.",
     },
   }),
@@ -93,7 +93,7 @@ export const DIFFICULTY_LEVELS = [
         "Use a neutral causal standard. Judge player plans by the supplied resources, timing, institutions, logistics, opposition, and prior commitments. NPC governments act with normal competence and pursue their own interests using information they could plausibly possess. Do not favor or punish the player when several outcomes are possible; choose the branch best supported by the campaign state.",
       diplomacy:
         "Negotiate from the counterpart's actual interests, leverage, relationships, commitments, and information. Offer concessions when they are rational, resist when they are not, and seek realistic compromise where interests overlap. Do not favor or target the player because they are human-controlled.",
-      catalyst:
+      interactive:
         "Present realistic strategic trade-offs. Resolve choices by capability, timing, leverage, and consequences already present in the world, with no difficulty-side favoritism or hostility.",
     },
   }),
@@ -119,7 +119,7 @@ export const DIFFICULTY_LEVELS = [
         "Use a demanding but strictly causal standard. Require player plans to respect logistics, resources, institutions, political constraints, timing, and foreseeable opposition; vague or under-supported plans receive little benefit of the doubt. NPC governments should notice and exploit clear opportunities, protect exposed interests promptly, and coordinate when their incentives, information, and existing relationships genuinely support coordination. Let mistakes produce durable consequences, but never invent anti-player hostility, omniscience, or arbitrary failure.",
       diplomacy:
         "Counterparts bargain firmly from real leverage and interests. They should notice weak offers, enforce important red lines, remember breaches and commitments, and demand credible concessions for meaningful cooperation. They may compromise when the bargain is genuinely worthwhile, and must not become hostile merely because the player controls the other side.",
-      catalyst:
+      interactive:
         "Present hard strategic trade-offs with no automatic safe option. Reward preparation and leverage; expose weak assumptions and let poor choices create lasting but causally grounded complications. Do not add surprise punishment unsupported by the world state.",
     },
   }),
@@ -145,7 +145,7 @@ export const DIFFICULTY_LEVELS = [
         "Use a severe but fair causal standard. Give the player very little benefit of the doubt: plans need credible means, sequencing, logistics, institutional support, and awareness of likely opposition. NPC governments act with very high competence, use information they plausibly possess, exploit exposed weaknesses quickly, and coordinate when shared interests and relationships make that realistic. Serious mistakes may compound through genuine second-order effects. Never fabricate a coalition, crisis, economic penalty, or military setback solely to make the level harder.",
       diplomacy:
         "Counterparts negotiate with very high competence and strong attention to leverage, credibility, precedent, and enforcement. Weak proposals receive little accommodation; valuable concessions require convincing reciprocal value. Existing trust can still produce cooperation, and enemies can still compromise when interests align. No actor gains secret knowledge or anti-player motivation from difficulty.",
-      catalyst:
+      interactive:
         "Make strategic choices genuinely demanding: obvious shortcuts should fail when they lack means, and serious mistakes may create cascading consequences that follow naturally from the situation. Every adverse result must remain traceable to supplied conditions rather than difficulty fiat.",
     },
   }),
@@ -171,7 +171,7 @@ export const DIFFICULTY_LEVELS = [
         "Apply maximum causal scrutiny with zero benefit of the doubt. Player success requires explicit capability, leverage, logistics, sequencing, institutional support, and a plan that survives competent opposition. NPC governments operate near the top of plausible competence, react quickly to actionable information, and exploit weaknesses or coordinate when their real incentives and knowledge permit it. Allow severe and cascading consequences when every link follows from the campaign state. This level is NOT a conspiracy mode: never invent hostility, secret knowledge, coalitions, bad luck, economic damage, or failure simply because the player is human-controlled.",
       diplomacy:
         "Counterparts negotiate at maximum plausible competence. They protect core interests, exploit real leverage, test credibility, enforce costly commitments, and concede only when the reciprocal value or strategic necessity warrants it. They remain capable of trust, compromise, de-escalation, and mutually beneficial agreements when those outcomes serve their interests. Difficulty never grants anti-player motives or hidden information.",
-      catalyst:
+      interactive:
         "Use maximum strategic rigor. Choices may all carry serious costs when the situation warrants it, and weak choices can fail decisively. Preserve fair information boundaries and causal traceability: no hidden punishment, impossible foresight, or arbitrary bad luck added solely for challenge.",
     },
   }),
@@ -193,7 +193,7 @@ export const difficultyMeta = (value) =>
   DIFFICULTY_LEVELS.find((level) => level.id === normalizeDifficulty(value)) ||
   DIFFICULTY_LEVELS[2];
 
-const DIFFICULTY_SCOPES = new Set(["simulation", "diplomacy", "catalyst"]);
+const DIFFICULTY_SCOPES = new Set(["simulation", "diplomacy", "interactive"]);
 
 export const difficultyDirective = (value, scope = "simulation") => {
   const meta = difficultyMeta(value);

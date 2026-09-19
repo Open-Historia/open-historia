@@ -31,7 +31,6 @@ export const journalTurn = ({
     storylineUpdates = [],
     stopDate = "",
     summary = "",
-    catalyst = null,
     outreach = [],
     clearActions = true,
     mode = "jump",
@@ -46,7 +45,6 @@ export const journalTurn = ({
         storylineUpdates: asArray(storylineUpdates),
         stopDate: asText(stopDate),
         summary: asText(summary),
-        catalyst: catalyst && typeof catalyst === "object" ? catalyst : null,
         outreach: asArray(outreach),
         clearActions: clearActions !== false,
         mode: asText(mode) || "jump",
@@ -107,9 +105,6 @@ export const truncateTurn = (journal, keptCount, { originDate = "", minimumDate 
             storylineUpdates: keepUpdates(journal?.storylineUpdates),
             stopDate: closingDate,
             summary: asText(journal?.summary),
-            // The player is acting for themselves now; a scene written for the
-            // end of the whole round would open on a moment that never came.
-            catalyst: dropped.length ? null : (journal?.catalyst ?? null),
             outreach: asArray(journal?.outreach),
             clearActions: journal?.clearActions !== false,
             mode: asText(journal?.mode) || "jump",

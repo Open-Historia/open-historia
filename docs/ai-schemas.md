@@ -35,9 +35,9 @@ Each task is identified by a **task key**. `GAMEPLAY_SCHEMAS` maps the key to it
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
 | `nextSpeaker` | `NEXT_SPEAKER_SCHEMA` | `submit_next_speaker` | diplomatic chat turn order |
 | `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
-| `catalystCreation` | `CATALYST_CREATION_SCHEMA` (**= `catalystSchema`**, `:517`) | `submit_catalyst_creation` | catalyst scene creation |
-| `catalystExecutor` | `CATALYST_EXECUTOR_SCHEMA` | `submit_catalyst_execution` | advance a catalyst |
-| `catalystSummary` | `CATALYST_SUMMARY_SCHEMA` | `submit_catalyst_summary` | resolved catalyst → event |
+| `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**, `:517`) | `submit_interactive_creation` | opening an interactive event's scene |
+| `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
+| `interactiveSummary` | `INTERACTIVE_SUMMARY_SCHEMA` | `submit_interactive_summary` | finished interactive event → event |
 | `gameMaster` | `GAME_MASTER_SCHEMA` | `submit_game_master` | `applyGameMasterCommand` |
 | `countryStatSheet` | `COUNTRY_STAT_SHEET_SCHEMA` | `submit_country_stat_sheet` | national stat sheet |
 | `timelineCurator` | `TIMELINE_CURATOR_SCHEMA` | `submit_timeline_curator` | one judgment per fresh event; native gates in `nativeTimelineCurator.js` decide what a judgment may remove |
@@ -226,7 +226,7 @@ Also used for `autoJumpForward`. This is the largest task.
 
 `eventSchema` (`:322`): `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
 
-There is **no `catalyst`**: a scene begins only when the player starts one in Catalyst mode (`catalystCreation`). The schema used to offer one on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
+There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 
 #### Ledger transports (`warUpdates`, `relationUpdates`, `agreementUpdates`, `puppetUpdates`)
 
@@ -257,15 +257,15 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 
 `PREGAME_HISTORY_SCHEMA` takes the same facts for round zero as one flat `canonicalUpdates` array (`canonicalUpdateSchema`: `kind` = relation | war:<op> | agreement:start, plus id / polities / opponents / score / category / title / detail), which `expandCanonicalUpdateEnvelope` turns into the three transports before `validatePregameCanonicalBootstrap` runs.
 
-### 4.8 `catalystSchema` (`:346`) and executor/summary
+### 4.8 `interactiveSchema` (`:346`) and executor/summary
 
-`CATALYST_CREATION_SCHEMA` is `catalystSchema` directly.
+`INTERACTIVE_CREATION_SCHEMA` is `interactiveSchema` directly.
 
 | Schema | Fields (required*) |
 |---|---|
-| `catalystSchema` | `title`*, `premise`*, `opening`*, `choices`* (array, `minItems: 2`, `maxItems: 5`, nonempty items) |
-| `CATALYST_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items) |
-| `CATALYST_SUMMARY_SCHEMA` (`:539`) | `title`*, `description`*, `importance`* |
+| `interactiveSchema` | `title`*, `premise`*, `opening`*, `choices`* (array, `minItems: 2`, `maxItems: 5`, nonempty items) |
+| `INTERACTIVE_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items) |
+| `INTERACTIVE_SUMMARY_SCHEMA` (`:539`) | `title`*, `description`*, `importance`* |
 
 ### 4.9 Small single-purpose schemas
 
@@ -328,9 +328,9 @@ After the schema walk passes, `validateGameplayPayload` runs task-specific check
 |---|---|---|
 | `jumpForward` / `autoJumpForward` | `stopDate` non-blank; every event's `date`/`title`/`description` non-blank after trim; **at least one of** events or a non-empty summary | `:866` |
 | `pregameHistory` | every event's `date`/`title`/`description` non-blank; `summary` non-blank | `:892` |
-| `descriptionToAction`, `nextSpeaker`, `eventConsolidator`, `catalystCreation`, `catalystExecutor`, `catalystSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
-| `catalystCreation` | `choices` distinct (`validateDistinctChoices`) | `:921` |
-| `catalystExecutor` | `nextChoices` **must be empty when `resolved`**; must have **≥2** when unresolved; must be distinct | `:926` |
+| `descriptionToAction`, `nextSpeaker`, `eventConsolidator`, `interactiveCreation`, `interactiveExecutor`, `interactiveSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
+| `interactiveCreation` | `choices` distinct (`validateDistinctChoices`) | `:921` |
+| `interactiveExecutor` | `nextChoices` **must be empty when `resolved`**; must have **≥2** when unresolved; must be distinct | `:926` |
 | `countryStatSheet` | deep no-blank-strings (`findBlankString`); **gdpBreakdown sum = 100** | `:937` |
 | `actions` | each topic `title` non-blank; each action `title` AND `text` non-blank | `:946` |
 
@@ -423,7 +423,7 @@ Every AI gameplay call goes through this one function. It owns prompt assembly, 
 1. `loadPromptCatalog` + `renderTemplate` build the system prompt from the current templates plus the campaign's guidance edits (ai-prompts.md §2).
 2. Append the **difficulty directive** from `readGameData().difficulty` (`:400`).
 3. For `jumpForward`/`autoJumpForward`: append **[Player Agency]** and **[Map Truth]** blocks at call time (`:411-421`) — a leftover of the frozen-prompt era; the templates now reach every campaign (ai-prompts.md §2), and `promptDedupe.js` skips a directive the template already carries.
-4. For `actions`/jumps/catalysts: append **[International Reputation]** context (`:425`).
+4. For `actions`/jumps/interactive events: append **[International Reputation]** context (`:425`).
 
 ### 8.3 The two-attempt loop (`:447-502`)
 

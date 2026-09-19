@@ -1238,7 +1238,6 @@ const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
         }
 
         const manualRecord = {
-            catalyst: null,
             date,
             eventIds: [eventId],
             fallbackReason: "",

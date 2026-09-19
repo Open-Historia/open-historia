@@ -3504,13 +3504,13 @@ export const buildWorldInitiativeContext = (
     normalizeString(bundle?.game?.country),
   );
 
-  const activeCatalyst = bundle?.world?.activeCatalyst;
-  if (activeCatalyst && typeof activeCatalyst === "object") {
-    const title = normalizeString(activeCatalyst.title);
-    const premise = normalizeString(activeCatalyst.premise || activeCatalyst.opening);
+  const activeInteractive = bundle?.world?.activeInteractive;
+  if (activeInteractive && typeof activeInteractive === "object") {
+    const title = normalizeString(activeInteractive.title);
+    const premise = normalizeString(activeInteractive.premise || activeInteractive.opening);
     if (title || premise) {
       candidates.push({
-        id: "active-catalyst",
+        id: "active-interactive",
         type: "active-crisis",
         score: 11,
         date: originDate,

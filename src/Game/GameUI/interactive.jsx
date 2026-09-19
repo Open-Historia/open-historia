@@ -1,22 +1,29 @@
-/*! Open Historia — Catalyst mode © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Catalyst mode: a moment played out as a scene, beat by beat, then written into
-// the record as one event. Nothing of it exists until the player enters the mode
-// from the Tools menu — a time skip no longer proposes scenes. The player says
-// what scene they want or leaves the choice to the simulation, picks or writes
-// each move, may take a move back, and ends the scene or sets it aside. Time
-// stands still while a scene is in progress (gameplay.js refuses a skip).
+/*! Open Historia — interactive events © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// An interactive event: a moment of the campaign played out as a scene, beat by
+// beat, then written into the record as one event. The player does not start
+// one. Now and then a time skip offers one of its own events for it
+// (runtime/interactiveOffer.js); the event's card says so (time.jsx), and this
+// panel opens on the offer. The player plays it out, with an angle of their own
+// if they like, or lets it pass; picks or writes each move; may take a move
+// back; and ends the scene or sets it aside. Time stands still while a scene is
+// in progress (gameplay.js refuses a skip).
 //
-// Costs, said beside the buttons that spend them: starting a scene is one AI
-// request, each move one more, and ending it one more. Taking a move back and
-// setting the scene aside cost nothing.
+// Costs, said beside the buttons that spend them: playing an offer out is one
+// AI request, each move one more, and ending the scene one more. Letting an
+// offer pass, taking a move back and setting a scene aside cost nothing.
 import React, { useState } from "react";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { canRewindCatalystTo, catalystChoiceTexts, isSceneInProgress } from "../AI/catalystRewind.js";
-import { advanceActiveCatalyst, createCatalyst, endActiveCatalyst, rewindActiveCatalyst, setAsideActiveCatalyst } from "../AI/gameplayLazy.js";
+import { offeredEvent } from "../../runtime/interactiveOffer.js";
+import { formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { canRewindInteractiveTo, interactiveChoiceTexts, isSceneInProgress } from "../AI/interactiveRewind.js";
+import { advanceActiveInteractive, createInteractive, declineInteractiveOffer, endActiveInteractive, rewindActiveInteractive, setAsideActiveInteractive } from "../AI/gameplayLazy.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 
 const YELLOW = "#facc15";
-const selectScene = (world) => world?.activeCatalyst ?? null;
+// A scene the player never took up (one a time skip proposed, before skips
+// stopped proposing them) is no scene here: the next skip clears it.
+const selectScene = (world) => (isSceneInProgress(world?.activeInteractive) ? world.activeInteractive : null);
+const selectOffer = (world) => world?.interactiveOffer ?? null;
 
 const panelStyle = {
     background: "rgba(18,18,22,0.97)",
@@ -87,17 +94,23 @@ const SceneText = ({ children, style }) => (
     <div data-no-translate style={{ fontSize: "0.88rem", lineHeight: 1.6, whiteSpace: "pre-wrap", ...style }}>{children}</div>
 );
 
-export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
+export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
     const scene = useRuntimeState("world", selectScene);
+    const offer = useRuntimeState("world", selectOffer);
+    const events = useRuntimeState("events");
     const unseen = useUnseenEventIds();
-    const [request, setRequest] = useState("");
+    const [angle, setAngle] = useState("");
     const [move, setMove] = useState("");
     const [busy, setBusy] = useState("");
     const [error, setError] = useState("");
     const [finished, setFinished] = useState(null); // { title } of a scene just written into the record
 
-    const choices = catalystChoiceTexts(scene?.choices);
+    const choices = interactiveChoiceTexts(scene?.choices);
     const beats = Array.isArray(scene?.history) ? scene.history : [];
+    const offered = offeredEvent({ offer, events, sceneInProgress: Boolean(scene) });
+    // An offer is shown once the reveal has reached its event; the scene starts
+    // from what the player has seen, so the rest of the reveal comes first.
+    const offerShown = offered && !unseen.has(offered.id) ? offered : null;
     const revealing = unseen.size > 0;
 
     // One engine call at a time; its errors are the panel's to show.
@@ -117,8 +130,12 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
 
     const begin = () => run("Writing the scene…", async () => {
         setFinished(null);
-        await createCatalyst({ request });
-        setRequest("");
+        await createInteractive({ eventId: offerShown?.id, angle });
+        setAngle("");
+    });
+    const letPass = () => run("Letting it pass…", async () => {
+        await declineInteractiveOffer();
+        onClose?.();
     });
     // A move: one of the offered choices, or the player's own words. When the
     // scene resolves, it is written into the record and closes.
@@ -126,30 +143,30 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
         const wording = String(text ?? "").trim();
         if (!wording) return;
         const title = scene?.title || "";
-        const result = await advanceActiveCatalyst(wording);
+        const result = await advanceActiveInteractive(wording);
         setMove("");
-        if (result && !result.catalyst) setFinished({ title: result.events?.at?.(-1)?.title || title });
+        if (result && !result.interactive) setFinished({ title: result.events?.at?.(-1)?.title || title });
     });
-    const takeBack = (index) => run("Taking the move back…", () => rewindActiveCatalyst({ beatIndex: index }));
+    const takeBack = (index) => run("Taking the move back…", () => rewindActiveInteractive({ beatIndex: index }));
     const end = () => run("Writing the scene into the record…", async () => {
         const title = scene?.title || "";
-        const result = await endActiveCatalyst();
+        const result = await endActiveInteractive();
         if (result?.resolved) setFinished({ title: result.events?.at?.(-1)?.title || title });
     });
-    const setAside = () => run("Setting the scene aside…", () => setAsideActiveCatalyst());
+    const setAside = () => run("Setting the scene aside…", () => setAsideActiveInteractive());
 
     if (!open) return null;
     const idle = !busy;
 
     return (
         <div style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", padding: "1rem", position: "fixed", zIndex: 10001 }}>
-            <div role="dialog" aria-label="Catalyst mode" style={panelStyle}>
+            <div role="dialog" aria-label="Interactive event" style={panelStyle}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(250,204,21,0.18)", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.9rem 1.1rem" }}>
                     <div>
-                        <div style={{ color: YELLOW, fontSize: "0.95rem", fontWeight: 850, letterSpacing: "0.02em" }}>⚡ Catalyst mode</div>
-                        <div style={{ ...caption, marginTop: "0.15rem" }}>Play out a moment as a scene. Time stands still until it ends.</div>
+                        <div style={{ color: YELLOW, fontSize: "0.95rem", fontWeight: 850, letterSpacing: "0.02em" }}>⚡ Interactive event</div>
+                        <div style={{ ...caption, marginTop: "0.15rem" }}>A moment of the campaign played out as a scene. Time stands still until it ends.</div>
                     </div>
-                    <button type="button" onClick={onClose} title="Leave Catalyst mode — a scene in progress stays where it is" style={quietButton(false)}>✕ Leave</button>
+                    <button type="button" onClick={onClose} title="Close — a scene in progress stays where it is, and an offer stays until the next time skip" style={quietButton(false)}>✕ Leave</button>
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem", overflowY: "auto", padding: "1rem 1.1rem 1.1rem" }}>
@@ -162,31 +179,12 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
                         </div>
                     )}
 
-                    {!scene ? (
-                        <>
-                            <label htmlFor="catalyst-request" style={{ fontSize: "0.84rem", fontWeight: 800 }}>What scene do you want to play?</label>
-                            <textarea
-                                id="catalyst-request"
-                                rows={3}
-                                value={request}
-                                disabled={!idle}
-                                onChange={(event) => setRequest(event.target.value)}
-                                placeholder="A secret meeting with the German chancellor the night before the vote… Leave it empty and the moment will be chosen for you."
-                                style={inputStyle}
-                            />
-                            {revealing && <div style={{ ...caption, color: "#fde68a" }}>Finish revealing the last time skip first: a scene starts from what you have seen.</div>}
-                            <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                                <button type="button" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Begin the scene</button>
-                                <span style={caption}>Starting a scene is one AI request; each move is one more, and ending it one more.</span>
-                            </div>
-                        </>
-                    ) : (
+                    {scene ? (
                         <>
                             <div>
                                 <SceneText style={{ fontSize: "1.05rem", fontWeight: 850 }}>{scene.title || "Untitled scene"}</SceneText>
                                 {scene.premise && <SceneText style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem", fontStyle: "italic", marginTop: "0.2rem" }}>{scene.premise}</SceneText>}
-                                {scene.request && <div style={{ ...caption, marginTop: "0.3rem" }}>You asked for: <span data-no-translate>{scene.request}</span></div>}
-                                {!isSceneInProgress(scene) && <div style={{ ...caption, marginTop: "0.3rem" }}>A scene the last time skip proposed. Play it, or set it aside and start your own.</div>}
+                                {scene.request && <div style={{ ...caption, marginTop: "0.3rem" }}>Your angle: <span data-no-translate>{scene.request}</span></div>}
                             </div>
 
                             {beats.length > 0 && (
@@ -197,7 +195,7 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
                                                 <div style={{ fontSize: "0.74rem", color: "#fde68a" }}>
                                                     Your move: <span data-no-translate>{beat.choice}</span>
                                                 </div>
-                                                {canRewindCatalystTo(scene, index) && (
+                                                {canRewindInteractiveTo(scene, index) && (
                                                     <button type="button" onClick={() => takeBack(index)} disabled={!idle} title="Return the scene to just before this move — free; choosing again is one request" style={{ ...quietButton(!idle), fontSize: "0.68rem", padding: "0.2rem 0.5rem" }}>↶ Take back</button>
                                                 )}
                                             </div>
@@ -236,6 +234,37 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
                                 <span style={caption}>Ending writes the scene into the record (one request). Setting it aside keeps nothing.</span>
                             </div>
                         </>
+                    ) : offerShown ? (
+                        <>
+                            <div>
+                                <div style={caption}>The last time skip offers this moment to be played out</div>
+                                <SceneText style={{ fontSize: "1.05rem", fontWeight: 850, marginTop: "0.2rem" }}>{offerShown.title}</SceneText>
+                                {offerShown.date && <div style={{ ...caption, marginTop: "0.1rem" }}>{isGameDate(offerShown.date) ? formatGameDateReadable(offerShown.date, "MMMM Do, YYYY") : offerShown.date}</div>}
+                                {offerShown.description && (
+                                    <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.8rem", marginTop: "0.4rem", maxHeight: "9.5rem", overflowY: "auto" }}>{offerShown.description}</SceneText>
+                                )}
+                            </div>
+                            <label htmlFor="interactive-angle" style={{ fontSize: "0.84rem", fontWeight: 800 }}>Your angle <span style={{ ...caption, fontWeight: 400 }}>(optional)</span></label>
+                            <textarea
+                                id="interactive-angle"
+                                rows={2}
+                                value={angle}
+                                disabled={!idle}
+                                onChange={(event) => setAngle(event.target.value)}
+                                placeholder="Who you are in the room, what you are after… Leave it empty and the scene is built on the event as it stands."
+                                style={inputStyle}
+                            />
+                            {revealing && <div style={{ ...caption, color: "#fde68a" }}>Finish revealing the last time skip first: a scene starts from what you have seen.</div>}
+                            <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                                <button type="button" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
+                                <button type="button" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
+                                <span style={caption}>Playing it out is one AI request; each move is one more, and ending it one more. Letting it pass costs nothing.</span>
+                            </div>
+                        </>
+                    ) : !finished && (
+                        <div style={{ ...caption, fontSize: "0.8rem" }}>
+                            No interactive event is waiting. Now and then a time skip offers one of its events that concerns you to be played out; the event's card says so.
+                        </div>
                     )}
 
                     {busy && <div style={{ color: YELLOW, fontSize: "0.78rem", fontWeight: 700 }}>{busy}</div>}
@@ -246,4 +275,4 @@ export const CatalystPanel = ({ open = true, onClose, onOpenTimeline }) => {
     );
 };
 
-export default CatalystPanel;
+export default InteractivePanel;

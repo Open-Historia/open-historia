@@ -695,11 +695,16 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             <div
               style={{
                 color: "rgba(244,244,246,0.7)",
+                display: "-webkit-box",
                 fontSize: "0.92rem",
                 lineHeight: 1.45,
                 marginTop: "0.65rem",
                 maxWidth: "16rem",
+                overflow: "hidden",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 6,
               }}
+              title={scenario.heroSubtitle || scenario.description || scenario.subtitle || undefined}
             >
               {scenario.heroSubtitle || scenario.description || scenario.subtitle}
             </div>
@@ -707,7 +712,18 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
         </div>
 
         <div>
-          <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.8rem", marginBottom: "0.7rem" }}>
+          <div
+            style={{
+              color: "rgba(255,255,255,0.68)",
+              display: "-webkit-box",
+              fontSize: "0.8rem",
+              marginBottom: "0.7rem",
+              overflow: "hidden",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: 2,
+            }}
+            title={scenario.subtitle || undefined}
+          >
             {scenario.subtitle}
           </div>
           <AssetBadgeRow badges={assetBadges} />
@@ -974,7 +990,19 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
             <div style={{ color: "rgba(244,244,246,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
               {game.country || "No player country"} / {game.currentDate || "No date"} / Round {game.round || 1}
             </div>
-            <div style={{ color: "rgba(244,244,246,0.58)", fontSize: "0.84rem", marginTop: "0.5rem", lineHeight: 1.45 }}>
+            <div
+              style={{
+                color: "rgba(244,244,246,0.58)",
+                display: "-webkit-box",
+                fontSize: "0.84rem",
+                lineHeight: 1.45,
+                marginTop: "0.5rem",
+                overflow: "hidden",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 6,
+              }}
+              title={game.description || undefined}
+            >
               {game.description || "Playable campaign session."}
             </div>
           </div>
@@ -3258,6 +3286,8 @@ const LibraryTopBar = () => {
                   : {},
                 background,
                 basemap: world.basemap || null,
+                // Carried like the flags above: a round-trip must not reset it.
+                customCities: Boolean(world.customCities),
                 // The scenario's starting units, so the Units panel edits what the game starts with.
                 units: Array.isArray(world.units) ? world.units : [],
               });

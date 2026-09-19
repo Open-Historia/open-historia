@@ -38,7 +38,7 @@ test("a mimicked tool call missing its outer bracket still yields the arguments"
 "stopDate":"2032-11-02",
 "summary":"A wave of programme initiations.",
 "clearActions":true,
-"catalyst":null,
+"interactive":null,
 "diplomaticOutreach":[]
 }
 }

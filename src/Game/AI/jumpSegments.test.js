@@ -180,14 +180,12 @@ test("segments merge into one round's result", () => {
       events: [{ date: "2287-04-01", title: "One" }],
       summary: "The spring.",
       diplomaticOutreach: [{ title: "A feeler" }],
-      catalyst: { title: "An early scene" },
       stopDate: "2287-05-27",
     },
     {
       events: [{ date: "2287-09-01", title: "Two" }],
       summary: "The autumn.",
       diplomaticOutreach: [],
-      catalyst: { title: "A closing scene" },
       stopDate: "2287-11-23",
     },
   ], { targetDate: "2287-11-23" });
@@ -196,17 +194,7 @@ test("segments merge into one round's result", () => {
   assert.equal(merged.summary, "The spring.\n\nThe autumn.");
   assert.equal(merged.stopDate, "2287-11-23");
   assert.equal(merged.diplomaticOutreach.length, 1);
-  // A catalyst is answered after the jump, so it must be the one from the END.
-  assert.equal(merged.catalyst.title, "A closing scene");
   assert.equal(merged.clearActions, true);
-});
-
-test("a catalyst offered mid-jump survives when later segments offer none", () => {
-  const merged = mergeSegmentPayloads([
-    { events: [], catalyst: { title: "The only scene" } },
-    { events: [] },
-  ]);
-  assert.equal(merged.catalyst.title, "The only scene");
 });
 
 test("the final segment has the last word on whether orders resolved", () => {

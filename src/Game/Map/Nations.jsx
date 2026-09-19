@@ -26,6 +26,7 @@ import {
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
 import { useWorkerFetchableUrl } from "./useWorkerFetchableUrl.js";
+import { publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   loadCountryLabelCollections,
@@ -865,6 +866,12 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [customFlag, map, mapDisplaySettings.disableCurvedCountryLabels, ptr1PolityTextAuthoritative, useLivePolityLabels]);
 
+  // Where each polity sits, for the place search: a custom scenario's countries are nowhere else.
+  useEffect(() => {
+    const ptrFeatures = polityLabelCollections.ptrLabelData?.features;
+    publishPolityIndex(ptrFeatures?.length ? ptrFeatures : polityLabelCollections.labelData?.features);
+  }, [polityLabelCollections]);
+
   // Development-time proof instead of screenshot guesswork. One authoritative
   // record per polity is exposed for inspection and the known regression set is
   // printed whenever live label geometry changes.
@@ -1234,7 +1241,12 @@ const WorldMap = ({ isGlobe = false }) => {
     }
 
     const { props, regionId, gid0, owner } = hit;
-    const rawClaimants = regionClaimants?.[regionId] ?? (Array.isArray(props.claimants) ? props.claimants : []);
+    // The world's list wherever it has one, an ended dispute's empty one
+    // included (useWorldState.js withSettledClaims); the feature's own claimants
+    // only for a region the world never recorded.
+    const rawClaimants = regionClaimants && Object.prototype.hasOwnProperty.call(regionClaimants, regionId)
+      ? regionClaimants[regionId]
+      : (Array.isArray(props.claimants) ? props.claimants : []);
     const claimants = Array.isArray(rawClaimants) ? rawClaimants : [];
     onRegionSelected({
       GID_0: owner || (owner === "" ? "" : toCountryName(gid0)),
@@ -2219,7 +2231,7 @@ const WorldMap = ({ isGlobe = false }) => {
     for (const record of customRegionMeta.records ?? []) {
       const id = String(record?.id ?? "");
       if (!id || record?.authored === true) continue;
-      const claimants = regionClaimants[id]?.length ? regionClaimants[id] : record?.claimants;
+      const claimants = Object.prototype.hasOwnProperty.call(regionClaimants, id) ? regionClaimants[id] : record?.claimants;
       if (!Array.isArray(claimants) || !claimants.length) continue;
       const liveOwner = regionOwnershipOverrides[id] ?? record?.owner ?? "";
       const seen = new Set();

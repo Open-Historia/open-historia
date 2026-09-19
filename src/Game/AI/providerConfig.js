@@ -1,6 +1,7 @@
 /*! Open Historia — portions (reasoning-effort toggle persistence) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { logDebugEvent, logSettingMessage, setDebugLogContext } from "../../runtime/debugLog.js";
 import { entryStatus } from "./fallbackRunner.js";
+import { FORMER_TASK_KEYS, readUnderTaskKey } from "./formerTaskKeys.js";
 
 export const DEFAULT_PROVIDER = "gemini";
 
@@ -122,7 +123,13 @@ function getSettingConfig(provider, field) {
     if (direct) return direct;
     const taskMatch = TASK_MODEL_FIELD.exec(String(field ?? ""));
     if (taskMatch && base.model) {
-        return { storageKey: `${normalized}_model_${taskMatch[1]}`, defaultValue: "" };
+        // A renamed task's override was stored under its old key (formerTaskKeys.js).
+        const former = FORMER_TASK_KEYS[taskMatch[1]];
+        return {
+            storageKey: `${normalized}_model_${taskMatch[1]}`,
+            ...(former ? { legacyKeys: [`${normalized}_model_${former}`] } : {}),
+            defaultValue: "",
+        };
     }
     return null;
 }
@@ -179,9 +186,9 @@ export const AI_TASK_ROUTING = [
     { key: "nextSpeaker", label: "Next speaker", hint: "Smallest model: single-field pick", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
-    { key: "catalystCreation", label: "Catalyst creation", hint: "Mid-tier model", group: "Player" },
-    { key: "catalystExecutor", label: "Catalyst execution", hint: "Mid-tier model", group: "Player" },
-    { key: "catalystSummary", label: "Catalyst summary", hint: "Small model", group: "Player" },
+    { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
+    { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
+    { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
@@ -761,11 +768,12 @@ export function moveEntry(id, toIndex) {
 
 // --- Per-task picks ---
 
-// A task's own pick: the id of the entry it tries first, or "" for none.
+// A task's own pick: the id of the entry it tries first, or "" for none. A
+// renamed task's pick may still sit under its old key (formerTaskKeys.js).
 export function getTaskPick(taskKey) {
     ensureMigrated();
-    const picks = readJsonSetting(TASK_PICKS_KEY, {});
-    return typeof picks?.[taskKey] === "string" ? picks[taskKey] : "";
+    const pick = readUnderTaskKey(readJsonSetting(TASK_PICKS_KEY, {}), taskKey);
+    return typeof pick === "string" ? pick : "";
 }
 
 export function setTaskPick(taskKey, entryId) {
@@ -773,6 +781,8 @@ export function setTaskPick(taskKey, entryId) {
     const picks = { ...readJsonSetting(TASK_PICKS_KEY, {}) };
     if (entryId) picks[taskKey] = entryId;
     else delete picks[taskKey];
+    // Moved to the new key, so clearing the pick cannot bring the old one back.
+    if (FORMER_TASK_KEYS[taskKey]) delete picks[FORMER_TASK_KEYS[taskKey]];
     writeJsonSetting(TASK_PICKS_KEY, picks);
     const task = AI_TASK_ROUTING.find((entry) => entry.key === taskKey)?.label || taskKey;
     const entry = getResolvedFallbackList().find((candidate) => candidate.id === entryId);

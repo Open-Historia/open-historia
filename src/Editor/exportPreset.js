@@ -304,7 +304,11 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // Authored cities replace the modern city labels. A custom-geometry map with
     // no cities still sets the flag — modern names over invented land would be
     // wrong — while a pure re-ownership map without cities keeps the stock set.
-    customCities: gameCities.features.length > 0 || hasCustomGeometry,
+    // citiesAuthored separates "never had cities" from "deleted them all".
+    customCities:
+      gameCities.features.length > 0
+      || hasCustomGeometry
+      || Boolean(doc.metadata?.citiesAuthored),
     author,
     mapCredit: author ? `Made by ${author}` : "",
     simulationRules: doc.metadata?.simulationRules || "",
