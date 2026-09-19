@@ -46,6 +46,18 @@ _Avoid_: Save, save game, campaign, session (as the term for the record)
 Something the simulation accepted as having happened during a jump, whether or not the player sees it on the timeline.
 _Avoid_: Accepted card
 
+**Player event**:
+A Canonical event that involves the player's polity in any way: something it does, something done to it or said about it, or something that happens inside its territory. Every other event is a World event.
+_Avoid_: Player-related event, player-sphere event
+
+**World event**:
+A Canonical event that does not involve the player's polity at all, such as a crisis between two other powers in a theatre the player is not in.
+_Avoid_: Wider-world event, background event
+
+**Player focus**:
+The player's choice of how much of each jump belongs to Player events: World first, Balanced, Focused or Spotlight. It sets a minimum share that applies only as far as the player has something going on; in a quiet stretch the World fills the jump.
+_Avoid_: Player share, player weighting, attention balance
+
 **Hidden event**:
 A Canonical event kept off the timeline because it was routine, low-value or already covered. It still happened. Distinct from a rejected event, which the simulation judged untrue and which never happened.
 _Avoid_: Dropped event (for anything that still happened)

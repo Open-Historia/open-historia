@@ -827,6 +827,7 @@ const HEADER_FIELD_KEYS = {
     model: "model",
     "player polity": "playerCountry",
     difficulty: "difficulty",
+    "player focus": "playerFocus",
     round: "round",
     "game date": "gameDate",
 };
@@ -1012,6 +1013,7 @@ const composeLoggingFile = ({ incident, desktop, settings } = {}) => {
         contextLine("Game date", context.gameDate),
         contextLine("Round", context.round),
         contextLine("Difficulty", context.difficulty),
+        contextLine("Player focus", context.playerFocus),
         "",
         // Provider and model NAMES only. Which model a player is on is the
         // single most useful line in an AI bug report, and it is not a secret;

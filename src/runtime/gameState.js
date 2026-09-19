@@ -433,6 +433,9 @@ export const normalizeActionEntry = (entry, index = 0) => {
     text: text || rawInput || title,
     title: title || rawInput || text,
     ...(unitRevert ? { unitRevert } : {}),
+    // Carried over unanswered from the last time skip (AI/playerFocus.js
+    // settleOrders): the next skip answers it first.
+    ...(entry.overdue === true ? { overdue: true } : {}),
   };
 };
 
@@ -1383,7 +1386,10 @@ const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
 const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
 
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
-const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
+// "slipped" is the engine's: a milestone whose date passed with no outcome
+// (AI/playerFocus.js slipPassedMilestones). Late, not yet reached, and still
+// something the next time skip must answer.
+const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "slipped", "done", "missed"]);
 
 // The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
 // mark a checkpoint reached writes "completed" or "achieved" about as often as it
@@ -1397,7 +1403,8 @@ const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
 const PROJECT_MILESTONE_STATUS_ALIASES = {
   complete: "done", completed: "done", finished: "done", achieved: "done",
   reached: "done", met: "done", delivered: "done", passed: "done",
-  slipped: "missed", late: "missed", overdue: "missed", failed: "missed", unmet: "missed",
+  late: "slipped", overdue: "slipped", delayed: "slipped", behind: "slipped",
+  failed: "missed", unmet: "missed",
   outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
 };
 
@@ -1518,7 +1525,8 @@ const normalizeProjectMilestones = (list) =>
 // moment it marks one done without restating the other. The list wins where there
 // is one; the stored value is a fallback for a project that carries no list.
 const deriveNextMilestoneFrom = (milestones, stored) => {
-  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending");
+  // A slipped milestone is late but still outstanding, so it is still "next".
+  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending" || entry.status === "slipped");
   if (pending.length > 0) {
     // Dated milestones first, earliest wins. An undated one is a "next, whenever"
     // and only surfaces when nothing dated is outstanding.
@@ -2240,7 +2248,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           // something already finished. Success marks them done; anything else
           // marks them missed, which is what actually happened.
           milestones: project.milestones.map((entry) =>
-            (entry.status === "pending" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
+            (entry.status === "pending" || entry.status === "slipped" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
           // Cancel and fail never release effects: `succeeded` is the only gate,

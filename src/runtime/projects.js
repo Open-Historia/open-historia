@@ -58,7 +58,8 @@ export const isProjectClosed = (project) => !isProjectOpen(project);
 // project arrived without one.
 export const deriveNextMilestone = (project) => {
   if (project?.nextMilestone && asText(project.nextMilestone.title)) return project.nextMilestone;
-  const pending = asArray(project?.milestones).filter((entry) => entry?.status === "pending");
+  // A slipped milestone is late but still outstanding, so it is still "next".
+  const pending = asArray(project?.milestones).filter((entry) => entry?.status === "pending" || entry?.status === "slipped");
   if (pending.length === 0) return null;
   const dated = pending.filter((entry) => asText(entry.date)).sort((a, b) => compareGameDates(a.date, b.date));
   const next = dated[0] || pending[0];
@@ -77,7 +78,7 @@ export const deriveNextMilestone = (project) => {
 // Returns, for one project:
 //   overdue     - target date is behind us and the project is still running
 //   dueSoon     - the next milestone lands within DUE_SOON_DAYS
-//   milestoneMissed - a milestone's date passed while it was still pending
+//   milestoneMissed - a milestone's date passed while it was still pending, or it slipped
 //   stale       - explicitly stalled, or untouched for STALE_ROUNDS rounds
 //   daysToTarget / daysToMilestone - signed, null when undateable
 export const deriveProjectFlags = (project, gameDate, round = 0) => {
@@ -91,6 +92,7 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
   // `overdue`, which is about the whole programme: a slipped milestone on a
   // project with a year still to run is a warning, not a failure.
   const milestoneMissed = asArray(project?.milestones).some((entry) => {
+    if (entry?.status === "slipped") return true;
     if (entry?.status !== "pending" || !asText(entry.date)) return false;
     const delta = signedDaysBetween(gameDate, entry.date);
     return delta !== null && delta < 0;

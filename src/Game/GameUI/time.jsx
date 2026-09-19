@@ -18,6 +18,7 @@ import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStr
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { normalizePlayerFocus } from "../AI/playerFocus.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
@@ -2713,9 +2714,10 @@ const DateWidget = ({
             gameDate: gameData?.gameDate || "",
             round: gameData?.round == null ? "" : String(gameData.round),
             difficulty: gameData?.difficulty || "",
+            playerFocus: normalizePlayerFocus(gameData?.playerFocus),
             playerCountry: playerCountry || playerCountryCode || "",
         });
-    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
+    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, gameData?.playerFocus, playerCountry, playerCountryCode]);
 
     // "Save logging file" (TimelineHistoryPanel, next to the fallback warning):
     // the diagnostics log, with this fallback's own details attached at the top —

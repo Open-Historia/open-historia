@@ -36,6 +36,8 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { PLAYER_FOCUS_DEFAULT, PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
+import { readGameData, writeGameData } from "../../runtime/gameState.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -1737,6 +1739,60 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
 
+// How much of each time skip is about the player's own country (AI/playerFocus.js).
+// Kept with the GAME rather than on this device, unlike its neighbours in this
+// section: a Spotlight war campaign should not decide how the next sandbox game
+// reads. Existing games have none stored and start on Balanced.
+const PLAYER_FOCUS_HINTS = {
+    "world-first": "The world comes first. At least a quarter of each skip is about you when you have something going on; the rest of the world gets the room.",
+    balanced: "The default. At least 40% of each skip is about you when you have orders, Projects or open threads.",
+    focused: "Your country leads. At least 60% of each skip is about you, and other powers' plans take up less of what the AI is shown.",
+    spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
+};
+
+const PlayerFocusSetting = () => {
+    const [focus, setFocus] = useState(PLAYER_FOCUS_DEFAULT);
+    const [ready, setReady] = useState(false);
+    useEffect(() => {
+        let live = true;
+        readGameData({ force: true })
+        .then((game) => { if (live) { setFocus(normalizePlayerFocus(game?.playerFocus)); setReady(true); } })
+        .catch(() => { if (live) setReady(true); });
+        return () => { live = false; };
+    }, []);
+    const choose = async (value) => {
+        const next = normalizePlayerFocus(value);
+        setFocus(next);
+        try {
+            const current = await readGameData({ force: true });
+            await writeGameData({ ...current, playerFocus: next });
+        } catch (error) {
+            console.warn("[settings] the player focus could not be saved.", error);
+        }
+    };
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={labelStyle}>Player focus — for this game</label>
+        <select
+        data-no-translate
+        disabled={!ready}
+        value={focus}
+        onChange={(event) => choose(event.target.value)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <option key={level.key} value={level.key} style={{ color: "black" }}>
+            {level.label}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {PLAYER_FOCUS_HINTS[focus]} It never invents events for you: in a quiet stretch the world fills the skip as usual.
+        </div>
+        </div>
+    );
+};
+
 const SettingsSection = ({ title, description, right, children }) => (
     <section style={{ background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
         <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
@@ -1972,6 +2028,7 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
+                    <PlayerFocusSetting />
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.

@@ -1262,6 +1262,7 @@ export const curateGeneratedEventsWithHidden = async ({
   actions = [],
   mode = "",
   analyzeBatch = null,
+  spare = null,
 } = {}) => {
   const incoming = asArray(events);
 
@@ -1345,10 +1346,16 @@ export const curateGeneratedEventsWithHidden = async ({
     }
   }
 
+  // An event that answers one of the player's orders, or a Project date due
+  // this period, is what the player asked the jump for (AI/playerFocus.js
+  // createSpareTest). However routine it reads, the filler gates may not take
+  // it off the timeline — it would leave the order or the milestone with
+  // nothing to show for it. Every other event is judged as before.
+  const spared = typeof spare === "function" ? spare : () => false;
   const evaluations =
     incoming.map(
-      (event, index) =>
-        evaluateCandidate({
+      (event, index) => {
+        const evaluation = evaluateCandidate({
           event,
           index,
 
@@ -1357,7 +1364,16 @@ export const curateGeneratedEventsWithHidden = async ({
 
           priorEvents,
           saturationByStoryline,
-        }),
+        });
+        if (evaluation.wouldAction === "KEEP" || !spared(event)) return evaluation;
+        return {
+          ...evaluation,
+          wouldAction: "KEEP",
+          actualAction: "KEEP",
+          route: "PLAYER_FOCUS_SPARE",
+          enforcementReason: `spared: it answers the player's own order or a Project date due this period (was ${evaluation.route})`,
+        };
+      },
     );
 
     // audit is over. the deterministic gates decide.

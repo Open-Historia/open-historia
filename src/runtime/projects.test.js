@@ -123,6 +123,18 @@ test("a milestone that slipped is flagged separately from an overdue project", (
   assert.equal(flags.overdue, false, "the programme still has years to run");
 });
 
+test("a milestone the engine marked slipped is still next, and still flagged late", () => {
+  const slipped = project({
+    targetDate: "1970-01-01",
+    milestones: [
+      { id: "m1", title: "Sea trials", date: "1963-01-01", status: "slipped", note: "" },
+      { id: "m2", title: "Commissioning", date: "1965-01-01", status: "pending", note: "" },
+    ],
+  });
+  assert.equal(deriveNextMilestone(slipped).title, "Sea trials");
+  assert.equal(deriveProjectFlags(slipped, "1963-02-01").milestoneMissed, true);
+});
+
 test("stale covers both an explicit stall and simple neglect", () => {
   assert.equal(deriveProjectFlags(project({ status: "stalled" }), "1963-01-01").stale, true);
   assert.equal(deriveProjectFlags(project({ updatedRound: 4 }), "1963-01-01", 4 + STALE_ROUNDS).stale, true);

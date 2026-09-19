@@ -17,6 +17,18 @@ import {
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import {
+  buildPlayerFocusDirective,
+  collectPlayerMaterial,
+  combinedShares,
+  createPlayerEventTest,
+  createSpareTest,
+  normalizePlayerFocus,
+  playerFocusShortfall,
+  settleOrders,
+  slipPassedMilestones,
+  trimWorldForFocus,
+} from "./playerFocus.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
 import { detectExplicitBaseTerritoryScope, scopeContainsRegion } from "./gmTerritoryScope.js";
 import { buildCuratorInput, candidatesWorthJudging, curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
@@ -2631,10 +2643,22 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   }
 
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const directionDirective = buildWorldDirectionDirective(getActiveWorldDirection(), {
-      playerPolity: normalizeString(variables?.playerPolity),
-      spanDays: computeSimulatedDays(variables) || 30,
-    });
+    // The player's focus (playerFocus.js), then the author's direction. Both are
+    // appended here rather than rendered into the template, so a campaign's own
+    // edited guidance can neither remove them nor starve them of room. Where the
+    // two shares together ask for more than the whole period, the world's share
+    // is the one that gives way (docs/adr/0003).
+    const focusDirective = normalizeString(variables?.playerFocusDirective);
+    if (focusDirective) systemPrompt = `${systemPrompt}\n\n${focusDirective}`;
+    const direction = getActiveWorldDirection();
+    const shares = combinedShares({ focus: variables?.playerFocus, worldShare: direction?.worldShare });
+    const directionDirective = buildWorldDirectionDirective(
+      direction ? { ...direction, worldShare: shares.world } : direction,
+      {
+        playerPolity: normalizeString(variables?.playerPolity),
+        spanDays: computeSimulatedDays(variables) || 30,
+      },
+    );
     if (directionDirective) systemPrompt = `${systemPrompt}\n\n${directionDirective}`;
   }
 
@@ -3504,7 +3528,7 @@ const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], r
     ...jumpTaskOptions(requests, "review"),
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved.${hiddenNote}\n\n${eventList}${doubtBlock}`,
+      + `{"projectOps":[]} if nothing on it genuinely moved. Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.${hiddenNote}\n\n${eventList}${doubtBlock}`,
     variables,
     // No fallback: an empty board is exactly what a failed call should leave
     // behind, and runJsonTask throwing is what lets the caller tell the player
@@ -6446,6 +6470,17 @@ const applySimulationResult = async ({
   // canon, and deterministic gates (hard mechanical consequences, retrieved
   // prior matches, saturation) decide what those judgments may remove. The
   // default is KEEP, and any failure of the analysis keeps everything.
+  // What the player has going on this period (playerFocus.js): the events that
+  // answer one of their orders or a Project date due now are spared by the
+  // filler gates below, because removing one leaves the order or the milestone
+  // with nothing on the timeline to show for it.
+  const applyFocus = await readPlayerFocusContext({ game: baseGame, world: baseWorld });
+  const focusMaterial = playerMaterialFor(
+    { actions: baseActions, chats: baseChats, events: baseEvents, world: baseWorld },
+    applyFocus,
+    { originDate: baseGame.gameDate, targetDate: normalizeString(result.stopDate) || baseGame.gameDate },
+  );
+  const spareForFocus = createSpareTest(focusMaterial);
   const mainCuration = await curateGeneratedEventsWithHidden({
     events: dedupedEvents,
     priorEvents,
@@ -6454,6 +6489,7 @@ const applySimulationResult = async ({
     actions: baseActions,
     mode: result.mode,
     analyzeBatch: curatorAnalyzeBatch,
+    spare: spareForFocus,
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
@@ -6502,6 +6538,7 @@ const applySimulationResult = async ({
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
+      spare: spareForFocus,
       events: repairScreened.events,
       priorEvents: [...priorEvents, ...curatedEvents],
       game: baseGame,
@@ -6561,10 +6598,28 @@ const applySimulationResult = async ({
     round: (baseGame.round || 1) + 1,
   });
   const plannedActionSnapshot = normalizeActions(baseActions).filter((action) => action.status === "planned");
-  let nextActions = normalizeActions(baseActions).map((action) => ({
-    ...action,
-    status: action.status === "planned" && result.clearActions ? "resolved" : action.status,
-  }));
+  // An order is resolved by the event that answered it, not by the turn having
+  // run (AI/playerFocus.js settleOrders). One the skip passed over stays queued
+  // and is marked overdue, so the next skip is told to answer it first — the
+  // whole queue used to be cleared either way, and an ignored order simply
+  // vanished. Only when the skip resolved the queue at all: a scene or a check
+  // that leaves the orders planned has not answered them.
+  let nextActions = result.clearActions
+    ? settleOrders(normalizeActions(baseActions), freshEvents)
+    : normalizeActions(baseActions);
+  // An order the skip narrated but never CITED stays queued, because nothing in
+  // the answer says it was carried out. The model is told at the top of its next
+  // turn, where the same orders are listed as overdue — a model that forgets
+  // actionIds once should not leave a player's queue growing quietly.
+  const carriedOrders = nextActions.filter((action) => action.status === "planned" && action.overdue === true).length;
+  if (carriedOrders) {
+    noteReceipt(
+      receipt,
+      "short",
+      `${carriedOrders} of the player's queued order${carriedOrders === 1 ? " was" : "s were"} left without an outcome and ${carriedOrders === 1 ? "is" : "are"} carried over as overdue. `
+        + "Answer each of them this period, in an event that lists that order's id in actionIds — an event that tells the story without naming the id does not resolve it.",
+    );
+  }
   const nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
@@ -7033,6 +7088,15 @@ const applySimulationResult = async ({
   // The structures this turn built for a Project, linked to it now that both
   // the map and the board are final (nativeStructureDirector.js).
   worldWithImpacts = linkStructuresToProjects(worldWithImpacts, result.structureLinks);
+
+  // A milestone whose date this skip passed with nothing said about it is late,
+  // not still pending (playerFocus.js): the Board says so, and the next skip is
+  // asked to answer it. After the board pass, so a milestone the model reached
+  // or missed this turn keeps the outcome it was given.
+  const slippedProjects = slipPassedMilestones(normalizeArray(worldWithImpacts.projects), { date: nextGame.gameDate });
+  if (slippedProjects.some((project, index) => project !== normalizeArray(worldWithImpacts.projects)[index])) {
+    worldWithImpacts = { ...worldWithImpacts, projects: slippedProjects };
+  }
 
   // The documents that changed hands this turn, delivered to the player the way
   // a government receives them (runtime/reportDelivery.js): a letter into the
@@ -11586,6 +11650,65 @@ export const advanceActiveInteractive = async (choiceText) => {
 // finished segments are kept, and the player decides whether to retry the one
 // that failed or discard the turn. Half a round of real events followed by half
 // a round of canned ones is never on the table.
+// ---- Player focus ----------------------------------------------------------
+//
+// How much of a jump belongs to the player, chosen per Game and kept in game
+// data (playerFocus.js holds every rule; this is where the campaign's data is
+// gathered for them).
+//
+// The counter has to know the player's TERRITORY, not just their name: an
+// empire's internal events name a city or a province, or the country a province
+// used to be, and counting those as the wider world is how unrest in Lahore
+// became somebody else's news. Each region the player holds contributes its own
+// name and the country it belongs to on the map.
+const playerTerritoryNames = async (world, playerNames) => {
+  const keys = new Set(normalizeArray(playerNames).map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
+  if (!keys.size) return [];
+  const overrides = normalizeWorldState(world).regionOwnershipOverrides ?? {};
+  const owned = new Set(Object.entries(overrides)
+    .filter(([, owner]) => keys.has(normalizeString(owner).toLowerCase()))
+    .map(([regionId]) => normalizeString(regionId)));
+  if (!owned.size) return [];
+  const names = new Set();
+  for (const row of normalizeArray(await loadRegionCatalog().catch(() => []))) {
+    if (!owned.has(normalizeString(row?.id))) continue;
+    for (const value of [row?.name, row?.country]) {
+      const name = normalizeString(value);
+      if (name && !keys.has(name.toLowerCase())) names.add(name);
+    }
+  }
+  return [...names];
+};
+
+// The focus, the player's names and the test the counter uses, once per jump.
+const readPlayerFocusContext = async (bundle) => {
+  const playerName = normalizeString(bundle?.game?.country);
+  const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
+  const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
+  return {
+    focus: normalizePlayerFocus(bundle?.game?.playerFocus),
+    playerName,
+    playerNames,
+    territoryNames,
+    isPlayerEvent: createPlayerEventTest({ playerNames, territoryNames }),
+  };
+};
+
+// What the player has going on over one window, from this campaign's own state.
+const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => collectPlayerMaterial({
+  playerNames: focusContext.playerNames,
+  isPlayerEvent: focusContext.isPlayerEvent,
+  originDate,
+  targetDate,
+  actions: normalizeArray(bundle?.actions),
+  projects: normalizeArray(bundle?.world?.projects),
+  storylines: normalizeArray(bundle?.world?.storylines),
+  wars: normalizeArray(bundle?.world?.wars),
+  relations: normalizeArray(bundle?.world?.relations),
+  chats: normalizeArray(bundle?.chats),
+  recentEvents: normalizeArray(bundle?.events),
+});
+
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
   const {
     bundle,
@@ -11635,6 +11758,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // Empty on a campaign's first jump and after a turn that predates receipts, and
   // then the message is byte-for-byte what it always was.
   const lastTurnReceipt = renderLastTurnReceipt(normalizeWorldState(bundle.world).simulationHistory);
+  // The player's focus for this Game (playerFocus.js): what counts as a Player
+  // event, gathered once, and per segment what the player has going on.
+  const focusContext = await readPlayerFocusContext(bundle);
   // And what the Game Master changed by hand since then (runtime/gmChanges.js):
   // the changes made in the round this skip starts from. Once, because the round
   // moves on when the skip lands — and again after a rollback, because the skip
@@ -11689,7 +11815,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       };
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        { targetDate: segmentTarget },
+        { targetDate: segmentTarget, playerFocus: focusContext.focus },
         signal,
       );
       console.info(
@@ -11697,8 +11823,23 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         `storylines ${normalizeArray(ledgerWorld?.storylines).length}; attention ${worldInitiative.analysis?.attentionCount || 0}; ` +
         `exploration slots ${worldInitiative.analysis?.explorationSlotCount || 0}.`,
       );
+      // What the player has going on across THIS segment's window, and the
+      // block that tells the simulator about it (playerFocus.js). Written with
+      // the code-appended directives, where an author's guidance cannot reach it.
+      const playerMaterial = playerMaterialFor(
+        { ...bundle, actions: bundle.actions, events: segmentBundle.events },
+        focusContext,
+        { originDate: state.segmentOrigin, targetDate: segmentTarget },
+      );
       const segmentVariables = {
         ...variables,
+        playerFocus: focusContext.focus,
+        playerFocusDirective: buildPlayerFocusDirective({
+          focus: focusContext.focus,
+          worldShare: direction?.worldShare,
+          material: playerMaterial,
+          playerName: focusContext.playerName,
+        }),
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
@@ -11781,11 +11922,22 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (worldDirection.js). Never a rejection, on any attempt: a lopsided
           // period is still a period, asking again is a whole second request, and
           // the simulator is told at the top of its next turn.
-          const playerName = normalizeString(bundle.game.country);
-          const shareShortfall = worldShareShortfall(candidate?.events, direction?.worldShare, {
-            playerNames: [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))],
+          // The player's focus outranks the author's world share (docs/adr/0003):
+          // when the two ask for more than the whole period, the world keeps what
+          // is left. Both are counted the same way — never a rejection, said at
+          // the top of the next turn.
+          const shares = combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare });
+          const shareShortfall = worldShareShortfall(candidate?.events, shares.world, {
+            playerNames: focusContext.playerNames,
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
+          const focusShortfall = playerFocusShortfall(candidate?.events, {
+            focus: focusContext.focus,
+            isPlayerEvent: focusContext.isPlayerEvent,
+            material: playerMaterial,
+            playerName: focusContext.playerName,
+          });
+          if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text);
           // Each segment is checked against ITS OWN span, so an event dated outside
           // the segment is caught while the model can still fix it rather than at the
           // end of the whole round.
@@ -12293,7 +12445,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
       taskKey: "projects",
       title: "the Projects board",
       instruction: `These events have just been simulated. Move the board to match them, and return `
-        + `{"projectOps":[]} if nothing on it genuinely moved.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
+        + `{"projectOps":[]} if nothing on it genuinely moved. Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
         + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }

@@ -563,10 +563,12 @@ const projectMilestoneSchema = {
     status: {
       type: "string",
       description:
-        "pending until reached; done once achieved; missed if its date passed unmet. "
+        "pending until reached; done once achieved; slipped if it is late but still coming "
+        + "(give it a new date); missed if it will never be reached. The engine marks a milestone "
+        + "slipped when its date passes with nothing said. "
         + "For a recurring checkpoint, send done each time it is performed - the engine "
         + "rolls it to the next occurrence and sets it pending again by itself.",
-      enum: ["pending", "done", "missed"],
+      enum: ["pending", "slipped", "done", "missed"],
     },
     repeat: {
       type: "string",
