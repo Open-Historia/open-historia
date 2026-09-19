@@ -284,6 +284,58 @@ test("a Connection edit is logged once it settles, and its key only as set or cl
   assert.ok(all.includes("gateway.local:8080"), "the endpoint by its host");
 });
 
+test("OpenCode Zen is a separate, key-required provider with free-only defaults", () => {
+  assert.equal(config.normalizeProvider("opencode-zen"), "opencode-zen");
+  assert.equal(config.getProviderMeta("opencode-zen").label, "OpenCode Zen");
+  assert.equal(config.providerSupportsModelDiscovery("opencode-zen"), true);
+  assert.equal(config.providerSetupRequirement("opencode-zen"), "apiKey");
+  const first = config.addConnection({ provider: "opencode-zen", apiKey: "test-only-key" });
+  const second = config.addConnection({ provider: "opencode-zen", apiKey: "other-test-key" });
+  const firstEntry = config.addEntry({ connectionId: first, model: "big-pickle" });
+  const secondEntry = config.addEntry({ connectionId: second, model: "deepseek-v4-flash" });
+  const entries = () => config.getResolvedFallbackList().filter((entry) => entry.provider === "opencode-zen");
+  assert.deepEqual(entries().map((entry) => entry.allowPaid), [false, false]);
+  config.updateConnection(first, { allowPaid: true, customParams: '{"top_p":0.9}' });
+  assert.deepEqual(entries().map((entry) => entry.allowPaid), [true, false]);
+  assert.deepEqual(entries().map((entry) => entry.apiKey), ["test-only-key", "other-test-key"]);
+  config.updateEntry(firstEntry, { structuredMode: "json_object" });
+  config.updateEntry(firstEntry, { model: "mimo-v2.5-free" });
+  assert.equal(entries()[0].structuredMode, "auto");
+  config.setTaskPick("advisor", secondEntry);
+  assert.equal(config.getTaskPick("advisor"), secondEntry);
+  assert.equal(entries()[1].allowPaid, false);
+  config.updateEntry(firstEntry, { customParamsOverride: '{"model":"deepseek-v4-flash"}' });
+  config.updateConnection(first, { allowPaid: false });
+  assert.equal(entries()[0].allowPaid, false);
+  assert.equal(entries()[0].customParams, '{"model":"deepseek-v4-flash"}');
+  // A provider switch cannot carry an earlier paid opt-in into a new Zen connection.
+  config.updateConnection(first, { provider: "gemini" });
+  config.updateConnection(first, { provider: "opencode-zen" });
+  assert.equal(entries()[0].allowPaid, false);
+});
+
+test("legacy Zen settings migrate once with paid opt-in, structured mode and task picks", () => {
+  for (const paid of [null, "", "1"]) {
+    store.clear();
+    store.set("api_provider", "opencode-zen");
+    store.set("opencode_zen_api_key", "test-only-key");
+    store.set("opencode_zen_model", "big-pickle");
+    store.set("opencode_zen_custom_params", '{"top_p":0.9}');
+    store.set("opencode_zen_structured_mode", "json_object");
+    store.set("opencode-zen_model_advisor", "mimo-v2.5-free");
+    if (paid !== null) store.set("opencode_zen_allow_paid", paid);
+    const list = config.getResolvedFallbackList();
+    assert.equal(list.length, 2);
+    assert.deepEqual(list.map((entry) => entry.model), ["big-pickle", "mimo-v2.5-free"]);
+    assert.ok(list.every((entry) => entry.allowPaid === (paid === "1")));
+    assert.equal(list[0].structuredMode, "json_object");
+    assert.equal(list[0].customParams, '{"top_p":0.9}');
+    assert.equal(config.getTaskPick("advisor"), list[1].id);
+    store.set("opencode_zen_allow_paid", paid === "1" ? "" : "1");
+    assert.deepEqual(config.getResolvedFallbackList(), list, "old settings stop controlling migrated entries");
+  }
+});
+
 test("recent models: newest first, no duplicates, capped at ten", () => {
   config.saveRecentModel("openai", "a");
   config.saveRecentModel("openai", "b");

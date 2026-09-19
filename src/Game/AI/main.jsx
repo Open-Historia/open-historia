@@ -10,6 +10,7 @@ import {
     saveRecentModel,
     updateEntry,
 } from "./providerConfig.js";
+import { OPENCODE_ZEN_ENDPOINT, pickZenFreeModel, validateZenModel, zenChatModels } from "./openCodeZen.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger } from "./requestBudget.js";
 import {
@@ -1160,6 +1161,7 @@ async function callOpenAIStyleChatCompletions({
     observerKey = "",
     maxTokens,
     tokenLimitField = "max_tokens",
+    fetchRequest = providerFetch,
     lookupTools,
     requireOutputTool = false,
 }) {
@@ -1234,7 +1236,7 @@ async function callOpenAIStyleChatCompletions({
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
-        const response = await providerFetch(`${normalizeEndpoint(endpoint)}/chat/completions`, {
+        const response = await fetchRequest(`${normalizeEndpoint(endpoint)}/chat/completions`, {
             headers,
             signal,
             payload: {
@@ -1606,6 +1608,73 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         observerKey: settings.id,
         tokenLimitField: "max_completion_tokens",
         ...rest,
+    });
+}
+
+// The public catalogue is not an authentication/balance check. Fetch it without
+// a key: merely looking at the available models must not expose a credential.
+export async function discoverOpenCodeZenModels({ signal } = {}) {
+    const response = await zenFetch(`${OPENCODE_ZEN_ENDPOINT}/models`, { method: "GET", signal });
+    if (!response.ok) {
+        const payload = await readErrorPayload(response);
+        throw providerFailureError(
+            extractErrorMessage(payload, "Could not load OpenCode Zen models. Try again later."),
+            classifyProviderFailure({ status: response.status, payload }),
+        );
+    }
+    return zenChatModels(await response.json());
+}
+
+async function zenFetch(url, options) {
+    try {
+        return await providerFetch(url, options);
+    } catch (error) {
+        if (!PAGE_IS_LOCAL && !options?.signal?.aborted && error instanceof TypeError) {
+            throw providerFailureError("OpenCode Zen could not be reached from this browser. Zen currently does not allow cross-origin browser requests (CORS). Use the Open Historia desktop app or your own local server; never paste your key into a public proxy.", { kind: "busy", reason: "could not be reached" });
+        }
+        throw error;
+    }
+}
+
+async function callOpenCodeZen(systemPrompt, history, opts = {}) {
+    const provider = "opencode-zen";
+    const { entrySettings: settings, ...rest } = opts;
+    const apiKey = settings.apiKey.trim();
+    if (!apiKey) throw missingSetupError("Open AI settings, select OpenCode Zen, and follow the setup steps to create and paste your API key.", "no API key");
+
+    const customParams = parseCustomParams(settings.customParams, "OpenCode Zen");
+    // Validate the EFFECTIVE model, including the escape hatch and task routing.
+    // Otherwise custom JSON could bypass the paid-model opt-in, while telemetry
+    // misleadingly named the free model in the ordinary settings field.
+    let model = customParams.model ?? String(settings.model ?? "").trim();
+    delete customParams.model;
+    if (!model) {
+        model = pickZenFreeModel(await discoverOpenCodeZenModels({ signal: opts.signal }));
+        if (!model) throw providerFailureError("No supported free OpenCode Zen model is currently listed. Choose a model in AI settings; no paid model was selected automatically.", { kind: "busy", reason: "no free Zen model is available" });
+    }
+    try {
+        model = validateZenModel(model, settings.allowPaid === true);
+    } catch (error) {
+        // A disallowed or unsupported model cannot answer until its entry or
+        // connection is edited. Let the fallback list try the next entry.
+        throw missingSetupError(error.message, error.message);
+    }
+    saveRecentModel(provider, model);
+    opts.onModel?.(model);
+
+    return callOpenAIStyleChatCompletions({
+        endpoint: OPENCODE_ZEN_ENDPOINT,
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        model,
+        systemPrompt,
+        history,
+        providerLabel: "OpenCode Zen",
+        customParams,
+        allowJsonSchemaFallback: true,
+        configuredStructuredMode: settings.structuredMode,
+        observerKey: settings.id,
+        ...rest,
+        fetchRequest: zenFetch,
     });
 }
 
@@ -2146,6 +2215,8 @@ function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
         return callAnthropicCompatible(systemPrompt, history, providerOpts);
     case "openai-compatible":
         return callOpenAICompatible(systemPrompt, history, providerOpts);
+    case "opencode-zen":
+        return callOpenCodeZen(systemPrompt, history, providerOpts);
     case "gemini":
     default:
         return callGemini(systemPrompt, history, providerOpts);

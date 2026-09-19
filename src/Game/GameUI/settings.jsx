@@ -33,6 +33,7 @@ import {
     updateConnection,
     updateEntry,
 } from "../AI/providerConfig.js";
+import { isZenFreeModel, OPENCODE_ZEN_ENDPOINT } from "../AI/openCodeZen.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
 import {
@@ -295,6 +296,10 @@ const Toggle = ({ label, enabled, onToggle }) => (
     >
     <span style={{ fontSize: "0.9rem" }}>{label}</span>
     <button
+    type="button"
+    role="switch"
+    aria-label={label}
+    aria-checked={Boolean(enabled)}
     onClick={onToggle}
     style={{
         width: "3.5rem",
@@ -512,11 +517,12 @@ const SettingsInput = ({
     const list = Array.isArray(suggestions) && suggestions.length ? suggestions : null;
     return (
         <div style={fieldGroupStyle}>
-        <label style={labelStyle}>
+        <label style={labelStyle} htmlFor={`${listId}-input`}>
         {label}
         </label>
         {multiline ? (
             <textarea
+            id={`${listId}-input`}
             rows={4}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -527,6 +533,7 @@ const SettingsInput = ({
             />
         ) : (
             <input
+            id={`${listId}-input`}
             type={type}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -657,6 +664,7 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
             />
         )}
+        {connection.provider === "opencode-zen" && <OpenCodeZenHelp connection={connection} />}
         <SettingsInput
         label={selfHosted ? "API key (optional)" : `${meta.label} API key`}
         type="password"
@@ -710,6 +718,9 @@ const EntryEditor = ({ entry, connections, entries }) => {
             </div>
         )}
         {connection && <ConnectionFields connection={connection} sharedBy={sharedBy} />}
+        {provider === "opencode-zen" && connection ? (
+            <OpenCodeZenModel key={entry.id + connection.id} entry={entry} connection={connection} recentModels={suggestions} />
+        ) : (
         <SettingsInput
         label="Model"
         value={entry.model}
@@ -720,6 +731,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
             ? "Leave blank to auto-pick a chat-capable model from the server's /models."
             : "Leave blank to use the built-in default."}
         />
+        )}
         <details style={{ marginBottom: "0.4rem" }}>
         <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem" }}>This model only</summary>
         <SettingsInput
@@ -976,6 +988,102 @@ const TaskPicks = () => {
             </div>
         )}
         </div>
+    );
+};
+
+// Setup and billing belong to the connection, shared by its fallback entries.
+const OpenCodeZenHelp = ({ connection }) => {
+    const allowPaid = connection.allowPaid === true;
+    const linkStyle = { color: "#93c5fd" };
+    return <>
+        <div style={{ ...helperStyle, marginTop: 0, marginBottom: "1rem", color: "rgba(255,255,255,0.8)" }}>
+        <strong>First time? Start here</strong>
+        <ol style={{ paddingLeft: "1.3rem", lineHeight: 1.65 }}>
+        <li>Open <a href="https://opencode.ai/auth" target="_blank" rel="noopener noreferrer" style={linkStyle}>OpenCode Zen</a> and sign in (or create an account).</li>
+        <li>In your OpenCode workspace, open <strong>API Keys</strong>, choose <strong>Create API Key</strong>, give it a name such as <strong>Open Historia</strong>, and create it.</li>
+        <li>Copy the entire secret key and paste it into <strong>OpenCode Zen API Key</strong> below. This is not your password or the key's name. Keep it private; do not put it in screenshots or bug reports.</li>
+        <li>Leave <strong>Enable paid Zen models</strong> off. Add this connection to the <strong>Fallback list</strong>, then click <strong>Load models</strong> in its entry and choose a free model, or leave Model blank to automatically try a currently listed free model.</li>
+        <li>Settings save automatically in this browser. Return to the game and send a short message to your advisor to test the key. Loading the model list alone does not test your key or balance.</li>
+        </ol>
+        <p><strong>Go is not Zen credit.</strong> An OpenCode account key used with Go may also work for Zen's free models, but the Go subscription does not cover paid Zen requests. You do not need to enable paid models here to try the free ones. To use paid models, check Zen Billing, add credit if needed, set a spending limit, then explicitly enable and select a paid model below.</p>
+        <p><strong>Use the desktop app or your own local server.</strong> Zen currently blocks cross-origin browser requests (CORS), so the hosted website may not connect. Never use a public proxy to work around this with your key.</p>
+        <p>Free availability and limits can change. Some free providers may use prompts and replies to improve their models: do not send personal or confidential information. Check <a href="https://opencode.ai/docs/zen/#pricing" target="_blank" rel="noopener noreferrer" style={linkStyle}>pricing</a> and <a href="https://opencode.ai/docs/zen/#privacy" target="_blank" rel="noopener noreferrer" style={linkStyle}>privacy terms</a>.</p>
+        </div>
+        <div style={{ ...helperStyle, marginBottom: "0.85rem", overflowWrap: "anywhere" }}>Fixed API address: {OPENCODE_ZEN_ENDPOINT} — not the /zen/go/v1 subscription endpoint.</div>
+        <Toggle
+        label="Enable paid Zen models"
+        enabled={allowPaid}
+        onToggle={() => updateConnection(connection.id, { allowPaid: !allowPaid })}
+        />
+        <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.85rem" }}>
+        Off by default. Turning this on allows explicitly selected paid models, including fallback entries and task picks, to spend Zen credit. Blank Model still auto-picks only a free model. Free labels follow Zen's model names and published offers, not a live price quote.
+        </div>
+        <details style={{ ...helperStyle, marginBottom: "0.85rem" }}>
+        <summary style={{ cursor: "pointer" }}>Not working? Quick fixes</summary>
+        <ul style={{ paddingLeft: "1.3rem", lineHeight: 1.65 }}>
+        <li><strong>Invalid API key:</strong> copy the full secret again. If it was revoked, create a new one. Never share it to get help.</li>
+        <li><strong>Insufficient balance:</strong> switch to a free model, or check Zen Billing. Paying for Go does not top up Zen.</li>
+        <li><strong>Rate limit / busy:</strong> wait and retry, or choose another free model. Free access is limited, not unlimited.</li>
+        <li><strong>Model not found / access denied:</strong> load the list again and check that the model is enabled in your OpenCode workspace.</li>
+        <li><strong>Failed to fetch / CORS:</strong> use the desktop app or your own local server; do not disable browser security or share your key with a proxy.</li>
+        </ul>
+        </details>
+    </>;
+};
+
+const OpenCodeZenModel = ({ entry, connection, recentModels }) => {
+    const [models, setModels] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const request = useRef(null);
+    useEffect(() => () => request.current?.abort(), []);
+    const allowPaid = connection.allowPaid === true;
+    const visibleModels = models.filter((model) => allowPaid || isZenFreeModel(model));
+
+    const loadModels = async () => {
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
+        setLoading(true);
+        setError("");
+        try {
+            const { discoverOpenCodeZenModels } = await import("../AI/main.jsx");
+            const available = await discoverOpenCodeZenModels({ signal: controller.signal });
+            if (controller.signal.aborted) return;
+            setModels(available);
+            if (!available.some(isZenFreeModel)) setError("No supported free model is currently listed. No paid model will be selected automatically.");
+        } catch (nextError) {
+            if (!controller.signal.aborted) setError(nextError.message);
+        } finally {
+            if (!controller.signal.aborted) setLoading(false);
+        }
+    };
+
+    return (
+        <>
+        <SettingsInput
+        label="Model"
+        value={entry.model}
+        onChange={(value) => updateEntry(entry.id, { model: value })}
+        suggestions={[...new Set([...visibleModels, ...recentModels.filter((model) => allowPaid || isZenFreeModel(model))])]}
+        placeholder="Leave blank to auto-pick a free model"
+        helperText="Supports Zen Chat Completions models such as Big Pickle, MiMo, DeepSeek, GLM, Kimi and MiniMax. Models requiring Responses, Claude/Qwen Messages or Gemini APIs are not supported here yet."
+        />
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.85rem" }}>
+        <button type="button" disabled={loading} onClick={loadModels} style={primaryButtonStyle}>{loading ? "Loading models…" : "Load models"}</button>
+        {visibleModels.length > 0 && (
+            <select aria-label="Choose an OpenCode Zen model" style={{ ...inputStyle, flex: 1, minWidth: "12rem" }} value="" onChange={(event) => updateEntry(entry.id, { model: event.target.value })}>
+            <option value="" disabled>Choose a model…</option>
+            {[false, true].filter((paid) => !paid || allowPaid).map((paid) => (
+                <optgroup key={String(paid)} label={paid ? "Paid — uses Zen credit" : "Free tier"}>
+                {visibleModels.filter((model) => isZenFreeModel(model) !== paid).map((model) => <option key={model} value={model}>{model}</option>)}
+                </optgroup>
+            ))}
+            </select>
+        )}
+        </div>
+        {error && <div role="alert" style={{ ...helperStyle, color: "#fca5a5", marginBottom: "0.85rem" }}>{error}</div>}
+        </>
     );
 };
 

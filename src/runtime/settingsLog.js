@@ -96,6 +96,7 @@ registerSettingsSnapshot("AI", () => {
         items.push(["Custom parameters", customParams ? `set (${customParams.length} characters)` : "none"]);
         items.push(["Structured output", entry.structuredMode || "auto"]);
         if (entry.provider === "openai-compatible") items.push(["Strict tool schema", onOff(entry.toolStrict)]);
+        if (entry.provider === "opencode-zen") items.push(["Enable paid Zen models", onOff(entry.allowPaid === true)]);
         items.push(["Status", describeStatus(entry)]);
     });
     items.push(["When a model is rate limited", getRateLimitPolicy() === "next" ? "try the next one" : "wait"]);

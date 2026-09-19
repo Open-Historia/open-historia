@@ -62,12 +62,19 @@ Defined in `PROVIDER_OPTIONS` at `src/Game/AI/providerConfig.js`. Which provider
 | `anthropic` | Anthropic | Native APIs | `callAnthropic` (`main.jsx`) | `https://api.anthropic.com/v1` | **direct only** (`fetch`, browser‑access opt‑in header) | no |
 | `openai-compatible` | OpenAI Compatible | Gateways & self‑hosted | `callOpenAICompatible` (`main.jsx`) | user `endpoint` (default `http://localhost:11434/v1`) | `providerFetch` | yes |
 | `anthropic-compatible` | Anthropic Compatible | Gateways & self‑hosted | `callAnthropicCompatible` (`main.jsx`) | user `endpoint` | `providerFetch` | no |
+| `opencode-zen` | OpenCode Zen | Gateways & self-hosted | `callOpenCodeZen` → `callOpenAIStyleChatCompletions` | fixed `https://opencode.ai/zen/v1` | `providerFetch` via `zenFetch` (actionable CORS error on hosted pages) | public catalogue, Chat Completions families only; free-only auto-pick |
 
 `callAI` (`main.jsx`) runs every call through the Fallback list (`runWithFallback`, `fallbackRunner.js`), and `dispatchToProvider` switches on each tried entry's provider; `gemini` is the `default` branch. Before dispatch it appends a language directive (`languageDirective()`, [i18n](i18n.md)) so replies come back in the player's language at the source.
 
 "OpenAI Compatible" is the catch‑all for Ollama, LM Studio, OpenRouter, vLLM, and other gateways speaking `/chat/completions`. "Anthropic Compatible" is a self‑hosted proxy speaking the Anthropic Messages API. Both share their native sibling's caller body but read a different settings namespace and are relay‑capable.
 
 ---
+
+### OpenCode Zen setup
+
+See **[OpenCode Zen: first-time setup](opencode-zen.md)** for key creation, the difference between Go and Zen billing, free-model selection, privacy and troubleshooting (also summarized in Russian). The same beginner steps are visible when editing a Zen Connection in Settings → AI.
+
+The Zen adapter intentionally supports only documented **Chat Completions** families, not every protocol returned by Zen's catalogue. Paid models require an explicit opt-in on the Connection (`allowPaid: true`), checked against the effective model including task picks and custom-JSON overrides. A blank model always discovers a free model; discovery does not persist a potentially temporary free offer as the default. Missing keys and disallowed models mark the entry Unusable; catalogue outages or an empty free catalogue let the Fallback list try another configured entry. `openCodeZen.js` owns catalogue filtering and the paid-model guard. Zen currently lacks browser CORS support; local installs use the existing local relay, while the hosted website gets instructions to use the desktop app rather than handing a key to a hosted proxy.
 
 ## Configuration & storage keys
 
@@ -85,8 +92,10 @@ All AI config lives in **browser `localStorage`** — never on a server — as *
 
 Notes:
 - **Migration** runs on the first read of the list, wherever that is (the harness reads it with no UI): every provider with a key or endpoint, and every profile under `ai_provider_presets`, becomes a Connection; the old active provider (`api_provider`) and its model become entry #1; the active provider's per-task models (`<provider>_model_<taskKey>`) become entries at the bottom, with picks pointing at them. The old per-provider keys (`gemini_api_key`, `openai_compatible_endpoint`, the legacy `custom_api_*`…) are left in storage and never read again.
-- **`structuredMode` lives on the entry** and is only READ by three providers — `openai`, `openai-compatible` and `anthropic-compatible`, whose callers walk the ladder. Changing an entry's model resets it to `auto` (`updateEntry`).
+- **`structuredMode` lives on the entry** and is only READ by four providers — `openai`, `openai-compatible`, `anthropic-compatible` and `opencode-zen`, whose callers walk the ladder. Changing an entry's model resets it to `auto` (`updateEntry`).
 - **Default model constants** live in `main.jsx`: `GEMINI_DEFAULT_MODEL`, `ANTHROPIC_DEFAULT_MODEL`, used as `resolveModel` fallbacks for an entry with a blank model. A blank model on a provider with discovery asks the server's `/models` once per entry per session and never writes the answer back.
+
+Zen Connections also store `allowPaid` (false by default), passed to every resolved entry. Migration preserves the old `opencode_zen_allow_paid` opt-in. Blank Zen models use only the supported free catalogue; explicit models, including custom-parameter overrides and task picks, are checked against that Connection's opt-in before a request.
 
 ### The Fallback list
 
@@ -172,7 +181,7 @@ The whole security model is in the comment block at `main.jsx`. AI calls go **st
 - **`PAGE_IS_LOCAL`** (`main.jsx`, from `isLocallyServed()`): true when the page is served from a machine the player controls — `localhost`/`127.0.0.1`/`::1`/`*.local` or the LAN private ranges `10.*`, `192.168.*`, `172.16–31.*`. The LAN ranges cover the Android client, which loads the UI from a local server on the home network.
 - **`providerFetch(url, options)`** (`main.jsx`): tries `directFetch`; on a CORS/network `TypeError` (not an abort) **and** only when `PAGE_IS_LOCAL`, it remembers the origin in `relayOnlyOrigins` and retries through the same‑origin `/api/ai/relay` (`relayFetch`, `main.jsx`). A remembered origin skips the doomed direct attempt on later calls.
 - On a **hosted website** there is no relay: every call is direct‑only and the key is never handed to anything but the provider. If a hosted page tries to reach a **local** backend (Ollama/LM Studio) and the browser rejects it, `providerFetch` throws an actionable error telling the user to set `OLLAMA_ORIGINS`/enable CORS (`main.jsx`).
-- **Who uses the relay**: only the `providerFetch` callers — `openai`, `openai-compatible`, `anthropic-compatible`, and model discovery (`GET /models`). **Native Gemini and native Anthropic bypass `providerFetch` entirely** (plain `fetch`), because both explicitly allow browser calls (Anthropic via the `anthropic-dangerous-direct-browser-access: true` header, `main.jsx`). They are therefore always direct, relay or not.
+- **Who uses the relay**: only the `providerFetch` callers — `openai`, `openai-compatible`, `anthropic-compatible`, `opencode-zen`, and model discovery (`GET /models`). **Native Gemini and native Anthropic bypass `providerFetch` entirely** (plain `fetch`), because both explicitly allow browser calls (Anthropic via the `anthropic-dangerous-direct-browser-access: true` header, `main.jsx`). They are therefore always direct, relay or not.
 
 `isLocalEndpoint(url)` (`main.jsx`) is the per‑endpoint sibling of `PAGE_IS_LOCAL`; it also gates local streaming (below).
 
@@ -219,7 +228,7 @@ Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` —
 
 ## Transport internals per provider
 
-`callAI` (`main.jsx`) → one of five callers. Shared retry/abort machinery:
+`callAI` (`main.jsx`) → one of six callers. Shared retry/abort machinery:
 
 - **Retries**: `retries = 3`, `retryDelay = 15000` ms. Retried on `429`/`503` (Gemini treats `429` as fatal "quota exhausted", `main.jsx`). Guarded by `canRetryBeforeDeadline(deadline, retryDelay)` (`main.jsx`) so a retry that would overrun the deadline is not attempted.
 - **Abort**: an `AbortSignal` (`signal`) propagates from `runJsonTask`'s controller through the caller to `fetch`/relay. An `AbortError` never triggers the relay fallback and never falls back to canned events (see [Cancellation](#cancellation--timeouts)).

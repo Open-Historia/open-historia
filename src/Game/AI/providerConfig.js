@@ -28,6 +28,13 @@ export const PROVIDER_OPTIONS = [
         searchTerms: ["claude", "haiku", "sonnet", "opus"],
     },
     {
+        value: "opencode-zen",
+        label: "OpenCode Zen",
+        group: "Gateways and self-hosted",
+        description: "Zen free and paid Chat Completions models (separate from Go)",
+        searchTerms: ["opencode", "zen", "free", "big pickle", "mimo", "deepseek", "glm", "kimi", "minimax"],
+    },
+    {
         value: "openai-compatible",
         label: "OpenAI Compatible",
         group: "Gateways and self-hosted",
@@ -44,6 +51,13 @@ export const PROVIDER_OPTIONS = [
 ];
 
 const PROVIDER_SETTINGS = {
+    "opencode-zen": {
+        apiKey: { storageKey: "opencode_zen_api_key", defaultValue: "" },
+        model: { storageKey: "opencode_zen_model", defaultValue: "" },
+        customParams: { storageKey: "opencode_zen_custom_params", defaultValue: "" },
+        structuredMode: { storageKey: "opencode_zen_structured_mode", defaultValue: "auto" },
+        allowPaid: { storageKey: "opencode_zen_allow_paid", defaultValue: "" },
+    },
     gemini: {
         apiKey: { storageKey: "gemini_api_key", defaultValue: "" },
         model: { storageKey: "gemini_model", defaultValue: "gemini-3.5-flash-lite" },
@@ -151,7 +165,7 @@ export function getProviderMeta(provider) {
 
 export function providerSupportsModelDiscovery(provider) {
     const normalized = normalizeProvider(provider);
-    return normalized === "openai" || normalized === "openai-compatible";
+    return normalized === "openai" || normalized === "openai-compatible" || normalized === "opencode-zen";
 }
 
 function getProviderField(provider, field) {
@@ -322,6 +336,7 @@ const normalizeConnection = (connection) => ({
     endpoint: String(connection?.endpoint ?? ""),
     customParams: String(connection?.customParams ?? ""),
     toolStrict: connection?.toolStrict === true,
+    ...(normalizeProvider(connection?.provider) === "opencode-zen" ? { allowPaid: connection?.allowPaid === true } : {}),
     suggestedModel: String(connection?.suggestedModel ?? ""),
 });
 
@@ -365,6 +380,7 @@ function migrateFromProviderSettings() {
             endpoint: endpoint || (provider === active ? getProviderField(provider, "endpoint") : ""),
             customParams: storedOldValue(old.customParams) ?? "",
             toolStrict: storedOldValue(old.toolStrict) === "1",
+            allowPaid: storedOldValue(old.allowPaid) === "1",
         });
         connections.push(connection);
         connectionFor[provider] = connection.id;
@@ -454,6 +470,7 @@ const resolveEntry = (entry, connectionsById) => {
         customParams: entry.customParamsOverride.trim() ? entry.customParamsOverride : connection.customParams,
         structuredMode: entry.structuredMode,
         toolStrict: connection.toolStrict,
+        ...(connection.provider === "opencode-zen" ? { allowPaid: connection.allowPaid === true } : {}),
         label: describeEntry(model, connectionDisplayName(connection)),
     };
 };
@@ -640,6 +657,7 @@ export function resetEntryState(id) {
 // --- Editing ---
 
 const CONNECTION_EDIT_LOG = {
+    allowPaid: (connection) => `paid Zen models turned ${connection.allowPaid ? "on" : "off"}`,
     name: (connection) => `renamed "${connectionDisplayName(connection)}"`,
     apiKey: (connection) => `key ${connection.apiKey.trim() ? "set" : "cleared"}`,
     endpoint: (connection) => `endpoint set to ${endpointHostForLog(connection.endpoint)}`,
