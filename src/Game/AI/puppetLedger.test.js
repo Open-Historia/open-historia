@@ -465,9 +465,17 @@ test("a change that cannot apply says why", () => {
   assert.match(dropped[0].reason, /Poland is already the satellite of USSR/);
 });
 
-test("a change naming a country the world does not know says so", () => {
+test("a change naming a country the world does not know says WHICH one", () => {
+  // A GM named "Republic of Ireland" for a country the player had annexed, and
+  // was told only that the pair were not two countries this world knows.
   const { dropped } = apply(baseWorld, "install~USSR~Atlantis~client~50~covert~1~Nowhere");
-  assert.match(dropped[0].reason, /not two different countries this world knows/);
+  assert.match(dropped[0].reason, /"Atlantis" is not a country this world knows/);
+  assert.doesNotMatch(dropped[0].reason, /"USSR"/, "and does not blame the one it does know");
+});
+
+test("a country made its own puppet is told so plainly", () => {
+  const { dropped } = apply(baseWorld, "install~USSR~USSR~client~50~open~1~Itself");
+  assert.match(dropped[0].reason, /cannot be its own puppet/);
 });
 
 test("a change that applies reports nothing dropped", () => {

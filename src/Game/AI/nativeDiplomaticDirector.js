@@ -1503,7 +1503,17 @@ export const applyPuppetUpdates = ({
       ? heldOverlord.overlord
       : namedOverlord;
     if (!overlord || !puppet || lower(overlord) === lower(puppet)) {
-      drop(index, update, `${update.op}: "${update.overlord}" and "${update.puppet}" are not two different countries this world knows.`);
+      // Say WHICH name is the problem. A GM that named "Republic of Ireland" for a
+      // country the player had already annexed was told only that the two were
+      // "not two different countries this world knows" — true, and no help to a
+      // retry or a player trying to see what went wrong.
+      const unknown = [
+        !namedOverlord ? `"${update.overlord}"` : "",
+        !puppet ? `"${update.puppet}"` : "",
+      ].filter(Boolean);
+      drop(index, update, unknown.length
+        ? `${update.op}: ${unknown.join(" and ")} ${unknown.length === 1 ? "is not a country" : "are not countries"} this world knows — ${unknown.length === 1 ? "it may have been annexed, renamed, or never existed" : "they may have been annexed, renamed, or never existed"}. Use the name the world uses now.`
+        : `${update.op}: "${update.overlord}" cannot be its own puppet.`);
       continue;
     }
 
