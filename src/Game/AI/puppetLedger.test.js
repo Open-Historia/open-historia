@@ -483,3 +483,56 @@ test("a change that applies reports nothing dropped", () => {
   assert.equal(appliedIds.length, 1);
   assert.deepEqual(dropped, []);
 });
+
+// A Puppet keeps its own land; that is what makes it a Puppet and not a
+// province. A player who had annexed Ireland asked the GM to make it a
+// protectorate and got one: a subordinate state with no state left.
+const annexedWorld = {
+  polityOverrides: {},
+  // Ireland's only region has been annexed; France and Britain hold theirs
+  // through the stock map's baked owner, with no override at all.
+  regionOwnershipOverrides: { "IRL.1_1": "United Kingdom" },
+  relations: [],
+  agreements: [],
+  puppets: [],
+};
+const catalog = [
+  { id: "IRL.1_1", country: "Ireland", countryCode: "IRL" },
+  { id: "GBR.1_1", country: "United Kingdom", countryCode: "GBR" },
+  { id: "FRA.1_1", country: "France", countryCode: "FRA" },
+  { id: "POL.1_1", country: "Poland", countryCode: "POL" },
+];
+const applyOnMap = (world, lines, regionCatalog = catalog) => applyPuppetUpdates({
+  world,
+  updates: lines,
+  events: events(),
+  stopDate: "1945-06-28",
+  round: 1,
+  regionCatalog,
+});
+
+test("a country that holds no land cannot be made a puppet", () => {
+  const { world, dropped } = applyOnMap(annexedWorld, "install~United Kingdom~Ireland~protectorate~50~open~1~Dublin answers to London");
+  assert.deepEqual(world.puppets, []);
+  assert.match(dropped[0].reason, /Ireland holds no territory/);
+});
+
+test("a country that still holds its stock land can be made a puppet", () => {
+  const { appliedIds } = applyOnMap(annexedWorld, "install~United Kingdom~France~client~50~covert~1~Paris leans on London");
+  assert.equal(appliedIds.length, 1);
+});
+
+test("an occupied country is still a country: lawful sovereignty counts as land", () => {
+  const occupied = {
+    ...annexedWorld,
+    regionOwnershipOverrides: { "POL.1_1": "Germany" },
+    regionSovereigntyOverrides: { "POL.1_1": "Poland" },
+  };
+  const { appliedIds } = applyOnMap(occupied, "install~Germany~Poland~satellite~30~open~1~A government under occupation");
+  assert.equal(appliedIds.length, 1);
+});
+
+test("with no region list to consult, land is not checked", () => {
+  const { appliedIds } = applyOnMap(annexedWorld, "install~United Kingdom~Ireland~protectorate~50~open~1~Unknown map", []);
+  assert.equal(appliedIds.length, 1);
+});

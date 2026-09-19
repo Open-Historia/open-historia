@@ -1455,6 +1455,29 @@ const applyRevoltFallout = (world, overlord, puppet, causalEventIds, events, dat
   return { ...merged.world, agreements };
 };
 
+// Which polities still hold land. A Puppet keeps its own territory — that is
+// what makes it a Puppet and not a province — so a country with none left (an
+// annexed Ireland) has no state to subordinate. A region counts for whoever
+// administers it and for its lawful sovereign, so an occupied homeland is still
+// a homeland; a stock region nobody has overridden belongs to its map country.
+// With no region list to consult it cannot tell, so it answers null and nothing
+// is refused on its account.
+export const landedPolityCheck = (world, regionCatalog) => {
+  const regions = array(regionCatalog);
+  if (!regions.length) return null;
+  const control = world?.regionOwnershipOverrides || {};
+  const sovereignty = world?.regionSovereigntyOverrides || {};
+  const holders = new Set([...Object.values(control), ...Object.values(sovereignty)].map(clean));
+  for (const region of regions) {
+    if (clean(control[region?.id])) continue;
+    holders.add(clean(region?.country) || clean(toCountryName(clean(region?.countryCode))));
+  }
+  const landed = new Set([...holders]
+    .filter(Boolean)
+    .map((name) => lower(canonicalDiplomaticPolity(name, world, { allowUnknown: true }))));
+  return (polity) => landed.has(lower(polity));
+};
+
 export const applyPuppetUpdates = ({
   world,
   updates,
@@ -1463,8 +1486,10 @@ export const applyPuppetUpdates = ({
   round = 0,
   allowUnboundBaseline = false,
   refusedDemands = [],
+  regionCatalog = [],
 } = {}) => {
   let nextWorld = normalizeWorldState(world);
+  const holdsLand = landedPolityCheck(nextWorld, regionCatalog);
   let rows = array(nextWorld.puppets).map((row) => ({ ...row }));
   const decoded = bindPuppetUpdatesToEvents(updates, events);
   const applied = [];
@@ -1522,6 +1547,10 @@ export const applyPuppetUpdates = ({
     const existing = livePuppetRow(rows, overlord, puppet);
 
     if (update.op === "install") {
+      if (holdsLand && !holdsLand(puppet)) {
+        drop(index, update, `install: ${puppet} holds no territory — it has been annexed or has lost all its land, so there is no state left to make a puppet. A puppet keeps its own land; restore some first if that is the story.`);
+        continue;
+      }
       // One Overlord per Puppet. A condominium is a curiosity this deliberately
       // does not model, so a second claimant loses to the one in possession.
       const heldByAnother = livePuppetByPuppet(rows, puppet);
@@ -1775,6 +1804,7 @@ export const applyDiplomaticUpdates = ({
   stopDate = "",
   round = 0,
   allowUnboundBaseline = false,
+  regionCatalog = [],
 } = {}) => {
   const relationMerge = applyRelationUpdates({
     world,
@@ -1798,6 +1828,7 @@ export const applyDiplomaticUpdates = ({
     world: agreementMerge.world,
     updates: puppetUpdates,
     refusedDemands,
+    regionCatalog,
     events,
     stopDate,
     round,

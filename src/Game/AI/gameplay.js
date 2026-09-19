@@ -1066,6 +1066,13 @@ const selectBreadthRepairContext = (state, context) => {
   };
 };
 
+// The map's regions, for the one question a subordination needs of them: does
+// the would-be Puppet still hold land (landedPolityCheck). Loaded only when
+// there is a subordination to check.
+const regionCatalogForPuppets = async (puppetUpdates, world) => (normalizeArray(puppetUpdates).length
+  ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world)
+  : []);
+
 // The world a later segment is validated against and shown: the base world plus
 // the war, diplomacy and storyline records of the segments already in hand. No impacts are
 // applied here - the round's events are applied once, at the end.
@@ -6839,6 +6846,7 @@ const applySimulationResult = async ({
     agreementUpdates,
     puppetUpdates,
     refusedDemands,
+    regionCatalog: await regionCatalogForPuppets(puppetUpdates, worldWithImpacts),
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
@@ -13430,6 +13438,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
     const trial = applyPuppetUpdates({
       world,
       updates: puppetUpdates,
+      regionCatalog: await regionCatalogForPuppets(puppetUpdates, world),
       events: normalizedEvents,
       stopDate: normalizeString(game?.gameDate || game?.startDate),
       round: Number(game?.round) || 0,
@@ -13948,6 +13957,7 @@ export const applyGameMasterPreview = async (preview) => {
           relationUpdates: relationUpdatesForApply,
           agreementUpdates: agreementUpdatesForApply,
           puppetUpdates: puppetUpdatesForApply,
+          regionCatalog: await regionCatalogForPuppets(puppetUpdatesForApply, nextWorld),
           events,
           stopDate: bundle.game.gameDate || bundle.game.startDate || "",
           round: bundle.game.round || 0,
