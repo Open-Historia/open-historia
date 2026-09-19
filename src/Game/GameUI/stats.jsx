@@ -14,6 +14,7 @@ import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { setRegionClickObserver } from "../Selection/Regions.jsx";
 import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
+import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
@@ -2013,6 +2014,7 @@ const StatsPaneBody = ({ active }) => {
                     fallbackGovernment={headerSheet?.government || ""}
                     fallbackLeader={headerSheet?.leader || ""}
                     intelligence={currentPoliticalKnowledge?.intelligence || null}
+                    institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
                 />
             )}
 

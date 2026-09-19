@@ -5,6 +5,7 @@
 import {
   applyInstitutionCharterResolution,
   applyInstitutionMembershipResolution,
+  applyInstitutionStatusResolution,
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
   normalizeInstitutionProposal,
@@ -541,6 +542,29 @@ export const closeInstitutionProposalVoting = ({
   proposal.voting.outcome = outcome;
   proposal.lastUpdatedDate = clean(date) || proposal.lastUpdatedDate || "";
   institution.proposals = { ...proposalMap(institution), [proposal.id]: normalizeInstitutionProposal(proposal, proposal.id, world) };
+
+  // Lifecycle proposals must close their canonical lifecycle case even when
+  // the institution rejects/vetoes the proposal. Passed proposals resolve
+  // during implementation so the actual membership/status consequence stays
+  // authoritative; failed/vetoed proposals terminate the pending case here.
+  if (!["passed", "implementation"].includes(lower(outcome.status))) {
+    const lifecycleCase = Object.values(institution.lifecycleCases || {})
+      .find((entry) => clean(entry?.proposalId) === clean(proposal.id));
+    if (lifecycleCase) {
+      institution.lifecycleCases = {
+        ...(institution.lifecycleCases || {}),
+        [lifecycleCase.id]: {
+          ...lifecycleCase,
+          status: "rejected",
+          decision: lifecycleCase.decision || "reject",
+          resolvedDate: clean(date),
+          updatedDate: clean(date),
+          reason: lifecycleCase.reason || clean(outcome.reason),
+        },
+      };
+    }
+  }
+
   commitInstitution(world, institutions, institution);
   return { world, institution, proposal: institution.proposals[proposal.id], outcome };
 };
@@ -638,6 +662,16 @@ export const implementInstitutionProposal = ({
         charterPatch: consequence.charterPatch || consequence.patch || {},
         date,
         sourceProposalId: proposal.id,
+      });
+    }
+    else if (["institution-status", "status"].includes(kind)) {
+      result = applyInstitutionStatusResolution({
+        world,
+        institutionId: consequence.institutionId || institutionId,
+        status: consequence.status,
+        date,
+        sourceProposalId: proposal.id,
+        note: consequence.note || proposal.title,
       });
     }
 

@@ -181,8 +181,33 @@ export const buildInstitutionDiplomacyView = ({ world = {}, institutionId = "", 
 export const buildPublicInstitutionDiplomacyView = ({ world = {}, institutionId = "", playerCountry = "" } = {}) => {
   const view = buildInstitutionDiplomacyView({ world, institutionId, playerCountry });
   if (!view) return null;
+  const publicHistoryActions = new Set([
+    "founded", "activated", "reactivated", "joined", "observer", "associate",
+    "left", "withdrawn", "expelled", "suspended", "reinstated", "dissolved",
+  ]);
+  // A non-member can inspect public institutional history, but pending accession
+  // negotiations, invitations, counterterms and their private rationale remain
+  // member/participant knowledge. Public history is deliberately reason-light: the
+  // visible fact of joining/leaving is canon; private diplomatic reasoning is not.
+  const publicInstitution = {
+    ...view.institution,
+    lifecycleCases: {},
+    membershipHistory: list(view.institution?.membershipHistory)
+      .filter((entry) => publicHistoryActions.has(lower(entry?.action)))
+      .map((entry) => ({
+        id: clean(entry?.id),
+        action: lower(entry?.action),
+        polity: clean(entry?.polity),
+        actor: clean(entry?.actor),
+        date: clean(entry?.date),
+        status: clean(entry?.status),
+        role: clean(entry?.role),
+        sourceProposalId: clean(entry?.sourceProposalId),
+      })),
+  };
   return {
     ...view,
+    institution: publicInstitution,
     canParticipate: false,
     canTableProposal: false,
     proposals: [],

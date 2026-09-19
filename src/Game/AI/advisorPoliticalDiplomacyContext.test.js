@@ -72,3 +72,20 @@ test("advisor context cannot convert PWv2 preferences into sovereign consent", (
   assert.match(built.text, /do not convert preferences into sovereign consent/i);
   assert.match(built.text, /Those remain explicit player\/native actions/);
 });
+
+test("Advisor receives pending institution lifecycle without gaining player authority", () => {
+  const result = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionViews: [],
+    institutionLifecycleCases: [{
+      institution: { id: "baltic-union", name: "Baltic Union" },
+      case: { id: "case-1", kind: "founding-invitation", status: "pending", requestedStatus: "member", reason: "Founding invitation" },
+    }],
+  });
+  assert.match(result.text, /Pending institution lifecycle:/);
+  assert.match(result.text, /Baltic Union \[baltic-union\]/);
+  assert.match(result.text, /founding-invitation \/ pending/);
+  assert.match(result.text, /may NOT silently cast the player's vote, accept an amendment, found\/join\/leave an institution, accept an invitation/);
+  assert.deepEqual(result.institutionIds, ["baltic-union"]);
+});

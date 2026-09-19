@@ -241,6 +241,14 @@ export const validateInstitutionTemporalBaseline = ({
   return { valid: true, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "" };
 };
 
+export const INSTITUTION_STATUSES = Object.freeze([
+  "provisional",
+  "active",
+  "dormant",
+  "dissolved",
+]);
+const INSTITUTION_STATUS_SET = new Set(INSTITUTION_STATUSES);
+
 export const INSTITUTION_KINDS = Object.freeze([
   "security_alliance",
   "defense_pact",
@@ -269,6 +277,39 @@ export const INSTITUTION_MEMBER_ROLES = Object.freeze([
   "member",
 ]);
 const MEMBER_ROLE_SET = new Set(INSTITUTION_MEMBER_ROLES);
+
+export const INSTITUTION_LIFECYCLE_CASE_KINDS = Object.freeze([
+  "founding-invitation",
+  "invitation",
+  "application",
+  "withdrawal",
+  "expulsion",
+  "suspension",
+  "reinstate",
+  "dissolution",
+]);
+const LIFECYCLE_CASE_KIND_SET = new Set(INSTITUTION_LIFECYCLE_CASE_KINDS);
+
+export const INSTITUTION_LIFECYCLE_CASE_STATUSES = Object.freeze([
+  "pending",
+  "negotiating",
+  "pending-approval",
+  "accepted",
+  "rejected",
+  "withdrawn",
+  "resolved",
+  "expired",
+]);
+const LIFECYCLE_CASE_STATUS_SET = new Set(INSTITUTION_LIFECYCLE_CASE_STATUSES);
+
+export const INSTITUTION_LIFECYCLE_DECISIONS = Object.freeze([
+  "accept",
+  "reject",
+  "seek-observer",
+  "request-terms",
+  "delay",
+]);
+const LIFECYCLE_DECISION_SET = new Set(INSTITUTION_LIFECYCLE_DECISIONS);
 
 export const INSTITUTION_VOTING_RULE_TYPES = Object.freeze([
   "unspecified",
@@ -312,6 +353,7 @@ export const INSTITUTION_CONSEQUENCE_KINDS = Object.freeze([
   "agreement",
   "institution-membership",
   "institution-charter",
+  "institution-status",
   "shared-project",
   "deployment-authorization",
   "sanctions-authorization",
@@ -327,6 +369,8 @@ const CONSEQUENCE_KIND_ALIASES = Object.freeze({
   "institution-membership": "institution-membership",
   charter: "institution-charter",
   "institution-charter": "institution-charter",
+  status: "institution-status",
+  "institution-status": "institution-status",
   project: "shared-project",
   "institution-project": "shared-project",
   "shared-project": "shared-project",
@@ -410,6 +454,10 @@ export const normalizeInstitutionProposalConsequence = (value = {}, index = 0, w
   if (kind === "institution-charter") {
     const patch = value.charterPatch || value.patch || value.payload || {};
     return { ...base, institutionId: slug(value.institutionId), charterPatch: boundedPlainObject(patch, { maxKeys: 12, maxString: 800, maxArray: 24 }) };
+  }
+  if (kind === "institution-status") {
+    const status = lower(value.status);
+    return { ...base, institutionId: slug(value.institutionId), status: INSTITUTION_STATUS_SET.has(status) ? status : clean(value.status) };
   }
   if (kind === "agreement") {
     const source = value.payload && typeof value.payload === "object" && !Array.isArray(value.payload) ? { ...value, ...value.payload } : value;
@@ -543,6 +591,129 @@ export const normalizeInstitutionVotingRule = (value = {}, world = {}, identityI
   };
 };
 
+const normalizeInstitutionLifecycleRule = (value = {}, { defaultMode = "approval", defaultStatuses = ["member"] } = {}) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const modeRaw = lower(source.mode || source.type || defaultMode).replace(/[\s_]+/g, "-");
+  const modeAliases = {
+    vote: "approval",
+    ballot: "approval",
+    direct: "direct",
+    unilateral: "unilateral",
+    notice: "notice",
+    "notice-required": "notice",
+    forbidden: "not-permitted",
+    closed: "not-permitted",
+  };
+  const mode = ["approval", "direct", "unilateral", "notice", "not-permitted"].includes(modeRaw)
+    ? modeRaw
+    : (modeAliases[modeRaw] || defaultMode);
+  const statuses = unique(source.allowedStatuses?.length ? source.allowedStatuses : defaultStatuses, 12)
+    .map(lower)
+    .filter((status) => MEMBER_STATUS_SET.has(status) && status !== "suspended");
+  const noticeDays = Number(source.noticeDays ?? source.noticePeriodDays ?? 0);
+  return {
+    mode,
+    allowedStatuses: statuses.length ? statuses : [...defaultStatuses],
+    noticeDays: Number.isFinite(noticeDays) ? Math.max(0, Math.min(3650, Math.trunc(noticeDays))) : 0,
+    note: clean(source.note || source.summary).slice(0, 800),
+  };
+};
+
+export const normalizeInstitutionLifecycleRules = (value = {}, world = {}, identityIndex = null) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const identitySource = source.identity && typeof source.identity === "object" && !Array.isArray(source.identity) ? source.identity : {};
+  const minimum = Number(source.minimumFoundingMembers ?? source.minimumMembers ?? 1);
+  return {
+    minimumFoundingMembers: Number.isFinite(minimum) ? Math.max(1, Math.min(64, Math.trunc(minimum))) : 1,
+    purpose: unique(source.purpose || source.purposes, 16).slice(0, 16),
+    identity: {
+      geographicScope: unique(identitySource.geographicScope || source.geographicScope, 24),
+      politicalCharacter: clean(identitySource.politicalCharacter || source.politicalCharacter).slice(0, 500),
+      primaryThreatModel: unique(identitySource.primaryThreatModel || source.primaryThreatModel, 24),
+    },
+    accession: normalizeInstitutionLifecycleRule(source.accession, { defaultMode: "approval", defaultStatuses: ["member", "observer"] }),
+    withdrawal: normalizeInstitutionLifecycleRule(source.withdrawal, { defaultMode: "unilateral", defaultStatuses: ["member"] }),
+    expulsion: normalizeInstitutionLifecycleRule(source.expulsion, { defaultMode: "approval", defaultStatuses: ["member"] }),
+    dissolution: normalizeInstitutionLifecycleRule(source.dissolution, { defaultMode: "approval", defaultStatuses: ["member"] }),
+    approvalRule: normalizeInstitutionVotingRule(source.approvalRule || source.membershipVotingRule || {}, world, identityIndex),
+    note: clean(source.note).slice(0, 1200),
+  };
+};
+
+export const normalizeInstitutionLifecycleCase = (value = {}, fallbackId = "", world = {}, identityIndex = null) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const id = slug(value.id || fallbackId || `${value.kind || "case"}-${value.polity || value.targetPolity || "polity"}-${value.createdDate || "date"}`);
+  const kind = lower(value.kind || value.type).replace(/[\s_]+/g, "-");
+  const status = lower(value.status || "pending").replace(/[\s_]+/g, "-");
+  const decision = lower(value.decision || value.response).replace(/[\s_]+/g, "-");
+  const polity = canonicalPolity(value.polity || value.targetPolity || value.applicant || value.member, world, identityIndex);
+  const initiatedBy = canonicalPolity(value.initiatedBy || value.invitedBy || value.requestedBy || value.proposer, world, identityIndex);
+  if (!id || !LIFECYCLE_CASE_KIND_SET.has(kind)) return null;
+  return {
+    id,
+    kind,
+    status: LIFECYCLE_CASE_STATUS_SET.has(status) ? status : "pending",
+    polity,
+    initiatedBy,
+    requestedStatus: MEMBER_STATUS_SET.has(lower(value.requestedStatus || value.memberStatus)) ? lower(value.requestedStatus || value.memberStatus) : "member",
+    decision: LIFECYCLE_DECISION_SET.has(decision) ? decision : "",
+    createdDate: clean(value.createdDate || value.date),
+    updatedDate: clean(value.updatedDate || value.resolvedDate || value.createdDate || value.date),
+    resolvedDate: clean(value.resolvedDate),
+    effectiveDate: clean(value.effectiveDate),
+    proposalId: slug(value.proposalId),
+    chatId: clean(value.chatId).slice(0, 160),
+    reason: clean(value.reason || value.note).slice(0, 1200),
+    terms: clean(value.terms || value.requestedTerms).slice(0, 2400),
+    sourceEventIds: unique(value.sourceEventIds, 24),
+  };
+};
+
+export const normalizeInstitutionLifecycleCases = (value = {}, world = {}, identityIndex = null) => {
+  const source = Array.isArray(value)
+    ? Object.fromEntries(value.map((entry, index) => [entry?.id || `case-${index + 1}`, entry]))
+    : (value && typeof value === "object" ? value : {});
+  const out = {};
+  for (const [rawId, rawCase] of Object.entries(source)) {
+    const lifecycleCase = normalizeInstitutionLifecycleCase(rawCase, rawId, world, identityIndex);
+    if (lifecycleCase) out[lifecycleCase.id] = lifecycleCase;
+  }
+  return out;
+};
+
+export const normalizeInstitutionMembershipHistoryEntry = (value = {}, index = 0, world = {}, identityIndex = null) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const action = lower(value.action || value.kind || value.type).replace(/[\s_]+/g, "-");
+  if (!["founded", "invited", "applied", "joined", "observer", "associate", "left", "withdrawn", "expelled", "suspended", "reinstated", "rejected", "dissolved", "activated", "reactivated", "role-changed"].includes(action)) return null;
+  const polity = canonicalPolity(value.polity || value.member || value.country, world, identityIndex);
+  const actor = canonicalPolity(value.actor || value.by || value.initiatedBy, world, identityIndex);
+  const id = slug(value.id || `${action}-${polity || "institution"}-${value.date || index + 1}`) || `history-${index + 1}`;
+  return {
+    id,
+    action,
+    polity,
+    actor,
+    date: clean(value.date || value.effectiveDate),
+    status: MEMBER_STATUS_SET.has(lower(value.status)) ? lower(value.status) : "",
+    role: MEMBER_ROLE_SET.has(lower(value.role)) ? lower(value.role) : "",
+    sourceCaseId: slug(value.sourceCaseId),
+    sourceProposalId: slug(value.sourceProposalId),
+    reason: clean(value.reason || value.note).slice(0, 1200),
+  };
+};
+
+export const normalizeInstitutionMembershipHistory = (value = [], world = {}, identityIndex = null) => {
+  const out = [];
+  const seen = new Set();
+  for (let index = 0; index < array(value).length; index += 1) {
+    const entry = normalizeInstitutionMembershipHistoryEntry(array(value)[index], index, world, identityIndex);
+    if (!entry || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    out.push(entry);
+  }
+  return out.slice(-512);
+};
+
 export const normalizeInstitutionCharter = (value = {}, world = {}, identityIndex = null) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const proposalRules = {};
@@ -557,6 +728,7 @@ export const normalizeInstitutionCharter = (value = {}, world = {}, identityInde
   return {
     votingRule: normalizeInstitutionVotingRule(source.votingRule || source.defaultVotingRule || source, world, identityIndex),
     proposalRules,
+    lifecycle: normalizeInstitutionLifecycleRules(source.lifecycle || source.membership || {}, world, identityIndex),
     note: clean(source.note || source.summary).slice(0, 1200),
     lastUpdatedDate: clean(source.lastUpdatedDate || source.updatedDate),
     sourceEventIds: unique(source.sourceEventIds, 24),
@@ -737,7 +909,7 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
     // institution-owned; the channel materializes that membership for UI/history.
     channelId: clean(value.channelId || value.institutionalChannelId).slice(0, 160),
     kind: INSTITUTION_KIND_SET.has(kindRaw) ? kindRaw : "other",
-    status: ["active", "dormant", "dissolved"].includes(status) ? status : "active",
+    status: INSTITUTION_STATUS_SET.has(status) ? status : "active",
     members: [...memberMap.values()].sort((a, b) => a.polity.localeCompare(b.polity)),
     leaders,
     foundedDate: clean(value.foundedDate || identity.foundedDate),
@@ -745,6 +917,8 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
     predecessors: normalizeInstitutionPredecessors(value?.predecessors?.length ? value.predecessors : identity.predecessors),
     charter: normalizeInstitutionCharter(value.charter || value.governance || {}, world, identityIndex),
     proposals: normalizeInstitutionProposals(value.proposals || value.resolutions || {}, world, identityIndex),
+    lifecycleCases: normalizeInstitutionLifecycleCases(value.lifecycleCases || value.membershipCases || {}, world, identityIndex),
+    membershipHistory: normalizeInstitutionMembershipHistory(value.membershipHistory || value.lifecycleHistory || [], world, identityIndex),
     governanceActivity: normalizeInstitutionGovernanceActivity(value.governanceActivity || value.agendaActivity || {}),
     lastUpdatedDate: clean(value.lastUpdatedDate),
     note: clean(value.note).slice(0, 1000),
@@ -772,6 +946,27 @@ export const normalizeInstitutions = (input, world = {}) => {
     ledgerVersion: Math.max(0, Math.trunc(Number(source.ledgerVersion) || 0)),
     byId,
   };
+};
+
+
+export const institutionLifecycleCases = (institution = {}) => Object.values(institution?.lifecycleCases || {});
+
+export const institutionPendingLifecycleCases = (institution = {}) => institutionLifecycleCases(institution)
+  .filter((entry) => ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)));
+
+export const institutionMembershipHistoryForPolity = (institution = {}, polityInput = "") => {
+  const wanted = lower(polityInput);
+  if (!wanted) return [];
+  return array(institution?.membershipHistory).filter((entry) => lower(entry?.polity) === wanted);
+};
+
+export const institutionLifecycleCaseForPolity = (institution = {}, polityInput = "", { pendingOnly = false } = {}) => {
+  const wanted = lower(polityInput);
+  if (!wanted) return [];
+  return institutionLifecycleCases(institution).filter((entry) => (
+    lower(entry?.polity) === wanted
+    && (!pendingOnly || ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)))
+  ));
 };
 
 
@@ -1075,6 +1270,39 @@ const upsertMember = (institution, member) => {
   ], 24);
 };
 
+const appendInstitutionMembershipHistory = (institution, entry, world = {}) => {
+  const history = normalizeInstitutionMembershipHistory([...(institution?.membershipHistory || []), entry], world);
+  institution.membershipHistory = history;
+  return history.at(-1) || null;
+};
+
+export const applyInstitutionStatusResolution = ({
+  world: worldLike = {}, institutionId = "", status = "", date = "", sourceProposalId = "", note = "",
+} = {}) => {
+  const world = clone(worldLike || {});
+  const institutions = normalizeInstitutions(world.institutions, world);
+  const id = canonicalInstitutionIdentity({ id: institutionId }).id;
+  const institution = institutions.byId[id];
+  if (!institution) return { world: { ...world, institutions }, institution: null, error: `Unknown institution ${clean(institutionId) || "<blank>"}.` };
+  const nextStatus = lower(status);
+  if (!INSTITUTION_STATUS_SET.has(nextStatus)) return { world: { ...world, institutions }, institution, error: `Unsupported institution status ${status || "<blank>"}.` };
+  const matchingLifecycleCase = sourceProposalId
+    ? Object.values(institution.lifecycleCases || {}).find((entry) => clean(entry?.proposalId) === clean(sourceProposalId)) || null
+    : null;
+  institution.status = nextStatus;
+  institution.lastUpdatedDate = clean(date) || institution.lastUpdatedDate || "";
+  institution.sourceProposalIds = unique([...(institution.sourceProposalIds || []), sourceProposalId], 24);
+  if (matchingLifecycleCase) institution.lifecycleCases = { ...(institution.lifecycleCases || {}), [matchingLifecycleCase.id]: { ...matchingLifecycleCase, status: "resolved", resolvedDate: clean(date), updatedDate: clean(date) } };
+  if (nextStatus === "dissolved") institution.dissolvedDate = clean(date) || institution.dissolvedDate || "";
+  if (nextStatus === "active" && lower(institution.status) !== "dissolved") institution.dissolvedDate = "";
+  appendInstitutionMembershipHistory(institution, {
+    action: nextStatus === "dissolved" ? "dissolved" : nextStatus === "active" ? "reactivated" : "role-changed",
+    actor: matchingLifecycleCase?.initiatedBy || "", date: clean(date), sourceCaseId: matchingLifecycleCase?.id || "", sourceProposalId, reason: clean(note),
+  }, world);
+  institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
+  return { world: { ...world, institutions }, institution: institutions.byId[id], error: "" };
+};
+
 export const applyInstitutionMembershipResolution = ({
   world: worldLike = {},
   institutionId = "",
@@ -1098,6 +1326,9 @@ export const applyInstitutionMembershipResolution = ({
   const polity = canonicalPolity(polityInput, world);
   if (!polity) return { world: { ...world, institutions }, institution, error: "Institution membership resolution requires a polity." };
   const existingMember = array(institution.members).find((entry) => lower(entry.polity) === lower(polity));
+  const matchingLifecycleCase = sourceProposalId
+    ? Object.values(institution.lifecycleCases || {}).find((entry) => clean(entry?.proposalId) === clean(sourceProposalId)) || null
+    : null;
   const proposalIds = unique([...(existingMember?.sourceProposalIds || []), sourceProposalId], 24);
 
   if (operation === "join" || operation === "restore") {
@@ -1113,18 +1344,35 @@ export const applyInstitutionMembershipResolution = ({
       sourceProposalIds: proposalIds,
       note: clean(note) || existingMember?.note || "",
     });
+    appendInstitutionMembershipHistory(institution, {
+      action: operation === "restore" ? "reinstated" : (nextStatus === "observer" ? "observer" : nextStatus === "associate" ? "associate" : "joined"),
+      polity, actor: matchingLifecycleCase?.initiatedBy || "", date: clean(date), status: nextStatus, role: nextRole,
+      sourceCaseId: matchingLifecycleCase?.id || "", sourceProposalId, reason: clean(note),
+    }, world);
+    if (matchingLifecycleCase) {
+      institution.lifecycleCases = {
+        ...(institution.lifecycleCases || {}),
+        [matchingLifecycleCase.id]: { ...matchingLifecycleCase, status: "resolved", decision: matchingLifecycleCase.decision || "accept", resolvedDate: clean(date), updatedDate: clean(date) },
+      };
+    }
   } else if (operation === "suspend") {
     if (!existingMember) return { world: { ...world, institutions }, institution, error: `${polity} is not a current member of ${institution.name}.` };
     upsertMember(institution, { ...existingMember, status: "suspended", lastUpdatedDate: clean(date), sourceProposalIds: proposalIds, note: clean(note) || existingMember.note || "" });
+    appendInstitutionMembershipHistory(institution, { action: "suspended", polity, actor: matchingLifecycleCase?.initiatedBy || "", date: clean(date), sourceCaseId: matchingLifecycleCase?.id || "", sourceProposalId, reason: clean(note) }, world);
+    if (matchingLifecycleCase) institution.lifecycleCases = { ...(institution.lifecycleCases || {}), [matchingLifecycleCase.id]: { ...matchingLifecycleCase, status: "resolved", resolvedDate: clean(date), updatedDate: clean(date) } };
   } else if (operation === "role") {
     if (!existingMember) return { world: { ...world, institutions }, institution, error: `${polity} is not a current member of ${institution.name}.` };
     const nextRole = MEMBER_ROLE_SET.has(lower(role)) ? lower(role) : "";
     if (!nextRole) return { world: { ...world, institutions }, institution, error: `Unsupported institution member role ${role || "<blank>"}.` };
     upsertMember(institution, { ...existingMember, role: nextRole, lastUpdatedDate: clean(date), sourceProposalIds: proposalIds, note: clean(note) || existingMember.note || "" });
+    appendInstitutionMembershipHistory(institution, { action: "role-changed", polity, date: clean(date), role: nextRole, sourceProposalId, reason: clean(note) }, world);
   } else if (operation === "leave") {
     if (!existingMember) return { world: { ...world, institutions }, institution, error: `${polity} is not a current member of ${institution.name}.` };
     institution.members = array(institution.members).filter((entry) => lower(entry.polity) !== lower(polity));
     institution.leaders = array(institution.leaders).filter((entry) => lower(entry) !== lower(polity));
+    const historyAction = matchingLifecycleCase?.kind === "expulsion" ? "expelled" : matchingLifecycleCase?.kind === "withdrawal" ? "withdrawn" : "left";
+    appendInstitutionMembershipHistory(institution, { action: historyAction, polity, actor: matchingLifecycleCase?.initiatedBy || polity, date: clean(date), sourceCaseId: matchingLifecycleCase?.id || "", sourceProposalId, reason: clean(note) }, world);
+    if (matchingLifecycleCase) institution.lifecycleCases = { ...(institution.lifecycleCases || {}), [matchingLifecycleCase.id]: { ...matchingLifecycleCase, status: "resolved", resolvedDate: clean(date), updatedDate: clean(date) } };
   }
 
   institution.lastUpdatedDate = clean(date) || institution.lastUpdatedDate || "";

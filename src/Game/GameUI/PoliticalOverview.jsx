@@ -308,6 +308,49 @@ const GovernmentOverview = ({ profile, fallbackGovernment, fallbackLeader }) => 
   );
 };
 
+const InstitutionPortfolio = ({ rows = [] }) => {
+  const items = Array.isArray(rows) ? rows : [];
+  if (!items.length) return null;
+  const lifecycleLabel = (entry) => {
+    const current = entry?.member;
+    if (current) return `${current.status || "member"}${current.role && current.role !== "member" ? ` / ${current.role}` : ""}`;
+    const last = [...(entry?.history || [])].reverse().find(Boolean);
+    if (!last) return "historical";
+    if (["left", "withdrawn", "expelled"].includes(last.action)) return `former member · ${last.action}`;
+    return last.action || "historical";
+  };
+  return (
+    <div style={{ ...card, marginTop: "0.7rem", padding: "0.72rem 0.78rem" }}>
+      <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", gap: "0.45rem" }}>
+        <div>
+          <div style={sectionLabel}>Institutions</div>
+          <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.59rem", marginTop: "0.15rem" }}>Canonical memberships and institutional history</div>
+        </div>
+        <Badge>{items.length}</Badge>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.42rem", marginTop: "0.58rem" }}>
+        {items.slice(0, 10).map((entry) => {
+          const institution = entry?.institution || {};
+          const pending = (entry?.cases || []).filter((item) => ["pending", "negotiating", "pending-approval"].includes(String(item?.status || "").toLowerCase()));
+          const recent = [...(entry?.history || [])].reverse()[0];
+          return (
+            <div key={institution.id || institution.name} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.065)", borderRadius: "9px", padding: "0.5rem 0.58rem" }}>
+              <div style={{ alignItems: "center", display: "flex", gap: "0.42rem" }}>
+                <span style={{ color: "rgba(255,255,255,0.88)", flex: 1, fontSize: "0.67rem", fontWeight: 820 }}>{institution.name || institution.id}</span>
+                <Badge tone={entry?.member ? "rgba(34,197,94,0.1)" : "rgba(148,163,184,0.09)"} border={entry?.member ? "rgba(34,197,94,0.23)" : "rgba(148,163,184,0.18)"} color={entry?.member ? "#86efac" : "rgba(255,255,255,0.55)"}>{lifecycleLabel(entry)}</Badge>
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", lineHeight: 1.4, marginTop: "0.22rem" }}>
+                {[entry?.member?.sinceDate ? `since ${entry.member.sinceDate}` : "", pending.length ? `${pending.length} pending lifecycle matter${pending.length === 1 ? "" : "s"}` : "", recent?.date && !entry?.member ? `last change ${recent.date}` : ""].filter(Boolean).join(" · ") || (institution.kind || "institution")}
+              </div>
+              {pending.slice(0, 2).map((item) => <div key={item.id} style={{ color: "rgba(221,214,254,0.6)", fontSize: "0.56rem", marginTop: "0.24rem" }}>• {item.kind} · {item.status}{item.requestedStatus ? ` · ${item.requestedStatus}` : ""}</div>)}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const IntelligenceAssessment = ({ intelligence }) => {
   if (!intelligence) return null;
   const findings = Array.isArray(intelligence.findings) ? intelligence.findings.slice(0, 4) : [];
@@ -337,7 +380,7 @@ const IntelligenceAssessment = ({ intelligence }) => {
   );
 };
 
-export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null }) {
+export default function PoliticalOverview({ profile, fallbackGovernment = "", fallbackLeader = "", intelligence = null, institutions = [] }) {
   const landscape = useMemo(() => buildPoliticalLandscape(profile), [profile]);
   const [selectedId, setSelectedId] = useState("");
   const [hoveredId, setHoveredId] = useState("");
@@ -441,6 +484,7 @@ export default function PoliticalOverview({ profile, fallbackGovernment = "", fa
         </div>
       )}
 
+      <InstitutionPortfolio rows={institutions} />
       <IntelligenceAssessment intelligence={intelligence} />
     </div>
   );

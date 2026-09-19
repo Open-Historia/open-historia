@@ -14,6 +14,7 @@ import {
   POLITICAL_PRESSURE_AXES,
 } from "../../runtime/politicalPressure.js";
 import { institutionsForPolity } from "../../runtime/institutions.js";
+import { institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { powerDecisionProfileForPolity } from "../../runtime/powerStatus.js";
 
 export const POLITICAL_DECISION_CONTEXT_VERSION = 3;
@@ -36,6 +37,7 @@ const DEFAULT_LIMITS = Object.freeze({
   agreements: 6,
   wars: 4,
   institutions: 8,
+  institutionLifecycleCases: 6,
 });
 
 const cloneValue = (value) => {
@@ -653,6 +655,18 @@ const formatVerboseDecisionContextText = (context, { maxChars }) => {
     ...(array(context.geopolitical?.institutions).length
       ? array(context.geopolitical.institutions).map((entry) => `- ${entry.name} [${entry.id}] | ${entry.status}${entry.role && entry.role !== "member" ? ` | ${entry.role}` : ""}`)
       : ["No bounded formal institution memberships are currently canonical."]),
+    ...(array(context.geopolitical?.institutionLifecycleCases).length
+      ? ["Pending institution lifecycle:", ...array(context.geopolitical.institutionLifecycleCases).map((entry) => {
+        const fit = [
+          entry.politicalCharacter ? `character=${entry.politicalCharacter}` : "",
+          array(entry.geographicScope).length ? `scope=${array(entry.geographicScope).join(", ")}` : "",
+          array(entry.primaryThreatModel).length ? `threat model=${array(entry.primaryThreatModel).join(", ")}` : "",
+          array(entry.purpose).length ? `purpose=${array(entry.purpose).join("; ")}` : "",
+          entry.charterNote ? `obligations=${entry.charterNote}` : "",
+        ].filter(Boolean).join(" | ");
+        return `- ${entry.institutionName} [${entry.institutionId}] | ${entry.kind} | ${entry.status} | requested ${entry.requestedStatus}${fit ? ` | ${fit}` : ""}${entry.reason ? ` | case=${entry.reason}` : ""}`;
+      })]
+      : []),
     "",
     "OBJECTIVE BILATERAL / CONFLICT CONTEXT",
   );
@@ -980,6 +994,21 @@ export const buildPoliticalDecisionContext = (
           kind: institution.kind,
           status: member.status,
           role: member.role,
+        })),
+      institutionLifecycleCases: institutionLifecycleCasesForPolity(world, actorPolity, { pendingOnly: true })
+        .slice(0, limits.institutionLifecycleCases || 6)
+        .map(({ institution, case: lifecycleCase }) => ({
+          institutionId: institution.id,
+          institutionName: institution.name,
+          kind: lifecycleCase.kind,
+          status: lifecycleCase.status,
+          requestedStatus: lifecycleCase.requestedStatus,
+          reason: clean(lifecycleCase.reason).slice(0, 240),
+          purpose: array(institution?.charter?.lifecycle?.purpose).slice(0, 4),
+          politicalCharacter: clean(institution?.charter?.lifecycle?.identity?.politicalCharacter).slice(0, 220),
+          geographicScope: array(institution?.charter?.lifecycle?.identity?.geographicScope).slice(0, 4),
+          primaryThreatModel: array(institution?.charter?.lifecycle?.identity?.primaryThreatModel).slice(0, 4),
+          charterNote: clean(institution?.charter?.note).slice(0, 320),
         })),
     },
     ...(counterpartKnowledge ? { counterpartKnowledge: cloneValue(counterpartKnowledge) } : {}),

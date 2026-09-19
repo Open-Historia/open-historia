@@ -24,6 +24,7 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
+import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
 import { normalizePoliticalActors, POLITICAL_ACTORS_SCHEMA_VERSION } from "./politicalActors.js";
 import { normalizePoliticalSimulationClock } from "./politicalClock.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
@@ -547,6 +548,7 @@ const normalizeReactionMap = (value) => {
 
         const emoji = normalizeOptionalString(reaction.emoji);
         const code = normalizeOptionalString(reaction.code);
+        const country = normalizeOptionalString(reaction.country);
 
         if (!emoji && !code) {
           return [name, null];
@@ -557,6 +559,7 @@ const normalizeReactionMap = (value) => {
           {
             ...(code ? { code } : {}),
             ...(emoji ? { emoji } : {}),
+            ...(country ? { country } : {}),
           },
         ];
       })
@@ -654,6 +657,11 @@ export const normalizeChatEntry = (entry, index = 0) => {
   }
 
   const institutionId = normalizeOptionalString(entry.institutionId || entry.channelInstitutionId);
+  const lifecycleInstitutionId = normalizeOptionalString(entry.lifecycleInstitutionId || entry.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(entry.lifecycleCaseIds || entry.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value))
+    .filter(Boolean)
+    .slice(0, 32);
   const countries = normalizeArray(entry.countries || entry.participants)
     .map((country) => normalizeChatCountry(country))
     .filter(Boolean);
@@ -677,6 +685,8 @@ export const normalizeChatEntry = (entry, index = 0) => {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
     ...(institutionId ? { institutionId } : {}),
+    ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
+    ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),
     linkedEventId: normalizeOptionalString(entry.linkedEventId || entry.eventId),
     messages: projected
       ? projected.messages.map((message, messageIndex) => normalizeChatMessage(message, messageIndex)).filter(Boolean)
@@ -767,6 +777,13 @@ const syncThreadMembership = (entry, desiredCountries, world, identityIndex = nu
 };
 
 export const chatThreadIdentityKey = (entry, world, identityIndex = null) => {
+  const lifecycleInstitutionId = normalizeOptionalString(entry?.lifecycleInstitutionId || entry?.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(entry?.lifecycleCaseIds || entry?.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value)).filter(Boolean).sort();
+  if (lifecycleInstitutionId && lifecycleCaseIds.length) {
+    const canonicalId = canonicalInstitutionIdentity({ id: lifecycleInstitutionId }).id;
+    return canonicalId ? `institution-lifecycle:${canonicalId}:${lifecycleCaseIds.join(",")}` : "";
+  }
   const institutionId = normalizeOptionalString(entry?.institutionId || entry?.channelInstitutionId);
   if (institutionId) {
     const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
@@ -786,9 +803,17 @@ const reconcileModernChatForPlayer = (entry, world, playerCountry = "", identity
   const index = identityIndex || buildPolityIdentityIndex(world || {});
   const playerKey = normalizedChatIdentityToken({ name: playerCountry }, world, index);
   const institutionId = normalizeOptionalString(chat.institutionId || chat.channelInstitutionId);
+  const lifecycleInstitutionId = normalizeOptionalString(chat.lifecycleInstitutionId || chat.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(chat.lifecycleCaseIds || chat.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value)).filter(Boolean);
+  const lifecycleGovernanceThread = Boolean(institutionId && lifecycleInstitutionId && lifecycleCaseIds.length);
 
   let desiredCountries = chat.countries;
-  if (institutionId) {
+  // The institution's permanent Council projects participants from the canonical
+  // membership ledger. A lifecycle hearing is different: it is a temporary
+  // diplomatic table containing the applicant/invitee plus the institution's
+  // eligible governments, while institutionId merely enables native governance.
+  if (institutionId && !lifecycleGovernanceThread) {
     const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
     desiredCountries = canonicalId ? institutionChannelParticipants(world, canonicalId) : [];
   }
@@ -827,6 +852,8 @@ const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", id
     ...left,
     id: left.id || right.id,
     institutionId: left.institutionId || right.institutionId || undefined,
+    lifecycleInstitutionId: left.lifecycleInstitutionId || right.lifecycleInstitutionId || undefined,
+    lifecycleCaseIds: left.lifecycleCaseIds?.length ? left.lifecycleCaseIds : right.lifecycleCaseIds,
     linkedEventId: left.linkedEventId || right.linkedEventId,
     source: left.source || right.source,
     status: left.status || right.status || "open",
@@ -2992,6 +3019,7 @@ const normalizeEventImpacts = (value) => {
     return {
       actionIds: [],
       createdChats: [],
+      institutionLifecycleOps: [],
       markerOps: [],
       polityChanges: [],
       projectOps: [],
@@ -3007,6 +3035,7 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),

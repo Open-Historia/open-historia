@@ -45,6 +45,7 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
   playerPolity = "",
   politicalContext = null,
   institutionViews = [],
+  institutionLifecycleCases = [],
 } = {}) => {
   const polity = clean(playerPolity);
   if (!polity) return { text: "", politicalText: "", diplomacyText: "", institutionIds: [], politicalContext: null };
@@ -64,7 +65,11 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
     ].join("\n");
 
   const views = list(institutionViews);
-  const institutionIds = views.map((entry) => clean(entry?.institution?.id)).filter(Boolean);
+  const lifecycleCases = list(institutionLifecycleCases);
+  const institutionIds = [...new Set([
+    ...views.map((entry) => clean(entry?.institution?.id)),
+    ...lifecycleCases.map((entry) => clean(entry?.institution?.id)),
+  ].filter(Boolean))];
   const lines = [
     "[Current Diplomatic & Institutional Options — canonical UI/legal affordances]",
     "Use this to tell the player what diplomatic levers actually exist right now. Conversation is not a vote, membership is not consent, and you must never cast a formal ballot or table binding business on the player's behalf merely because you recommend it.",
@@ -83,16 +88,47 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
       if (entry.canTableProposal) options.push("may table a resolution");
       if (entry.playerPendingBallotCount) options.push(`${entry.playerPendingBallotCount} player ballot${entry.playerPendingBallotCount === 1 ? "" : "s"} pending`);
       if (entry.playerPendingAmendmentReviewCount) options.push(`${entry.playerPendingAmendmentReviewCount} amendment review${entry.playerPendingAmendmentReviewCount === 1 ? "" : "s"} pending`);
+      const lifecycle = institution?.charter?.lifecycle || {};
+      const identity = lifecycle?.identity || {};
+      const lifecycleBits = [
+        list(lifecycle.purpose).length ? `purpose: ${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
+        clean(identity.politicalCharacter) ? `character: ${clean(identity.politicalCharacter).slice(0, 180)}` : "",
+        list(identity.geographicScope).length ? `scope: ${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
+        clean(institution?.charter?.note) ? `charter/obligations: ${clean(institution.charter.note).slice(0, 220)}` : "",
+        lifecycle?.withdrawal?.mode ? `withdrawal: ${lifecycle.withdrawal.mode}${Number(lifecycle.withdrawal.noticeDays) > 0 ? ` (${lifecycle.withdrawal.noticeDays}d notice)` : ""}` : "",
+      ].filter(Boolean);
       lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${member.status || "member"}${member.role && member.role !== "member" ? ` / ${member.role}` : ""}${options.length ? ` | ${options.join("; ")}` : ""}`);
+      if (lifecycleBits.length) lines.push(`  ${lifecycleBits.join(" | ")}`);
       for (const proposal of proposalSummary(entry)) lines.push(proposal);
     }
     if (views.length > 12) lines.push(`- ${views.length - 12} additional membership(s) omitted from the inline brief; use institution lookups when needed.`);
   }
 
+  if (lifecycleCases.length) {
+    lines.push("Pending institution lifecycle:");
+    for (const entry of lifecycleCases.slice(0, 12)) {
+      const institution = entry?.institution || {};
+      const lifecycleCase = entry?.case || {};
+      const lifecycle = institution?.charter?.lifecycle || {};
+      const identity = lifecycle?.identity || {};
+      const fit = [
+        list(lifecycle.purpose).length ? `purpose=${list(lifecycle.purpose).slice(0, 3).join("; ")}` : "",
+        clean(identity.politicalCharacter) ? `character=${clean(identity.politicalCharacter).slice(0, 160)}` : "",
+        list(identity.geographicScope).length ? `scope=${list(identity.geographicScope).slice(0, 3).join(", ")}` : "",
+        list(identity.primaryThreatModel).length ? `threat model=${list(identity.primaryThreatModel).slice(0, 3).join(", ")}` : "",
+        clean(institution?.charter?.note) ? `obligations=${clean(institution.charter.note).slice(0, 180)}` : "",
+      ].filter(Boolean).join(" | ");
+      lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${lifecycleCase.kind || "lifecycle"} / ${lifecycleCase.status || "pending"}${lifecycleCase.requestedStatus ? ` | requested ${lifecycleCase.requestedStatus}` : ""}${lifecycleCase.effectiveDate ? ` | effective ${lifecycleCase.effectiveDate}` : ""}${fit ? ` | ${fit}` : ""}${lifecycleCase.reason ? ` | case=${lifecycleCase.reason}` : ""}`);
+    }
+  } else {
+    lines.push("Pending institution lifecycle: none.");
+  }
+
   lines.push(
     "Advisor authority boundary:",
     "- You may recommend, explain, compare, draft language and point out pending institutional obligations.",
-    "- You may NOT silently cast the player's vote, accept an amendment, table a formal resolution, join/leave an institution, sign an agreement, or infer sovereign authorization from PWv2. Those remain explicit player/native actions.",
+    "- You may NOT silently cast the player's vote, accept an amendment, found/join/leave an institution, accept an invitation, sign an agreement, or infer sovereign authorization from PWv2. Those remain explicit player/native actions.",
+    "- You MAY explain pending invitations/applications, charter accession/withdrawal rules, likely consequences, and where the player can exercise the corresponding explicit lifecycle control in the Institutions workspace.",
     "- When the player asks what is possible, distinguish ordinary diplomatic speech from formal institutional acts and identify any pending player decision clearly.",
   );
 

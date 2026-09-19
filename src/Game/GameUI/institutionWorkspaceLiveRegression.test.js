@@ -7,10 +7,10 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 test("Institutions is restored as a first-class Diplomacy panel tab", () => {
   const chat = read("./chat.jsx");
   assert.match(chat, /import InstitutionsWorkspace, \{ Emblem as InstitutionEmblem, Facts as InstitutionFacts, SmallPill as InstitutionPill \} from "\.\/InstitutionsWorkspace\.jsx"/);
-  assert.match(chat, /\[\["chats", "Diplomacy"\], \["institutions", institutionUnreadCount \?/);
+  assert.match(chat, /["institutions", "institutions", "Institutions", institutionUnreadCount]/);
   assert.match(chat, /currentView === "institutions"/);
   assert.match(chat, /<InstitutionsWorkspace/);
-  assert.match(chat, /const openChats = allOpenChats\.filter\(\(chat\) => !chat\.institutionId\)/);
+  assert.match(chat, /const openChats = allOpenChats\.filter\(\(chat\) => !chat\.institutionId \|\| \(chat\.lifecycleInstitutionId && chat\.lifecycleCaseIds\?\.length\)\)/);
 });
 
 test("institution workspace restores browser, logos, governance and documents", () => {

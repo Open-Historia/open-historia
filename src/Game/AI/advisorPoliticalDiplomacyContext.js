@@ -2,6 +2,7 @@
 
 import { buildPoliticalDecisionContext } from "./politicalDecisionContext.js";
 import { institutionsForPolity } from "../../runtime/institutions.js";
+import { institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycleCore.js";
 import {
   ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS,
   ADVISOR_POLITICAL_DECISION_MAX_CHARS,
@@ -48,9 +49,13 @@ export const buildAdvisorPoliticalDiplomacyContext = ({ world = {}, playerPolity
       playerPendingAmendmentReviewCount: 0,
     }));
 
+  const institutionLifecycleCases = institutionLifecycleCasesForPolity(world, polity, { pendingOnly: true })
+    .slice(0, 12);
+
   return formatAdvisorPoliticalDiplomacyContext({
     playerPolity: polity,
     politicalContext,
     institutionViews,
+    institutionLifecycleCases,
   });
 };

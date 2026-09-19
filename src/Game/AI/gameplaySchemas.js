@@ -809,6 +809,45 @@ const projectOpSchema = {
   additionalProperties: false,
 };
 
+const institutionLifecycleImpactOpSchema = {
+  type: "object",
+  description:
+    "A canonical institution lifecycle act by an AI-controlled government. Use only when this event itself politically justifies founding, inviting, applying, responding, withdrawing, or opening formal discipline/dissolution business. The actor is sovereign: never use the human player's polity as actor for accept/apply/found/withdraw/respond. An invitation/application is NOT membership; native institution law resolves it.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["found", "invite", "apply", "respond", "withdraw", "expel", "suspend", "reinstate", "dissolve"],
+    },
+    actorPolity: textSchema("AI-controlled polity making this institutional act, using its exact canonical name."),
+    institutionId: textSchema("Existing institution id copied exactly from canonical institution context. Omit only for found."),
+    targetPolity: textSchema("invite/expel/suspend/reinstate: exact target polity name."),
+    caseId: textSchema("respond: exact pending lifecycle case id supplied by canonical context."),
+    requestedStatus: textSchema("invite/apply: requested status such as member or observer."),
+    decision: { type: "string", enum: ["accept", "reject", "seek-observer", "request-terms", "delay"] },
+    reason: textSchema("Concise political/strategic reason grounded in current relations, PWv2 context and institution fit."),
+    terms: textSchema("Counterconditions or accession terms when relevant."),
+    name: textSchema("found: institution name."),
+    shortName: textSchema("found: optional short name/acronym."),
+    kind: textSchema("found: institution kind, e.g. military_alliance, regional_bloc, economic_union, international_organization, other."),
+    purpose: stringArraySchema("found: concrete purposes/mandates."),
+    geographicScope: stringArraySchema("found: political/geographic scope; this informs whether membership makes sense."),
+    primaryThreatModel: stringArraySchema("found: named threats/adversaries the institution explicitly organizes around, if any."),
+    politicalCharacter: textSchema("found: concise political identity/character."),
+    votingRule: textSchema("found: governance decision rule, normally simple-majority unless the event establishes another rule."),
+    minimumFoundingMembers: { type: "integer", minimum: 1, maximum: 64 },
+    accessionMode: { type: "string", enum: ["approval", "direct"], description: "found: whether later accession needs an institutional vote or is direct once the applicant accepts." },
+    allowObserver: { type: "boolean", description: "found: whether observer status is permitted." },
+    withdrawalMode: { type: "string", enum: ["unilateral", "notice", "approval", "not-permitted"], description: "found: charter withdrawal rule." },
+    withdrawalNoticeDays: { type: "integer", minimum: 0, maximum: 3650, description: "found: notice period when withdrawalMode is notice." },
+    expulsionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal expulsion can be proposed." },
+    dissolutionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal dissolution can be proposed." },
+    invitees: stringArraySchema("found: governments invited to become founding participants; invitation does not make them members."),
+    charterNote: textSchema("found: concise founding charter note/obligation summary."),
+  },
+  required: ["op", "actorPolity"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -853,6 +892,12 @@ const impactsSchema = {
       type: "array",
       description: "The player's own espionage orders this event executes (deploy or recall an agent), only when their queued actions or chat ordered it; never for other powers.",
       items: spyOpSchema,
+    },
+    institutionLifecycleOps: {
+      type: "array",
+      description:
+        "Institution lifecycle acts enacted by AI-controlled governments in this event: found/invite/apply/respond/withdraw or formal discipline/dissolution proposals. Use current PWv2, relations, institution purpose/scope/obligations and threat model to decide whether the act makes political sense. Never make a sovereign membership decision for the human player. Invitations aimed at the player are allowed; the player must answer them.",
+      items: institutionLifecycleImpactOpSchema,
     },
     reports: {
       type: "array",
@@ -1419,7 +1464,7 @@ const chatActionSchema = {
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
         + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
-        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state.",
+        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.",
       enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
@@ -1453,7 +1498,7 @@ const chatActionSchema = {
     amendmentText: textSchema("institution_amendment: exact formal amendment text."),
     amendmentStatus: textSchema("institution_resolve_amendment: accepted, rejected, or withdrawn."),
     voteChoice: textSchema("institution_vote: yes, no, abstain, or veto. Veto is valid only where the charter grants it."),
-    reason: textSchema("institution_vote: optional concise reason for the formal ballot."),
+    reason: textSchema("institution_vote: optional concise public ballot rationale."),
   },
   required: ["type", "actorName"],
   additionalProperties: false,
@@ -1470,6 +1515,7 @@ export const CHAT_ACTIONS_SCHEMA = {
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
+    lifecycleResponsesJson: textSchema("Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is accept, reject, seek-observer, request-terms, or delay. Use [] when this is not a lifecycle negotiation."),
   },
   required: ["actions"],
   additionalProperties: false,
@@ -3296,6 +3342,49 @@ const normalizeProjectsShape = (value) => {
 // this when omitted", says its description) — so a missing, null or zero value
 // from the model is filled here, before the schema sees it, rather than
 // costing the sheet its attempt.
+
+// Raw-JSON chat turns (used by lifecycle negotiations) do not receive Gemini's
+// submit_chat_actions function declaration, so providers sometimes answer in a
+// natural dialogue shape and/or return lifecycleResponsesJson as a real array.
+// Normalize those transport aliases before CHAT_ACTIONS_SCHEMA validation. The
+// canonical task schema stays unchanged for function-calling providers.
+const normalizeChatActionsShape = (value) => {
+  if (!isPlainRecord(value)) return value;
+  const candidate = { ...value };
+
+  const normalizeAction = (entry) => {
+    if (!isPlainRecord(entry)) return entry;
+    const action = { ...entry };
+    const speaker = action.actorName ?? action.actor ?? action.speaker;
+    const text = action.content ?? action.text ?? action.message;
+    if (action.actorName === undefined && speaker !== undefined) action.actorName = speaker;
+    if (action.type === undefined && speaker !== undefined && text !== undefined) action.type = "send_message";
+    if (action.content === undefined && text !== undefined && String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_") === "send_message") {
+      action.content = text;
+    }
+    delete action.actor;
+    delete action.speaker;
+    delete action.text;
+    delete action.message;
+    delete action.recipient;
+    return action;
+  };
+
+  if (!Array.isArray(candidate.actions) && Array.isArray(candidate.dialogue)) {
+    candidate.actions = candidate.dialogue.map(normalizeAction);
+  } else if (Array.isArray(candidate.actions)) {
+    candidate.actions = candidate.actions.map(normalizeAction);
+  }
+  if (!Array.isArray(candidate.actions)) candidate.actions = [];
+  delete candidate.dialogue;
+
+  const lifecycleAlias = candidate.lifecycleResponsesJson ?? candidate.lifecycleResponses;
+  if (Array.isArray(lifecycleAlias)) candidate.lifecycleResponsesJson = JSON.stringify(lifecycleAlias);
+  else if (candidate.lifecycleResponsesJson === undefined && typeof lifecycleAlias === "string") candidate.lifecycleResponsesJson = lifecycleAlias;
+  delete candidate.lifecycleResponses;
+
+  return candidate;
+};
 const normalizeCountryStatSheetShape = (value) => {
   if (!isPlainRecord(value)) return value;
   const version = Number(value.statsSchemaVersion);
@@ -3304,6 +3393,7 @@ const normalizeCountryStatSheetShape = (value) => {
 };
 
 export const normalizeGameplayPayload = (taskKey, value) => {
+  if (taskKey === "chatActions") return normalizeChatActionsShape(value);
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);

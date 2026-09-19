@@ -729,6 +729,9 @@ const institutionIdentityBrief = (institution) => ({
   kind: clean(institution?.kind),
   status: clean(institution?.status),
   memberCount: institutionMemberNames(institution).length,
+  purpose: array(institution?.charter?.lifecycle?.purpose).slice(0, 8).map(clean).filter(Boolean),
+  geographicScope: array(institution?.charter?.lifecycle?.identity?.geographicScope).slice(0, 8).map(clean).filter(Boolean),
+  politicalCharacter: clean(institution?.charter?.lifecycle?.identity?.politicalCharacter).slice(0, 400),
 });
 
 const institutionFullBrief = (institution) => {
@@ -755,6 +758,21 @@ const institutionFullBrief = (institution) => {
       status: clean(proposal?.status),
       sponsor: clean(proposal?.sponsor || proposal?.proposer),
       ...(proposal?.votingRule || proposal?.rule ? { votingRule: proposal?.votingRule || proposal?.rule } : {}),
+    })),
+    pendingLifecycle: Object.values(institution?.lifecycleCases || {}).filter((entry) => ["pending", "negotiating", "pending-approval"].includes(clean(entry?.status).toLowerCase())).slice(0, 24).map((entry) => ({
+      id: clean(entry?.id),
+      kind: clean(entry?.kind),
+      polity: clean(entry?.polity),
+      initiatedBy: clean(entry?.initiatedBy),
+      requestedStatus: clean(entry?.requestedStatus),
+      status: clean(entry?.status),
+      proposalId: clean(entry?.proposalId),
+      effectiveDate: clean(entry?.effectiveDate),
+      reason: clean(entry?.reason).slice(0, 400),
+    })),
+    membershipHistory: array(institution?.membershipHistory).slice(-24).map((entry) => ({
+      action: clean(entry?.action), polity: clean(entry?.polity), actor: clean(entry?.actor), date: clean(entry?.date),
+      status: clean(entry?.status), role: clean(entry?.role), reason: clean(entry?.reason).slice(0, 300),
     })),
   };
 };
