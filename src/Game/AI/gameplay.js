@@ -157,6 +157,7 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
+  confirmResolvedDeployments,
   enforceUnitVolume,
   readInterceptsState,
   writeInterceptsState,
@@ -6643,8 +6644,12 @@ const applySimulationResult = async ({
   // advancing them again here would move them twice for the same elapsed time.
   const movedThisTurn = freshEvents.flatMap((event) =>
     normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  // A deployment the player asked for and this skip resolved without removing
+  // it has been accepted (gameState.js confirmResolvedDeployments). Only when the
+  // skip resolved the planned actions: a scene or a check that leaves them
+  // planned has not answered the request yet.
   let worldWithImpacts = enforceUnitVolume(
-    advanceStandingOrders(
+    confirmResolvedDeployments(advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
       // were issued, which would leave every dormant patrol already expired.
       // Give them the rest of their life from here before advancing anything.
@@ -6658,7 +6663,7 @@ const applySimulationResult = async ({
         round: nextGame.round,
         skipUnitIds: movedThisTurn,
       },
-    ),
+    ), result.clearActions ? plannedActionSnapshot : []),
     { playerCode: baseGame.country },
   );
 

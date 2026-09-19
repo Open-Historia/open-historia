@@ -2726,6 +2726,33 @@ export const clearStaleUnitMotion = (world, { queuedUnitIds = [] } = {}) => {
   };
 };
 
+// A player deployment is placed "pending" and queued as a Deploy request action
+// (unitsController.js deployUnit, whose unitRevert says "remove it" if the
+// player deletes the request). The skip that resolves the request decides: a
+// remove op rejects it, a move op relocates it — and whatever it left standing
+// was accepted. Without this, nothing else ever made a pending unit real: only a
+// move op cleared the status, a move on a garrison is ignored by design, and a
+// fleet the story says arrived was a translucent counter for the rest of the
+// campaign. `resolvedActions` are the planned actions this skip resolved.
+// Pure; returns the same world when there is nothing to confirm.
+export const confirmResolvedDeployments = (world, resolvedActions = []) => {
+  const requested = new Set(
+    normalizeArray(resolvedActions)
+      .map((action) => normalizeUnitRevert(action?.unitRevert))
+      .filter((revert) => revert?.remove)
+      .map((revert) => revert.unitId),
+  );
+  if (requested.size === 0) return world;
+  const units = normalizeUnits(world?.units);
+  const accepted = (unit) => unit.status === "pending" && requested.has(unit.id);
+  if (!units.some(accepted)) return world;
+  const stamp = new Date().toISOString();
+  return {
+    ...world,
+    units: units.map((unit) => (accepted(unit) ? { ...unit, status: "idle", updatedAt: stamp } : unit)),
+  };
+};
+
 // Keep the map legible. Applies to A.I. polities ONLY: the player's own forces
 // are filtered out before anything is counted, so neither cap constrains them and
 // their units never eat another power's headroom — the player manages their own
