@@ -12191,7 +12191,14 @@ const reportJumpRequests = (requests) => {
 // a reason, every enabled check with something to look at rides along — it is
 // the same request either way.
 const UNIT_DIRECTOR_INSTRUCTION =
-  "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
+  "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. "
+  // Said here as well as in the rules: a live run wrote "HMS Dauntless
+  // Commissioned at Portsmouth" and "No. 12 Squadron Stands Up at RAF
+  // Lossiemouth" and returned no ops at all for either, because the wording
+  // that makes a ship or a squadron a NEW formation sat only in the system
+  // prompt. It is the last thing the model reads before answering.
+  + "A ship, submarine or squadron COMMISSIONED, delivered, stood up or entering service is a new formation that does not exist yet: spawn it for the power that commissioned it, at its named port or base, even when that power already has units. "
+  + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
 const TIMELINE_CURATOR_INSTRUCTION =

@@ -1772,7 +1772,7 @@ const PlayerFocusSetting = () => {
     };
     return (
         <div style={fieldGroupStyle}>
-        <label style={labelStyle}>Player focus — for this game</label>
+        <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
         data-no-translate
         disabled={!ready}
