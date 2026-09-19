@@ -2113,6 +2113,56 @@ export const UNIT_DIRECTOR_SCHEMA = {
   additionalProperties: false,
 };
 
+// The structure director's answer: new structures the supplied events built,
+// keyed by event index (nativeStructureDirector.js). Builds only, and native
+// code decides which of them reach the map.
+export const STRUCTURE_DIRECTOR_SCHEMA = {
+  type: "object",
+  description:
+    "A conservative post-simulation pass that puts on the map the physical structures the supplied events "
+    + "built, opened or completed.",
+  properties: {
+    eventOrders: {
+      type: "array",
+      description: "New structures, keyed by the supplied eventIndex of the event that built them.",
+      items: {
+        type: "object",
+        properties: {
+          eventIndex: { type: "integer", minimum: 0 },
+          structures: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: nonEmptyTextSchema("Its specific name."),
+                kind: nonEmptyTextSchema("What it is, as a short lowercase noun phrase: data centre, ground station, shipyard."),
+                ownerCode: nonEmptyTextSchema("The owning polity's FULL name, never a code."),
+                status: {
+                  type: "string",
+                  enum: ["planned", "under_construction", "active"],
+                  description: "planned when only announced, under_construction when work has begun, active when working.",
+                },
+                at: atSchema,
+                lng: { type: "number", description: "Only with no `at`.", minimum: -180, maximum: 180 },
+                lat: { type: "number", description: "Only with no `at`.", minimum: -90, maximum: 90 },
+                note: textSchema("One line on what it is for, shown when inspected."),
+                projectId: textSchema("The id of the board project it belongs to, copied exactly. Omit when it belongs to none."),
+              },
+              required: ["name", "kind", "ownerCode", "status"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["eventIndex", "structures"],
+        additionalProperties: false,
+      },
+    },
+    summary: textSchema("Short summary of what was put on the map this turn."),
+  },
+  required: ["eventOrders", "summary"],
+  additionalProperties: false,
+};
+
 // The Projects & Operations board, moved OUT of the jump and into its own call.
 //
 // Why: projectOps was the single largest thing in the jump contract by a wide
@@ -2568,6 +2618,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   interactiveSummary: INTERACTIVE_SUMMARY_SCHEMA,
   gameMaster: GAME_MASTER_SCHEMA,
   unitDirector: UNIT_DIRECTOR_SCHEMA,
+  structureDirector: STRUCTURE_DIRECTOR_SCHEMA,
   timelineCurator: TIMELINE_CURATOR_SCHEMA,
   worldMotionRepair: WORLD_MOTION_REPAIR_SCHEMA,
   territoryDirector: TERRITORY_DIRECTOR_SCHEMA,
@@ -2664,6 +2715,12 @@ export const UNIT_DIRECTOR_TOOL = makeTool(
   UNIT_DIRECTOR_SCHEMA,
 );
 
+export const STRUCTURE_DIRECTOR_TOOL = makeTool(
+  "submit_structure_director",
+  "Submit the new structures the supplied events built, opened or completed.",
+  STRUCTURE_DIRECTOR_SCHEMA,
+);
+
 export const WORLD_MOTION_REPAIR_TOOL = makeTool(
   "submit_world_motion_repair",
   "Submit exactly one semantic update for one existing persistent storyline. This tool cannot create events or mutate any other canonical ledger.",
@@ -2729,6 +2786,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   interactiveSummary: INTERACTIVE_SUMMARY_TOOL,
   gameMaster: GAME_MASTER_TOOL,
   unitDirector: UNIT_DIRECTOR_TOOL,
+  structureDirector: STRUCTURE_DIRECTOR_TOOL,
   timelineCurator: TIMELINE_CURATOR_TOOL,
   worldMotionRepair: WORLD_MOTION_REPAIR_TOOL,
   territoryDirector: TERRITORY_DIRECTOR_TOOL,

@@ -2753,6 +2753,33 @@ export const confirmResolvedDeployments = (world, resolvedActions = []) => {
   };
 };
 
+// A structure the turn built for a Project joins that entry's linked structures
+// (nativeStructureDirector.js), so the card can show it on the map. Only a link
+// whose structure is really on the map now and whose entry still exists; an
+// entry already holding its twelve keeps the ones it has.
+export const linkStructuresToProjects = (world, links = []) => {
+  const onMap = new Set(normalizeMarkers(world?.markers).map((marker) => marker.id));
+  const adding = new Map();
+  for (const link of normalizeArray(links)) {
+    const markerId = normalizeOptionalString(link?.markerId);
+    const projectId = normalizeOptionalString(link?.projectId);
+    if (!markerId || !projectId || !onMap.has(markerId)) continue;
+    adding.set(projectId, [...(adding.get(projectId) ?? []), markerId]);
+  }
+  if (adding.size === 0) return world;
+  let changed = false;
+  const projects = normalizeArray(world?.projects).map((project) => {
+    const markerIds = adding.get(normalizeOptionalString(project?.id));
+    if (!markerIds) return project;
+    const linked = normalizeArray(project.linkedMarkerIds);
+    const next = [...new Set([...linked, ...markerIds])].slice(0, 12);
+    if (next.length === linked.length) return project;
+    changed = true;
+    return { ...project, linkedMarkerIds: next };
+  });
+  return changed ? { ...world, projects } : world;
+};
+
 // Keep the map legible. Applies to A.I. polities ONLY: the player's own forces
 // are filtered out before anything is counted, so neither cap constrains them and
 // their units never eat another power's headroom — the player manages their own

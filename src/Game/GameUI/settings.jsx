@@ -1010,6 +1010,7 @@ const ReasoningSection = () => {
 const REVIEW_SECTION_LABELS = {
     units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
     territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
+    structures: ["Put new structures on the map", "Bases, shipyards, data centres and ground stations appear where the events built them."],
     timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
     board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
     spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],

@@ -16,6 +16,7 @@ import {
 } from "../../runtime/applicationReceipt.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
+import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
 import { detectExplicitBaseTerritoryScope, scopeContainsRegion } from "./gmTerritoryScope.js";
 import { buildCuratorInput, candidatesWorthJudging, curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
@@ -158,6 +159,7 @@ import {
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
   confirmResolvedDeployments,
+  linkStructuresToProjects,
   enforceUnitVolume,
   readInterceptsState,
   writeInterceptsState,
@@ -2436,7 +2438,7 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // The unit director's runtime rules travel with the call so a campaign's
   // frozen prompt pack (which predates the task) still gets the current contract.
-  if (["unitDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
+  if (["unitDirector", "structureDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
   }
   if (taskKey === "unitDirector") {
@@ -2662,6 +2664,7 @@ const GM_REMINDER_TASKS = new Set([
   "timelineCurator",
   "unitDirector",
   "territoryDirector",
+  "structureDirector",
   "projects",
   "gameMaster",
   "actions",
@@ -7026,6 +7029,10 @@ const applySimulationResult = async ({
     }
     phases?.enter("applying");
   }
+
+  // The structures this turn built for a Project, linked to it now that both
+  // the map and the board are final (nativeStructureDirector.js).
+  worldWithImpacts = linkStructuresToProjects(worldWithImpacts, result.structureLinks);
 
   // The documents that changed hands this turn, delivered to the player the way
   // a government receives them (runtime/reportDelivery.js): a letter into the
@@ -12055,6 +12062,36 @@ const territoryDirectorUnavailable = () => ({
   eventOrders: [],
   summary: "Territory director unavailable; existing legal/control impacts preserved.",
 });
+
+const STRUCTURE_DIRECTOR_INSTRUCTION =
+  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. Return JSON only.";
+const structureDirectorUnavailable = () => ({ eventOrders: [], summary: "Structure director unavailable; no structures added." });
+
+const structureDirectorVariables = (input, game) => ({
+  structureDirectorCandidates: JSON.stringify(input.candidates, null, 2),
+  structureDirectorStructures: input.structures.length ? JSON.stringify(input.structures, null, 2) : "None yet.",
+  structureDirectorProjects: input.projects.length ? JSON.stringify(input.projects, null, 2) : "None.",
+  structureDirectorGameDate: normalizeString(game?.gameDate),
+  structureDirectorBudget: String(input.budget),
+});
+
+// Same as the unit director's: every `at` becomes coordinates before the
+// director's rules, which need a point, look at the structures.
+const placeStructureOrders = async (payload, world, events) => {
+  const orders = normalizeArray(payload?.eventOrders);
+  if (!orders.length) return payload;
+  const containers = orders.map((order, index) => ({
+    event: normalizeArray(events)[Number(order?.eventIndex)] ?? null,
+    impacts: { markerOps: normalizeArray(order?.structures).map((marker) => ({ op: "build", marker })) },
+    path: `$.eventOrders[${index}]`,
+  }));
+  try {
+    await resolvePlacements(containers, world, { receipt: null });
+  } catch (error) {
+    console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
+  }
+  return payload;
+};
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
   judgments: normalizeArray(candidates).map((event, index) => ({
@@ -12164,6 +12201,16 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     reasons.push(`${territoryInput.candidates.length} event(s) may change who holds land`);
     await addJob({ key: "territory", taskKey: "territoryDirector", title: "occupied and disputed land", instruction: TERRITORY_DIRECTOR_INSTRUCTION },
       await territoryDirectorVariables(territoryInput, bundle.world));
+  }
+
+  // --- structures ---
+  const structureInput = wants("structures")
+    ? buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry })
+    : null;
+  if (structureInput) {
+    reasons.push(`${structureInput.candidates.length} event(s) may have built something`);
+    await addJob({ key: "structures", taskKey: "structureDirector", title: "new structures", instruction: STRUCTURE_DIRECTOR_INSTRUCTION },
+      structureDirectorVariables(structureInput, { ...bundle.game, gameDate: stopDate }));
   }
 
   // --- timeline ---
@@ -12465,9 +12512,43 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     territoryEvents = directedEvents;
   }
 
+  // Third: the structures the events built (nativeStructureDirector.js), which
+  // the simulator almost never puts on the map by itself. Each one that belongs
+  // to a Project is linked to it once the turn is written (structureLinks).
+  let builtEvents = territoryEvents;
+  let structureLinks = [];
+  try {
+    const built = await directGeneratedStructureOps({
+      events: territoryEvents,
+      world: bundle.world,
+      playerCountry: normalizeString(bundle.game?.country),
+      analyzeBatch: review
+        ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
+        : requestSettings.reviewSection("structures")
+          ? async (input) => {
+            const answer = await runJsonTask("structureDirector", {
+              lookups: buildTaskLookups(bundle),
+              fallback: structureDirectorUnavailable,
+              signal,
+              userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
+              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }),
+              ...jumpTaskOptions(state.requests, "review"),
+            });
+            return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
+          }
+          : null,
+    });
+    builtEvents = built.events;
+    structureLinks = built.links;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[OH structure director] pass failed; the events keep the structures they had.", error);
+  }
+
   const result = {
     clearActions: merged.clearActions,
-    events: territoryEvents,
+    events: builtEvents,
+    structureLinks,
     mode,
     outreach: merged.diplomaticOutreach,
     stopDate: merged.stopDate,

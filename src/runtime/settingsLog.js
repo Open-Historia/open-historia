@@ -131,6 +131,7 @@ registerSettingsSnapshot("AI requests", () => {
         ["Background requests a day, at most", String(day.backgroundCap)],
         ["Move units to match the events", onOff(requestSettings.reviewSection("units"))],
         ["Mark occupied and disputed land", onOff(requestSettings.reviewSection("territory"))],
+        ["Put new structures on the map", onOff(requestSettings.reviewSection("structures"))],
         ["Take repeats and filler off the timeline", onOff(requestSettings.reviewSection("timeline"))],
         ["Keep the Projects board in step", onOff(requestSettings.reviewSection("board"))],
         ["Collect your agents' reports", onOff(requestSettings.reviewSection("spies"))],
