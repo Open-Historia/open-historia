@@ -207,6 +207,7 @@ import {
 import {
   DIPLOMATIC_LEDGER_VERSION,
   applyDiplomaticUpdates,
+  applyPuppetUpdates,
   bindPuppetUpdatesToEvents,
   revealPuppetsToSpies,
   puppetUpdatesFromCanonical,
@@ -13069,7 +13070,8 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
   return linked(candidate?.countryStatPatches)
     || linked(candidate?.warUpdates)
     || linked(candidate?.relationUpdates)
-    || linked(candidate?.agreementUpdates);
+    || linked(candidate?.agreementUpdates)
+    || linked(candidate?.puppetUpdates);
 };
 
 const validateGameMasterChronology = (candidate, game) => {
@@ -13419,6 +13421,23 @@ const validateGameMasterPreviewPayload = async (candidate, {
   }, { world });
   if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
 
+  // Subordinations, tried against the live world exactly as Apply will run
+  // them: every change must apply, or the preview is refused with the reason.
+  // A skip may drop a bad line; the GM may not, because a player who asks for
+  // a puppet and silently gets none is the bug this closes.
+  const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), normalizedEvents);
+  if (puppetUpdates.length) {
+    const trial = applyPuppetUpdates({
+      world,
+      updates: puppetUpdates,
+      events: normalizedEvents,
+      stopDate: normalizeString(game?.gameDate || game?.startDate),
+      round: Number(game?.round) || 0,
+    });
+    const [first] = normalizeArray(trial.dropped);
+    if (first) return `[canonical subordination-state] puppetUpdates[${first.index}]: ${first.reason}`;
+  }
+
   const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request });
   if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
@@ -13572,6 +13591,7 @@ const gameMasterTransactionCandidate = (transaction) => ({
   warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
   relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
   agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
+  puppetUpdates: cloneValue(normalizeArray(transaction?.puppetUpdates)),
   diplomaticOutreach: cloneValue(normalizeArray(transaction?.diplomaticOutreach)),
 });
 
@@ -13593,6 +13613,7 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
     count(transaction?.agreementUpdates, "agreement", "agreements"),
+    count(transaction?.puppetUpdates, "subordination", "subordinations"),
     count(transaction?.storylineUpdates, "storyline", "storylines"),
     count(transaction?.diplomaticOutreach, "diplomatic note", "diplomatic notes"),
   ].filter(Boolean);
@@ -13622,6 +13643,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
   normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
   normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.puppetUpdates).forEach((entry, index) => labels.push(`puppet:${index}:${normalizeString(entry?.op)}:${normalizeString(entry?.overlord)}->${normalizeString(entry?.puppet)}`));
   normalizeArray(transaction?.diplomaticOutreach).forEach((_, index) => labels.push(`outreach:${index}`));
   return labels.filter(Boolean).slice(0, 128);
 };
@@ -13732,6 +13754,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
+    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), events);
     const countryStatPatches = normalizeGameMasterStatPatches(payload?.countryStatPatches, bundle.world);
 
     return {
@@ -13752,6 +13775,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         warUpdates,
         relationUpdates,
         agreementUpdates,
+        puppetUpdates,
         diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
       },
       generation,
@@ -13914,21 +13938,30 @@ export const applyGameMasterPreview = async (preview) => {
 
     const relationUpdatesForApply = normalizeArray(transaction.relationUpdates);
     const agreementUpdatesForApply = normalizeArray(transaction.agreementUpdates);
-    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length
+    // Subordinations ride the same merge as relations and agreements, so a
+    // puppet the GM makes is a ledger row like any other: the country panel
+    // shows it, the advisor is briefed on it, and a refusal later charges it.
+    const puppetUpdatesForApply = normalizeArray(transaction.puppetUpdates);
+    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length || puppetUpdatesForApply.length
       ? applyDiplomaticUpdates({
           world: nextWorld,
           relationUpdates: relationUpdatesForApply,
           agreementUpdates: agreementUpdatesForApply,
+          puppetUpdates: puppetUpdatesForApply,
           events,
           stopDate: bundle.game.gameDate || bundle.game.startDate || "",
           round: bundle.game.round || 0,
         })
-      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [] };
+      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [], appliedPuppetIds: [], droppedPuppetUpdates: [] };
     if (diplomaticMerge.appliedRelationIds.length !== relationUpdatesForApply.length) {
       throw new Error("A canonical relation operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
     }
     if (diplomaticMerge.appliedAgreementIds.length !== agreementUpdatesForApply.length) {
       throw new Error("A canonical agreement operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    if (normalizeArray(diplomaticMerge.appliedPuppetIds).length !== puppetUpdatesForApply.length) {
+      const [first] = normalizeArray(diplomaticMerge.droppedPuppetUpdates);
+      throw new Error(`A subordination change failed during the in-memory apply${first ? `: ${first.reason}` : ""}. Nothing was persisted; regenerate the preview.`);
     }
     nextWorld = diplomaticMerge.world;
 

@@ -1721,6 +1721,43 @@ const gameMasterEventSchema = {
 // The GM transaction the app validates and previews. The AI plans structured
 // canonical operations; the payload is not itself permission to persist them —
 // only the administrator's Apply of the exact preview is.
+// One subordination change the GM decrees: one polity directing another's will
+// while it stays a separate country (docs/world-state.md, Puppet). The same ops
+// and rules as a skip's puppetUpdates lines, applied by the same director.
+//
+// Until this existed the GM transaction had no place for one, so a player asking
+// the GM to make a country their puppet got the story written — "Washington
+// Reverses Course and Aligns With London" — and an empty world.puppets: the
+// country panel said nothing, and nothing charged or ended it later.
+const gmPuppetUpdateSchema = {
+  type: "object",
+  description: "One subordination change: one polity directing another's will while it remains a separate country, holding its own territory and sovereignty.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["install", "reclassify", "loyalty", "reveal", "release", "annex", "revolt", "suppress"],
+      description: "install creates it; reclassify changes kind; loyalty moves the score; reveal makes a covert one open (permanently); release, annex and revolt end it; suppress puts down a rising.",
+    },
+    overlord: nonEmptyTextSchema("The directing polity, using its full canonical name."),
+    puppet: nonEmptyTextSchema("The directed polity, using its full canonical name."),
+    kind: {
+      type: "string",
+      enum: ["protectorate", "satellite", "client"],
+      description: "Which powers the overlord holds — protectorate: foreign policy; satellite: real independence behind a sovereign front; client: a bought or installed government. Used by install and reclassify.",
+    },
+    loyalty: { type: "integer", minimum: 0, maximum: 100, description: "How far the puppet accepts direction, 0-100. Used by install and loyalty." },
+    secrecy: {
+      type: "string",
+      enum: ["open", "covert"],
+      description: "open if the world knows of it, covert if only the two parties do. Used by install.",
+    },
+    eventIndexes: gmEventIndexesSchema,
+    note: textSchema("Why, in one line."),
+  },
+  required: ["op", "overlord", "puppet", "kind", "loyalty", "secrecy", "eventIndexes", "note"],
+  additionalProperties: false,
+};
+
 export const GAME_MASTER_SCHEMA = {
   type: "object",
   description:
@@ -1768,6 +1805,14 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 12,
       items: gmAgreementUpdateSchema,
     },
+    // Not in `required`: a preview saved before puppets had a place here must
+    // still validate. The transport decodes a missing list as [].
+    puppetUpdates: {
+      type: "array",
+      description: "Structured subordination changes: making a country a puppet (protectorate, satellite or client), changing one, or ending one.",
+      maxItems: 8,
+      items: gmPuppetUpdateSchema,
+    },
     diplomaticOutreach: {
       type: "array",
       description: "Direct NPC-to-player chats not attached to one specific authored event.",
@@ -1810,6 +1855,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
+    puppetUpdatesJson: textSchema("JSON array text for structured world.puppets subordination changes — making a country a puppet (protectorate, satellite or client), changing one, or ending one. Use [] when none."),
     diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
   },
   required: [
@@ -1821,6 +1867,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
+    "puppetUpdatesJson",
     "diplomaticOutreachJson",
   ],
   additionalProperties: false,
@@ -1833,6 +1880,9 @@ const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["warUpdatesJson", "warUpdates"],
   ["relationUpdatesJson", "relationUpdates"],
   ["agreementUpdatesJson", "agreementUpdates"],
+  // A missing field decodes to [] (parseGameMasterTransportArray), so an answer
+  // from before puppets had a place here still decodes as it did.
+  ["puppetUpdatesJson", "puppetUpdates"],
   ["diplomaticOutreachJson", "diplomaticOutreach"],
 ]);
 

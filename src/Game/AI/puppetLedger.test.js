@@ -453,3 +453,25 @@ test("bootstrap puppets install on day one without a causing event", () => {
   assert.equal(merge.world.puppets[0].overlord, "Germany");
   assert.equal(merge.world.puppets[0].kind, "satellite");
 });
+
+// What was NOT applied, and why. A skip shrugs a bad line off; the GM console
+// must not, or a player who asks it for a puppet gets nothing and no word why.
+
+test("a change that cannot apply says why", () => {
+  const held = apply(baseWorld, "install~USSR~Poland~satellite~40~open~1~Seated").world;
+  const { dropped, appliedIds } = apply(held, "install~Germany~Poland~client~50~open~1~Also ours");
+  assert.deepEqual(appliedIds, []);
+  assert.equal(dropped.length, 1);
+  assert.match(dropped[0].reason, /Poland is already the satellite of USSR/);
+});
+
+test("a change naming a country the world does not know says so", () => {
+  const { dropped } = apply(baseWorld, "install~USSR~Atlantis~client~50~covert~1~Nowhere");
+  assert.match(dropped[0].reason, /not two different countries this world knows/);
+});
+
+test("a change that applies reports nothing dropped", () => {
+  const { dropped, appliedIds } = apply(baseWorld, "install~USSR~Poland~satellite~40~open~1~Seated");
+  assert.equal(appliedIds.length, 1);
+  assert.deepEqual(dropped, []);
+});

@@ -1469,19 +1469,24 @@ export const applyPuppetUpdates = ({
   const decoded = bindPuppetUpdatesToEvents(updates, events);
   const applied = [];
   const settledStorylines = new Set();
+  // What was NOT applied, and why. A skip can shrug a bad line off, but the GM
+  // console must not: a player who asks it for a puppet and gets nothing is the
+  // bug this list exists to prevent, so the GM refuses its preview and says why.
+  const dropped = [];
+  const drop = (index, update, reason) => {
+    console.warn(`[OH puppets] ${reason}`);
+    dropped.push({ index, op: update.op, overlord: update.overlord, puppet: update.puppet, reason });
+  };
 
-  for (const update of decoded) {
+  for (const [index, update] of decoded.entries()) {
     if (!PUPPET_OP_SET.has(update.op)) {
-      if (update.op) console.warn(`[OH puppets] dropped unknown verb "${update.op}".`);
+      drop(index, update, `"${update.op || "(none)"}" is not a subordination change.`);
       continue;
     }
 
     const causalEvents = linkedEvents(update, events);
     if (!causalEvents.length && !allowUnboundBaseline) {
-      console.warn(
-        `[OH puppets] dropped unbound ${update.op} ${update.overlord || "?"} -> ${update.puppet || "?"}; ` +
-        "a subordination may not persist without a causal event.",
-      );
+      drop(index, update, `${update.op} ${update.overlord || "?"} -> ${update.puppet || "?"} is tied to no event; a subordination may not persist without one.`);
       continue;
     }
 
@@ -1498,7 +1503,7 @@ export const applyPuppetUpdates = ({
       ? heldOverlord.overlord
       : namedOverlord;
     if (!overlord || !puppet || lower(overlord) === lower(puppet)) {
-      console.warn(`[OH puppets] dropped ${update.op}: could not resolve both polities, or they are the same.`);
+      drop(index, update, `${update.op}: "${update.overlord}" and "${update.puppet}" are not two different countries this world knows.`);
       continue;
     }
 
@@ -1511,11 +1516,11 @@ export const applyPuppetUpdates = ({
       // does not model, so a second claimant loses to the one in possession.
       const heldByAnother = livePuppetByPuppet(rows, puppet);
       if (heldByAnother && heldByAnother !== existing) {
-        console.warn(`[OH puppets] refused install: ${puppet} is already held by ${heldByAnother.overlord}.`);
+        drop(index, update, `${puppet} is already the ${heldByAnother.kind} of ${heldByAnother.overlord}; a country has one overlord at a time, so release it first.`);
         continue;
       }
       if (livePuppetRow(rows, puppet, overlord)) {
-        console.warn(`[OH puppets] refused install: ${overlord} is already a Puppet of ${puppet}.`);
+        drop(index, update, `${overlord} is itself a puppet of ${puppet}, so it cannot also direct it.`);
         continue;
       }
 
@@ -1578,7 +1583,7 @@ export const applyPuppetUpdates = ({
     // unrecorded one has nothing to reclassify, reveal or end, and inventing the
     // row from the verb is how a ledger fills with relationships nobody formed.
     if (!existing) {
-      console.warn(`[OH puppets] dropped ${update.op}: no live subordination of ${puppet} by ${overlord}.`);
+      drop(index, update, `${update.op}: ${overlord} does not direct ${puppet}, so there is nothing to ${update.op}.`);
       continue;
     }
 
@@ -1675,7 +1680,7 @@ export const applyPuppetUpdates = ({
         `${row.puppet} chafes under ${row.overlord}. Whether this ripens into a coup, a negotiated loosening or nothing at all is unsettled.`,
       ].join(SEP);
     });
-  return { world: merged, puppets: merged.puppets, appliedIds: applied, refusedDemandCount, storylineSeeds: [...storylineResolutions, ...storylineSeeds] };
+  return { world: merged, puppets: merged.puppets, appliedIds: applied, dropped, refusedDemandCount, storylineSeeds: [...storylineResolutions, ...storylineSeeds] };
 };
 
 // STARTING PUPPETS. The pregame bootstrap answers in one flat canonicalUpdates
@@ -1796,6 +1801,7 @@ export const applyDiplomaticUpdates = ({
     appliedRelationIds: relationMerge.appliedIds,
     appliedAgreementIds: agreementMerge.appliedIds,
     appliedPuppetIds: puppetMerge.appliedIds,
+    droppedPuppetUpdates: puppetMerge.dropped,
     refusedDemandCount: puppetMerge.refusedDemandCount,
     puppetStorylineSeeds: puppetMerge.storylineSeeds,
   };
