@@ -729,7 +729,8 @@ export const boardEntriesConcernedByEvent = (event, board, { playerCountry = "" 
 // An op that names no usable event keeps the board pass's long-standing
 // fallback, riding on the last visible event — but in a carrier of its own,
 // after that event's, so it can never be what proves that event changed a Board
-// entry (see materiallyChangedEntryIds).
+// entry (see materiallyChangedEntryIds), nor put that event in the entry's
+// activity (stampsActivity).
 
 const withoutAddress = ({ eventIndex, ...op }) => op;
 
@@ -746,6 +747,11 @@ export const boardPassCarriers = ({ ops, visibleEvents = [], hiddenEvents = [] }
         eventIndex: onTimeline ? index : null,
         hiddenIndex: onTimeline ? null : index,
         fallback,
+        // Whether applying these ops puts the event in each moved entry's
+        // activity. A fallback rides on an event it did not come from — usually
+        // the turn's last, often an espionage one — so it moves the entry but
+        // never claims that event as the entry's history.
+        stampsActivity: onTimeline && !fallback,
         date: asText(event?.date),
         // Visible events first, in their own order, then Hidden ones: the tie-break
         // for events on the same day, and for undated ones.

@@ -849,6 +849,25 @@ test("an op with no usable event number rides on the last visible event, and is 
   );
 });
 
+// Seen in a live game (2026-09-19): three entries' routine reports named no
+// event, rode on the turn's last one — an agent caught in Argentina — and that
+// event sat in the Activity of an air-defence, a satellite and a drone Project.
+test("only an event's own ops stamp it into an entry's activity, never a fallback", () => {
+  const carriers = boardPassCarriers({
+    ops: [
+      { op: "update", name: "Project Westbird", progress: 45, eventIndex: 1 },
+      { op: "update", name: "Project Kestrel", lastUpdate: "Quiet month." },
+      { op: "update", name: "Project Westbird", progress: 50, eventIndex: 2 },
+    ],
+    visibleEvents: [at("1963-01-05", "a"), at("1963-01-20", "Spy ring rolled up")],
+    hiddenEvents: [at("1963-01-10", "c")],
+  });
+  assert.deepEqual(
+    carriers.map((carrier) => [carrier.onTimeline, carrier.fallback, carrier.stampsActivity]),
+    [[false, false, false], [true, false, true], [true, true, false]],
+  );
+});
+
 test("a material change is a new entry, a status or progress change, or a checkpoint reached or missed", () => {
   const before = [project({ id: "w", progress: 40, status: "active", milestones: [{ id: "m1", title: "First cell", date: "1963-03-01", status: "pending" }] })];
   const changed = (patch) => materiallyChangedEntryIds(before, [{ ...before[0], ...patch }]);

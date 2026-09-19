@@ -6949,7 +6949,8 @@ const applySimulationResult = async ({
       // player sees after this write is the one the model moved. Only the project
       // ops are replayed: the events' other impacts were applied when the world
       // was first impacted, and must not run twice. A Hidden event's carrier is
-      // never stamped into an entry's activity, which lists timeline events only.
+      // never stamped into an entry's activity, which lists timeline events only;
+      // nor is a fallback, which names no event of its own (stampsActivity).
       //
       // A provisional event is judged on the Board itself, before and after its
       // OWN ops: if nothing changed materially, its claim was never recorded, so
@@ -6975,7 +6976,7 @@ const applySimulationResult = async ({
         const event = carrier.onTimeline ? freshEvents[carrier.eventIndex] : boardHiddenEvents[carrier.hiddenIndex];
         if (!event) continue;
         const before = worldWithImpacts;
-        const stamped = carrier.onTimeline && !unbackedIds.has(event.id);
+        const stamped = carrier.stampsActivity && !unbackedIds.has(event.id);
         let after = applyCarrier(before, carrier, event, { stamped });
         const changed = materiallyChangedEntryIds(before.projects, after.projects);
         if (carrier.onTimeline && !carrier.fallback && provisionalIndexes.has(carrier.eventIndex) && !changed.length) {
