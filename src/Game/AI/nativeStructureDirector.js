@@ -157,7 +157,10 @@ export const sanitizeStructureOrders = ({ events, orders, world, makeId = makeSt
       if (taken.has(nameKey(name))) { reject("already on the map"); continue; }
       const lng = Number(raw?.lng);
       const lat = Number(raw?.lat);
-      if (!Number.isFinite(lng) || !Number.isFinite(lat) || (lng === 0 && lat === 0)) { reject("could not be placed"); continue; }
+      if (!Number.isFinite(lng) || !Number.isFinite(lat) || (lng === 0 && lat === 0)) {
+        reject(`could not be placed${normalizeString(raw?.at) ? ` at "${normalizeString(raw.at)}"` : ""}`);
+        continue;
+      }
       if (budget <= 0) { reject(`over the ${STRUCTURE_BUILDS_PER_TURN} new structures a turn may build`); continue; }
 
       const status = normalizeString(raw?.status).toLowerCase();
