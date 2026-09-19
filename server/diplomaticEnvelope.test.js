@@ -22,7 +22,7 @@ test("the envelope splits the reply, the hidden memory line and the reaction", (
 });
 
 test("a reply without the envelope parts is returned whole, and a multi-line memory is folded", () => {
-  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "", refusedOverlord: "", refusedPuppet: "" });
+  assert.deepEqual(parseDiplomaticEnvelope("  Plain words.  "), { reply: "Plain words.", reaction: null, memorySummary: "" });
   const folded = parseDiplomaticEnvelope("Reply.\nDIPLOMATIC_MEMORY: first line\n   second line\nthird");
   assert.equal(folded.reply, "Reply.");
   assert.equal(folded.memorySummary, "first line second line third");

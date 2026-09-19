@@ -30,7 +30,31 @@ export const CHAT_EVENT_KINDS = Object.freeze([
     "poll_created",
     "poll_option_added",
     "poll_vote_cast",
+    // A demand an Overlord makes of its own Puppet, and each answer to it, in the
+    // one-on-one thread between them (see "Demands" below).
+    "demand_made",
+    "demand_answered",
 ]);
+
+// Demands. An Overlord telling its own Puppet to do something is kept the way a
+// poll is — as events appended to the thread's log, its state projected from
+// them — and never as a flag written onto a message: a flag on a message was
+// erased by the next save from any chat panel holding an older copy, which is
+// how the refusal rule this replaces spent three commits never firing.
+//
+//   open ──accepted──────────────────► accepted     (no cost)
+//   open ──refused───────────────────► refused      (costs Loyalty, once)
+//   open ──alternative───────────────► countered
+//   countered ──alternative_accepted─► settled      (no cost)
+//   open | countered ──superseded────► superseded   (no cost)
+//
+// An Overlord that declines an alternative does so by DEMANDING AGAIN — revised,
+// or the same demand restated — which supersedes the old one. Countering is
+// negotiating, so it never costs anything; only a refusal does.
+export const DEMAND_ANSWERS = Object.freeze(["accepted", "refused", "alternative", "alternative_accepted"]);
+export const DEMAND_SUMMARY_MAX_CHARS = 240;
+export const DEMAND_ALTERNATIVE_MAX_CHARS = 600;
+const DEMAND_SETTLED = new Set(["accepted", "refused", "settled", "superseded"]);
 
 // A thread keeps this many events. A long negotiation is summarised into the
 // rolling memory on its messages (diplomaticEnvelope.js), not kept whole.
@@ -43,19 +67,6 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const fold = (value) => asText(value).toLowerCase();
-
-// A refusal of an Overlord's demand (diplomaticEnvelope.js REFUSED_DEMAND, or a
-// group turn's send_message). Carried through every place this file lists a
-// message's fields — recording, migrating, folding in and projecting — because a
-// field left off any one of them is silently dropped on the next save. Both
-// parties or neither: a single name cannot be charged to anyone. Whether it has
-// been CHARGED is not recorded here but in world.chargedRefusals, because chat
-// writers save from whatever copy they hold and would erase it.
-const refusalFields = (source) => {
-    const overlord = asText(source?.refusedOverlord);
-    const puppet = asText(source?.refusedPuppet);
-    return overlord && puppet ? { refusedOverlord: overlord, refusedPuppet: puppet } : {};
-};
 
 let sequence = 0;
 const mintId = (prefix) => {
@@ -118,7 +129,6 @@ export const normalizeChatEvent = (entry, index = 0) => {
             code: asText(entry.code),
             text,
             memorySummary: asText(entry.memorySummary),
-            ...refusalFields(entry),
             // A turn's own message: shown when this event is revealed
             // (runtime/unseenEvents.js).
             ...(asText(entry.eventId) ? { eventId: asText(entry.eventId) } : {}),
@@ -149,6 +159,28 @@ export const normalizeChatEvent = (entry, index = 0) => {
         const pollId = asText(entry.pollId);
         const label = clip(asText(entry.label), POLL_LABEL_MAX_CHARS);
         return pollId && label ? { ...base, pollId, optionId: asText(entry.optionId) || mintId("option"), label } : null;
+    }
+    if (kind === "demand_made") {
+        const demandId = asText(entry.demandId);
+        const target = asText(entry.target);
+        const summary = clip(asText(entry.summary), DEMAND_SUMMARY_MAX_CHARS);
+        if (!demandId || !base.by || !target || !summary) return null;
+        return {
+            ...base,
+            demandId,
+            target,
+            summary,
+            ...(asText(entry.messageId) ? { messageId: asText(entry.messageId) } : {}),
+            ...(asText(entry.supersedes) ? { supersedes: asText(entry.supersedes) } : {}),
+        };
+    }
+    if (kind === "demand_answered") {
+        const demandId = asText(entry.demandId);
+        const answer = fold(entry.answer);
+        if (!demandId || !base.by || !DEMAND_ANSWERS.includes(answer)) return null;
+        const text = clip(asText(entry.text), DEMAND_ALTERNATIVE_MAX_CHARS);
+        if (answer === "alternative" && !text) return null;
+        return { ...base, demandId, answer, ...(text ? { text } : {}) };
     }
     // poll_vote_cast
     const pollId = asText(entry.pollId);
@@ -218,7 +250,6 @@ export const eventsFromLegacyChat = (chat) => {
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
-            ...refusalFields(message),
         });
         // Reactions were a map on the message; each becomes its own event.
         const reactions = message?.reactions && typeof message.reactions === "object" ? message.reactions : {};
@@ -255,6 +286,7 @@ export const projectChatThread = (events) => {
     const messages = [];
     const messageById = new Map();
     const polls = new Map();
+    const demands = new Map();
 
     for (const event of log) {
         if (event.kind === "chat_created") {
@@ -282,7 +314,6 @@ export const projectChatThread = (events) => {
                 text: event.text,
                 time: event.time,
                 memorySummary: event.memorySummary,
-                ...refusalFields(event),
                 reactions: {},
                 // Who was in the room when this was said (E5): a member added
                 // later did not hear it, and must not be written as though it did.
@@ -318,6 +349,51 @@ export const projectChatThread = (events) => {
             }
             continue;
         }
+        if (event.kind === "demand_made") {
+            // A demand made again replaces the one it answers — but only one still
+            // in play. A refusal that stands is still charged, whatever follows.
+            const replaced = event.supersedes ? demands.get(event.supersedes) : null;
+            if (replaced && !DEMAND_SETTLED.has(replaced.status)) {
+                replaced.status = "superseded";
+                replaced.supersededBy = event.demandId;
+            }
+            if (!demands.has(event.demandId)) {
+                demands.set(event.demandId, {
+                    id: event.demandId,
+                    by: event.by,
+                    target: event.target,
+                    summary: event.summary,
+                    messageId: event.messageId || "",
+                    time: event.time,
+                    status: "open",
+                    alternative: "",
+                    ...(event.supersedes ? { supersedes: event.supersedes } : {}),
+                });
+            }
+            continue;
+        }
+        if (event.kind === "demand_answered") {
+            // Only the Puppet answers a demand, and only its Overlord accepts the
+            // Puppet's alternative: a model may not answer for either side, nor a
+            // third party for anyone. The first answer that settles it is final.
+            const demand = demands.get(event.demandId);
+            if (!demand) continue;
+            const byPuppet = fold(event.by) === fold(demand.target);
+            const byOverlord = fold(event.by) === fold(demand.by);
+            if (event.answer === "alternative_accepted") {
+                if (byOverlord && demand.status === "countered") demand.status = "settled";
+                continue;
+            }
+            if (!byPuppet || demand.status !== "open") continue;
+            if (event.answer === "alternative") {
+                demand.status = "countered";
+                demand.alternative = event.text;
+            } else {
+                demand.status = event.answer;
+            }
+            demand.answeredAt = event.time;
+            continue;
+        }
         // poll_vote_cast — the first vote an actor casts on a poll is final.
         const poll = polls.get(event.pollId);
         if (!poll || poll.votes[event.by] || !poll.options.some((option) => option.id === event.optionId)) continue;
@@ -337,6 +413,7 @@ export const projectChatThread = (events) => {
                 votes: Object.values(poll.votes).filter((optionId) => optionId === option.id).length,
             })),
         })),
+        demands: [...demands.values()],
     };
 };
 
@@ -431,7 +508,6 @@ export const withUnloggedMessages = (events, messages, { threadId = "" } = {}) =
             eventId: asText(message?.eventId),
             catchUp: asText(message?.catchUp),
             catchUpLabel: asText(message?.catchUpLabel),
-            ...refusalFields(message),
         });
     }
     return additions.length ? normalizeChatEvents([...log, ...additions]) : log;

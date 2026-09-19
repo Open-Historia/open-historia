@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { describePuppetBriefing, livePuppetsFor, loyaltyBand, puppetBriefingFor, refusalPairsFor, visiblePuppetsFor } from "./puppets.js";
+import { describePuppetBriefing, livePuppetsFor, loyaltyBand, puppetBriefingFor, visiblePuppetsFor } from "./puppets.js";
 
 // One field, different rows per viewer - the same problem chatVisibility.js
 // solves for transcripts. What separates the two: a chat filters on
@@ -221,22 +221,4 @@ test("a viewer sees an arrangement as they last saw it, ended or not", () => {
   const stale = { ...ended, knownTo: [{ polity: "United Kingdom", learnedDate: "1948-03-02", seenStatus: "active" }] };
   assert.equal(visiblePuppetsFor(world([refreshed]), "United Kingdom")[0].status, "released");
   assert.equal(visiblePuppetsFor(world([stale]), "United Kingdom")[0].status, "active");
-});
-
-// Which of the speaker's arrangements a refusal could be about, right now: its
-// own, live, with the other party IN THE ROOM. The per-reply instruction offers
-// the REFUSED_DEMAND line for exactly these and nothing else.
-
-test("a speaker's refusable arrangements are those whose other party is present", () => {
-  const rows = [openSatellite, { ...covertClient, overlord: "USSR", puppet: "Finland" }];
-  assert.deepEqual(refusalPairsFor(world(rows), "USSR", { present: ["Poland", "France"] }),
-    [{ role: "overlord", counterpart: "Poland" }], "Finland is not in the room");
-  assert.deepEqual(refusalPairsFor(world(rows), "Poland", { present: [{ name: "USSR" }] }),
-    [{ role: "puppet", counterpart: "USSR" }]);
-});
-
-test("nobody present, or no arrangement, means nothing to refuse", () => {
-  assert.deepEqual(refusalPairsFor(world([openSatellite]), "USSR", { present: ["France"] }), []);
-  assert.deepEqual(refusalPairsFor(world([openSatellite]), "France", { present: ["USSR", "Poland"] }), []);
-  assert.deepEqual(refusalPairsFor(world([{ ...openSatellite, status: "released" }]), "USSR", { present: ["Poland"] }), []);
 });

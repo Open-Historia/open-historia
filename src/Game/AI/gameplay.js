@@ -2,6 +2,7 @@
 import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
+import { demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
@@ -6309,7 +6310,7 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     const priorMessages = withoutUnseenMessages(existing?.messages ?? [], unseenEvents.unseenFor(bundle.world));
 
     const gameDate = normalizeString(bundle.game?.gameDate);
-    const { reply, reaction, memorySummary, refusedOverlord, refusedPuppet } = await sendDiplomaticMessageOnceOff({
+    const { reply, reaction, memorySummary } = await sendDiplomaticMessageOnceOff({
       playerMessage: trimmedText,
       speakingAs: recipient.name,
       participantNames: [playerName, recipient.name],
@@ -6326,12 +6327,10 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
       ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
     };
     const leaderMessage = {
+      // Set here so a demand this reply makes can be attached to it.
+      id: mintDemandId("msg"),
       role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate,
       ...(memorySummary ? { memorySummary } : {}),
-      // A refusal of an Overlord's demand, the same as the panel carries: a
-      // player who tells their Overlord no through the advisor's send button
-      // has refused exactly as much as one who typed it in the thread.
-      ...(refusedOverlord && refusedPuppet ? { refusedOverlord, refusedPuppet } : {}),
     };
 
     const built = normalizeChatEntry({
@@ -6343,10 +6342,30 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     });
     if (!built) throw new Error("Could not build the message.");
 
-    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
+    let nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
     await writeChatsState(nextChats);
 
-    const finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    let finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+
+    // The advisor's send button is a one-on-one exchange like the panel's, so a
+    // reply here can make, answer or settle a demand too (runtime/demandCheck.js).
+    // checkDemandReply returns at once, without a request, anywhere but the
+    // thread between the player and their own Overlord or Puppet.
+    const demandEvents = finalChat
+      ? await checkDemandReply({ chat: finalChat, speaker: recipient.name, reply, answering: trimmedText, messageId: leaderMessage.id, time: gameDate })
+        .catch(() => [])
+      : [];
+    if (demandEvents.length) {
+      const logged = normalizeChats([{
+        ...finalChat,
+        events: [...(finalChat.events?.length ? finalChat.events : eventsFromLegacyChat(finalChat)), ...demandEvents],
+      }])[0];
+      if (logged) {
+        nextChats = nextChats.map((chat) => (chat === finalChat ? logged : chat));
+        await writeChatsState(nextChats);
+        finalChat = logged;
+      }
+    }
     return { chat: finalChat, reply };
   } finally {
     endSimulation();
@@ -6801,14 +6820,14 @@ const applySimulationResult = async ({
     });
   });
 
-  // THE ONE DETERMINISTIC LOYALTY RULE. A demand is negotiable text, so the
-  // engine cannot read a refusal out of a reply: the speaker marks it with a
-  // hidden REFUSED_DEMAND line (diplomaticEnvelope.js) and it rides on the saved
-  // message. Collected here off the transcript rather than written to the world
-  // when it happened, because a world write from the chat panel would race the
-  // turn's. chargeRefusals owns the rest — once per refusal, recorded in
-  // world.chargedRefusals where no chat writer can erase it — and is where it
-  // can be tested.
+  // THE ONE DETERMINISTIC LOYALTY RULE: a demand the Puppet REFUSED costs a
+  // fixed amount, once. A demand is a record in its thread's log
+  // (chatThreads.js), answered from the demand card by the player or read off
+  // an AI's reply by the demandCheck task (runtime/demandCheck.js). Collected
+  // here, off the saved threads, rather than charged when it happened, because a
+  // world write from the chat panel would race the turn's. chargeRefusals owns
+  // the rest — once per refused demand, recorded in world.chargedRefusals where
+  // no chat writer can erase it — and is where it can be tested.
   const refusalCharge = chargeRefusals(nextChats, worldWithImpacts.chargedRefusals);
   const refusedDemands = refusalCharge.refusedDemands;
   worldWithImpacts = { ...worldWithImpacts, chargedRefusals: refusalCharge.charged };
@@ -11275,6 +11294,50 @@ export const runChatActionBatch = async ({
     cursors: nextCursors,
     actions: normalizeArray(payload?.actions),
   };
+};
+
+// What an AI's reply does about a demand, in the one-on-one thread between the
+// player and their own Overlord or Puppet (runtime/demandCheck.js): the events to
+// append to the thread's log — a demand made, answered, or settled — or none.
+//
+// One small request, and only there: every other reply in the game is never
+// checked. Its answer is a REQUIRED choice from a fixed list, which is the whole
+// point — the optional hidden line it replaces was left off by a model that had
+// plainly understood the refusal. A failed request records nothing: no card, no
+// charge, never a guess.
+//
+// `answering` is the message the reply answers, so the check can tell a refusal
+// from a reply to something else. The caller appends what comes back.
+const mintDemandId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null } = {}) => {
+  const stored = normalizeChats([chat])[0];
+  if (!stored || !normalizeString(reply)) return [];
+  const [world, game] = await Promise.all([readWorldState({ force: true }), readGameData({ force: true })]);
+  const context = demandCheckContext({
+    world,
+    speaker,
+    playerCountry: normalizeString(game?.country),
+    participants: stored.countries,
+  });
+  if (!context) return [];
+  const openDemand = openDemandOf(stored);
+  // A Puppet's reply matters only while there is a demand for it to answer; an
+  // Overlord's always might, since any reply of its may make one.
+  if (context.role === "puppet" && !openDemand) return [];
+
+  const { payload } = await runJsonTask("demandCheck", {
+    fallback: () => ({ outcome: "none", summary: "" }),
+    signal,
+    userMessage: demandCheckPrompt({ context, reply, openDemand, answering }),
+    variables: {},
+    requestKind: BACKGROUND_REQUEST,
+  });
+  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId });
+  logDebugEvent("diplomacy",
+    `Demand check on ${speaker}'s reply (${context.role}): ${normalizeString(payload?.outcome) || "none"}${events.length ? ` — ${events.map((event) => event.kind === "demand_made" ? "demand made" : `demand ${event.answer}`).join(", ")}` : ""}.`,
+    { outcome: payload?.outcome, summary: payload?.summary, openDemand: openDemand?.id ?? null });
+  return events;
 };
 
 export const chooseNextDiplomaticSpeaker = async ({

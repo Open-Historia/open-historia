@@ -249,37 +249,3 @@ test("an option given as {label} alone, and a vote by its own ref, both work", (
     ], roster(), {});
     assert.deepEqual(rejected, []);
 });
-
-// A group turn answers as structured actions, not free text, so there is no
-// hidden REFUSED_DEMAND line to carry a refusal (diplomaticEnvelope.js). The same
-// two fields ride on send_message instead — named the same, so both paths feed
-// the one deterministic Loyalty rule — and through the log to the saved message.
-
-test("a message refusing an Overlord's demand carries both parties", () => {
-    assert.deepEqual(
-        normalizeChatAction({ type: "send_message", actorName: "Prussia", content: "We will not march.", refusedOverlord: "France", refusedPuppet: "Prussia" }),
-        { type: "send_message", actorName: "Prussia", content: "We will not march.", refusedOverlord: "France", refusedPuppet: "Prussia" },
-    );
-});
-
-test("half a refusal is no refusal", () => {
-    // One name cannot be charged to anyone, and guessing the other from who
-    // spoke is the mistake the envelope already made once.
-    assert.deepEqual(
-        normalizeChatAction({ type: "send_message", actorName: "Prussia", content: "No.", refusedOverlord: "France" }),
-        { type: "send_message", actorName: "Prussia", content: "No." },
-    );
-});
-
-test("a refusal reaches the thread's message, and so the saved transcript", () => {
-    const { events } = applyChatActionBatch([
-        { type: "send_message", actorName: "Prussia", content: "We will not march.", refusedOverlord: "France", refusedPuppet: "Prussia" },
-    ], roster(), { time: "1870-07-14" });
-    const message = projectChatThread([
-        { id: "t-created", kind: "chat_created", time: "1870-07-01", title: "The alliance" },
-        { id: "t-join", kind: "member_joined", time: "1870-07-01", name: "Prussia" },
-        ...events,
-    ]).messages.find((entry) => entry.text === "We will not march.");
-    assert.equal(message.refusedOverlord, "France");
-    assert.equal(message.refusedPuppet, "Prussia");
-});

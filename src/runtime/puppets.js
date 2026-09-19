@@ -212,16 +212,3 @@ export const describePuppetBriefing = ({ own = [], learned = [] } = {}, viewer =
   }
   return `[Subordinations ${viewer} Knows Of]\n${lines.join("\n")}`;
 };
-
-// The arrangements a refusal in THIS conversation could be about: the speaker's
-// own live ones whose other party is present. The per-reply instruction
-// (diplomaticEnvelope.js) offers the hidden REFUSED_DEMAND line for exactly
-// these, by name, and to nobody else — a line offered to every speaker is one a
-// model can emit for nothing, and each false mark costs a Puppet Loyalty.
-export const refusalPairsFor = (world, speaker, { present = [] } = {}) => {
-  const room = present.map((entry) => str(entry?.name ?? entry)).filter(Boolean);
-  return puppetBriefingFor(world, speaker, { present })
-    .own
-    .filter((row) => room.some((name) => same(name, row.counterpart)))
-    .map((row) => ({ role: row.role, counterpart: row.counterpart }));
-};

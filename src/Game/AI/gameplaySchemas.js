@@ -1389,6 +1389,27 @@ export const DESCRIPTION_TO_ACTION_SCHEMA = {
   additionalProperties: false,
 };
 
+// Whether a reply in the one-on-one thread between the player and their own
+// Overlord or Puppet makes, answers or settles a demand (runtime/demandCheck.js).
+// Both fields REQUIRED, the outcome from a fixed list: a demand used to be marked
+// by an optional hidden line in the reply, and a live run showed a model
+// understand a refusal and still leave that line off. A required choice cannot
+// be left off. The code accepts only the outcomes that side may give.
+export const DEMAND_CHECK_SCHEMA = {
+  type: "object",
+  description: "What the reply does about a demand between an overlord and its own puppet state.",
+  properties: {
+    outcome: {
+      type: "string",
+      enum: ["none", "demand", "accepts_alternative", "accepted", "refused", "alternative"],
+      description: "Exactly one of the outcomes the request lists for this reply.",
+    },
+    summary: textSchema("One line: what is demanded (for demand) or what is offered instead (for alternative). Empty for any other outcome."),
+  },
+  required: ["outcome", "summary"],
+  additionalProperties: false,
+};
+
 export const NEXT_SPEAKER_SCHEMA = {
   type: "object",
   description: "The exact participant who should speak next in the diplomatic chat.",
@@ -1429,8 +1450,6 @@ const chatActionSchema = {
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
     content: textSchema("send_message: what it says, in its leader's voice. Match the length and tone of what it answers."),
-    refusedOverlord: textSchema("send_message: ONLY when this message is a refusal of a demand an overlord made of its own puppet state - the overlord's exact name. Leave it out otherwise. Always set together with refusedPuppet."),
-    refusedPuppet: textSchema("send_message: ONLY with refusedOverlord - the puppet state doing the refusing, by exact name. It may be the speaker refusing, or, when an overlord is answering its puppet's refusal, the puppet it is answering."),
     targetEntryId: textSchema("add_reaction: the id of the message reacted to, copied from the transcript."),
     emoji: textSchema("add_reaction: one emoji."),
     title: textSchema("rename_chat: the new title."),
@@ -2568,6 +2587,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
   nextSpeaker: NEXT_SPEAKER_SCHEMA,
+  demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
   interactiveCreation: INTERACTIVE_CREATION_SCHEMA,
@@ -2615,6 +2635,12 @@ export const CHAT_ACTIONS_TOOL = makeTool(
   "submit_chat_actions",
   "Submit this turn of the conversation: every AI-controlled participant's actions, in order.",
   CHAT_ACTIONS_SCHEMA,
+);
+
+export const DEMAND_CHECK_TOOL = makeTool(
+  "submit_demand_check",
+  "Submit what this reply does about a demand between an overlord and its own puppet state.",
+  DEMAND_CHECK_SCHEMA,
 );
 
 export const NEXT_SPEAKER_TOOL = makeTool(
@@ -2729,6 +2755,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
   descriptionToAction: DESCRIPTION_TO_ACTION_TOOL,
   nextSpeaker: NEXT_SPEAKER_TOOL,
+  demandCheck: DEMAND_CHECK_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
   interactiveCreation: INTERACTIVE_CREATION_TOOL,

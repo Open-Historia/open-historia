@@ -591,8 +591,6 @@ const normalizeChatMessage = (message, index = 0) => {
       text,
       time: "",
       memorySummary: "",
-      refusedOverlord: "",
-      refusedPuppet: "",
     };
   }
 
@@ -623,21 +621,6 @@ const normalizeChatMessage = (message, index = 0) => {
     // chat text, it lets long negotiations stay bounded without forgetting
     // agreements, threats or unresolved proposals (promptContext reads the latest).
     memorySummary: normalizeOptionalString(message.memorySummary || message.diplomaticMemorySummary),
-    // A refusal of an Overlord's demand, off the reply's hidden REFUSED_DEMAND
-    // line (diplomaticEnvelope.js) or a group turn's send_message. Both parties
-    // are named on the message itself, never taken from who spoke: an AI Puppet
-    // marks its own refusal, and an Overlord marks the reply answering the
-    // PLAYER's, whose typed message carries no envelope. Both or neither — a
-    // single name cannot be charged to anyone. It has to survive the round trip,
-    // because the next jump reads refusals back off the SAVED transcript; a field
-    // this normalizer does not know is one the next write silently drops.
-    ...(() => {
-      const overlord = normalizeOptionalString(message.refusedOverlord);
-      const puppet = normalizeOptionalString(message.refusedPuppet);
-      return overlord && puppet
-        ? { refusedOverlord: overlord, refusedPuppet: puppet }
-        : { refusedOverlord: "", refusedPuppet: "" };
-    })(),
     text,
     time: normalizeOptionalString(message.time || message.date),
     ...(eventId ? { eventId } : {}),
@@ -710,6 +693,9 @@ export const normalizeChatEntry = (entry, index = 0) => {
     ...(events.length ? { events } : {}),
     // The binding votes the log carries, ready for the panel to render.
     ...(projected?.polls?.length ? { polls: projected.polls } : {}),
+    // The demands the log carries (chatThreads.js), for the panel's demand card
+    // and for the turn that charges a refusal.
+    ...(projected?.demands?.length ? { demands: projected.demands } : {}),
     source: projected?.source || normalizeOptionalString(entry.source) || "manual",
     status: normalizeOptionalString(entry.status) || "open",
     title: projected?.title || normalizeOptionalString(entry.title),
@@ -734,13 +720,17 @@ export const chargeRefusals = (chats, charged = []) => {
   const refusedDemands = [];
   const newlyCharged = [];
   for (const chat of normalizeArray(chats)) {
-    for (const message of normalizeArray(chat?.messages)) {
-      const overlord = normalizeOptionalString(message?.refusedOverlord);
-      const puppet = normalizeOptionalString(message?.refusedPuppet);
-      const id = normalizeOptionalString(message?.id);
-      if (!overlord || !puppet || !id || seen.has(id)) continue;
-      seen.add(id);
-      newlyCharged.push(id);
+    const threadId = normalizeOptionalString(chat?.id);
+    for (const demand of normalizeArray(chat?.demands)) {
+      if (demand?.status !== "refused") continue;
+      const overlord = normalizeOptionalString(demand.by);
+      const puppet = normalizeOptionalString(demand.target);
+      // A demand id is only unique within its thread, so the key carries both —
+      // or one thread's refusal would hide another's that reused the id.
+      const key = `${threadId}:${normalizeOptionalString(demand.id)}`;
+      if (!overlord || !puppet || !threadId || seen.has(key)) continue;
+      seen.add(key);
+      newlyCharged.push(key);
       refusedDemands.push({ overlord, puppet });
     }
   }

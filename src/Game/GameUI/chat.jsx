@@ -3,8 +3,9 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { checkDemandReply, chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
@@ -460,6 +461,125 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
     );
 };
 
+// A demand between the player and their own Overlord or Puppet
+// (runtime/demandCheck.js, chatThreads.js), drawn like a poll: a card in the
+// thread, answered by the side whose move it is, once. Two buttons and your own
+// words, the shape of an interactive event's "play it out / let it pass" with an
+// angle of your own. It appears only on DEMANDS — every other message from an
+// Overlord is just a message.
+//
+//   the player is the Puppet, the demand open      → Accept · Refuse · an alternative
+//   the player is the Overlord, an alternative on it → Accept it · Reject (optionally revised)
+//
+// Only a Refuse costs the Puppet anything, and only once (gameState.js
+// chargeRefusals). Rejecting an alternative is demanding again: revised if you
+// write something, the original restated if you do not.
+const DEMAND_STATUS_TEXT = {
+    accepted: "Accepted",
+    refused: "Refused",
+    settled: "Settled on the alternative",
+    superseded: "Replaced by a new demand",
+};
+
+const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlternative, onReject }) => {
+    const [text, setText] = useState("");
+    const me = String(playerCountry ?? "").trim().toLowerCase();
+    const iAmPuppet = String(demand?.target ?? "").trim().toLowerCase() === me;
+    const iAmOverlord = String(demand?.by ?? "").trim().toLowerCase() === me;
+    const myMovePuppet = iAmPuppet && demand?.status === "open";
+    const myMoveOverlord = iAmOverlord && demand?.status === "countered";
+    const settled = DEMAND_STATUS_TEXT[demand?.status] ?? "";
+
+    const button = (label, onClick, tone = "neutral") => (
+        <button
+            type="button"
+            disabled={busy}
+            onClick={onClick}
+            style={{
+                background: tone === "danger" ? "rgba(248,113,113,0.14)" : tone === "go" ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${tone === "danger" ? "rgba(248,113,113,0.45)" : tone === "go" ? "rgba(74,222,128,0.45)" : "rgba(255,255,255,0.16)"}`,
+                borderRadius: "8px",
+                color: "white",
+                cursor: busy ? "default" : "pointer",
+                flex: 1,
+                fontFamily: "inherit",
+                fontSize: "0.78rem",
+                fontWeight: 700,
+                opacity: busy ? 0.6 : 1,
+                padding: "0.4rem 0.6rem",
+            }}
+        >{label}</button>
+    );
+
+    return (
+        <div style={{
+            background: "rgba(234,179,8,0.08)",
+            border: "1px solid rgba(234,179,8,0.35)",
+            borderRadius: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            margin: "0.35rem 0",
+            opacity: settled ? 0.7 : 1,
+            padding: "0.7rem 0.85rem",
+        }}>
+            <span style={{ fontSize: "0.68rem", letterSpacing: "0.04em", color: "rgba(250,204,21,0.9)", textTransform: "uppercase" }}>
+                {iAmOverlord ? `Your demand · of ${demand?.target}` : `Demand · from ${demand?.by}`}
+                {settled ? ` · ${settled}` : ""}
+            </span>
+            <span style={{ fontSize: "0.85rem", fontWeight: 700, lineHeight: 1.35 }}>{demand?.summary}</span>
+            {demand?.alternative && (
+                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: "0.78rem", lineHeight: 1.35 }}>
+                    {iAmPuppet ? "You offered instead: " : `${demand?.target} offers instead: `}{demand.alternative}
+                </span>
+            )}
+
+            {myMovePuppet && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button("Accept", () => onAnswer?.("accepted", ""), "go")}
+                        {button("Refuse", () => onAnswer?.("refused", ""), "danger")}
+                    </div>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <input
+                            value={text}
+                            onChange={(event) => setText(event.target.value)}
+                            placeholder="Or offer an alternative…"
+                            disabled={busy}
+                            style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", flex: 1, fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                        />
+                        {button("Offer", () => { if (text.trim()) { onAnswer?.("alternative", text.trim()); setText(""); } })}
+                    </div>
+                </>
+            )}
+
+            {myMoveOverlord && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button("Accept alternative", () => onAcceptAlternative?.(), "go")}
+                        {button("Reject", () => { onReject?.(text.trim()); setText(""); }, "danger")}
+                    </div>
+                    <input
+                        value={text}
+                        onChange={(event) => setText(event.target.value)}
+                        placeholder="Revise your demand (or leave empty to insist on it)…"
+                        disabled={busy}
+                        style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                    />
+                </>
+            )}
+
+            {!settled && !myMovePuppet && !myMoveOverlord && (
+                <span data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
+                    {demand?.status === "countered"
+                        ? `Waiting for ${demand?.by} to consider the alternative`
+                        : `Waiting for ${demand?.target}'s answer`}
+                </span>
+            )}
+        </div>
+    );
+};
+
 const MessageBubble = ({ msg, onRetry }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
@@ -811,6 +931,39 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     const chatRef = useRef(chat);
     useEffect(() => { chatRef.current = chat; }, [chat]);
 
+    // DEMANDS, in the one-on-one thread between the player and their own
+    // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
+    // player, from the same shared rule as the list's markers.
+    const puppetRelations = usePuppetMarkers();
+    const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
+    // The composer offers "make this a demand" only to an Overlord writing to
+    // its own Puppet; an Overlord's demands of the player arrive on their own.
+    const canDemand = theyAre === "puppet";
+    const [makeDemand, setMakeDemand] = useState(false);
+    const [demandBusy, setDemandBusy] = useState(false);
+    const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // Appends events to the thread's log, the way a poll vote is — but read from
+    // the thread as LAST RENDERED, never the copy this closure started with: a
+    // demand is often appended after a model request, seconds later, and writing
+    // the older copy back would drop whatever the thread gained meanwhile.
+    const appendThreadEvents = (newEvents) => {
+        if (!newEvents?.length) return;
+        const current = chatRef.current ?? chat;
+        const events = [
+            ...(current.events?.length ? current.events : eventsFromLegacyChat({ ...current, messages: messagesRef.current })),
+            ...newEvents,
+        ];
+        const projected = projectChatThread(events);
+        onThreadUpdate?.(current.id, {
+            events,
+            countries: projected.countries,
+            title: projected.title,
+            polls: projected.polls,
+            demands: projected.demands,
+        });
+    };
+
     useEffect(() => {
         countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
     }, [countries]);
@@ -996,21 +1149,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             const asked = [...messagesRef.current].reverse().find((msg) => msg.role === "user" && msg.text === playerMessage);
             const repliedOn = asked?.time || gameDate;
             try {
-                const { reply, reaction, memorySummary, refusedOverlord, refusedPuppet } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
+                const { reply, reaction, memorySummary } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
-                // and the world director read the same continuity.
+                // and the world director read the same continuity. Its id is set
+                // here so a demand this reply makes can be attached to it.
                 const leaderMessage = {
+                    id: newThreadId("msg"),
                     role: "leader", speaker: country.name, code: country.code, text: reply, time: repliedOn,
                     ...(memorySummary ? { memorySummary } : {}),
-                    // A refusal of an Overlord's demand, naming BOTH parties so
-                    // it works whichever of them is speaking — an AI Puppet marks
-                    // its own reply, and an Overlord marks the reply that answers
-                    // the PLAYER's refusal. Stamped on the message rather than
-                    // written to the world here: the next jump reads it back off
-                    // the transcript, so the deterministic Loyalty cost cannot
-                    // race the turn's own world write.
-                    ...(refusedOverlord && refusedPuppet ? { refusedOverlord, refusedPuppet } : {}),
                 };
 
                 if (reaction) {
@@ -1025,6 +1172,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     pushMessages([...msgs, leaderMessage]);
                 } else {
                     pushMessages([...messagesRef.current, leaderMessage]);
+                }
+                // Did this reply make, answer or settle a demand? Only asked in
+                // the one-on-one thread between the player and their own Overlord
+                // or Puppet — everywhere else checkDemandReply returns at once,
+                // without a request. It runs after the reply is shown, so the
+                // player is never kept waiting for it; a failure records nothing.
+                if (!isGroup && theyAre) {
+                    void checkDemandReply({
+                        chat: { ...(chatRef.current ?? chat), messages: messagesRef.current },
+                        speaker: country.name,
+                        reply,
+                        answering: playerMessage,
+                        messageId: leaderMessage.id,
+                        time: repliedOn,
+                    })
+                        .then((events) => appendThreadEvents(events))
+                        .catch((error) => logDebugEvent("diplomacy", `Demand check on ${country.name}'s reply failed; nothing recorded.`, error));
                 }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
@@ -1165,23 +1329,104 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             logDebugEvent("diplomacy", `${playerCountry} voted in chat #${chat.id}.`, { poll: poll.question, optionId }, { verbose: true });
         };
 
+        // The demand card's moves (runtime/demandCheck.js). Each is appended to
+        // the thread's log AND said, as a line from the player, so the other side
+        // answers it the way it answers anything typed — and that answer is then
+        // checked in turn. Only a refusal costs the Puppet anything.
+        const answerDemand = async (demand, answer, text = "") => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer, text, time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                const line = answer === "accepted" ? `We accept: ${demand.summary}.`
+                    : answer === "refused" ? "We refuse this demand."
+                        : text;
+                await submitPlayerText(line);
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        const acceptAlternative = async (demand) => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer: "alternative_accepted", time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                await submitPlayerText(`We accept your alternative: ${demand.alternative}.`);
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        // Rejecting an alternative is demanding again: the player's revision if
+        // they wrote one, the original restated if not — "this is the demand".
+        const rejectAlternative = async (demand, revised = "") => {
+            setDemandBusy(true);
+            try {
+                await submitPlayerText(revised || `No. The demand stands: ${demand.summary}.`, {
+                    onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: demand.target,
+                        text: revised,
+                        openDemand: demand,
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean)),
+                });
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
+            if (!text || isLoading) return;
+            setPlayerInput("");
+            // "Make this a demand" — only offered to an Overlord writing to its
+            // own Puppet, and only for this one message.
+            const asDemand = canDemand && makeDemand;
+            setMakeDemand(false);
+            await submitPlayerText(text, {
+                // Rejecting an alternative from the card is demanding again; so is
+                // this. Either replaces whatever demand was still in play.
+                onSent: asDemand
+                    ? ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: countries[0]?.name,
+                        text,
+                        openDemand: openDemandOf(chatRef.current),
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean))
+                    : null,
+            });
+        };
+
+        // Sends a line as the player and gets the table's answer: the composer's
+        // path, and the demand card's, so a button press is answered exactly as a
+        // typed message is. `onSent` runs once the line is on the thread, with its
+        // id — which is what a demand made by this line is attached to.
+        const submitPlayerText = async (text, { onSent = null } = {}) => {
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
             lastPlayerMessage.current = text;
-            setPlayerInput("");
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
             const moment = await readSeenChatMoment(gameDate);
             const catchUp = buildLeaderCatchUp(messagesRef.current, chat, playerCountry, moment);
+            const messageId = newThreadId("msg");
             const nextMessages = [...messagesRef.current, {
-                role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
+                id: messageId, role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }];
             pushMessages(nextMessages);
+            onSent?.({ messageId, time: moment.date || gameDate });
             // One request for the whole table. Only for a group: a one-on-one
             // chat is already a single request, and its streaming reply is what
             // the player watches arrive.
@@ -1335,6 +1580,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
+            {/* Demands between the player and their own Overlord or Puppet. A
+                replaced demand is not shown — its successor says what stands —
+                and only the last few, so a long negotiation stays readable. */}
+            {!isGroup && (chat.demands ?? []).filter((demand) => demand.status !== "superseded").slice(-3).map((demand) => (
+                <DemandCard
+                    key={demand.id}
+                    demand={demand}
+                    playerCountry={playerCountry}
+                    busy={demandBusy || isLoading}
+                    onAnswer={(answer, text) => answerDemand(demand, answer, text)}
+                    onAcceptAlternative={() => acceptAlternative(demand)}
+                    onReject={(text) => rejectAlternative(demand, text)}
+                />
+            ))}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             {/* The next line of the table's turn, still being typed. */}
             {!isLoading && typingNext && (
@@ -1365,9 +1624,22 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 </div>
             ) : phase === "player" && !isLoading ? (
                 <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem", flexShrink: 0 }}>
+                {/* Make the next message a demand of the player's own Puppet
+                    (runtime/demandCheck.js). A choice, so no request is spent
+                    working out whether the player meant one. One message at a
+                    time: it switches itself off once sent. */}
+                {canDemand && (
+                    <button
+                    type="button"
+                    onClick={() => setMakeDemand((on) => !on)}
+                    aria-pressed={makeDemand}
+                    title={makeDemand ? "This message is a demand. Click to send it as an ordinary message." : `Make this message a demand of ${countries[0]?.name}`}
+                    style={{ background: makeDemand ? "rgba(234,179,8,0.22)" : "rgba(255,255,255,0.05)", border: `1px solid ${makeDemand ? "rgba(234,179,8,0.7)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: makeDemand ? "rgb(250,204,21)" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, height: "2.5rem", padding: "0 0.6rem" }}
+                    >{makeDemand ? "⚑ Demand" : "⚑"}</button>
+                )}
                 <textarea
                 ref={composerRef}
-                placeholder="Send a diplomatic message…"
+                placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : "Send a diplomatic message…"}
                 rows={1} value={playerInput}
                 onChange={e => setPlayerInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
@@ -1768,11 +2040,14 @@ const usePuppetMarkers = () => {
                     readGameData().catch(() => ({})),
                 ]);
                 if (cancelled) return;
+                // Per counterpart: the label, and what THEY are to the player —
+                // the demand card and the composer's "make this a demand" need
+                // the relationship itself, not a label to parse.
                 const next = {};
                 for (const row of livePuppetsFor(world, game?.country || "")) {
                     describeRole(row, {
-                        puppet: () => { next[row.overlord] = "YOUR OVERLORD"; },
-                        overlord: () => { next[row.puppet] = `YOUR ${row.kind.toUpperCase()}`; },
+                        puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
+                        overlord: () => { next[row.puppet] = { label: `YOUR ${row.kind.toUpperCase()}`, theyAre: "puppet" }; },
                         foreign: () => {},
                     });
                 }
@@ -1795,7 +2070,7 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false, p
     const previewCountries = chat.countries.slice(0, 4);
     const flagUrlMap = useCountryFlagUrls(previewCountries);
     const names    = chat.countries.map(c => c.name).join(", ");
-    const chatMarker = chat.countries.map((c) => puppetMarkers[c.name]).find(Boolean) || "";
+    const chatMarker = chat.countries.map((c) => puppetMarkers[c.name]?.label).find(Boolean) || "";
     const lastMsg  = chat.messages?.at(-1);
     const preview  = lastMsg ? lastMsg.text.replace(/\*\*/g, "").slice(0, 60) + (lastMsg.text.length > 60 ? "…" : "") : "No messages yet";
 
@@ -2413,10 +2688,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // itself (the truth of the thread), the roster after a join or a departure,
     // the title, the polls, and each speaker's cross-chat cursors. The cursors
     // live in world state, so they are written there rather than on the chat.
-    const handleThreadUpdate = (chatId, { events, countries, title, polls, cursors }) => {
+    const handleThreadUpdate = (chatId, { events, countries, title, polls, demands, cursors }) => {
         setChats((prev) => {
             const updated = prev.map((c) => (c.id === chatId
-                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls }
+                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls, demands: demands ?? c.demands }
                 : c));
             saveAllChats(updated);
             setActiveChat((ac) => (ac?.id === chatId ? updated.find((c) => c.id === chatId) ?? ac : ac));
