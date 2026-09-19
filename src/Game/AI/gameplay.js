@@ -3528,7 +3528,7 @@ const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], r
     ...jumpTaskOptions(requests, "review"),
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved. Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.${hiddenNote}\n\n${eventList}${doubtBlock}`,
+      + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${hiddenNote}\n\n${eventList}${doubtBlock}`,
     variables,
     // No fallback: an empty board is exactly what a failed call should leave
     // behind, and runJsonTask throwing is what lets the caller tell the player
@@ -6489,7 +6489,7 @@ const applySimulationResult = async ({
     actions: baseActions,
     mode: result.mode,
     analyzeBatch: curatorAnalyzeBatch,
-    spare: spareForFocus,
+    isSparedFromFiller: spareForFocus,
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
@@ -6538,7 +6538,7 @@ const applySimulationResult = async ({
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
-      spare: spareForFocus,
+      isSparedFromFiller: spareForFocus,
       events: repairScreened.events,
       priorEvents: [...priorEvents, ...curatedEvents],
       game: baseGame,
@@ -11664,14 +11664,16 @@ export const advanceActiveInteractive = async (choiceText) => {
 const playerTerritoryNames = async (world, playerNames) => {
   const keys = new Set(normalizeArray(playerNames).map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
   if (!keys.size) return [];
+  // Who holds a region, by the one rule the rest of the engine uses
+  // (lookupTools.js ownerOf): the campaign's override where there is one, then
+  // the region's own owner, then the country it belongs to on the stock map.
+  // Reading the overrides ALONE would find nothing for a player who has annexed
+  // nothing, which is most players — their home provinces were never transferred.
   const overrides = normalizeWorldState(world).regionOwnershipOverrides ?? {};
-  const owned = new Set(Object.entries(overrides)
-    .filter(([, owner]) => keys.has(normalizeString(owner).toLowerCase()))
-    .map(([regionId]) => normalizeString(regionId)));
-  if (!owned.size) return [];
   const names = new Set();
   for (const row of normalizeArray(await loadRegionCatalog().catch(() => []))) {
-    if (!owned.has(normalizeString(row?.id))) continue;
+    const owner = normalizeString(overrides[normalizeString(row?.id)] ?? row?.owner ?? row?.country);
+    if (!owner || !keys.has(owner.toLowerCase())) continue;
     for (const value of [row?.name, row?.country]) {
       const name = normalizeString(value);
       if (name && !keys.has(name.toLowerCase())) names.add(name);
@@ -11827,7 +11829,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // block that tells the simulator about it (playerFocus.js). Written with
       // the code-appended directives, where an author's guidance cannot reach it.
       const playerMaterial = playerMaterialFor(
-        { ...bundle, actions: bundle.actions, events: segmentBundle.events },
+        { ...bundle, events: segmentBundle.events },
         focusContext,
         { originDate: state.segmentOrigin, targetDate: segmentTarget },
       );
@@ -11928,7 +11930,11 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // the top of the next turn.
           const shares = combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare });
           const shareShortfall = worldShareShortfall(candidate?.events, shares.world, {
-            playerNames: focusContext.playerNames,
+            // The player's TERRITORY counts as the player here too. Without it an
+            // event inside the player's own empire satisfies the world's share,
+            // which is how unrest in a player-held province came to be filed as
+            // news from the wider world.
+            playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
           const focusShortfall = playerFocusShortfall(candidate?.events, {
@@ -12311,6 +12317,11 @@ const boardEventList = (events, hidden) => [
     `[${events.length + index}] ${event.date || "undated"} — ${event.title} (kept off the timeline)\n${event.description}`),
 ].join("\n\n");
 
+// Every running entry needs dates to be paced against: Player focus asks the
+// skip to answer a milestone whose date it passes (playerFocus.js), and an entry
+// with no milestones at all can never come due.
+const BOARD_MILESTONE_NOTE = " Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.";
+
 const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, but were too routine to show the player as a card. "
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
@@ -12445,7 +12456,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
       taskKey: "projects",
       title: "the Projects board",
       instruction: `These events have just been simulated. Move the board to match them, and return `
-        + `{"projectOps":[]} if nothing on it genuinely moved. Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
+        + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
         + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }

@@ -1787,7 +1787,16 @@ const PlayerFocusSetting = () => {
         ))}
         </select>
         <div style={helperStyle}>
-        {PLAYER_FOCUS_HINTS[focus]} It never invents events for you: in a quiet stretch the world fills the skip as usual.
+        {/* Every level, not only the one selected: the choice is between four
+            feels, and a player cannot compare them one at a time. */}
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <div key={level.key} style={{ marginBottom: 4, opacity: level.key === focus ? 1 : 0.65 }}>
+            <strong>{level.label}</strong> — {PLAYER_FOCUS_HINTS[level.key]}
+            </div>
+        ))}
+        <div style={{ marginTop: 6 }}>
+        It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
+        </div>
         </div>
         </div>
     );

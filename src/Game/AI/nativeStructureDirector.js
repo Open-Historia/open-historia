@@ -1,4 +1,4 @@
-/*! Open Historia — native structure director. */
+/*! Open Historia — portions (native structure director: the structures an event builds) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The simulator has always been able to build a structure: any event may carry
 // a markerOps build, and the map draws it. In practice it never does. Structures
 // are one lever among a dozen in a long prompt, nothing checks for the ones it

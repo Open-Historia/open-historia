@@ -76,7 +76,14 @@ const LEAD_UP_DAYS = 30;
 const RECENT_DAYS = 60;
 const CHAT_MEMORY_DAYS = 90;
 const MAX_CONSEQUENCES = 3;
-const OPEN_PROJECT_STATUSES = new Set(["proposed", "active", "stalled"]);
+// Entries whose dates a jump is asked to answer. A paused entry is deliberately
+// absent: its dates are not being worked towards, so neither its milestones nor
+// its target date belong in what the player "has going on". Its milestones can
+// still slip (SLIPPABLE_PROJECT_STATUSES), because a date passes whether or not
+// anyone is working. The Board's own isProjectOpen is a different question — what
+// still counts as running — and projects.js owns that one.
+const PACED_PROJECT_STATUSES = new Set(["proposed", "active", "stalled"]);
+const SLIPPABLE_PROJECT_STATUSES = new Set([...PACED_PROJECT_STATUSES, "paused"]);
 const UNREACHED_MILESTONE_STATUSES = new Set(["pending", "slipped"]);
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
@@ -127,7 +134,7 @@ export const collectPlayerMaterial = ({
   }
 
   for (const project of asArray(projects)) {
-    if (!OPEN_PROJECT_STATUSES.has(asText(project?.status) || "active") || !isPlayersEntry(project, playerKeys)) continue;
+    if (!PACED_PROJECT_STATUSES.has(asText(project?.status) || "active") || !isPlayersEntry(project, playerKeys)) continue;
     const name = asText(project.name);
     for (const milestone of asArray(project.milestones)) {
       if (!UNREACHED_MILESTONE_STATUSES.has(asText(milestone?.status) || "pending")) continue;
@@ -249,7 +256,7 @@ export const slipPassedMilestones = (projects, { date = "" } = {}) => {
   const passed = (milestone) => (asText(milestone?.status) || "pending") === "pending"
     && dayNumber(milestone?.date) !== null && dayNumber(milestone.date) <= today;
   return asArray(projects).map((project) => {
-    if (!OPEN_PROJECT_STATUSES.has(asText(project?.status) || "active") && asText(project?.status) !== "paused") return project;
+    if (!SLIPPABLE_PROJECT_STATUSES.has(asText(project?.status) || "active")) return project;
     if (!asArray(project?.milestones).some(passed)) return project;
     return { ...project, milestones: project.milestones.map((milestone) => (passed(milestone) ? { ...milestone, status: "slipped" } : milestone)) };
   });
@@ -323,7 +330,8 @@ export const buildPlayerFocusDirective = ({ focus, worldShare = 0, material = []
   const optional = items.filter((item) => !item.required);
   const lines = [
     heading,
-    `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — as far as what is listed below gives them a reason. Never invent business for ${player} to reach the share; when these run out, the world fills the period within its usual number of events.`,
+    `At least ${playerShare}% of this period's events should be Player events — anything ${player} does, anything done to or said about ${player}, and anything that happens inside ${player}'s territory — but never more than the ${items.length} thing${items.length === 1 ? "" : "s"} listed below gives reason for. `
+      + `The share is a ceiling on attention, not a quota: never invent business for ${player} to reach it, and when these run out the world fills the period within its usual number of events.`,
   ];
   if (orders.length) {
     lines.push("", `ORDERS — every one gets an outcome this period (success, partial success, delay or failure), in an event that lists its id in actionIds. One event may answer several orders when they are genuinely the same thing.`);

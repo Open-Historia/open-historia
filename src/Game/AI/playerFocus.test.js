@@ -1,3 +1,4 @@
+/*! Open Historia — portions (tests for the Player focus rules) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run the tests: node --test src/Game/AI/playerFocus.test.js
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -232,4 +233,19 @@ test("a queued request that no event could cite still clears: a Deploy the engin
     ["c1", "resolved", false],
     ["o1", "planned", true],
   ]);
+});
+
+test("the share the jump is told is capped by what the player actually has going on", () => {
+  const thin = [
+    { kind: "order", id: "a1", label: "Fortify the Falklands", required: true },
+    { kind: "storyline", id: "s1", label: "Falklands standoff", required: false },
+  ];
+  const text = buildPlayerFocusDirective({ focus: "spotlight", worldShare: 35, material: thin, playerName: PLAYER });
+  assert.match(text, /never more than the 2/, "a Spotlight player with two threads is not asked for three quarters of the month");
+  const plentyText = buildPlayerFocusDirective({
+    focus: "spotlight",
+    material: Array.from({ length: 9 }, (_, index) => ({ kind: "storyline", id: `s${index}`, label: "x", required: false })),
+    playerName: PLAYER,
+  });
+  assert.match(plentyText, /75%/, "with plenty going on the level's own share is what it asks for");
 });

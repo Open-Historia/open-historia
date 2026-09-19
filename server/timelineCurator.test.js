@@ -92,9 +92,9 @@ const redundant = (index) => judgment(index, {
   incrementalProcess: true,
 });
 
-const curate = (analyzeBatch, mode = "jump", spare = null) => curateGeneratedEvents({
+const curate = (analyzeBatch, mode = "jump", isSparedFromFiller = null) => curateGeneratedEvents({
   events: candidates,
-  spare,
+  isSparedFromFiller,
   priorEvents,
   game: { gameDate: "1930-04-28", round: 5 },
   world: {},

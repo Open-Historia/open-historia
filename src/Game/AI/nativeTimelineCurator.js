@@ -1262,7 +1262,7 @@ export const curateGeneratedEventsWithHidden = async ({
   actions = [],
   mode = "",
   analyzeBatch = null,
-  spare = null,
+  isSparedFromFiller = null,
 } = {}) => {
   const incoming = asArray(events);
 
@@ -1351,7 +1351,7 @@ export const curateGeneratedEventsWithHidden = async ({
   // createSpareTest). However routine it reads, the filler gates may not take
   // it off the timeline — it would leave the order or the milestone with
   // nothing to show for it. Every other event is judged as before.
-  const spared = typeof spare === "function" ? spare : () => false;
+  const spared = typeof isSparedFromFiller === "function" ? isSparedFromFiller : () => false;
   const evaluations =
     incoming.map(
       (event, index) => {

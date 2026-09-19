@@ -56,10 +56,18 @@ export const isProjectClosed = (project) => !isProjectOpen(project);
 // (normalizeProjectEntry already derived it from the milestone list on the way
 // in, so it is the authoritative answer) and only falls back to scanning when a
 // project arrived without one.
+// A checkpoint nobody has settled yet. "slipped" is late — its date passed with
+// nothing said (AI/playerFocus.js) — but late is not reached, so it is still the
+// one the Board shows next and the one the next skip is asked to answer. Shared
+// with gameState.js, which derives the same answer on the way in.
+export const isMilestoneOutstanding = (milestone) => {
+  const status = asText(milestone?.status) || "pending";
+  return status === "pending" || status === "slipped";
+};
+
 export const deriveNextMilestone = (project) => {
   if (project?.nextMilestone && asText(project.nextMilestone.title)) return project.nextMilestone;
-  // A slipped milestone is late but still outstanding, so it is still "next".
-  const pending = asArray(project?.milestones).filter((entry) => entry?.status === "pending" || entry?.status === "slipped");
+  const pending = asArray(project?.milestones).filter(isMilestoneOutstanding);
   if (pending.length === 0) return null;
   const dated = pending.filter((entry) => asText(entry.date)).sort((a, b) => compareGameDates(a.date, b.date));
   const next = dated[0] || pending[0];
@@ -92,8 +100,8 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
   // `overdue`, which is about the whole programme: a slipped milestone on a
   // project with a year still to run is a warning, not a failure.
   const milestoneMissed = asArray(project?.milestones).some((entry) => {
-    if (entry?.status === "slipped") return true;
-    if (entry?.status !== "pending" || !asText(entry.date)) return false;
+    if (asText(entry?.status) === "slipped") return true;
+    if (!isMilestoneOutstanding(entry) || !asText(entry.date)) return false;
     const delta = signedDaysBetween(gameDate, entry.date);
     return delta !== null && delta < 0;
   });

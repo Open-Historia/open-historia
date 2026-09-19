@@ -3,7 +3,7 @@ import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
-import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
+import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
@@ -1525,8 +1525,7 @@ const normalizeProjectMilestones = (list) =>
 // moment it marks one done without restating the other. The list wins where there
 // is one; the stored value is a fallback for a project that carries no list.
 const deriveNextMilestoneFrom = (milestones, stored) => {
-  // A slipped milestone is late but still outstanding, so it is still "next".
-  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending" || entry.status === "slipped");
+  const pending = normalizeArray(milestones).filter(isMilestoneOutstanding);
   if (pending.length > 0) {
     // Dated milestones first, earliest wins. An undated one is a "next, whenever"
     // and only surfaces when nothing dated is outstanding.
@@ -2248,7 +2247,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           // something already finished. Success marks them done; anything else
           // marks them missed, which is what actually happened.
           milestones: project.milestones.map((entry) =>
-            (entry.status === "pending" || entry.status === "slipped" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
+            (isMilestoneOutstanding(entry) ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
           // Cancel and fail never release effects: `succeeded` is the only gate,

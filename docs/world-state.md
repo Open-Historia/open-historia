@@ -30,6 +30,12 @@ _Avoid_: Effort, item, card
 An ongoing situation no single polity controls, with unresolved stakes, such as a war, a crisis, a rivalry or unrest. Hidden from the player. A Project can cause or feed a Storyline, but the same thing is never both.
 _Avoid_: Process, thread, arc
 
+### The map
+
+**Structure**:
+Anything physical the campaign builds and the map draws in one place: a base, shipyard, data centre, ground station, reactor, embassy. Kept in `world.markers[]` and written by an event's `markerOps`, so **marker** is the field name for the record while Structure is the thing itself. A satellite is not one; the ground station that serves it is. Something that moves is a unit.
+_Avoid_: Feature, facility, building (as the term for the record)
+
 ### Library
 
 **Scenario**:
