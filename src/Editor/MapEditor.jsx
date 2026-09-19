@@ -868,7 +868,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
@@ -934,7 +934,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
@@ -954,7 +954,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
