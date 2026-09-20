@@ -5,6 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import url from "node:url";
 
 // A LEFTOVER ")}" IS NOT AN ERROR — IT IS TEXT. An edit that replaced a block
 // and left its old closing line behind shipped `)}` onto the map's country card,
@@ -26,7 +27,9 @@ const jsxFiles = (dir, found = []) => {
 };
 
 test("no JSX file closes the same expression twice — a stray closer renders as text", () => {
-    const root = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..");
+    // fileURLToPath, not the URL's own pathname: a checkout under a path with a
+    // space in it reads back as %20, and the walk then finds nothing to look at.
+    const root = path.join(path.dirname(url.fileURLToPath(import.meta.url)), "..", "..");
     const closer = /^\s*\)\}\s*$/;
     const stray = [];
     for (const file of jsxFiles(root)) {
