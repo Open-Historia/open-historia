@@ -273,7 +273,7 @@ const topologyDiagnosticStyle = (feature) => {
 // this reason — the Style wrapping it was not. The key collapses to just the size
 // when the label is hidden, so a zoomed-out world uses three objects in total no
 // matter how many cities were imported.
-const cityStyleCache = new Map();
+const cityStyleCache = new globalThis.Map();
 const cityStyle = (size, name) => {
   const key = name ? `${size}|${name}` : size;
   let style = cityStyleCache.get(key);
@@ -297,7 +297,7 @@ const cityStyle = (size, name) => {
 
 // A feature the Features panel has selected (box-select or a ticked row):
 // always drawn, ringed in yellow, labelled — so a selection reads on the map.
-const selectedCityStyleCache = new Map();
+const selectedCityStyleCache = new globalThis.Map();
 const selectedCityStyle = (size, name) => {
   const key = name ? `${size}|${name}` : size;
   let style = selectedCityStyleCache.get(key);
@@ -326,7 +326,7 @@ const selectedCityStyle = (size, name) => {
 // A starting unit placed in the Workshop: a diamond in its owner's colour with
 // the type's initial; the name replaces the initial at closer zooms.
 const UNIT_GLYPH = { infantry: "I", armor: "A", air: "✈", naval: "N", artillery: "R", garrison: "G" };
-const unitStyleCache = new Map();
+const unitStyleCache = new globalThis.Map();
 const unitStyle = (feature, zoom, rgb) => {
   const type = feature.get("type") || "infantry";
   const name = zoom >= 4.5 ? feature.get("name") || "" : "";
@@ -358,7 +358,7 @@ const unitStyle = (feature, zoom, rgb) => {
 // Same reasoning for region labels: the region styles are memoised (see
 // olStyle.js) and these were the one place still allocating per feature per
 // frame. Keyed on the text, the only thing that varies.
-const labelStyleCache = new Map();
+const labelStyleCache = new globalThis.Map();
 const labelStyle = (name) => {
   let style = labelStyleCache.get(name);
   if (!style) {
@@ -541,7 +541,7 @@ const OlMap = ({
     // What the last save wrote: region id -> a hash of its GeoJSON, so the next
     // save can carry only what has moved (serializeRegionChanges below). Empty
     // means the next save is a full one, which is what a fresh load leaves it as.
-    const savedRegionHashes = new Map();
+    const savedRegionHashes = new globalThis.Map();
     const getZoom = (res) => mapRef.current?.getView().getZoomForResolution(res) ?? 3;
 
     // VectorImage, not Vector: the regions are ~3,662 separate filled+stroked
