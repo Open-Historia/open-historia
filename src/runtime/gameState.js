@@ -4,7 +4,7 @@ import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
-import { advanceRecurringDate, canPlayerDirect, normalizeMilestoneRepeat } from "./projects.js";
+import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
@@ -447,6 +447,9 @@ export const normalizeActionEntry = (entry, index = 0) => {
     text: text || rawInput || title,
     title: title || rawInput || text,
     ...(unitRevert ? { unitRevert } : {}),
+    // Carried over unanswered from the last time skip (AI/playerFocus.js
+    // settleOrders): the next skip answers it first.
+    ...(entry.overdue === true ? { overdue: true } : {}),
   };
 };
 
@@ -1435,7 +1438,10 @@ const PROJECT_VERIFICATIONS = ["", "doubted", "confirmed", "refuted"];
 const PROJECT_VERIFICATION_SET = new Set(PROJECT_VERIFICATIONS);
 
 const PROJECT_SECRECY_SET = new Set(["public", "restricted", "covert"]);
-const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
+// "slipped" is the engine's: a milestone whose date passed with no outcome
+// (AI/playerFocus.js slipPassedMilestones). Late, not yet reached, and still
+// something the next time skip must answer.
+const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "slipped", "done", "missed"]);
 
 // The same problem PROJECT_STATUS_ALIASES solves, one level down. A model asked to
 // mark a checkpoint reached writes "completed" or "achieved" about as often as it
@@ -1449,7 +1455,8 @@ const PROJECT_MILESTONE_STATUS_SET = new Set(["pending", "done", "missed"]);
 const PROJECT_MILESTONE_STATUS_ALIASES = {
   complete: "done", completed: "done", finished: "done", achieved: "done",
   reached: "done", met: "done", delivered: "done", passed: "done",
-  slipped: "missed", late: "missed", overdue: "missed", failed: "missed", unmet: "missed",
+  late: "slipped", overdue: "slipped", delayed: "slipped", behind: "slipped",
+  failed: "missed", unmet: "missed",
   outstanding: "pending", planned: "pending", upcoming: "pending", scheduled: "pending",
 };
 
@@ -1570,7 +1577,7 @@ const normalizeProjectMilestones = (list) =>
 // moment it marks one done without restating the other. The list wins where there
 // is one; the stored value is a fallback for a project that carries no list.
 const deriveNextMilestoneFrom = (milestones, stored) => {
-  const pending = normalizeArray(milestones).filter((entry) => entry.status === "pending");
+  const pending = normalizeArray(milestones).filter(isMilestoneOutstanding);
   if (pending.length > 0) {
     // Dated milestones first, earliest wins. An undated one is a "next, whenever"
     // and only surfaces when nothing dated is outstanding.
@@ -2292,7 +2299,7 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           // something already finished. Success marks them done; anything else
           // marks them missed, which is what actually happened.
           milestones: project.milestones.map((entry) =>
-            (entry.status === "pending" ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
+            (isMilestoneOutstanding(entry) ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
           // Cancel and fail never release effects: `succeeded` is the only gate,
@@ -2776,6 +2783,60 @@ export const clearStaleUnitMotion = (world, { queuedUnitIds = [] } = {}) => {
     units: units.map((unit) =>
       (isStale(unit) ? { ...unit, status: "idle", orderId: "", updatedAt: stamp } : unit)),
   };
+};
+
+// A player deployment is placed "pending" and queued as a Deploy request action
+// (unitsController.js deployUnit, whose unitRevert says "remove it" if the
+// player deletes the request). The skip that resolves the request decides: a
+// remove op rejects it, a move op relocates it — and whatever it left standing
+// was accepted. Without this, nothing else ever made a pending unit real: only a
+// move op cleared the status, a move on a garrison is ignored by design, and a
+// fleet the story says arrived was a translucent counter for the rest of the
+// campaign. `resolvedActions` are the planned actions this skip resolved.
+// Pure; returns the same world when there is nothing to confirm.
+export const confirmResolvedDeployments = (world, resolvedActions = []) => {
+  const requested = new Set(
+    normalizeArray(resolvedActions)
+      .map((action) => normalizeUnitRevert(action?.unitRevert))
+      .filter((revert) => revert?.remove)
+      .map((revert) => revert.unitId),
+  );
+  if (requested.size === 0) return world;
+  const units = normalizeUnits(world?.units);
+  const accepted = (unit) => unit.status === "pending" && requested.has(unit.id);
+  if (!units.some(accepted)) return world;
+  const stamp = new Date().toISOString();
+  return {
+    ...world,
+    units: units.map((unit) => (accepted(unit) ? { ...unit, status: "idle", updatedAt: stamp } : unit)),
+  };
+};
+
+// A structure the turn built for a Project joins that entry's linked structures
+// (nativeStructureDirector.js), so the card can show it on the map. Only a link
+// whose structure is really on the map now and whose entry still exists; an
+// entry already holding its twelve keeps the ones it has.
+export const linkStructuresToProjects = (world, links = []) => {
+  const onMap = new Set(normalizeMarkers(world?.markers).map((marker) => marker.id));
+  const adding = new Map();
+  for (const link of normalizeArray(links)) {
+    const markerId = normalizeOptionalString(link?.markerId);
+    const projectId = normalizeOptionalString(link?.projectId);
+    if (!markerId || !projectId || !onMap.has(markerId)) continue;
+    adding.set(projectId, [...(adding.get(projectId) ?? []), markerId]);
+  }
+  if (adding.size === 0) return world;
+  let changed = false;
+  const projects = normalizeArray(world?.projects).map((project) => {
+    const markerIds = adding.get(normalizeOptionalString(project?.id));
+    if (!markerIds) return project;
+    const linked = normalizeArray(project.linkedMarkerIds);
+    const next = [...new Set([...linked, ...markerIds])].slice(0, 12);
+    if (next.length === linked.length) return project;
+    changed = true;
+    return { ...project, linkedMarkerIds: next };
+  });
+  return changed ? { ...world, projects } : world;
 };
 
 // Keep the map legible. Applies to A.I. polities ONLY: the player's own forces

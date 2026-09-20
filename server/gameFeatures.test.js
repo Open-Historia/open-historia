@@ -7,6 +7,7 @@ import {
   isFeatureEnabled,
   normalizeFeatureOverrides,
   normalizeFeatureSettings,
+  playerFocusOf,
   resolveFeatures,
   worldDirectionOf,
 } from "./gameFeatures.js";
@@ -14,6 +15,7 @@ import {
 // A feature this file is not about, at its defaults: a complete configuration
 // carries every feature, so the exact-object checks below spread it in.
 const worldDirection = featureDefaults().worldDirection;
+const playerFocus = featureDefaults().playerFocus;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -36,12 +38,14 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
     worldDirection,
+    playerFocus,
   });
   // The boolean shorthand and clamping to the setting's range.
   assert.deepEqual(normalizeFeatureSettings({ espionage: false, idleDiplomacy: { averageMinutes: 100000 } }), {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
     worldDirection,
+    playerFocus,
   });
   assert.deepEqual(normalizeFeatureSettings("garbage"), featureDefaults());
 });
@@ -114,4 +118,30 @@ test("world direction switched off is nothing to enforce", () => {
   assert.equal(worldDirectionOf(resolveFeatures({ worldDirection: { priorityRules: "x" } }, { worldDirection: { enabled: false } })), null);
   assert.equal(worldDirectionOf(null), null);
   assert.equal(worldDirectionOf({}), null);
+});
+
+test("Player focus: the scenario sets the default level and a game chooses its own", () => {
+  assert.equal(playerFocusOf(featureDefaults()), "balanced");
+
+  const scenario = { playerFocus: { level: "spotlight" } };
+  assert.equal(playerFocusOf(resolveFeatures(scenario, null)), "spotlight", "a new game starts where the scenario says");
+  assert.equal(playerFocusOf(resolveFeatures(scenario, { playerFocus: { level: "world-first" } })), "world-first", "the player's own choice wins");
+  assert.deepEqual(
+    normalizeFeatureOverrides({ playerFocus: { level: "focused" } }),
+    { playerFocus: { level: "focused" } },
+    "a game stores only the level it chose",
+  );
+
+  // A level this build does not know (an older scenario, a typo in an import)
+  // is not set at all, so the scenario's default or the built-in one stands.
+  assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { level: "loudest" } }, null)), "balanced");
+  assert.equal(playerFocusOf(resolveFeatures(scenario, { playerFocus: { level: "" } })), "spotlight");
+  assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { level: "nonsense" } }), {});
+
+  // The feature has no on/off: it is a choice of level, so an "off" stored by
+  // an older build or an import is ignored rather than silently cancelling the
+  // player's share.
+  assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
+  assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
+  assert.equal(featureDefaults().playerFocus.enabled, true);
 });

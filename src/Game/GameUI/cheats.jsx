@@ -22,7 +22,11 @@ import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
+import { isSceneInProgress } from "../AI/interactiveRewind.js";
+import { isOfferableEvent } from "../../runtime/interactiveOffer.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
+import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import {
     REMINDERS_LIMIT,
@@ -77,6 +81,7 @@ const TOOLS = [
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
     { id: "events", title: "Event Editor", subtitle: "Search, create, and repair canonical timeline events", icon: "≡" },
+    { id: "interactive-event", title: "Interactive Event", subtitle: "Play any event on the record out as a scene, the way a time skip offers one now and then", icon: "⚡" },
     { id: "history-document", title: "History Document", subtitle: "Read and edit the living history the AI is given in place of older events; the timeline keeps every event", icon: "≣" },
 ];
 
@@ -86,7 +91,7 @@ const TOOL_GROUPS = [
         title: "GM & History",
         subtitle: "Intervene in the world, repair canon, or restore an earlier state.",
         icon: "✦",
-        tools: ["master-ai", "reminders", "events", "history-document", "roll-back-turn"],
+        tools: ["master-ai", "reminders", "events", "interactive-event", "history-document", "roll-back-turn"],
     },
     {
         id: "countries-territory",
@@ -476,6 +481,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             endClickMode={endClickMode}
             setStatus={setStatus}
             navigateTool={(nextTool) => { setTool(nextTool); setStatus(""); }}
+            closePanel={onClose}
             />
         )}
         {status && !tool && (
@@ -1443,6 +1449,144 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 };
 
+// Interactive Event: offer any event on the record to be played out as a scene.
+// A time skip does this by itself now and then — one skip in three, and never
+// twice within three rounds (runtime/interactiveOffer.js). This puts the same
+// offer on an event of the Game Master's choosing and opens the panel that
+// plays it out (GameUI/interactive.jsx).
+//
+// It writes the offer and nothing else. The scene itself costs what it always
+// costs (one request to open, one a move, one to end), and the cooldown is left
+// alone, so skips go on offering their own.
+const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, closePanel }) => {
+    // The shared store, like the panels that play the scene: an offer written
+    // here reaches the buttons below without a re-read.
+    const world = useRuntimeState("world");
+    const events = useRuntimeState("events");
+    const [search, setSearch] = useState("");
+    const [limit, setLimit] = useState(30);
+    // A scene starts from what the player has seen, so an event the reveal has
+    // not reached cannot be offered yet (gameplay.js createInteractive).
+    const unseen = useUnseenEventIds();
+
+    const sceneInProgress = isSceneInProgress(world?.activeInteractive);
+    const offer = world?.interactiveOffer ?? null;
+    const query = cleanEventText(search).toLowerCase();
+    // Newest first: the moment closest to where the player stands is the one
+    // worth playing out, and the one a scene can open on.
+    const listed = useMemo(() => {
+        const all = Array.isArray(events) ? [...events].reverse() : [];
+        if (!query) return all;
+        return all.filter((event) => [event?.title, event?.date, event?.description, event?.id]
+            .some((value) => cleanEventText(value).toLowerCase().includes(query)));
+    }, [events, query]);
+
+    const openScene = () => {
+        window.dispatchEvent(new Event("oh:open-interactive-event"));
+        // The cheats panel sits above the scene, so it steps out of the way.
+        closePanel?.();
+    };
+
+    const offerEvent = (event) => runBusy(async () => {
+        const id = cleanEventText(event?.id);
+        if (!id) throw new Error("That event has no id, so a scene cannot be opened on it.");
+        const current = await readWorldState({ force: true });
+        await writeWorldState({ ...current, interactiveOffer: { eventId: id, round: Math.max(0, Math.trunc(Number(game?.round) || 0)) } });
+        openScene();
+        return `Offered "${cleanEventText(event?.title) || id}". Play it out in the panel that just opened.`;
+    });
+
+    const clearOffer = () => runBusy(async () => {
+        const current = await readWorldState({ force: true });
+        await writeWorldState({ ...current, interactiveOffer: null });
+        return "The offer is gone. Nothing else changed.";
+    });
+
+    const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
+    const warnStyle = { background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.32)", borderRadius: 8, color: "#fde68a", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.5rem 0.6rem" };
+    const statusLine = status && (
+        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+            {status}
+        </div>
+    );
+    const offeredTitle = offer && cleanEventText((Array.isArray(events) ? events : []).find((event) => cleanEventText(event?.id) === cleanEventText(offer.eventId))?.title);
+
+    return (
+        <>
+        {header(meta.title, meta.subtitle)}
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.55rem", minHeight: 0, overflowY: "auto", paddingRight: "0.12rem" }}>
+            <div style={noteStyle}>
+                Pick an event and it becomes the moment to play out: the scene opens inside it, you make the moves, and how it ends is written into the record as one event. Only the scene costs requests — offering one costs nothing, and letting it pass costs nothing.
+            </div>
+
+            {sceneInProgress && (
+                <div style={warnStyle}>
+                    A scene is already in progress. End it or set it aside before opening another.
+                    <button type="button" onClick={openScene} style={{ ...buttonStyle, display: "block", marginTop: "0.4rem" }}>Open the scene</button>
+                </div>
+            )}
+
+            {offer && !sceneInProgress && (
+                <div style={warnStyle}>
+                    <span data-no-translate>{offeredTitle || cleanEventText(offer.eventId)}</span> is offered now.
+                    <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.4rem" }}>
+                        <button type="button" onClick={openScene} style={{ ...primaryButtonStyle, flex: 1 }}>Play it out</button>
+                        <button type="button" disabled={busy} onClick={clearOffer} style={{ ...buttonStyle, flex: 1 }}>Clear the offer</button>
+                    </div>
+                </div>
+            )}
+
+            <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search the record…"
+                style={{ ...inputStyle, width: "100%" }}
+            />
+
+            {world === null && <div style={noteStyle}>Loading the record…</div>}
+            {world !== null && listed.length === 0 && <div style={noteStyle}>{query ? "No event matches that." : "The record is empty: play a turn first."}</div>}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {listed.slice(0, limit).map((event) => {
+                    const id = cleanEventText(event.id);
+                    const revealing = unseen.has(id);
+                    const wouldBeOffered = isOfferableEvent(event);
+                    return (
+                        <div key={id || `${event.title}-${event.date}`} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.6rem" }}>
+                            <div data-no-translate style={{ fontSize: "0.76rem", fontWeight: 700, lineHeight: 1.35 }}>{cleanEventText(event.title) || "Untitled event"}</div>
+                            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.25rem" }}>
+                                {isGameDate(event.date) && <span data-no-translate style={{ ...noteStyle, fontSize: "0.64rem" }}>{formatGameDateReadable(event.date)}</span>}
+                                <span style={eventBadgeStyle(wouldBeOffered ? "rgba(134,239,172,0.5)" : "rgba(255,255,255,0.28)")}>
+                                    {wouldBeOffered ? "a skip could offer this" : "a skip never would"}
+                                </span>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={busy || revealing || sceneInProgress}
+                                onClick={() => offerEvent(event)}
+                                title={revealing
+                                    ? "Finish revealing the last time skip first: a scene starts from what you have seen."
+                                    : "Offer this moment and open the scene"}
+                                style={{ ...primaryButtonStyle, marginTop: "0.45rem", opacity: busy || revealing || sceneInProgress ? 0.5 : 1, width: "100%" }}
+                            >
+                                {revealing ? "Not revealed yet" : "Play this out"}
+                            </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {listed.length > limit && (
+                <button type="button" onClick={() => setLimit((value) => value + 30)} style={buttonStyle}>
+                    Show {Math.min(30, listed.length - limit)} more of {listed.length}
+                </button>
+            )}
+            {statusLine}
+        </div>
+        </>
+    );
+};
+
 const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     const [events, setEvents] = useState(null);
     const [search, setSearch] = useState("");
@@ -2166,7 +2310,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 };
 
-const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool }) => {
+const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
     const [gmMode, setGmMode] = useState("world-intervention");
@@ -2336,6 +2480,20 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 status={status}
                 game={game}
                 runBusy={runBusy}
+            />
+        );
+    }
+
+    if (tool === "interactive-event") {
+        return (
+            <InteractiveEventView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                game={game}
+                runBusy={runBusy}
+                closePanel={closePanel}
             />
         );
     }

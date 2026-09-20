@@ -158,9 +158,11 @@ export const classifyProviderFailure = ({ status, payload } = {}) => {
 // Fallback list move on. Shared by every provider path so they agree:
 //
 //   Spent, Unusable, other — never; waiting fixes none of them.
-//   Busy — one retry, then the next entry.
-//   Rate limited — the player's setting: "wait" retries as it always did,
-//                  "next" gives up at once.
+//   Busy — never while there is a backup: the next entry answers at once, and
+//          the next call starts at the top again, by when the spell is usually
+//          over (fallbackRunner.js).
+//   Rate limited — the same, unless the player chose to wait (Settings → AI,
+//                  "wait"; the default is "next").
 //
 // With no entry left to fall back to, busy and Rate limited keep the full retry
 // count they had before the list existed: giving up early then would only lose
@@ -170,8 +172,7 @@ export const shouldRetryProviderFailure = ({ failure, attempt, retries, canFallB
     if (kind !== "busy" && kind !== "rateLimited") return false;
     if (attempt >= retries) return false;
     if (!canFallBack) return true;
-    if (kind === "busy") return attempt < 2;
-    return rateLimitPolicy !== "next";
+    return kind === "rateLimited" && rateLimitPolicy === "wait";
 };
 
 // 529 is Anthropic's own status for overloaded_error.

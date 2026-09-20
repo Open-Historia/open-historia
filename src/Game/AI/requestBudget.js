@@ -44,7 +44,7 @@ export const REQUEST_BUDGET_KEYS = Object.freeze({
 
 // The checks one request after a time skip can carry (afterJumpReview in
 // gameplay.js). Each is ON unless the player turned it off.
-export const REVIEW_SECTIONS = Object.freeze(["units", "territory", "timeline", "board", "spies"]);
+export const REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "timeline", "board", "spies"]);
 export const reviewSectionKey = (section) => `ai_review_${section}`;
 
 // --- Where settings are kept ---

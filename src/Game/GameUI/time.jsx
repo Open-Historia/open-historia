@@ -18,6 +18,7 @@ import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStr
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
@@ -2697,6 +2698,9 @@ const DateWidget = ({
     // scenarios) display verbatim instead of "Undated".
     // Full display name, never the code: era polity name first, then the
     // base country name, then the raw value as a last resort.
+    // Re-read when the game's features change, so the log's header follows a
+// Player focus the player just changed in Settings.
+    const activeFeatures = useActiveFeatures();
     const playerCountryCode = gameData?.country || "";
     const playerCountry = playerCountryCode
     ? (worldState?.polityOverrides?.[playerCountryCode]?.name
@@ -2713,9 +2717,10 @@ const DateWidget = ({
             gameDate: gameData?.gameDate || "",
             round: gameData?.round == null ? "" : String(gameData.round),
             difficulty: gameData?.difficulty || "",
+            playerFocus: getActivePlayerFocus() ?? "off",
             playerCountry: playerCountry || playerCountryCode || "",
         });
-    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
+    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, activeFeatures, playerCountry, playerCountryCode]);
 
     // "Save logging file" (TimelineHistoryPanel, next to the fallback warning):
     // the diagnostics log, with this fallback's own details attached at the top —

@@ -16,6 +16,7 @@ import {
   buildOwnerFootprint,
   clampUnitStrength,
   clearStaleUnitMotion,
+  confirmResolvedDeployments,
   enforceUnitVolume,
   normalizePendingUnitOrders,
   normalizeUnits,
@@ -527,4 +528,34 @@ test("clearStaleUnitMotion repairs only the stale unit, and is idempotent", () =
 test("a world with nothing moving comes back untouched", () => {
   const world = normalizeWorldState({ units: [unit({ id: "u1", status: "idle" })] });
   assert.equal(clearStaleUnitMotion(world), world);
+});
+
+// ---- A player deployment the skip resolved ----------------------------------
+//
+// Seen in a live game (2026-09-19): two formations placed from the advisor on
+// the first day were still translucent "pending" counters three years later.
+// The skip had written their deployment as an event and resolved the request,
+// but only a move op ever turned a pending unit into a real one — and a move on
+// a garrison is ignored outright.
+
+const deployRequest = (unitId) => ({ kind: "action", source: "order", status: "planned", text: `Deploy request: ${unitId}`, unitRevert: { unitId, remove: true } });
+
+test("a pending deployment whose request the skip resolved joins the order of battle", () => {
+  const world = { units: [unit({ id: "fleet", status: "pending" }), unit({ id: "garrison", type: "garrison", status: "pending" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("fleet"), deployRequest("garrison")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["fleet", "idle"], ["garrison", "idle"]]);
+});
+
+test("a deployment the skip removed stays removed, and one it moved keeps its motion", () => {
+  const world = { units: [unit({ id: "moving", status: "moving" })] };
+  const next = confirmResolvedDeployments(world, [deployRequest("moving"), deployRequest("rejected")]);
+  assert.deepEqual(next.units.map((entry) => [entry.id, entry.status]), [["moving", "moving"]]);
+});
+
+test("a pending deployment with no resolved request of its own stays pending", () => {
+  const world = { units: [unit({ id: "fresh", status: "pending" }), unit({ id: "other", status: "pending" })] };
+  // A moved unit's revert (no remove) is an order, not a deployment.
+  const orders = [{ kind: "action", status: "planned", text: "Orders", unitRevert: { unitId: "other", lng: 1, lat: 2 } }];
+  const next = confirmResolvedDeployments(world, orders);
+  assert.equal(next, world, "nothing to confirm leaves the world untouched");
 });
