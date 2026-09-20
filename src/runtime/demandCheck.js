@@ -137,6 +137,27 @@ export const demandCheckPrompt = ({ context, reply, openDemand = null, answering
   return lines.join("\n");
 };
 
+// WHERE EACH DEMAND CARD GOES. A card belongs under the message that made the
+// demand, so a negotiation reads in order and an answered demand stays where the
+// conversation left it instead of being shoved along by every later message.
+// `messages` are the ones actually on screen: a demand whose message has
+// scrolled out of the window, or which was never tied to one, is `stranded` and
+// drawn at the foot of the thread, where it is at least still answerable. A
+// superseded demand is drawn nowhere — its successor says what stands.
+export const placeDemandCards = ({ messages = [], demands = [], isGroup = false } = {}) => {
+  const byMessage = new Map();
+  const stranded = [];
+  if (isGroup) return { byMessage, stranded };
+  const onScreen = new Set((Array.isArray(messages) ? messages : []).map((message) => str(message?.id)).filter(Boolean));
+  for (const demand of Array.isArray(demands) ? demands : []) {
+    if (str(demand?.status) === "superseded") continue;
+    const messageId = str(demand?.messageId);
+    if (messageId && onScreen.has(messageId)) byMessage.set(messageId, [...(byMessage.get(messageId) ?? []), demand]);
+    else stranded.push(demand);
+  }
+  return { byMessage, stranded };
+};
+
 // What a checked reply becomes in the thread's log: a demand_made, a
 // demand_answered, or nothing. An outcome this speaker may not give in this
 // state is dropped, never guessed into something else — a false refusal costs

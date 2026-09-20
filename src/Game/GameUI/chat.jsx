@@ -5,7 +5,7 @@ import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { checkDemandReply, chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
-import { openDemandOf, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
+import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
@@ -1514,23 +1514,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             : shownEntries;
         const hiddenMessageCount = shownEntries.length - visibleEntries.length;
 
-        // DEMANDS, placed in the conversation rather than under it. Each card
-        // hangs off the message that made the demand; one whose message is not
-        // on screen — scrolled out of the window, or never tied to a message —
-        // falls to the foot of the thread, where it is at least answerable. A
-        // replaced demand is not shown at all: its successor says what stands.
-        const liveDemands = isGroup ? [] : (chat.demands ?? []).filter((demand) => demand.status !== "superseded");
-        const visibleMessageIds = new Set(visibleEntries.map(({ msg }) => String(msg?.id ?? "")).filter(Boolean));
-        const demandsByMessage = new Map();
-        const strandedDemands = [];
-        for (const demand of liveDemands) {
-            const messageId = String(demand?.messageId ?? "");
-            if (messageId && visibleMessageIds.has(messageId)) {
-                demandsByMessage.set(messageId, [...(demandsByMessage.get(messageId) ?? []), demand]);
-            } else {
-                strandedDemands.push(demand);
-            }
-        }
+        // DEMANDS, placed in the conversation rather than under it
+        // (runtime/demandCheck.js placeDemandCards).
+        const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
+            messages: visibleEntries.map(({ msg }) => msg),
+            demands: chat.demands,
+            isGroup,
+        });
         const renderDemandCard = (demand) => (
             <DemandCard
                 key={demand.id}

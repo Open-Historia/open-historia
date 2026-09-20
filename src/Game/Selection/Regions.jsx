@@ -27,6 +27,8 @@ export const setRegionClickInterceptor = (fn) => {
 // Passive tap on every normal region click (the Stats tab watches which country
 // the player is inspecting). Never consumes the click — popups still open.
 let _clickObserver = null;
+// Who is playing, remembered for the life of the session: see the popup below.
+let _playerCountry = "";
 
 export const setRegionClickObserver = (fn) => {
     _clickObserver = typeof fn === "function" ? fn : null;
@@ -227,12 +229,19 @@ const RegionPopup = () => {
     const [worldState, setWorldState] = useState(null);
     // Who is looking, for the puppet lines: what the card may say about a
     // subordination depends on whether the player is party to it or found it out.
-    const [playerCountry, setPlayerCountry] = useState("");
+    // Kept across popups, not read afresh for each: the read is a promise, and
+    // the first paint after a click would otherwise have no viewer at all — and
+    // a card with no viewer is the player's own overlord described to them as a
+    // stranger's business. The panel is suppressed until this is known.
+    const [playerCountry, setPlayerCountry] = useState(_playerCountry);
     useEffect(() => {
         if (!selection) return undefined;
         let cancelled = false;
         readGameData({ force: true })
-            .then((game) => { if (!cancelled) setPlayerCountry(String(game?.country ?? "").trim()); })
+            .then((game) => {
+                _playerCountry = String(game?.country ?? "").trim() || _playerCountry;
+                if (!cancelled) setPlayerCountry(_playerCountry);
+            })
             .catch(() => {});
         return () => { cancelled = true; };
     }, [selection]);
@@ -528,7 +537,7 @@ const RegionPopup = () => {
         allowStockBase: true,
     }).resolved || controllerCode || "");
     const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;
-    const heldPuppets = controllerKey && worldState
+    const heldPuppets = controllerKey && worldState && playerCountry
         ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
         : [];
     const POPUP_WIDTH = 238;

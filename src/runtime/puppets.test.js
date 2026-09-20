@@ -263,3 +263,17 @@ test("a clicked country's subordination is summarised the same way everywhere, a
   assert.equal(puppetSummaryFor(world, "Germany", "Australia"), null);
   assert.equal(puppetSummaryFor(world, "Germany", "Germany"), null);
 });
+
+test("with no viewer there is no view: the panel shows nothing rather than a stranger's wording", async () => {
+  // The map card reads who is playing asynchronously and drew before the answer
+  // came back, so the player's own overlord was described to them as if it were
+  // two other countries' business: "Puppet state of Russia", and no word on
+  // whether the world knew. Nobody's view is not the same as an outsider's.
+  const { puppetSummaryFor } = await import("./puppets.js");
+  const world = {
+    puppets: [{ id: "p1", overlord: "Russia", puppet: "British Empire", kind: "satellite", loyalty: 60, secrecy: "open", knownTo: [], status: "active", startedDate: "2016-01-12" }],
+  };
+  assert.equal(puppetSummaryFor(world, "", "British Empire"), null);
+  assert.equal(puppetSummaryFor(world, "   ", "British Empire"), null);
+  assert.equal(puppetSummaryFor(world, "British Empire", "British Empire")?.headline, "Russia's puppet state");
+});

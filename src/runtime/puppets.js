@@ -213,7 +213,11 @@ const readableDate = (value) => {
 //            against, and nothing in the engine enforces one.
 export const puppetSummaryFor = (world, viewer, countryName) => {
   const name = String(countryName ?? "").trim();
-  if (!world || !name) return null;
+  // NOBODY'S VIEW IS NOT AN OUTSIDER'S. A surface that has not yet learned who
+  // is playing must show nothing at all: the map card drew before its read of
+  // the save came back and told the player their own overlord was somebody
+  // else's arrangement ("Puppet state of Russia").
+  if (!world || !name || !String(viewer ?? "").trim()) return null;
   const rows = visiblePuppetsFor(world, viewer);
   const row = rows.find((entry) => entry.puppet === name)
     || rows.find((entry) => entry.overlord === name && entry.role === "puppet");

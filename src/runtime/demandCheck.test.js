@@ -255,3 +255,23 @@ test("the prompt tells the model what is already agreed, so it does not ask for 
   assert.match(prompt, /already agreed/i);
   assert.match(prompt, /Fulfil the Geneva protocols/);
 });
+
+test("a demand card is placed under the message that made it", async () => {
+  const { placeDemandCards } = await import("./demandCheck.js");
+  const messages = [{ id: "m1" }, { id: "m2" }, { id: "m3" }];
+  const demands = [
+    { id: "d1", messageId: "m1", status: "accepted" },
+    { id: "d2", messageId: "m3", status: "open" },
+    { id: "d3", messageId: "gone", status: "open" },      // its message is off-window
+    { id: "d4", messageId: "", status: "open" },           // never tied to one
+    { id: "d5", messageId: "m2", status: "superseded" },   // replaced: not shown at all
+  ];
+  const placed = placeDemandCards({ messages, demands });
+  assert.deepEqual(placed.byMessage.get("m1").map((demand) => demand.id), ["d1"]);
+  assert.deepEqual(placed.byMessage.get("m3").map((demand) => demand.id), ["d2"]);
+  assert.equal(placed.byMessage.has("m2"), false, "a superseded demand leaves no card");
+  assert.deepEqual(placed.stranded.map((demand) => demand.id), ["d3", "d4"], "only what has nowhere to go falls to the foot");
+
+  // A group chat has no demands to place.
+  assert.deepEqual(placeDemandCards({ messages, demands, isGroup: true }), { byMessage: new Map(), stranded: [] });
+});
