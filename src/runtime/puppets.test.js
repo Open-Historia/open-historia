@@ -237,17 +237,24 @@ test("a clicked country's subordination is summarised the same way everywhere, a
     ],
   };
 
+  // The player's own puppet: what it is, what that means, and the few facts
+  // worth showing — as chips, not a run-on line.
   const ours = puppetSummaryFor(world, "British Empire", "United States");
-  assert.equal(ours.headline, "Our satellite (puppet state)");
-  assert.match(ours.detail, /Loyal toward us · since 2016-01-10 · openly known/);
-  assert.match(ours.meaning, /we control its government/);
+  assert.equal(ours.headline, "Our puppet state");
+  assert.match(ours.meaning, /We control its government/);
+  assert.deepEqual(ours.facts, ["Loyal", "Since 10 January 2016", "Openly known"]);
 
-  assert.match(puppetSummaryFor(world, "British Empire", "Australia").meaning, /depends on our backing/);
+  const client = puppetSummaryFor(world, "British Empire", "Australia");
+  assert.equal(client.headline, "Our client state");
+  assert.match(client.meaning, /depends on our backing/);
+  assert.ok(client.facts.includes("Covert"), "a secret arrangement says so");
 
   // Seen from the Puppet itself, and from a stranger.
   const fromBelow = puppetSummaryFor(world, "United States", "United States");
-  assert.equal(fromBelow.headline, "Our overlord");
+  assert.equal(fromBelow.headline, "British Empire's puppet state");
   assert.match(fromBelow.meaning, /British Empire controls our government/);
+  assert.ok(!fromBelow.facts.some((fact) => /loyal/i.test(fact)), "a puppet is never shown its own Loyalty");
+
   const stranger = puppetSummaryFor(world, "Germany", "Monaco");
   assert.equal(stranger.headline, "Protectorate of France");
   assert.match(stranger.meaning, /France runs its foreign policy and defence/);

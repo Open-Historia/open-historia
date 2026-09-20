@@ -35,7 +35,7 @@ import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/com
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { readChatsState, writeChatsState, readGameData, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
-import { describeRole, livePuppetsFor } from "../../runtime/puppets.js";
+import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
@@ -469,11 +469,17 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
 // Overlord is just a message.
 //
 //   the player is the Puppet, the demand open      → Accept · Refuse · an alternative
+//   the player is the Puppet, having refused        → the same choice, to think again
 //   the player is the Overlord, an alternative on it → Accept it · Reject (optionally revised)
 //
+// A card sits under the message that made the demand, where the conversation
+// reached it, rather than at the foot of the thread.
+//
 // Only a Refuse costs the Puppet anything, and only once (gameState.js
-// chargeRefusals). Rejecting an alternative is demanding again: revised if you
-// write something, the original restated if you do not.
+// chargeRefusals). A refusal is not the end of it: the card stays answerable, so
+// a player who thinks better of it agrees to the same demand instead of being
+// handed a second one. Rejecting an alternative is demanding again: revised if
+// you write something, the original restated if you do not.
 const DEMAND_STATUS_TEXT = {
     accepted: "Accepted",
     refused: "Refused",
@@ -486,9 +492,11 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
     const me = String(playerCountry ?? "").trim().toLowerCase();
     const iAmPuppet = String(demand?.target ?? "").trim().toLowerCase() === me;
     const iAmOverlord = String(demand?.by ?? "").trim().toLowerCase() === me;
-    const myMovePuppet = iAmPuppet && demand?.status === "open";
+    const reconsidering = iAmPuppet && demand?.status === "refused";
+    const myMovePuppet = iAmPuppet && (demand?.status === "open" || reconsidering);
     const myMoveOverlord = iAmOverlord && demand?.status === "countered";
-    const settled = DEMAND_STATUS_TEXT[demand?.status] ?? "";
+    const settled = myMovePuppet ? "" : DEMAND_STATUS_TEXT[demand?.status] ?? "";
+    const standing = reconsidering ? "Refused" : "";
 
     const button = (label, onClick, tone = "neutral") => (
         <button
@@ -525,7 +533,7 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
         }}>
             <span style={{ fontSize: "0.68rem", letterSpacing: "0.04em", color: "rgba(250,204,21,0.9)", textTransform: "uppercase" }}>
                 {iAmOverlord ? `Your demand · of ${demand?.target}` : `Demand · from ${demand?.by}`}
-                {settled ? ` · ${settled}` : ""}
+                {settled || standing ? ` · ${settled || standing}` : ""}
             </span>
             <span style={{ fontSize: "0.85rem", fontWeight: 700, lineHeight: 1.35 }}>{demand?.summary}</span>
             {demand?.alternative && (
@@ -534,11 +542,17 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
                 </span>
             )}
 
+            {reconsidering && (
+                <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", lineHeight: 1.35 }}>
+                    You refused this. You can still change your mind.
+                </span>
+            )}
+
             {myMovePuppet && (
                 <>
                     <div style={{ display: "flex", gap: "0.4rem" }}>
-                        {button("Accept", () => onAnswer?.("accepted", ""), "go")}
-                        {button("Refuse", () => onAnswer?.("refused", ""), "danger")}
+                        {button(reconsidering ? "Accept after all" : "Accept", () => onAnswer?.("accepted", ""), "go")}
+                        {!reconsidering && button("Refuse", () => onAnswer?.("refused", ""), "danger")}
                     </div>
                     <div style={{ display: "flex", gap: "0.4rem" }}>
                         <input
@@ -1339,9 +1353,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             setDemandBusy(true);
             try {
                 appendThreadEvents([event]);
-                const line = answer === "accepted" ? `We accept: ${demand.summary}.`
+                // A change of mind says so, or the other side reads the
+                // acceptance as coming out of nowhere.
+                const reconsidered = demand.status === "refused";
+                const line = answer === "accepted"
+                    ? (reconsidered ? `We have reconsidered. We accept: ${demand.summary}.` : `We accept: ${demand.summary}.`)
                     : answer === "refused" ? "We refuse this demand."
-                        : text;
+                        : (reconsidered ? `We have reconsidered. ${text}` : text);
                 await submitPlayerText(line);
             } finally {
                 setDemandBusy(false);
@@ -1496,6 +1514,35 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             : shownEntries;
         const hiddenMessageCount = shownEntries.length - visibleEntries.length;
 
+        // DEMANDS, placed in the conversation rather than under it. Each card
+        // hangs off the message that made the demand; one whose message is not
+        // on screen — scrolled out of the window, or never tied to a message —
+        // falls to the foot of the thread, where it is at least answerable. A
+        // replaced demand is not shown at all: its successor says what stands.
+        const liveDemands = isGroup ? [] : (chat.demands ?? []).filter((demand) => demand.status !== "superseded");
+        const visibleMessageIds = new Set(visibleEntries.map(({ msg }) => String(msg?.id ?? "")).filter(Boolean));
+        const demandsByMessage = new Map();
+        const strandedDemands = [];
+        for (const demand of liveDemands) {
+            const messageId = String(demand?.messageId ?? "");
+            if (messageId && visibleMessageIds.has(messageId)) {
+                demandsByMessage.set(messageId, [...(demandsByMessage.get(messageId) ?? []), demand]);
+            } else {
+                strandedDemands.push(demand);
+            }
+        }
+        const renderDemandCard = (demand) => (
+            <DemandCard
+                key={demand.id}
+                demand={demand}
+                playerCountry={playerCountry}
+                busy={demandBusy || isLoading}
+                onAnswer={(answer, text) => answerDemand(demand, answer, text)}
+                onAcceptAlternative={() => acceptAlternative(demand)}
+                onReject={(text) => rejectAlternative(demand, text)}
+            />
+        );
+
         return (
             <>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -1566,6 +1613,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     {showDateSeparator && <ChatDateSeparator value={msg.time} />}
                     <MessageBubble msg={msg} chatCountries={countries}
                     onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />
+                    {/* The demand this message made, under the message that made
+                        it — where the conversation reached it. */}
+                    {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
                     </React.Fragment>
                 );
             })}
@@ -1580,20 +1630,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                     onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
-            {/* Demands between the player and their own Overlord or Puppet. A
-                replaced demand is not shown — its successor says what stands —
-                and only the last few, so a long negotiation stays readable. */}
-            {!isGroup && (chat.demands ?? []).filter((demand) => demand.status !== "superseded").slice(-3).map((demand) => (
-                <DemandCard
-                    key={demand.id}
-                    demand={demand}
-                    playerCountry={playerCountry}
-                    busy={demandBusy || isLoading}
-                    onAnswer={(answer, text) => answerDemand(demand, answer, text)}
-                    onAcceptAlternative={() => acceptAlternative(demand)}
-                    onReject={(text) => rejectAlternative(demand, text)}
-                />
-            ))}
+            {/* A demand whose message is older than the window, or which was
+                never tied to one, still has to be answerable: it sits at the
+                foot of the thread rather than nowhere. */}
+            {strandedDemands.map(renderDemandCard)}
             {isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             {/* The next line of the table's turn, still being typed. */}
             {!isLoading && typingNext && (
@@ -2047,7 +2087,7 @@ const usePuppetMarkers = () => {
                 for (const row of livePuppetsFor(world, game?.country || "")) {
                     describeRole(row, {
                         puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
-                        overlord: () => { next[row.puppet] = { label: `YOUR ${row.kind.toUpperCase()}`, theyAre: "puppet" }; },
+                        overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
                         foreign: () => {},
                     });
                 }

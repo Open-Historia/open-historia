@@ -153,35 +153,64 @@ export const describeRole = (row, { overlord, puppet, foreign }) => {
 // says which powers the Overlord holds; a satellite is what most people mean by
 // a "puppet state", so it says so. `who` is "we" (the viewer is the Overlord),
 // or the Overlord's name; `whose` is "its" or, seen from the Puppet, "our".
+// THE THREE KINDS, in the player's words. A "puppet state" is what people
+// actually call a satellite, so that is what the game calls it; `kind` in the
+// ledger is unchanged. Each sentence says what the Overlord holds, from the
+// viewer's own side of the arrangement.
+const KIND_LABELS = { protectorate: "protectorate", satellite: "puppet state", client: "client state" };
 const KIND_MEANINGS = {
-  protectorate: ({ who, runs, whose, it }) =>
-    `A protectorate: ${who} ${runs("run")} ${whose} foreign policy and defence, and ${it} ${it === "we" ? "govern" : "governs"} ${it === "we" ? "ourselves" : "itself"} at home.`,
-  satellite: ({ who, runs, whose, it }) =>
-    `A satellite, or puppet state: ${who} ${runs("control")} ${whose} government, though ${it} ${it === "we" ? "keep" : "keeps"} the look of an independent country.`,
-  client: ({ whoPossessive, whose, it }) =>
-    `A client state: ${whose} government depends on ${whoPossessive} backing and follows ${whoPossessive === "our" ? "our" : "its"} lead, but ${it} still ${it === "we" ? "make" : "makes"} most of ${whose} own decisions.`,
+  protectorate: ({ holder, runs, its, governs }) => `${holder} ${runs("run")} ${its} foreign policy and defence. ${governs} at home.`,
+  satellite: ({ holder, runs, its, keeps, decisions }) =>
+    `${holder} ${runs("control")} ${its} government. ${keeps} the flag and the name; the decisions are ${decisions}.`,
+  client: ({ government, backing, makes, its }) =>
+    `${government} depends on ${backing} backing and follows its lead, but ${makes} most of ${its} own decisions.`,
 };
 
+export const puppetKindLabel = (kind) => KIND_LABELS[String(kind ?? "").trim()] || String(kind ?? "").trim();
+
+// One sentence on what this kind means, written for whoever is looking: the
+// Overlord ("we control its government"), the Puppet ("they control ours"), or
+// a third party watching two other countries.
 export const puppetKindMeaning = (row) => {
   const meaning = KIND_MEANINGS[row?.kind];
   if (!meaning) return "";
   const ours = row.role === "overlord";
-  const theirs = row.role === "puppet";
+  const mine = row.role === "puppet";
   return meaning({
-    who: ours ? "we" : row.overlord,
-    whoPossessive: ours ? "our" : `${row.overlord}'s`,
+    holder: ours ? "We" : row.overlord,
     runs: (verb) => (ours ? verb : `${verb}s`),
-    whose: theirs ? "our" : "its",
-    it: theirs ? "we" : "it",
+    its: mine ? "our" : "its",
+    governs: mine ? "We govern ourselves" : "It governs itself",
+    keeps: mine ? "We keep" : "It keeps",
+    decisions: ours ? "ours" : mine ? "theirs" : `${row.overlord}'s`,
+    government: mine ? "Our government" : "Its government",
+    backing: ours ? "our" : `${row.overlord}'s`,
+    makes: mine ? "we make" : "it makes",
   });
 };
 
-const kindLabel = (kind) => ({ satellite: "satellite (puppet state)", client: "client state" })[kind] || kind;
+// "2016-01-10" as "10 January 2016" — a date a player reads, not a key. Left
+// alone if it is not a plain calendar date (a scenario may use its own).
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const readableDate = (value) => {
+  const text = String(value ?? "").trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!match) return text;
+  const month = MONTHS[Number(match[2]) - 1];
+  return month ? `${Number(match[3])} ${month} ${match[1]}` : text;
+};
 
 // What the country panel and the map popup print for a clicked country, as the
 // viewer may see it — or null, which renders nothing. A covert arrangement the
 // viewer has not discovered must leave no trace at all: not a locked row, not a
 // greyed-out line, since either would announce the secret it is keeping.
+//
+// headline — what this country is, in three or four words
+// meaning  — one sentence on what that gives the Overlord
+// facts    — the short, chip-sized truths: mood, when it began, whether the
+//            world knows. Never a Loyalty NUMBER, and never the Puppet's own
+//            mood to itself: a visible score is a threshold to optimise
+//            against, and nothing in the engine enforces one.
 export const puppetSummaryFor = (world, viewer, countryName) => {
   const name = String(countryName ?? "").trim();
   if (!world || !name) return null;
@@ -190,29 +219,27 @@ export const puppetSummaryFor = (world, viewer, countryName) => {
     || rows.find((entry) => entry.overlord === name && entry.role === "puppet");
   if (!row || row.status !== "active") return null;
 
-  const since = row.startedDate ? ` · since ${row.startedDate}` : "";
-  const asOf = row.asOf ? `, as of ${row.asOf}` : "";
-  const label = kindLabel(row.kind);
+  const label = puppetKindLabel(row.kind);
+  const since = row.startedDate ? `Since ${readableDate(row.startedDate)}` : "";
+  const secrecy = row.secrecy === "covert" ? "Covert" : "Openly known";
   const summary = describeRole(row, {
     overlord: () => ({
       headline: `Our ${label}`,
-      // A band, never a number: a visible score is a threshold to optimise
-      // against, and nothing in the engine enforces one.
-      detail: `${row.loyaltyBand} toward us${since} · ${row.secrecy === "covert" ? "arrangement is covert" : "openly known"}`,
+      facts: [row.loyaltyBand, since, secrecy].filter(Boolean),
       provenance: "",
     }),
     puppet: () => ({
-      headline: "Our overlord",
-      detail: `We are the ${label} of ${row.overlord}${since}`,
+      headline: `${row.overlord}'s ${label}`,
+      facts: [since, secrecy].filter(Boolean),
       provenance: "",
     }),
     foreign: () => ({
       headline: `${label.charAt(0).toUpperCase()}${label.slice(1)} of ${row.overlord}`,
-      detail: row.startedDate ? `Since ${row.startedDate}` : "",
-      provenance: row.fromIntelligence ? `From intelligence${asOf}.` : "",
+      facts: [since].filter(Boolean),
+      provenance: row.fromIntelligence ? `From intelligence${row.asOf ? `, as of ${readableDate(row.asOf)}` : ""}.` : "",
     }),
   });
-  return { ...summary, meaning: puppetKindMeaning(row), role: row.role };
+  return { ...summary, meaning: puppetKindMeaning(row), role: row.role, kind: row.kind, kindLabel: label };
 };
 
 // What a LEADER speaking as `viewer` is told about subordinations — the chat

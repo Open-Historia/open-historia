@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
-import { livePuppetsFor, puppetSummaryFor } from "../../runtime/puppets.js";
+import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
@@ -639,21 +639,29 @@ const RegionPopup = () => {
         </div>
 
         {subordination && (
-            <div style={{ marginTop: "7px", padding: "6px 8px", borderRadius: "8px", background: "rgba(234,179,8,0.1)", border: "1px solid rgba(234,179,8,0.35)" }}>
-            <div style={{ fontSize: "12px", fontWeight: 700, color: "rgba(255,255,255,0.95)" }}>{subordination.headline}</div>
-            {subordination.detail && (
-                <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.62)", marginTop: "2px" }}>{subordination.detail}</div>
+            <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "linear-gradient(180deg, rgba(234,179,8,0.15), rgba(234,179,8,0.06))", border: "1px solid rgba(234,179,8,0.32)" }}>
+            <div style={{ alignItems: "center", display: "flex", gap: "5px" }}>
+            <span aria-hidden style={{ fontSize: "11px", lineHeight: 1 }}>{"⛓"}</span>
+            <span style={{ fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
+            </div>
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.82)", lineHeight: 1.4, marginTop: "3px" }}>{subordination.meaning}</div>
+            {subordination.facts.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "3px", marginTop: "5px" }}>
+                {subordination.facts.map((fact) => (
+                    <span key={fact} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "999px", color: "rgba(255,255,255,0.7)", fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap" }}>{fact}</span>
+                ))}
+                </div>
             )}
-            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.8)", lineHeight: 1.35, marginTop: "3px" }}>{subordination.meaning}</div>
             {subordination.provenance && (
-                <div style={{ fontSize: "10.5px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "2px" }}>{subordination.provenance}</div>
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "3px" }}>{subordination.provenance}</div>
             )}
             </div>
+        )}
         )}
         {heldPuppets.length > 0 && (
             <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
             <span style={{ color: "rgba(255,255,255,0.45)" }}>{heldPuppets[0].role === "overlord" ? "Our puppets: " : "Puppets: "}</span>
-            {heldPuppets.map((row) => `${row.puppet} (${row.kind})`).join(", ")}
+            {heldPuppets.map((row) => `${row.puppet} (${puppetKindLabel(row.kind)})`).join(", ")}
             </div>
         )}
 

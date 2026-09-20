@@ -55,6 +55,13 @@ export const DEMAND_ANSWERS = Object.freeze(["accepted", "refused", "alternative
 export const DEMAND_SUMMARY_MAX_CHARS = 240;
 export const DEMAND_ALTERNATIVE_MAX_CHARS = 600;
 const DEMAND_SETTLED = new Set(["accepted", "refused", "settled", "superseded"]);
+// What a Puppet may still answer. A REFUSAL is not the end of the conversation:
+// a player who refuses, thinks again and agrees is answering the same demand
+// over, not being handed a new one — so the card stays live. What has been
+// AGREED is final, by either side. The refusal's Loyalty cost is the turn's
+// (gameState.chargeRefusals): changing your mind before the turn ends costs
+// nothing, and after it the price has already been paid.
+const DEMAND_ANSWERABLE = new Set(["open", "refused"]);
 
 // A thread keeps this many events. A long negotiation is summarised into the
 // rolling memory on its messages (diplomaticEnvelope.js), not kept whole.
@@ -384,7 +391,7 @@ export const projectChatThread = (events) => {
                 if (byOverlord && demand.status === "countered") demand.status = "settled";
                 continue;
             }
-            if (!byPuppet || demand.status !== "open") continue;
+            if (!byPuppet || !DEMAND_ANSWERABLE.has(demand.status)) continue;
             if (event.answer === "alternative") {
                 demand.status = "countered";
                 demand.alternative = event.text;

@@ -201,3 +201,57 @@ test("the demand still in play is the newest one open or countered", () => {
   assert.equal(openDemandOf({ demands: [{ id: "d1", status: "accepted" }] }), null);
   assert.equal(openDemandOf({}), null);
 });
+
+test("a refused demand can still be answered: the player may change their mind", () => {
+  const refused = { id: "d1", by: "Russia", target: "Belarus", summary: "Two brigades", status: "refused" };
+  // From the card.
+  assert.equal(playerAnswerEvent({ demand: refused, player: "Belarus", answer: "accepted", time: "2016-01-05" })?.answer, "accepted");
+  assert.equal(playerAnswerEvent({ demand: refused, player: "Belarus", answer: "alternative", text: "One brigade" })?.answer, "alternative");
+  // And what the player has already agreed to cannot be taken back.
+  const accepted = { ...refused, status: "accepted" };
+  assert.equal(playerAnswerEvent({ demand: accepted, player: "Belarus", answer: "refused" }), null);
+});
+
+test("an AI Puppet that changes its mind after refusing is heard too", () => {
+  const refused = { id: "d1", by: "Russia", target: "Belarus", summary: "Two brigades", status: "refused" };
+  const events = interpretDemandCheck({
+    payload: { outcome: "accepted", summary: "" },
+    context: { role: "puppet", overlord: "Russia", puppet: "Belarus" },
+    openDemand: refused,
+    time: "2016-01-05",
+    idFor: (prefix) => `${prefix}-x`,
+  });
+  assert.equal(events[0]?.answer, "accepted");
+  assert.equal(events[0]?.demandId, "d1");
+});
+
+test("an Overlord acknowledging what was just agreed is not a fresh demand", () => {
+  // "Wise choice. Comply fully." after the Puppet accepted was opening a second
+  // demand for the same thing, and a third after that: a pile of cards for one
+  // obligation. A reply that only restates what is already agreed settles
+  // nothing new.
+  const settledDemands = [{ id: "d1", by: "Russia", target: "Belarus", summary: "Fulfil the Geneva protocols", status: "accepted" }];
+  const context = { role: "overlord", overlord: "Russia", puppet: "Belarus" };
+  const restated = interpretDemandCheck({
+    payload: { outcome: "demand", summary: "Fulfil the Geneva protocols." },
+    context, demands: settledDemands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
+  });
+  assert.deepEqual(restated, [], "the same obligation, worded again, opens nothing");
+
+  // Something genuinely new still becomes a demand.
+  const fresh = interpretDemandCheck({
+    payload: { outcome: "demand", summary: "Hand over the Dogger Bank patrol logs" },
+    context, demands: settledDemands, time: "2016-01-05", idFor: (prefix) => `${prefix}-x`,
+  });
+  assert.equal(fresh[0]?.kind, "demand_made");
+});
+
+test("the prompt tells the model what is already agreed, so it does not ask for it again", () => {
+  const prompt = demandCheckPrompt({
+    context: { role: "overlord", overlord: "Russia", puppet: "Belarus" },
+    reply: "Good. Ensure it is done.",
+    demands: [{ id: "d1", by: "Russia", target: "Belarus", summary: "Fulfil the Geneva protocols", status: "accepted" }],
+  });
+  assert.match(prompt, /already agreed/i);
+  assert.match(prompt, /Fulfil the Geneva protocols/);
+});

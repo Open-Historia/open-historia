@@ -40,6 +40,33 @@ export const openDemandOf = (chat) => [...(Array.isArray(chat?.demands) ? chat.d
   .reverse()
   .find((demand) => demand?.status === "open" || demand?.status === "countered") ?? null;
 
+// What the Puppet may still answer — the demand in play, or the last one it
+// refused. A refusal is not the end of the conversation: thinking again and
+// agreeing answers the same demand over rather than opening a second one.
+const ANSWERABLE = new Set(["open", "refused"]);
+export const answerableDemandOf = (chat) => [...(Array.isArray(chat?.demands) ? chat.demands : [])]
+  .reverse()
+  .find((demand) => ANSWERABLE.has(str(demand?.status))) ?? null;
+
+// Is this "demand" only the Overlord repeating something the Puppet has already
+// agreed to? A live game filled with cards that way: "Comply fully", "Ensure it
+// is done", "Control your personnel" — each classified as a fresh demand for the
+// obligation just accepted. One obligation, one card.
+const AGREED = new Set(["accepted", "settled"]);
+const shorn = (value) => norm(value).replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+const restatesAgreed = (summary, demands) => {
+  const text = shorn(summary);
+  if (!text) return false;
+  return (Array.isArray(demands) ? demands : []).some((demand) => {
+    if (!AGREED.has(str(demand?.status))) return false;
+    const agreed = shorn(demand?.summary);
+    if (!agreed) return false;
+    // The same words, or one wholly inside the other ("Fulfil the Geneva
+    // protocols" vs "Fulfil the Geneva protocols in full").
+    return agreed === text || agreed.includes(text) || text.includes(agreed);
+  });
+};
+
 // Whether a reply from `speaker` needs checking, and as which side. Only in the
 // one-on-one thread between the player and their OWN Overlord or Puppet, and
 // only while that arrangement stands. `participants` are the thread's non-player
@@ -63,7 +90,7 @@ export const demandCheckContext = ({ world, speaker, playerCountry, participants
 // The request text. It names the two countries, what is already on the table,
 // and the outcomes THIS speaker may give in THIS state — an Overlord is never
 // offered "refused", nor "accepts_alternative" with no alternative to accept.
-export const demandCheckPrompt = ({ context, reply, openDemand = null, answering = "" } = {}) => {
+export const demandCheckPrompt = ({ context, reply, openDemand = null, answering = "", demands = [] } = {}) => {
   const { role, overlord, puppet } = context ?? {};
   const speaker = role === "overlord" ? overlord : puppet;
   const lines = [
@@ -74,6 +101,19 @@ export const demandCheckPrompt = ({ context, reply, openDemand = null, answering
   if (openDemand) {
     lines.push(`Already on the table: ${overlord} demanded "${str(openDemand.summary)}".`);
     if (openDemand.status === "countered") lines.push(`${puppet} offered this alternative instead: "${str(openDemand.alternative)}".`);
+    // A refusal can be thought better of, so the outcomes below stay open to
+    // the Puppet and the model is told where the conversation actually stands.
+    if (openDemand.status === "refused") lines.push(`${puppet} refused it, and may still change its mind and agree.`);
+    lines.push("");
+  }
+  // What is already agreed, so an overlord pressing the point ("see that it is
+  // done") is read as that and not as a second demand for the same thing.
+  const agreed = (Array.isArray(demands) ? demands : [])
+    .filter((demand) => AGREED.has(str(demand?.status)) && str(demand?.summary))
+    .slice(-3);
+  if (agreed.length) {
+    lines.push(`${puppet} has already agreed to: ${agreed.map((demand) => `"${str(demand.summary)}"`).join(", ")}.`);
+    lines.push(`Insisting on, praising or checking up on something already agreed is NOT a new demand — that is "none". Only something ${puppet} is not already bound to is.`);
     lines.push("");
   }
   if (answering) lines.push(`The message being answered:`, str(answering), "");
@@ -101,7 +141,7 @@ export const demandCheckPrompt = ({ context, reply, openDemand = null, answering
 // demand_answered, or nothing. An outcome this speaker may not give in this
 // state is dropped, never guessed into something else — a false refusal costs
 // a Puppet Loyalty it never forfeited.
-export const interpretDemandCheck = ({ payload, context, openDemand = null, messageId = "", time = "", idFor } = {}) => {
+export const interpretDemandCheck = ({ payload, context, openDemand = null, messageId = "", time = "", idFor, demands = [] } = {}) => {
   const outcome = norm(payload?.outcome);
   const summary = str(payload?.summary);
   const role = context?.role;
@@ -112,6 +152,8 @@ export const interpretDemandCheck = ({ payload, context, openDemand = null, mess
   if (role === "overlord") {
     if (outcome === "demand") {
       if (!summary) return [];
+      // Not a second card for an obligation the Puppet already took on.
+      if (restatesAgreed(summary, demands)) return [];
       const demandId = mint("demand");
       return [{
         id: `${demandId}-made`, kind: "demand_made", time, by: context.overlord, demandId, target: context.puppet, summary,
@@ -124,8 +166,9 @@ export const interpretDemandCheck = ({ payload, context, openDemand = null, mess
     return [{ id: mint("demand-answer"), kind: "demand_answered", time, by: context.overlord, demandId: openDemand.id, answer: "alternative_accepted" }];
   }
 
-  // The Puppet answers only a demand still open: an answer is final.
-  if (!openDemand || openDemand.status !== "open") return [];
+  // The Puppet answers a demand in play, or one it refused and has thought
+  // better of. What it has agreed to it may not take back.
+  if (!openDemand || !ANSWERABLE.has(str(openDemand.status))) return [];
   if (outcome === "alternative" && !summary) return [];
   return [{
     id: mint("demand-answer"), kind: "demand_answered", time, by: context.puppet, demandId: openDemand.id, answer: outcome,
@@ -144,7 +187,7 @@ export const playerAnswerEvent = ({ demand, player, answer, text = "", time = ""
     return { id: mint("demand-answer"), kind: "demand_answered", time, by: str(player), demandId: demand.id, answer };
   }
   if (!["accepted", "refused", "alternative"].includes(answer)) return null;
-  if (!same(player, demand.target) || demand.status !== "open") return null;
+  if (!same(player, demand.target) || !ANSWERABLE.has(str(demand.status))) return null;
   const alternative = str(text);
   if (answer === "alternative" && !alternative) return null;
   return {

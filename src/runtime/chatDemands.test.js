@@ -77,8 +77,26 @@ test("only the Puppet may answer a demand, and only the Overlord may accept its 
   assert.equal(demandsOf([made(), answered("alternative", { text: "One" }), answered("alternative_accepted")])[0].status, "countered");
 });
 
-test("an answer is final: a refused demand cannot be accepted afterwards", () => {
-  assert.equal(demandsOf([made(), answered("refused"), answered("accepted", { id: "late" })])[0].status, "refused");
+test("a Puppet may change its mind after a refusal, but not after agreeing", () => {
+  // A player who refuses, thinks again and accepts is answering the same demand
+  // over, not being handed a new one. The refusal's Loyalty cost is charged by
+  // the turn (gameState.chargeRefusals), so a change of mind inside the same
+  // turn costs nothing and one after it has already been paid.
+  const changed = demandsOf([made(), answered("refused"), answered("accepted", { id: "late" })])[0];
+  assert.equal(changed.status, "accepted");
+  const offered = demandsOf([made(), answered("refused"), answered("alternative", { id: "late", text: "One brigade" })])[0];
+  assert.equal(offered.status, "countered");
+  assert.equal(offered.alternative, "One brigade");
+
+  // What is agreed is agreed: neither side may take an acceptance back.
+  assert.equal(demandsOf([made(), answered("accepted"), answered("refused", { id: "late" })])[0].status, "accepted");
+  const settled = demandsOf([
+    made(),
+    answered("alternative", { text: "One brigade" }),
+    answered("alternative_accepted", { by: "Russia" }),
+    answered("refused", { id: "late" }),
+  ])[0];
+  assert.equal(settled.status, "settled");
 });
 
 test("an answer to a demand that was never made is ignored", () => {

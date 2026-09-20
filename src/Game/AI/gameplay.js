@@ -2,7 +2,7 @@
 import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
-import { demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
+import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
@@ -11330,19 +11330,21 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
     participants: stored.countries,
   });
   if (!context) return [];
-  const openDemand = openDemandOf(stored);
-  // A Puppet's reply matters only while there is a demand for it to answer; an
-  // Overlord's always might, since any reply of its may make one.
+  // A Puppet answers the demand in play, or thinks better of one it refused;
+  // an Overlord acts on whatever is on the table. A Puppet's reply matters only
+  // while there is something for it to answer; an Overlord's always might,
+  // since any reply of its may make a demand.
+  const openDemand = context.role === "puppet" ? answerableDemandOf(stored) : openDemandOf(stored);
   if (context.role === "puppet" && !openDemand) return [];
 
   const { payload } = await runJsonTask("demandCheck", {
     fallback: () => ({ outcome: "none", summary: "" }),
     signal,
-    userMessage: demandCheckPrompt({ context, reply, openDemand, answering }),
+    userMessage: demandCheckPrompt({ context, reply, openDemand, answering, demands: stored.demands }),
     variables: {},
     requestKind: BACKGROUND_REQUEST,
   });
-  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId });
+  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId, demands: stored.demands });
   logDebugEvent("diplomacy",
     `Demand check on ${speaker}'s reply (${context.role}): ${normalizeString(payload?.outcome) || "none"}${events.length ? ` — ${events.map((event) => event.kind === "demand_made" ? "demand made" : `demand ${event.answer}`).join(", ")}` : ""}.`,
     { outcome: payload?.outcome, summary: payload?.summary, openDemand: openDemand?.id ?? null });

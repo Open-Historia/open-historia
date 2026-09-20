@@ -337,23 +337,41 @@ const CountryInfoPanel = () => {
         {subordination && (
             <div
                 style={{
-                    background: "rgba(234,179,8,0.1)",
-                    border: "1px solid rgba(234,179,8,0.35)",
-                    borderRadius: 10,
+                    background: "linear-gradient(180deg, rgba(234,179,8,0.14), rgba(234,179,8,0.06))",
+                    border: "1px solid rgba(234,179,8,0.32)",
+                    borderRadius: 12,
                     display: "flex",
                     flexDirection: "column",
-                    gap: "0.3rem",
+                    gap: "0.45rem",
                     marginTop: "0.5rem",
-                    padding: "0.55rem 0.7rem",
+                    padding: "0.65rem 0.8rem",
                 }}
             >
-                <div style={{ fontSize: "0.85rem", fontWeight: 800 }}>{subordination.headline}</div>
-                {subordination.detail && (
-                    <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.76rem" }}>{subordination.detail}</div>
+                <div style={{ alignItems: "center", display: "flex", gap: "0.45rem" }}>
+                    <span aria-hidden style={{ fontSize: "0.9rem", lineHeight: 1 }}>⛓</span>
+                    <span style={{ fontSize: "0.9rem", fontWeight: 800, letterSpacing: "0.01em" }}>{subordination.headline}</span>
+                </div>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.78rem", lineHeight: 1.45 }}>{subordination.meaning}</div>
+                {subordination.facts.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                        {subordination.facts.map((fact) => (
+                            <span
+                                key={fact}
+                                style={{
+                                    background: "rgba(0,0,0,0.22)",
+                                    border: "1px solid rgba(255,255,255,0.1)",
+                                    borderRadius: 999,
+                                    color: "rgba(255,255,255,0.7)",
+                                    fontSize: "0.68rem",
+                                    padding: "0.12rem 0.45rem",
+                                    whiteSpace: "nowrap",
+                                }}
+                            >{fact}</span>
+                        ))}
+                    </div>
                 )}
-                <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.76rem", lineHeight: 1.4 }}>{subordination.meaning}</div>
                 {subordination.provenance && (
-                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", fontStyle: "italic" }}>
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", fontStyle: "italic" }}>
                         {subordination.provenance}
                     </div>
                 )}
