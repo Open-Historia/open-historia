@@ -206,7 +206,7 @@ export const WORLD_DEFAULTS = {
   wars: [],
   // Subordinations: who directs whom. Directional, partly secret, and written
   // only through the diplomatic director's compact puppetUpdates lines — see
-  // docs/adr/0003-puppet-ledger-and-secrecy.md.
+  // docs/adr/0004-puppet-ledger-and-secrecy.md.
   puppets: [],
   // Persistent storylines: the hidden state of the world's ongoing processes
   // (AI/nativeWorldDirector.js), advanced by compact storylineUpdates lines on

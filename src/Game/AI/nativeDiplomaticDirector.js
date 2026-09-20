@@ -1301,7 +1301,7 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
 //
 // Directional, unlike a relation; partly secret, unlike an agreement. That is
 // why it is its own ledger rather than a new agreement type — see
-// docs/adr/0003-puppet-ledger-and-secrecy.md. What a given viewer may SEE of a
+// docs/adr/0004-puppet-ledger-and-secrecy.md. What a given viewer may SEE of a
 // row is not decided here: that is runtime/puppets.js, which every surface asks.
 //
 // Transport, like the relation and agreement lines above:

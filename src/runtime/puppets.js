@@ -3,7 +3,7 @@
 // A Puppet is a polity whose will is directed by an Overlord while it stays a
 // separate country — it holds its own territory, keeps its own sovereignty and
 // paints in its own colour. See the Glossary in docs/world-state.md, and
-// docs/adr/0003-puppet-ledger-and-secrecy.md for why this is its own ledger.
+// docs/adr/0004-puppet-ledger-and-secrecy.md for why this is its own ledger.
 //
 // This module owns the one rule every surface must agree on: WHAT MAY THIS
 // VIEWER SEE. The country panel, the diplomacy markers, the map overlay and the
