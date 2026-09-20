@@ -270,7 +270,22 @@ test("a demand card is placed under the message that made it", async () => {
   assert.deepEqual(placed.byMessage.get("m1").map((demand) => demand.id), ["d1"]);
   assert.deepEqual(placed.byMessage.get("m3").map((demand) => demand.id), ["d2"]);
   assert.equal(placed.byMessage.has("m2"), false, "a superseded demand leaves no card");
-  assert.deepEqual(placed.stranded.map((demand) => demand.id), ["d3", "d4"], "only what has nowhere to go falls to the foot");
+  // Only a demand that still WANTS something falls to the foot. The chat draws
+  // its last dozen messages, so a settled demand from further back was landing
+  // at the bottom of the thread and being shoved down by every new line the
+  // player typed. It waits inline for whoever scrolls back to it.
+  assert.deepEqual(placed.stranded.map((demand) => demand.id), ["d3", "d4"], "the open ones, which need an answer");
+
+  const old = [
+    { id: "done", messageId: "scrolled-away", status: "accepted" },
+    { id: "refused", messageId: "scrolled-away", status: "refused" },
+    { id: "waiting", messageId: "scrolled-away", status: "countered" },
+  ];
+  assert.deepEqual(
+    placeDemandCards({ messages, demands: old }).stranded.map((demand) => demand.id),
+    ["waiting"],
+    "what is settled, or answered and awaiting nobody, is not dragged along",
+  );
 
   // A group chat has no demands to place.
   assert.deepEqual(placeDemandCards({ messages, demands, isGroup: true }), { byMessage: new Map(), stranded: [] });

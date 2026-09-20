@@ -144,16 +144,26 @@ export const demandCheckPrompt = ({ context, reply, openDemand = null, answering
 // scrolled out of the window, or which was never tied to one, is `stranded` and
 // drawn at the foot of the thread, where it is at least still answerable. A
 // superseded demand is drawn nowhere — its successor says what stands.
+const WANTS_AN_ANSWER = new Set(["open", "countered"]);
 export const placeDemandCards = ({ messages = [], demands = [], isGroup = false } = {}) => {
   const byMessage = new Map();
   const stranded = [];
   if (isGroup) return { byMessage, stranded };
   const onScreen = new Set((Array.isArray(messages) ? messages : []).map((message) => str(message?.id)).filter(Boolean));
   for (const demand of Array.isArray(demands) ? demands : []) {
-    if (str(demand?.status) === "superseded") continue;
+    const status = str(demand?.status);
+    if (status === "superseded") continue;
     const messageId = str(demand?.messageId);
-    if (messageId && onScreen.has(messageId)) byMessage.set(messageId, [...(byMessage.get(messageId) ?? []), demand]);
-    else stranded.push(demand);
+    if (messageId && onScreen.has(messageId)) {
+      byMessage.set(messageId, [...(byMessage.get(messageId) ?? []), demand]);
+      continue;
+    }
+    // Its message is behind the window the chat draws. Only a demand still
+    // WAITING on somebody earns the foot of the thread: one already settled sat
+    // there being pushed down by every new line the player typed, as if the
+    // conversation had never moved on. It is still there, inline, for whoever
+    // scrolls back.
+    if (WANTS_AN_ANSWER.has(status)) stranded.push(demand);
   }
   return { byMessage, stranded };
 };
