@@ -639,11 +639,8 @@ const RegionPopup = () => {
         </div>
 
         {subordination && (
-            <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "linear-gradient(180deg, rgba(234,179,8,0.15), rgba(234,179,8,0.06))", border: "1px solid rgba(234,179,8,0.32)" }}>
-            <div style={{ alignItems: "center", display: "flex", gap: "5px" }}>
-            <span aria-hidden style={{ fontSize: "11px", lineHeight: 1 }}>{"⛓"}</span>
-            <span style={{ fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
-            </div>
+            <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.13)", borderLeft: "2px solid rgba(255,255,255,0.3)" }}>
+            <span style={{ display: "block", fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
             <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.82)", lineHeight: 1.4, marginTop: "3px" }}>{subordination.meaning}</div>
             {subordination.facts.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "3px", marginTop: "5px" }}>
@@ -656,7 +653,6 @@ const RegionPopup = () => {
                 <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "3px" }}>{subordination.provenance}</div>
             )}
             </div>
-        )}
         )}
         {heldPuppets.length > 0 && (
             <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>

@@ -337,8 +337,9 @@ const CountryInfoPanel = () => {
         {subordination && (
             <div
                 style={{
-                    background: "linear-gradient(180deg, rgba(234,179,8,0.14), rgba(234,179,8,0.06))",
-                    border: "1px solid rgba(234,179,8,0.32)",
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.13)",
+                    borderLeft: "2px solid rgba(255,255,255,0.3)",
                     borderRadius: 12,
                     display: "flex",
                     flexDirection: "column",
@@ -347,10 +348,7 @@ const CountryInfoPanel = () => {
                     padding: "0.65rem 0.8rem",
                 }}
             >
-                <div style={{ alignItems: "center", display: "flex", gap: "0.45rem" }}>
-                    <span aria-hidden style={{ fontSize: "0.9rem", lineHeight: 1 }}>⛓</span>
-                    <span style={{ fontSize: "0.9rem", fontWeight: 800, letterSpacing: "0.01em" }}>{subordination.headline}</span>
-                </div>
+                <span style={{ fontSize: "0.9rem", fontWeight: 800, letterSpacing: "0.01em" }}>{subordination.headline}</span>
                 <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.78rem", lineHeight: 1.45 }}>{subordination.meaning}</div>
                 {subordination.facts.length > 0 && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
