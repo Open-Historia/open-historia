@@ -7,10 +7,10 @@ import fs from "node:fs";
 
 // THE DRIFT GUARD. Four surfaces answer "is this country a Puppet, and what am
 // I allowed to know about it": the country panel, the diplomacy markers, the map
-// overlay and the advisor's prompt. Four callers deciding that separately is how
-// the game ends up contradicting itself about the player's own empire — showing
-// a satellite on the map that the panel denies, or briefing the advisor on a
-// secret the player never discovered.
+// popup card and the advisor's prompt. Four callers deciding that separately is
+// how the game ends up contradicting itself about the player's own empire —
+// showing a satellite in the popup that the panel denies, or briefing the
+// advisor on a secret the player never discovered.
 //
 // So: nothing but runtime/puppets.js and the world normalizer may read
 // world.puppets directly. This test is what keeps the fifth surface honest when
@@ -21,7 +21,6 @@ const read = (path) => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 const SURFACES = [
     ["the country panel", "../Game/Selection/CountryPanel.jsx"],
     ["the diplomacy markers", "../Game/GameUI/chat.jsx"],
-    ["the map overlay", "../Game/Map/Nations.jsx"],
     ["the advisor's own directive", "../Game/AI/main.jsx"],
     ["the map popup card", "../Game/Selection/Regions.jsx"],
 ];

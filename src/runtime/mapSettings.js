@@ -24,12 +24,6 @@ export const MAP_SETTING_KEYS = {
     // the game editor.
     labelFont: "map_label_font",
     hideCountryLabels: "map_hide_country_labels",
-    // OFF by default, like every getMapSetting key: the map looks exactly as it
-    // does today until the player asks to see their sphere. Puppets deliberately
-    // get a border treatment and never a fill or stripe — striping already means
-    // DISPUTED (regionClaimants) and OCCUPIED (regionSovereigntyOverrides), and a
-    // third meaning would make a contested satellite border unreadable.
-    showPuppetOverlay: "map_show_puppet_overlay",
     disableIdleRotation: "map_disable_idle_rotation",
     disableEventCamera: "map_disable_event_camera",
     // Not a map setting, but the same localStorage-toggle mechanism: when ON,
@@ -113,7 +107,6 @@ export function getMapSettingDefaultOn(key) {
 // forgets to add a name still logs its key rather than nothing.
 const SETTING_LABELS = {
     [MAP_SETTING_KEYS.hideCountryLabels]: "Hide country labels",
-    [MAP_SETTING_KEYS.showPuppetOverlay]: "Show puppet states on the map",
     [MAP_SETTING_KEYS.disableIdleRotation]: "Disable idle globe rotation",
     [MAP_SETTING_KEYS.disableEventCamera]: "Disable camera movement during events",
     [MAP_SETTING_KEYS.limitAiGeneration]: "Limit AI generation",
