@@ -17,6 +17,12 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     settings: Object.freeze([]),
   }),
   Object.freeze({
+    key: "puppetStates",
+    label: "Puppet states",
+    description: "Subordination between two countries: protectorates, puppet states and clients, openly known or covert, the loyalty underneath them, the demands an overlord makes of its own puppet, and the risings that follow a collapse. Off: no country can be made another's puppet by the simulator, the Game Master or a scenario's own start date, the simulator and every leader are never told the system exists, no demands can be made or answered, and nothing about subordination is shown on the map, in a country's panel or to the advisor. A game switched back on finds its ledger as it left it.",
+    settings: Object.freeze([]),
+  }),
+  Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
     description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",

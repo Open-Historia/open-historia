@@ -52,6 +52,32 @@ test("the visibility rule stays import-free so it can be unit tested", () => {
     assert.doesNotMatch(read("./puppets.js"), /^\s*import\s/m);
 });
 
+test("the off switch sits on the shared resolver, not on the surfaces", () => {
+    // The scenario's "Puppet states" feature switches the whole system off. It
+    // is gated HERE, on the two roots every surface reads through, for the same
+    // reason visibility is: five surfaces each remembering to check a flag is
+    // five chances to forget, and the one that forgets shows a player a puppet
+    // their scenario said does not exist.
+    const puppets = read("./puppets.js");
+    assert.match(puppets, /export const setPuppetStatesEnabled/);
+    const roots = ["export const visiblePuppetsFor", "export const puppetBriefingFor"];
+    for (const root of roots) {
+        const body = puppets.slice(puppets.indexOf(root), puppets.indexOf(root) + 400);
+        assert.match(body, /if \(!systemEnabled\)/, `${root} must answer empty while the system is off`);
+    }
+    // And the resolved features must actually reach it, or the switch is dead.
+    assert.match(read("./gameFeatures.js"), /setPuppetStatesEnabled\(isFeatureEnabled\(activeFeatures, "puppetStates"\)\)/);
+});
+
+test("switching the system off does not erase the ledger", () => {
+    // The rows are save data. Nothing in the off path may delete them, or a
+    // player who switches the feature off to try it loses a campaign's empire.
+    const puppets = read("./puppets.js");
+    assert.doesNotMatch(puppets, /puppets\s*=\s*\[\]\s*;/);
+    // The world normalizer keeps normalizing them whatever the feature says.
+    assert.doesNotMatch(read("./gameState.js"), /puppetStates/);
+});
+
 test("Loyalty never reaches a surface as a bare number", () => {
     // A visible score is the threshold players optimise against whether or not
     // the engine enforces one — and nothing in the engine does.
