@@ -102,6 +102,10 @@ export const FEATURE_DEFINITIONS = Object.freeze([
   Object.freeze({
     key: "playerFocus",
     label: "Player focus",
+    // No on/off: every game has some balance between the player and the world,
+    // and switching a level off would only mean "ignore the level", which is
+    // what World first already says in words a player understands.
+    toggleable: false,
     description: "How much of each time skip is about the player's own country, as far as they have something going on — orders, Project dates due, wars, open threads. In a quiet stretch the world fills the skip whatever this says, and it never invents business for the player. The player can change it for their own game.",
     settings: Object.freeze([
       Object.freeze({
@@ -172,7 +176,8 @@ export const normalizeFeatureSettings = (raw) => {
   const settings = {};
   for (const definition of FEATURE_DEFINITIONS) {
     const entry = readEntry(source[definition.key]);
-    const resolved = { enabled: readBoolean(entry.enabled) ?? true };
+    // A feature with no on/off is always on, whatever an older save stored.
+    const resolved = { enabled: definition.toggleable === false ? true : readBoolean(entry.enabled) ?? true };
     for (const setting of definition.settings) {
       resolved[setting.key] = readSetting(entry[setting.key], setting) ?? setting.defaultValue;
     }
@@ -190,7 +195,7 @@ export const normalizeFeatureOverrides = (raw) => {
     if (source[definition.key] === undefined || source[definition.key] === null) continue;
     const entry = readEntry(source[definition.key]);
     const resolved = {};
-    const enabled = readBoolean(entry.enabled);
+    const enabled = definition.toggleable === false ? null : readBoolean(entry.enabled);
     if (enabled !== null) resolved.enabled = enabled;
     for (const setting of definition.settings) {
       const value = readSetting(entry[setting.key], setting);
@@ -230,12 +235,11 @@ export const worldDirectionOf = (features) => {
   };
 };
 
-// The Player focus level this game plays with, or null when the feature is off
-// and no share is asked for (src/Game/AI/playerFocus.js reads the level itself).
+// The Player focus level this game plays with (src/Game/AI/playerFocus.js holds
+// what each level means). Always a level: the feature has no on/off.
 export const playerFocusOf = (features) => {
-  const focus = features?.playerFocus;
-  if (!focus || focus.enabled === false) return null;
-  return typeof focus.level === "string" && focus.level ? focus.level : "balanced";
+  const level = features?.playerFocus?.level;
+  return typeof level === "string" && level ? level : "balanced";
 };
 
 // Idle diplomacy rolls once a minute while the game is on screen; an average

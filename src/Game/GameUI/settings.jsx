@@ -1761,10 +1761,9 @@ const PlayerFocusSetting = () => {
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
     const gameId = library.activeGameId;
-    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features) ?? "");
+    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
     const override = library.activeGame?.features?.playerFocus?.level;
-    const focus = normalizePlayerFocus(getActivePlayerFocus() ?? "");
-    const off = getActivePlayerFocus() === null;
+    const focus = normalizePlayerFocus(getActivePlayerFocus());
     const following = !override;
 
     const choose = async (value) => {
@@ -1787,7 +1786,7 @@ const PlayerFocusSetting = () => {
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
         data-no-translate
-        disabled={saving || !gameId || off}
+        disabled={saving || !gameId}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -1800,9 +1799,6 @@ const PlayerFocusSetting = () => {
         ))}
         </select>
         <div style={helperStyle}>
-        {off ? (
-            <div style={{ marginBottom: 6 }}>This scenario has Player focus switched off, so no share of a skip is reserved for you.</div>
-        ) : null}
         {/* Every level, not only the one selected: the choice is between four
             feels, and a player cannot compare them one at a time. */}
         {PLAYER_FOCUS_LEVELS.map((level) => (

@@ -63,6 +63,8 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                   <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{definition.label}</div>
                   <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", lineHeight: 1.45, marginTop: "0.15rem" }}>{definition.description}</div>
                 </div>
+{/* A feature with no on/off (Player focus) is a choice, not a switch. */}
+                {definition.toggleable !== false && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                   {isGame && (
                     <button type="button" style={choice(enabledState === "default")} onClick={() => setFeature(definition.key, { enabled: undefined })}>
@@ -72,6 +74,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                   <button type="button" style={choice(enabledState === "on")} onClick={() => setFeature(definition.key, { enabled: true })}>On</button>
                   <button type="button" style={choice(enabledState === "off")} onClick={() => setFeature(definition.key, { enabled: false })}>Off</button>
                 </div>
+                )}
               </div>
               {definition.settings.length > 0 && (
                 <div style={{ display: "grid", gap: "0.6rem", marginTop: "0.6rem" }}>

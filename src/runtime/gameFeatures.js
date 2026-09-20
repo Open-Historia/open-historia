@@ -52,6 +52,5 @@ export const idleDiplomacyChancePerMinute = () => chancePerMinute(activeFeatures
 export const getActiveWorldDirection = () => worldDirectionOf(activeFeatures);
 
 // How much of a time skip belongs to the player (src/Game/AI/playerFocus.js):
-// the scenario's default under this game's own choice, or null when the feature
-// is off and no share is asked for.
+// the scenario's default under this game's own choice. Always a level.
 export const getActivePlayerFocus = () => playerFocusOf(activeFeatures);

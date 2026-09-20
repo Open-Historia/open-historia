@@ -138,6 +138,10 @@ test("Player focus: the scenario sets the default level and a game chooses its o
   assert.equal(playerFocusOf(resolveFeatures(scenario, { playerFocus: { level: "" } })), "spotlight");
   assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { level: "nonsense" } }), {});
 
-  // Switched off, no share of a skip is reserved for the player at all.
-  assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false } }, null)), null);
+  // The feature has no on/off: it is a choice of level, so an "off" stored by
+  // an older build or an import is ignored rather than silently cancelling the
+  // player's share.
+  assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
+  assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
+  assert.equal(featureDefaults().playerFocus.enabled, true);
 });

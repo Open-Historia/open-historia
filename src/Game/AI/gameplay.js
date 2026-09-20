@@ -11690,11 +11690,9 @@ const readPlayerFocusContext = async (bundle) => {
   const playerName = normalizeString(bundle?.game?.country);
   const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
   const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
-  // The scenario's default under this game's own choice (gameFeatures.js), and
-  // no minimum at all when the feature is switched off.
-  const level = getActivePlayerFocus();
+  // The scenario's default under this game's own choice (gameFeatures.js).
   return {
-    focus: level === null ? null : normalizePlayerFocus(level),
+    focus: normalizePlayerFocus(getActivePlayerFocus()),
     playerName,
     playerNames,
     territoryNames,
@@ -11823,8 +11821,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       };
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        // With the focus off, the world keeps every lane it would have had.
-        { targetDate: segmentTarget, playerFocus: focusContext.focus ?? "balanced" },
+        { targetDate: segmentTarget, playerFocus: focusContext.focus },
         signal,
       );
       console.info(
@@ -11841,22 +11838,17 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         { originDate: state.segmentOrigin, targetDate: segmentTarget },
       );
       // The two minimums, settled here where both are known: the player's focus
-      // wins where they overlap (docs/adr/0003), and with the focus switched off
-      // the author's world share stands exactly as written.
-      const segmentShares = focusContext.focus
-        ? combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare })
-        : { player: 0, world: Number(direction?.worldShare) || 0 };
+      // wins where they overlap (docs/adr/0003).
+      const segmentShares = combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare });
       const segmentVariables = {
         ...variables,
         playerFocusWorldShare: segmentShares.world,
-        playerFocusDirective: focusContext.focus
-          ? buildPlayerFocusDirective({
-            focus: focusContext.focus,
-            worldShare: direction?.worldShare,
-            material: playerMaterial,
-            playerName: focusContext.playerName,
-          })
-          : "",
+        playerFocusDirective: buildPlayerFocusDirective({
+          focus: focusContext.focus,
+          worldShare: direction?.worldShare,
+          material: playerMaterial,
+          playerName: focusContext.playerName,
+        }),
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
@@ -11951,12 +11943,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
-          const focusShortfall = focusContext.focus ? playerFocusShortfall(candidate?.events, {
+          const focusShortfall = playerFocusShortfall(candidate?.events, {
             focus: focusContext.focus,
             isPlayerEvent: focusContext.isPlayerEvent,
             material: playerMaterial,
             playerName: focusContext.playerName,
-          }) : null;
+          });
           if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text);
           // Each segment is checked against ITS OWN span, so an event dated outside
           // the segment is caught while the model can still fix it rather than at the
