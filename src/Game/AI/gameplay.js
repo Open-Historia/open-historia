@@ -263,7 +263,7 @@ import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNarration, renderReminders } from "../../runtime/gmChanges.js";
@@ -2651,9 +2651,12 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     const focusDirective = normalizeString(variables?.playerFocusDirective);
     if (focusDirective) systemPrompt = `${systemPrompt}\n\n${focusDirective}`;
     const direction = getActiveWorldDirection();
-    const shares = combinedShares({ focus: variables?.playerFocus, worldShare: direction?.worldShare });
+    // The world's share as the focus left it (the segment works both out together).
+    const worldShare = Number.isFinite(Number(variables?.playerFocusWorldShare))
+      ? Number(variables.playerFocusWorldShare)
+      : direction?.worldShare;
     const directionDirective = buildWorldDirectionDirective(
-      direction ? { ...direction, worldShare: shares.world } : direction,
+      direction ? { ...direction, worldShare } : direction,
       {
         playerPolity: normalizeString(variables?.playerPolity),
         spanDays: computeSimulatedDays(variables) || 30,
@@ -11687,8 +11690,11 @@ const readPlayerFocusContext = async (bundle) => {
   const playerName = normalizeString(bundle?.game?.country);
   const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
   const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
+  // The scenario's default under this game's own choice (gameFeatures.js), and
+  // no minimum at all when the feature is switched off.
+  const level = getActivePlayerFocus();
   return {
-    focus: normalizePlayerFocus(bundle?.game?.playerFocus),
+    focus: level === null ? null : normalizePlayerFocus(level),
     playerName,
     playerNames,
     territoryNames,
@@ -11817,7 +11823,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       };
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        { targetDate: segmentTarget, playerFocus: focusContext.focus },
+        // With the focus off, the world keeps every lane it would have had.
+        { targetDate: segmentTarget, playerFocus: focusContext.focus ?? "balanced" },
         signal,
       );
       console.info(
@@ -11833,15 +11840,23 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         focusContext,
         { originDate: state.segmentOrigin, targetDate: segmentTarget },
       );
+      // The two minimums, settled here where both are known: the player's focus
+      // wins where they overlap (docs/adr/0003), and with the focus switched off
+      // the author's world share stands exactly as written.
+      const segmentShares = focusContext.focus
+        ? combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare })
+        : { player: 0, world: Number(direction?.worldShare) || 0 };
       const segmentVariables = {
         ...variables,
-        playerFocus: focusContext.focus,
-        playerFocusDirective: buildPlayerFocusDirective({
-          focus: focusContext.focus,
-          worldShare: direction?.worldShare,
-          material: playerMaterial,
-          playerName: focusContext.playerName,
-        }),
+        playerFocusWorldShare: segmentShares.world,
+        playerFocusDirective: focusContext.focus
+          ? buildPlayerFocusDirective({
+            focus: focusContext.focus,
+            worldShare: direction?.worldShare,
+            material: playerMaterial,
+            playerName: focusContext.playerName,
+          })
+          : "",
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
@@ -11928,8 +11943,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // when the two ask for more than the whole period, the world keeps what
           // is left. Both are counted the same way — never a rejection, said at
           // the top of the next turn.
-          const shares = combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare });
-          const shareShortfall = worldShareShortfall(candidate?.events, shares.world, {
+          const shareShortfall = worldShareShortfall(candidate?.events, segmentShares.world, {
             // The player's TERRITORY counts as the player here too. Without it an
             // event inside the player's own empire satisfies the world's share,
             // which is how unrest in a player-held province came to be filed as
@@ -11937,12 +11951,12 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
-          const focusShortfall = playerFocusShortfall(candidate?.events, {
+          const focusShortfall = focusContext.focus ? playerFocusShortfall(candidate?.events, {
             focus: focusContext.focus,
             isPlayerEvent: focusContext.isPlayerEvent,
             material: playerMaterial,
             playerName: focusContext.playerName,
-          });
+          }) : null;
           if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text);
           // Each segment is checked against ITS OWN span, so an event dated outside
           // the segment is caught while the model can still fix it rather than at the

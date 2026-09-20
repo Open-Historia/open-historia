@@ -93,6 +93,32 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
     ]),
   }),
+  // How much of a time skip belongs to the player's own country
+  // (src/Game/AI/playerFocus.js). The scenario sets the level a new game starts
+  // on — a tight one-nation campaign wants a different default from a world
+  // sandbox — and the player changes it for their own game in Settings, AI,
+  // Generation behavior. Off: no minimum share of Player events at all; the
+  // world's share above still applies.
+  Object.freeze({
+    key: "playerFocus",
+    label: "Player focus",
+    description: "How much of each time skip is about the player's own country, as far as they have something going on — orders, Project dates due, wars, open threads. In a quiet stretch the world fills the skip whatever this says, and it never invents business for the player. The player can change it for their own game.",
+    settings: Object.freeze([
+      Object.freeze({
+        key: "level",
+        type: "choice",
+        label: "The scenario starts on",
+        defaultValue: "balanced",
+        options: Object.freeze([
+          Object.freeze({ value: "world-first", label: "World first", description: "At least a quarter of a skip is the player's when they have something going on." }),
+          Object.freeze({ value: "balanced", label: "Balanced", description: "At least 40%. The built-in feel." }),
+          Object.freeze({ value: "focused", label: "Focused", description: "At least 60%, and other powers' plans take less of what the simulator is shown." }),
+          Object.freeze({ value: "spotlight", label: "Spotlight", description: "At least three quarters, and the wider world is kept to what matters most." }),
+        ]),
+        description: "Where a new game on this scenario starts. Players change it for their own game in Settings.",
+      }),
+    ]),
+  }),
 ]);
 
 export const FEATURE_KEYS = Object.freeze(FEATURE_DEFINITIONS.map((definition) => definition.key));
@@ -113,6 +139,14 @@ const readBoolean = (value) => {
 // A setting is a number unless it says `type: "text"`. Blank text is "not set":
 // a scenario's blank is its default, and a game's blank follows the scenario.
 const readSetting = (value, setting) => {
+  // A choice is one of the values the setting lists. Anything else — a value
+  // from an older build, a typo in an imported scenario — is "not set", so the
+  // scenario's default (or the built-in one) stands rather than a level the
+  // engine cannot read.
+  if (setting.type === "choice") {
+    const text = String(value ?? "").trim().toLowerCase();
+    return setting.options.some((option) => option.value === text) ? text : null;
+  }
   if (setting.type === "text") {
     if (typeof value !== "string") return null;
     const text = value.replace(/\r\n/g, "\n").trim().slice(0, setting.maxLength || 2000);
@@ -194,6 +228,14 @@ export const worldDirectionOf = (features) => {
     scriptedEvents: typeof direction.scriptedEvents === "string" ? direction.scriptedEvents.trim() : "",
     territoryTempo: percent(direction.territoryTempo, 0),
   };
+};
+
+// The Player focus level this game plays with, or null when the feature is off
+// and no share is asked for (src/Game/AI/playerFocus.js reads the level itself).
+export const playerFocusOf = (features) => {
+  const focus = features?.playerFocus;
+  if (!focus || focus.enabled === false) return null;
+  return typeof focus.level === "string" && focus.level ? focus.level : "balanced";
 };
 
 // Idle diplomacy rolls once a minute while the game is on screen; an average

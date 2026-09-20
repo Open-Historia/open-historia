@@ -61,7 +61,7 @@ A Canonical event that does not involve the player's polity at all, such as a cr
 _Avoid_: Wider-world event, background event
 
 **Player focus**:
-The player's choice of how much of each jump belongs to Player events: World first, Balanced, Focused or Spotlight. It sets a minimum share that applies only as far as the player has something going on; in a quiet stretch the World fills the jump.
+How much of each jump belongs to Player events: World first, Balanced, Focused or Spotlight. The Scenario sets the level a new Game starts on and the player changes it for their own Game, like any other feature setting. It is a minimum share that applies only as far as the player has something going on; in a quiet stretch the World fills the jump.
 _Avoid_: Player share, player weighting, attention balance
 
 **Hidden event**:

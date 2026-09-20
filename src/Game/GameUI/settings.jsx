@@ -36,8 +36,9 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
-import { PLAYER_FOCUS_DEFAULT, PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
-import { readGameData, writeGameData } from "../../runtime/gameState.js";
+import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { playerFocusOf } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -60,7 +61,7 @@ import {
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildLoggingFile,
@@ -1751,35 +1752,47 @@ const PLAYER_FOCUS_HINTS = {
 };
 
 const PlayerFocusSetting = () => {
-    const [focus, setFocus] = useState(PLAYER_FOCUS_DEFAULT);
-    const [ready, setReady] = useState(false);
-    useEffect(() => {
-        let live = true;
-        readGameData({ force: true })
-        .then((game) => { if (live) { setFocus(normalizePlayerFocus(game?.playerFocus)); setReady(true); } })
-        .catch(() => { if (live) setReady(true); });
-        return () => { live = false; };
-    }, []);
+    // The scenario's default under this game's own choice (server/gameFeatures.js).
+    // Kept with the GAME, not on this device: a Spotlight war campaign should not
+    // decide how the next sandbox game reads. A scenario author sets where new
+    // games start, in the library's Features tab.
+    useActiveFeatures();
+    const library = useLibraryState();
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const gameId = library.activeGameId;
+    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features) ?? "");
+    const override = library.activeGame?.features?.playerFocus?.level;
+    const focus = normalizePlayerFocus(getActivePlayerFocus() ?? "");
+    const off = getActivePlayerFocus() === null;
+    const following = !override;
+
     const choose = async (value) => {
-        const next = normalizePlayerFocus(value);
-        setFocus(next);
+        if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
+        setSaving(true);
+        setError("");
         try {
-            const current = await readGameData({ force: true });
-            await writeGameData({ ...current, playerFocus: next });
-        } catch (error) {
-            console.warn("[settings] the player focus could not be saved.", error);
+            // undefined clears the override, so the game follows its scenario again.
+            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+        } catch (problem) {
+            setError(problem?.message || "That could not be saved.");
+        } finally {
+            setSaving(false);
         }
     };
+
+    const scenarioLabel = PLAYER_FOCUS_LEVELS.find((level) => level.key === scenarioLevel)?.label ?? scenarioLevel;
     return (
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
         data-no-translate
-        disabled={!ready}
-        value={focus}
-        onChange={(event) => choose(event.target.value)}
+        disabled={saving || !gameId || off}
+        value={following ? "" : focus}
+        onChange={(event) => choose(event.target.value || null)}
         style={{ ...inputStyle, cursor: "pointer" }}
         >
+        <option value="" style={{ color: "black" }}>{`Scenario default (${scenarioLabel})`}</option>
         {PLAYER_FOCUS_LEVELS.map((level) => (
             <option key={level.key} value={level.key} style={{ color: "black" }}>
             {level.label}
@@ -1787,6 +1800,9 @@ const PlayerFocusSetting = () => {
         ))}
         </select>
         <div style={helperStyle}>
+        {off ? (
+            <div style={{ marginBottom: 6 }}>This scenario has Player focus switched off, so no share of a skip is reserved for you.</div>
+        ) : null}
         {/* Every level, not only the one selected: the choice is between four
             feels, and a player cannot compare them one at a time. */}
         {PLAYER_FOCUS_LEVELS.map((level) => (
@@ -1797,6 +1813,7 @@ const PlayerFocusSetting = () => {
         <div style={{ marginTop: 6 }}>
         It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
         </div>
+        {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
         </div>
         </div>
     );
