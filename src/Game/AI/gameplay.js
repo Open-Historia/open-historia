@@ -93,7 +93,7 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -1949,6 +1949,28 @@ const buildPlacementGazetteer = (context, world) => {
     return close ? { kind: "city", name: close.name, point: close.coordinates } : null;
   };
 
+  // A region by its id, for an operation that gives `regionId` and no phrase.
+  const findRegionId = (id) => {
+    const key = normalizeString(id);
+    if (!key) return null;
+    const row = withGeometry.find((candidate) => normalizeString(candidate.id) === key);
+    return row ? asRegion(row) : null;
+  };
+
+  // What a phrase ALMOST matched, for the receipt. The usual dead end is a name
+  // that fits several regions at once — "Falkland Islands" over East and West
+  // Falkland Islands — which matchRegionName refuses on purpose rather than pick
+  // one of them. Refusing is right; leaving the model to guess again is not, so
+  // the receipt names them and it can write one exactly next turn.
+  const suggest = (phrase) => {
+    const key = fold(phrase);
+    if (key.length < 4) return [];
+    return withGeometry
+      .filter((row) => fold(row.name).includes(key) || key.includes(fold(row.name)))
+      .slice(0, 4)
+      .map((row) => row.name);
+  };
+
   const regionAt = (point) => {
     const row = withGeometry.find((candidate) => point[0] >= candidate.bbox[0] && point[0] <= candidate.bbox[2]
       && point[1] >= candidate.bbox[1] && point[1] <= candidate.bbox[3]
@@ -1970,16 +1992,17 @@ const buildPlacementGazetteer = (context, world) => {
     const ashore = nearestInteriorPoint(best.geometry, point);
     return ashore ? { point: ashore, region: asRegion(best) } : null;
   };
-  return { find, regionAt, nearestLand };
+  return { find, findRegionId, suggest, regionAt, nearestLand };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 
-// Every `at` in a list of containers ({ event, impacts, path }) becomes
-// coordinates, and every newly placed thing is spaced off the rest. Mutates the
-// operations in place, like the region resolvers beside it. `receipt` hears what
-// could not be placed; an operation that then has no coordinates at all is left
-// for the normalizer to drop, exactly as one that never had any.
+// Every `at` — or, failing that, every `regionId` — in a list of containers
+// ({ event, impacts, path }) becomes coordinates, and every newly placed thing is
+// spaced off the rest. Mutates the operations in place, like the region resolvers
+// beside it. `receipt` hears what could not be placed; an operation that then has
+// no coordinates at all is left for the normalizer to drop, exactly as one that
+// never had any.
 const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
@@ -1989,9 +2012,9 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
       } else if (kind === "move") {
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2019,20 +2042,45 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
-    if (entry.phrase) {
-      const resolved = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name });
-      if (resolved.error) {
-        const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
-        noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
-          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${resolved.error}. `
-          + (hasCoordinates ? "Its coordinates were used instead." : "It was left off the map. Name a city, region, structure or unit as the map spells it."));
-        if (!hasCoordinates) continue;
-      } else {
-        target[lngKey] = resolved.lng;
-        target[latKey] = resolved.lat;
-        if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
-        placed += 1;
+    // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
+    // the region it belongs to is not. `regionId` is the fallback, and for an
+    // operation that gives only an id it is the whole answer. It used to be
+    // ignored, so such an operation was dropped for having no coordinates: the
+    // exact move a model reaches for after being told its `at` was not on the map.
+    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name }) : null;
+    const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
+      ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
+      : null;
+    const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    if (resolved) {
+      // A phrase that failed still gets said: the model wrote it, and next turn
+      // it should know which of the two the engine went with.
+      if (byPhrase?.error) {
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
+          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
       }
+      target[lngKey] = resolved.lng;
+      target[latKey] = resolved.lat;
+      if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (byPhrase?.error || byRegion?.error) {
+      const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+          + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
+        : `could not be placed in region "${entry.regionId}" — ${byRegion.error}`;
+      // The commonest dead end is a name that fits several regions at once, which
+      // the matcher refuses rather than guess between. Naming them turns a turn
+      // wasted guessing again into one exact name.
+      const near = (byPhrase?.names ?? [entry.phrase])
+        .map((name) => gazetteer.suggest(name))
+        .find((hits) => hits.length) ?? [];
+      noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}.`
+        + (near.length ? ` Did you mean ${near.map((name) => `"${name}"`).join(" or ")}?` : "")
+        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."));
+      if (!hasCoordinates) continue;
     }
     delete target.at;
     let lng = Number(target[lngKey]); let lat = Number(target[latKey]);

@@ -10,9 +10,21 @@
 // And every call starts at the top again (2026-09-19): an entry that failed a
 // moment ago is still tried first next time, because a rate limit or a busy
 // spell is usually over by then, and a call that skipped it would run on a
-// weaker model for nothing. The marks a failure leaves are kept — the Settings
-// rows show them, and a call that finds every entry failing says when the
-// first comes back — but they never take an entry out of the order.
+// weaker model for nothing.
+//
+// Except where the provider has SAID the entry is out for now (2026-09-20): a
+// Spent one, whose allowance it told us is gone until a reset hours away.
+// Guessing that a busy minute is over costs one fast refusal; guessing that a
+// daily quota came back early costs one on every call of every turn — a real
+// log shows four refusals before each answer, forty across one session. So a
+// Spent entry sinks to the BACK of the order rather than out of it: nothing
+// above it answering means the guess is worth making after all, and a mark that
+// has quietly expired must never be the thing that fails a turn.
+//
+// Only Spent. Unusable keeps its place, because its mark has no reset to wait
+// for — it is cleared by the player fixing the entry (providerConfig.js) or by
+// a later call simply working, and a provider that returned one 401 in a bad
+// moment must be able to heal itself that way.
 //
 // DELIBERATELY IMPORT-FREE, like providerErrors.js: main.jsx makes the calls and
 // cannot be unit-tested, and these rules are exactly what needs to be. The
@@ -69,8 +81,9 @@ const spentUntil = (entry, at) => (entry.provider === "gemini" ? nextPacificMidn
 // A busy or Rate limited entry sits out this long unless the provider said.
 export const SHORT_SKIP_MS = 60 * 1000;
 
-// Spent and Unusable are hard: the entry cannot answer. A short skip is only
-// advice about where to START — see orderToTry.
+// Spent and Unusable are hard: the entry cannot answer. Spent also carries a
+// reset, which is why orderToTry waits it out; a short skip is only advice, and
+// says nothing about where a call starts.
 const isAvailable = (state, at) => !state || (!state.unusable && !(state.spentUntil > at));
 const isSkipped = (state, at) => Boolean(state && state.skipUntil > at);
 
@@ -90,11 +103,19 @@ const markFor = (entry, failure, at, rateLimitPolicy) => {
     }
 };
 
-// Every entry, in list order, whatever its mark: a task's own pick first, the
-// rest from the top.
-const orderToTry = (entries, preferredEntryId) => {
+// Every entry, in list order — a task's own pick first, the rest from the top —
+// except that a Spent one waits at the back until its reset. A busy, rate
+// limited or Unusable entry does not move.
+//
+// Nothing is ever dropped. When everything else has failed, the call goes on to
+// the Spent entries in the order they would otherwise have had.
+const orderToTry = (entries, preferredEntryId, store, at) => {
     const pick = entries.find((candidate) => candidate.id === preferredEntryId);
-    return pick ? [pick, ...entries.filter((candidate) => candidate !== pick)] : [...entries];
+    const ordered = pick ? [pick, ...entries.filter((candidate) => candidate !== pick)] : [...entries];
+    const spent = (candidate) => (store.get(candidate.id)?.spentUntil > at ? 1 : 0);
+    // Array sort is stable, so two entries that are equally spent — or equally
+    // not — keep the list order the player put them in.
+    return ordered.sort((left, right) => spent(left) - spent(right));
 };
 
 // What a Settings row says about its entry: ready, Spent (until when),
@@ -185,7 +206,7 @@ export async function runWithFallback({
         if (skipped.length) onSwitch?.({ skipped, to: null });
         return error;
     };
-    const order = orderToTry(entries, preferredEntryId);
+    const order = orderToTry(entries, preferredEntryId, store, now());
     if (!order.length) throw unavailableError(entries, store, now, formatTime, null);
     let tried = 0;
     for (const [index, candidate] of order.entries()) {

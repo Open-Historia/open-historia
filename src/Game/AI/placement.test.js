@@ -31,6 +31,7 @@ import {
     pointInGeometry,
     readPlacement,
     resolvePlacement,
+    resolveRegionPlacement,
 } from "./placement.js";
 
 const box = (west, south, east, north) => ({ type: "Polygon", coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]] });
@@ -69,8 +70,44 @@ const gazetteer = {
         return null;
     },
     regionAt: (point) => REGIONS.find((region) => pointInGeometry(point, region.geometry)) ?? null,
+    findRegionId: (id) => REGIONS.find((region) => region.id === String(id ?? "").trim()) ?? null,
 };
 const place = (phrase, seedText = "") => resolvePlacement(phrase, gazetteer, { seedText });
+
+// --- a destination given as a region id ---
+
+test("a region id lands inside that region, and says which region it is", () => {
+    const spot = resolveRegionPlacement("el-s", gazetteer, { seedText: "u-1" });
+    assert.equal(spot.error, undefined);
+    assert.equal(pointInGeometry([spot.lng, spot.lat], REGIONS[3].geometry), true, `${spot.lng},${spot.lat} is not in Eastland South`);
+    assert.equal(spot.regionId, "el-s");
+    assert.equal(spot.regionName, "Eastland South");
+});
+
+test("the same region id and unit land in the same spot every time", () => {
+    const first = resolveRegionPlacement("wm-n", gazetteer, { seedText: "u-1" });
+    const again = resolveRegionPlacement("wm-n", gazetteer, { seedText: "u-1" });
+    assert.deepEqual([first.lng, first.lat], [again.lng, again.lat]);
+});
+
+test("an id no region has says so, in words the model can act on", () => {
+    assert.match(resolveRegionPlacement("116", gazetteer).error, /no region on this map has the id "116"/);
+    assert.equal(resolveRegionPlacement("", gazetteer).error, "no region id");
+    assert.equal(resolveRegionPlacement("wm-n", { regionAt: () => null }).error, 'no region on this map has the id "wm-n"');
+});
+
+test("a phrase that finds nothing reports every place it could have been naming", () => {
+    // The receipt quotes what the model wrote, but "Falkland Islands" inside
+    // "off Falkland Islands" is what a caller can offer near misses for.
+    const missed = place("off Nowhereshire");
+    assert.match(missed.error, /is called "off Nowhereshire"/);
+    assert.deepEqual(missed.names, ["off Nowhereshire", "Nowhereshire"]);
+    assert.deepEqual(
+        place("between Nowhereshire and Elsewhere").names,
+        ["between Nowhereshire and Elsewhere", "Nowhereshire", "Elsewhere"],
+        "the whole phrase, then each end of it",
+    );
+});
 
 // --- geometry ---
 

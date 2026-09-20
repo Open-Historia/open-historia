@@ -487,7 +487,30 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "" } = {}) => {
         }
         if (resolved) return resolved;
     }
-    return { error: `no city, region, unit or structure on this map is called "${asText(readings[0].name ?? phrase)}"` };
+    // `names` is every place the phrase could be read as naming — the whole of
+    // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
+    // can say what the phrase nearly matched. The message quotes the first, which
+    // is the whole phrase, because that is what the model actually wrote.
+    const names = [...new Set(readings.flatMap((reading) => [reading.name, reading.first, reading.second]).map(asText).filter(Boolean))];
+    const name = names[0] || asText(phrase);
+    return { error: `no city, region, unit or structure on this map is called "${name}"`, name, names };
+};
+
+// A destination given as a region id instead of a phrase. The schema offers
+// `regionId` on both a spawn and a move, and a model just told its `at` phrase
+// is not on the map reaches for it next — so it has to land somewhere. Before
+// this it landed nowhere: nothing turned an id into a point, and the operation
+// was dropped for having no coordinates, silently, every time.
+//
+// The point is the one a bare region NAME would have given: inside it, off
+// centre, stable for the same id and unit.
+export const resolveRegionPlacement = (regionId, gazetteer, { seedText = "" } = {}) => {
+    const id = asText(regionId);
+    if (!id) return { error: "no region id" };
+    const region = gazetteer.findRegionId?.(id);
+    if (!region) return { error: `no region on this map has the id "${id}"` };
+    const point = interiorPoint(region.geometry, { seed: hashText(`${id}|${asText(seedText).toLowerCase()}`) });
+    return point ? done(point, "region", gazetteer, region.name) : { error: `region "${region.name || id}" has no shape to stand in` };
 };
 
 // What the model is told. Short, because it rides on every jump.
@@ -500,5 +523,5 @@ export const PLACEMENT_DIRECTIVE = [
     "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison.",
     "- \"coast of Crimea\" — on land at the sea's edge. \"off Sevastopol\" — AT SEA, for fleets.",
     "- \"between Kyiv and Kharkiv\" — halfway.",
-    "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins.",
+    "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
 ].join("\n");
