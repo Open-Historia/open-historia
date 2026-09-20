@@ -2,6 +2,7 @@
 import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
+import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
@@ -127,6 +128,15 @@ export const WORLD_DEFAULTS = {
   // was shown. Keeps a leader from being handed the same exchange twice, and a
   // long campaign from growing the chat prompt without bound.
   chatKnowledgeCursors: {},
+  // Refusals of an Overlord's demand the engine has already charged, by the id of
+  // the message that carried them (chargeRefusals). It lives HERE, and not as a
+  // stamp on the message, because of who writes what: every writer of the world
+  // re-reads it at write time, while chats are written from whatever copy each
+  // panel happens to hold — so a stamp on a message was erased by the next save
+  // from a stale panel, and the refusal charged again on every jump after.
+  // Written only by the turn, so it rides the turn's restore point like the
+  // puppet ledger it pays into. Never sent to a model.
+  chargedRefusals: [],
   // Real-time grace-period queue for optional Event Editor -> NPC diplomatic
   // reactions. Pending evaluations only, never chats: the conversation itself
   // is created later through the normal chat merge seam.
@@ -194,6 +204,10 @@ export const WORLD_DEFAULTS = {
   // save's older treaty/alliance events, so that only ever happens once.
   diplomaticLedgerVersion: 0,
   wars: [],
+  // Subordinations: who directs whom. Directional, partly secret, and written
+  // only through the diplomatic director's compact puppetUpdates lines — see
+  // docs/adr/0004-puppet-ledger-and-secrecy.md.
+  puppets: [],
   // Persistent storylines: the hidden state of the world's ongoing processes
   // (AI/nativeWorldDirector.js), advanced by compact storylineUpdates lines on
   // a jump payload exactly like the ledgers above.
@@ -682,10 +696,48 @@ export const normalizeChatEntry = (entry, index = 0) => {
     ...(events.length ? { events } : {}),
     // The binding votes the log carries, ready for the panel to render.
     ...(projected?.polls?.length ? { polls: projected.polls } : {}),
+    // The demands the log carries (chatThreads.js), for the panel's demand card
+    // and for the turn that charges a refusal.
+    ...(projected?.demands?.length ? { demands: projected.demands } : {}),
     source: projected?.source || normalizeOptionalString(entry.source) || "manual",
     status: normalizeOptionalString(entry.status) || "open",
     title: projected?.title || normalizeOptionalString(entry.title),
   };
+};
+
+// THE ONE DETERMINISTIC LOYALTY RULE's intake: every refusal of an Overlord's
+// demand the engine has not yet charged, and the charged record with them added.
+// Pure, and it never touches a chat.
+//
+// Charged ONCE, keyed by the id of the message that carried it — not by date,
+// because a retried jump or a reloaded save lands on the same date twice. The
+// record is world.chargedRefusals rather than a stamp on the message, because a
+// stamp on a message was erased by the next save from any chat panel holding an
+// older copy, and the refusal was then charged on every jump after. Every world
+// writer re-reads before it writes; chat writers do not.
+//
+// Both parties come off the message, never from who spoke: an AI Puppet marks
+// its own refusal, and an Overlord marks the reply answering the PLAYER's.
+export const chargeRefusals = (chats, charged = []) => {
+  const seen = new Set(normalizeArray(charged).map((id) => String(id)));
+  const refusedDemands = [];
+  const newlyCharged = [];
+  for (const chat of normalizeArray(chats)) {
+    const threadId = normalizeOptionalString(chat?.id);
+    for (const demand of normalizeArray(chat?.demands)) {
+      if (demand?.status !== "refused") continue;
+      const overlord = normalizeOptionalString(demand.by);
+      const puppet = normalizeOptionalString(demand.target);
+      // A demand id is only unique within its thread, so the key carries both —
+      // or one thread's refusal would hide another's that reused the id.
+      const key = `${threadId}:${normalizeOptionalString(demand.id)}`;
+      if (!overlord || !puppet || !threadId || seen.has(key)) continue;
+      seen.add(key);
+      newlyCharged.push(key);
+      refusedDemands.push({ overlord, puppet });
+    }
+  }
+  return { refusedDemands, charged: [...normalizeArray(charged), ...newlyCharged] };
 };
 
 export const normalizeChats = (chats) =>
@@ -3375,6 +3427,99 @@ const normalizeWorldAgreements = (value, identityWorld) => {
     .slice(0, MAX_WORLD_AGREEMENTS);
 };
 
+// A subordination is DIRECTIONAL (overlord -> puppet), unlike a relation, and
+// partly secret, unlike an agreement. See puppets.js for what a viewer may see
+// of one, and the ADR for why it is neither of those two things.
+const normalizeWorldPuppet = (entry, identityWorld, index = 0) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const overlord = resolveWorldDiplomaticPolity(entry.overlord, identityWorld);
+  const puppet = resolveWorldDiplomaticPolity(entry.puppet, identityWorld);
+  // Nobody directs themselves, and a one-sided row names no relationship.
+  if (!overlord || !puppet || overlord.toLocaleLowerCase() === puppet.toLocaleLowerCase()) return null;
+
+  const status = PUPPET_STATUSES.includes(normalizeOptionalString(entry.status).toLowerCase())
+    ? normalizeOptionalString(entry.status).toLowerCase()
+    : "active";
+  const loyaltyNumber = Number(entry.loyalty);
+  const kind = normalizeOptionalString(entry.kind).toLowerCase();
+  const secrecy = normalizeOptionalString(entry.secrecy).toLowerCase();
+
+  // knownTo carries WHEN each polity learned a covert arrangement, because the
+  // panel shows that date and a bare name cannot answer it. A plain string is
+  // still accepted — it grants sight with no date to show.
+  const seen = new Set();
+  const knownTo = [];
+  for (const raw of normalizeArray(entry.knownTo)) {
+    const polity = resolveWorldDiplomaticPolity(typeof raw === "string" ? raw : raw?.polity, identityWorld);
+    if (!polity) continue;
+    const key = polity.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const lastSeen = typeof raw === "string" ? "" : normalizeOptionalString(raw?.seenStatus).toLowerCase();
+    knownTo.push({
+      polity,
+      learnedDate: typeof raw === "string" ? "" : canonicalizeDateString(raw?.learnedDate),
+      // The status this polity last SAW. Absent means it saw the arrangement
+      // standing — the only thing it could have learned of it by being told.
+      ...(PUPPET_STATUSES.includes(lastSeen) ? { seenStatus: lastSeen } : {}),
+    });
+    if (knownTo.length >= 24) break;
+  }
+
+  return {
+    id: normalizeOptionalString(entry.id) || `puppet-${index}`,
+    overlord,
+    puppet,
+    kind: PUPPET_KINDS.includes(kind) ? kind : "client",
+    loyalty: Number.isFinite(loyaltyNumber) ? Math.max(0, Math.min(100, Math.round(loyaltyNumber))) : 50,
+    secrecy: PUPPET_SECRECY_LEVELS.includes(secrecy) ? secrecy : "open",
+    knownTo,
+    status,
+    startedDate: canonicalizeDateString(entry.startedDate),
+    endedDate: status === "active" ? "" : canonicalizeDateString(entry.endedDate || entry.lastUpdatedDate),
+    lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
+    sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
+    createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
+    updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
+  };
+};
+
+const normalizeWorldPuppets = (value, identityWorld) => {
+  const rows = [];
+  // One Overlord per Puppet. A second LIVE row for the same Puppet is the
+  // condominium this deliberately does not model, so it loses to the first;
+  // an ended row never blocks a new Overlord, or a country could be subjugated
+  // exactly once in a campaign.
+  const liveByPuppet = new Set();
+  const ids = new Set();
+  normalizeArray(value).forEach((entry, index) => {
+    const normalized = normalizeWorldPuppet(entry, identityWorld, index);
+    if (!normalized || ids.has(normalized.id)) return;
+    const key = normalized.puppet.toLocaleLowerCase();
+    if (normalized.status === "active") {
+      if (liveByPuppet.has(key)) return;
+      liveByPuppet.add(key);
+    }
+    ids.add(normalized.id);
+    rows.push(normalized);
+  });
+
+  if (rows.length <= MAX_WORLD_PUPPETS) return rows;
+
+  // Evict what is OVER before what is live, oldest first — never a live row.
+  // .slice() would drop whatever happened to be last, which is live work as
+  // often as not (the same rule the projects board uses).
+  // Live rows first, so the cut below can only ever reach finished ones while any
+  // remain — that is the whole eviction rule. Each half is ordered by how
+  // recently it was touched, so past 64 LIVE subordinations, where something must
+  // give whatever we do, what goes is the least recently touched rather than
+  // whichever happened to be last in the array.
+  const byRecency = (a, b) => compareGameDates(b.lastUpdatedDate || "", a.lastUpdatedDate || "") || a.id.localeCompare(b.id);
+  const live = rows.filter((row) => row.status === "active").sort(byRecency);
+  const ended = rows.filter((row) => row.status !== "active").sort(byRecency);
+  return [...live, ...ended].slice(0, MAX_WORLD_PUPPETS);
+};
+
 // Interactive events were called catalysts until 18 September 2026. A save
 // from before keeps its scene under the old key; it is read from there and
 // never written back under it.
@@ -3592,6 +3737,11 @@ export const normalizeWorldState = (world) => {
       }
       return cursors;
     })(),
+    // Capped at the most recent 512: a refusal is rare, and past that many the
+    // oldest could be charged again — a campaign would need five hundred refused
+    // demands for that to matter, and a list that grew forever would matter sooner.
+    chargedRefusals: [...new Set(normalizeArray(nextWorld.chargedRefusals).map((id) => normalizeOptionalString(id)).filter(Boolean))]
+      .slice(-512),
     pendingEventOutreach: normalizePendingEventOutreach(nextWorld.pendingEventOutreach),
     // Explicit (not via the ...WORLD_DEFAULTS spread) so these new fields survive every
     // write path — the documented new-world-field trap.
@@ -3624,6 +3774,7 @@ export const normalizeWorldState = (world) => {
       ? Math.max(0, Math.trunc(Number(nextWorld.diplomaticLedgerVersion)))
       : 0,
     wars: normalizeWorldWars(nextWorld.wars),
+    puppets: normalizeWorldPuppets(nextWorld.puppets, diplomaticIdentityWorld),
     storylines: normalizeWorldStorylines(nextWorld.storylines),
     simulationRules: normalizeOptionalString(nextWorld.simulationRules),
     startingTimelineText: normalizeOptionalString(nextWorld.startingTimelineText),

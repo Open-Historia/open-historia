@@ -72,3 +72,112 @@ test("an event keeps its war metadata", () => {
   assert.equal(plain.warId, "");
   assert.deepEqual(plain.combatants, []);
 });
+
+// world.puppets is the fourth ledger and rides the same read/write path. A
+// field the normalizer does not know is a field the next round trip loses.
+
+test("puppets survive a normalizeWorldState round trip", () => {
+  const world = normalizeWorldState({
+    polityOverrides: { USSR: { code: "USSR" }, Poland: { code: "Poland" } },
+    puppets: [{
+      id: "p1",
+      overlord: "USSR",
+      puppet: "Poland",
+      kind: "satellite",
+      loyalty: 42,
+      secrecy: "open",
+      knownTo: [{ polity: "United Kingdom", learnedDate: "1948-03-02" }, "France", ""],
+      status: "active",
+      startedDate: "1945-06-28",
+      sourceEventIds: ["e1"],
+      createdRound: 2,
+      updatedRound: 3,
+    }],
+  });
+
+  assert.equal(world.puppets.length, 1);
+  const [row] = world.puppets;
+  assert.equal(row.overlord, "USSR");
+  assert.equal(row.puppet, "Poland");
+  assert.equal(row.kind, "satellite");
+  assert.equal(row.loyalty, 42);
+  assert.equal(row.secrecy, "open");
+  assert.equal(row.status, "active");
+  assert.deepEqual(row.knownTo, [
+    { polity: "United Kingdom", learnedDate: "1948-03-02" },
+    { polity: "France", learnedDate: "" },
+  ]);
+  assert.deepEqual(row.sourceEventIds, ["e1"]);
+});
+
+test("a puppet row with a nonsense kind, secrecy or status falls back rather than vanishing", () => {
+  const [row] = normalizeWorldState({
+    puppets: [{ overlord: "USSR", puppet: "Poland", kind: "vassal", secrecy: "sort of", status: "wobbly", loyalty: 900 }],
+  }).puppets;
+  assert.equal(row.kind, "client");
+  assert.equal(row.secrecy, "open");
+  assert.equal(row.status, "active");
+  assert.equal(row.loyalty, 100);
+});
+
+test("a puppet of itself, or of nobody, is dropped", () => {
+  const world = normalizeWorldState({
+    puppets: [
+      { overlord: "USSR", puppet: "USSR" },
+      { overlord: "", puppet: "Poland" },
+      { overlord: "USSR", puppet: "" },
+      "not an object",
+    ],
+  });
+  assert.deepEqual(world.puppets, []);
+});
+
+test("one Overlord per Puppet - a second row for the same Puppet is dropped", () => {
+  const world = normalizeWorldState({
+    puppets: [
+      { id: "p1", overlord: "USSR", puppet: "Poland", status: "active" },
+      { id: "p2", overlord: "Germany", puppet: "Poland", status: "active" },
+    ],
+  });
+  assert.equal(world.puppets.length, 1);
+  assert.equal(world.puppets[0].overlord, "USSR");
+});
+
+test("an ended row does not block a new Overlord for the same Puppet", () => {
+  const world = normalizeWorldState({
+    puppets: [
+      { id: "p1", overlord: "Germany", puppet: "Poland", status: "revolted" },
+      { id: "p2", overlord: "USSR", puppet: "Poland", status: "active" },
+    ],
+  });
+  assert.equal(world.puppets.length, 2);
+  assert.equal(world.puppets.find((row) => row.status === "active").overlord, "USSR");
+});
+
+test("the puppet ledger caps at 64, evicting what is over before what is live", () => {
+  const ended = Array.from({ length: 60 }, (_, index) => ({
+    id: `done-${index}`,
+    overlord: "USSR",
+    puppet: `Gone ${index}`,
+    status: "released",
+    lastUpdatedDate: `19${String(10 + index).padStart(2, "0")}-01-01`,
+  }));
+  const live = Array.from({ length: 20 }, (_, index) => ({
+    id: `live-${index}`,
+    overlord: "USSR",
+    puppet: `Held ${index}`,
+    status: "active",
+  }));
+
+  const world = normalizeWorldState({ puppets: [...ended, ...live] });
+  assert.equal(world.puppets.length, 64);
+  assert.equal(world.puppets.filter((row) => row.status === "active").length, 20, "no live row is ever evicted");
+  const kept = world.puppets.filter((row) => row.status === "released").map((row) => row.id);
+  assert.equal(kept.length, 44);
+  assert.ok(!kept.includes("done-0"), "the oldest finished row goes first");
+  assert.ok(kept.includes("done-59"), "the most recently touched finished row stays");
+});
+
+test("an empty world has an empty puppet ledger", () => {
+  assert.deepEqual(normalizeWorldState({}).puppets, []);
+});

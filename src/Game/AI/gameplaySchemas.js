@@ -1040,6 +1040,11 @@ export const JUMP_FORWARD_SCHEMA = {
       type: "string",
       description: "Newline-separated treaty/agreement lifecycle records, format in the prompt. Empty string when none started, changed or ended.",
     },
+    puppetUpdates: {
+      type: "string",
+      description:
+        "Compact newline-separated subordination updates - one polity directing another while it remains a separate country. Ops: install, reclassify, loyalty, reveal, release, annex, revolt, suppress. Empty string when no subordination changes. Record format is documented in the live prompt.",
+    },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
   // reads it as `payload?.clearActions !== false`, so a missing value already
@@ -1239,13 +1244,13 @@ const canonicalUpdateSchema = {
     kind: {
       type: "string",
       description:
-        "Semantic kind code. Use relation; storyline:active; storyline:dormant; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start.",
+        "Semantic kind code. Use relation; storyline:active; storyline:dormant; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start; puppet:open; puppet:covert.",
     },
     id: { type: "string", description: "Stable storyline/war/agreement id, or empty for a relation." },
     polities: {
       type: "array",
       description:
-        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors / side A. Agreement: parties.",
+        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors / side A. Agreement: parties. Puppet: exactly [overlord, puppet].",
       items: { type: "string" },
     },
     opponents: {
@@ -1255,7 +1260,7 @@ const canonicalUpdateSchema = {
     },
     score: {
       type: "integer",
-      description: "Relation absolute score -100..100; 0 for non-relation items. The engine clamps it and derives the status.",
+      description: "Relation absolute score -100..100. Puppet: its loyalty to its overlord, 0-100. 0 for other items. The engine clamps it and derives the status.",
     },
     pressure: {
       type: "integer",
@@ -1271,7 +1276,7 @@ const canonicalUpdateSchema = {
     },
     category: {
       type: "string",
-      description: "Storyline process kind (war, crisis, revolution, diplomacy, politics, economy) or agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other); otherwise empty.",
+      description: "Storyline process kind (war, crisis, revolution, diplomacy, politics, economy) or agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other), or puppet kind (protectorate, satellite, client); otherwise empty.",
     },
     title: {
       type: "string",
@@ -1383,6 +1388,27 @@ export const DESCRIPTION_TO_ACTION_SCHEMA = {
     chatStarter: textSchema("Opening message for a chat; empty for a normal action."),
   },
   required: ["title", "text", "kind"],
+  additionalProperties: false,
+};
+
+// Whether a reply in the one-on-one thread between the player and their own
+// Overlord or Puppet makes, answers or settles a demand (runtime/demandCheck.js).
+// Both fields REQUIRED, the outcome from a fixed list: a demand used to be marked
+// by an optional hidden line in the reply, and a live run showed a model
+// understand a refusal and still leave that line off. A required choice cannot
+// be left off. The code accepts only the outcomes that side may give.
+export const DEMAND_CHECK_SCHEMA = {
+  type: "object",
+  description: "What the reply does about a demand between an overlord and its own puppet state.",
+  properties: {
+    outcome: {
+      type: "string",
+      enum: ["none", "demand", "accepts_alternative", "accepted", "refused", "alternative"],
+      description: "Exactly one of the outcomes the request lists for this reply.",
+    },
+    summary: textSchema("One line: what is demanded (for demand) or what is offered instead (for alternative). Empty for any other outcome."),
+  },
+  required: ["outcome", "summary"],
   additionalProperties: false,
 };
 
@@ -1697,6 +1723,43 @@ const gameMasterEventSchema = {
 // The GM transaction the app validates and previews. The AI plans structured
 // canonical operations; the payload is not itself permission to persist them —
 // only the administrator's Apply of the exact preview is.
+// One subordination change the GM decrees: one polity directing another's will
+// while it stays a separate country (docs/world-state.md, Puppet). The same ops
+// and rules as a skip's puppetUpdates lines, applied by the same director.
+//
+// Until this existed the GM transaction had no place for one, so a player asking
+// the GM to make a country their puppet got the story written — "Washington
+// Reverses Course and Aligns With London" — and an empty world.puppets: the
+// country panel said nothing, and nothing charged or ended it later.
+const gmPuppetUpdateSchema = {
+  type: "object",
+  description: "One subordination change: one polity directing another's will while it remains a separate country, holding its own territory and sovereignty.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["install", "reclassify", "loyalty", "reveal", "release", "annex", "revolt", "suppress"],
+      description: "install creates it; reclassify changes kind; loyalty moves the score; reveal makes a covert one open (permanently); release, annex and revolt end it; suppress puts down a rising.",
+    },
+    overlord: nonEmptyTextSchema("The directing polity, using its full canonical name."),
+    puppet: nonEmptyTextSchema("The directed polity, using its full canonical name."),
+    kind: {
+      type: "string",
+      enum: ["protectorate", "satellite", "client"],
+      description: "Which powers the overlord holds — protectorate: its foreign policy and defence; satellite: control of its government behind an independent front, which is what the player is shown as a \"puppet state\"; client: a government that depends on the overlord's backing but makes most of its own decisions. Used by install and reclassify.",
+    },
+    loyalty: { type: "integer", minimum: 0, maximum: 100, description: "How far the puppet accepts direction, 0-100. Used by install and loyalty." },
+    secrecy: {
+      type: "string",
+      enum: ["open", "covert"],
+      description: "open if the world knows of it, covert if only the two parties do. Used by install.",
+    },
+    eventIndexes: gmEventIndexesSchema,
+    note: textSchema("Why, in one line."),
+  },
+  required: ["op", "overlord", "puppet", "kind", "loyalty", "secrecy", "eventIndexes", "note"],
+  additionalProperties: false,
+};
+
 export const GAME_MASTER_SCHEMA = {
   type: "object",
   description:
@@ -1744,6 +1807,14 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 12,
       items: gmAgreementUpdateSchema,
     },
+    // Not in `required`: a preview saved before puppets had a place here must
+    // still validate. The transport decodes a missing list as [].
+    puppetUpdates: {
+      type: "array",
+      description: "Structured subordination changes: making a country a puppet (protectorate, satellite or client), changing one, or ending one.",
+      maxItems: 8,
+      items: gmPuppetUpdateSchema,
+    },
     diplomaticOutreach: {
       type: "array",
       description: "Direct NPC-to-player chats not attached to one specific authored event.",
@@ -1786,6 +1857,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
     relationUpdatesJson: textSchema("JSON array text for structured world.relations operations. Use [] when none."),
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
+    puppetUpdatesJson: textSchema("JSON array text for structured world.puppets subordination changes — making a country a puppet (protectorate, satellite or client), changing one, or ending one. Use [] when none."),
     diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
   },
   required: [
@@ -1797,6 +1869,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "warUpdatesJson",
     "relationUpdatesJson",
     "agreementUpdatesJson",
+    "puppetUpdatesJson",
     "diplomaticOutreachJson",
   ],
   additionalProperties: false,
@@ -1809,6 +1882,9 @@ const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["warUpdatesJson", "warUpdates"],
   ["relationUpdatesJson", "relationUpdates"],
   ["agreementUpdatesJson", "agreementUpdates"],
+  // A missing field decodes to [] (parseGameMasterTransportArray), so an answer
+  // from before puppets had a place here still decodes as it did.
+  ["puppetUpdatesJson", "puppetUpdates"],
   ["diplomaticOutreachJson", "diplomaticOutreach"],
 ]);
 
@@ -2613,6 +2689,7 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
   nextSpeaker: NEXT_SPEAKER_SCHEMA,
+  demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
   interactiveCreation: INTERACTIVE_CREATION_SCHEMA,
@@ -2661,6 +2738,12 @@ export const CHAT_ACTIONS_TOOL = makeTool(
   "submit_chat_actions",
   "Submit this turn of the conversation: every AI-controlled participant's actions, in order.",
   CHAT_ACTIONS_SCHEMA,
+);
+
+export const DEMAND_CHECK_TOOL = makeTool(
+  "submit_demand_check",
+  "Submit what this reply does about a demand between an overlord and its own puppet state.",
+  DEMAND_CHECK_SCHEMA,
 );
 
 export const NEXT_SPEAKER_TOOL = makeTool(
@@ -2781,6 +2864,7 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
   descriptionToAction: DESCRIPTION_TO_ACTION_TOOL,
   nextSpeaker: NEXT_SPEAKER_TOOL,
+  demandCheck: DEMAND_CHECK_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
   interactiveCreation: INTERACTIVE_CREATION_TOOL,

@@ -1,6 +1,8 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
+import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
+import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
@@ -179,6 +181,7 @@ import {
   normalizeEventEntry,
   normalizeActions,
   normalizeChatEntry,
+  chargeRefusals,
   normalizeChats,
   normalizeEvents,
   normalizeGameData,
@@ -219,6 +222,11 @@ import {
 import {
   DIPLOMATIC_LEDGER_VERSION,
   applyDiplomaticUpdates,
+  applyPuppetUpdates,
+  bindPuppetUpdatesToEvents,
+  revealPuppetsToSpies,
+  puppetUpdatesFromCanonical,
+  decodePuppetUpdates,
   bindAgreementUpdatesToEvents,
   bindRelationUpdatesToEvents,
   buildBoundedDiplomaticContext,
@@ -607,7 +615,13 @@ Relation decision model: a canonical bilateral relation score/status is persiste
 - agreementUpdates is compact text, one record per line:
   agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms
   ops: start | update | suspend | resume | end | expire. type is one of alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other. Use a stable, descriptive agreementId (e.g. franco-russian-alliance-1894) and reuse it for later lifecycle records; every record needs a real causal event in this response, and only start needs the full type/parties/title.
-- Return relationUpdates:"" and agreementUpdates:"" when nothing material changes.`;
+- puppetUpdates is compact text, one record per line, for a SUBORDINATION - one polity directing another's will while it remains a separate country holding its own territory and its own sovereignty:
+  op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note
+  ops: install (create) | reclassify (change kind) | loyalty (move the score) | reveal (covert becomes open, permanently) | release (the overlord lets go) | annex (absorbed) | revolt (thrown off) | suppress (a rising CRUSHED - the overlord holds on, loyalty is forced up at gunpoint, and the overlord's reputation should fall with it). kind is one of protectorate (keeps internal rule, surrenders foreign policy) | satellite (keeps formal sovereignty, loses real independence) | client (bought or installed government); it states WHICH POWERS the overlord holds, not how tightly, so use reclassify rather than treating the three as a scale. loyalty is 0-100, how far the puppet accepts direction - move it when the period earned it, never merely because time passed. secrecy is open (the arrangement is publicly known, as a signed protectorate is) or covert (only the two parties know). Only install needs kind/loyalty/secrecy; the rest may leave them blank.
+  A puppet may hold no puppets of its own: installing one over a polity that already has them moves those to the new overlord automatically. A polity has at most one overlord, and reveal cannot be undone.
+  Coup model: a puppet whose loyalty has collapsed has a hidden storyline building against it, and YOU decide whether and when that breaks. A rising may succeed (emit revolt) or be put down (emit suppress); either is a real outcome and neither is owed to the player. Before it breaks, unrest should be VISIBLE to an overlord who has the means to see it - if the overlord has an agent inside the puppet or a strong intelligence service, return a timeline event reporting the unrest, so the warning is bought rather than given. A puppet at high loyalty does not revolt.
+  Puppet decision model: a Puppet is a SEPARATE COUNTRY with its own interests, not a possession. It may refuse what its overlord demands, and loyalty is the prior for how likely that is, never a veto. Annexing one's own Puppet meets far less resistance than conquering a foreign power, and a Puppet at high loyalty may accept absorption outright - and the standing it costs the overlord is applied for you - do not emit a polityChanges reputation drop for it as well, or it is paid twice. Likewise a puppet REFUSING its overlord's demand in conversation is charged its loyalty cost for you, once, by the engine: narrate what follows from the refusal as you see fit, but do not also emit a loyalty line for the refusal itself, or it is paid twice. Move loyalty for everything else the period brought. A covert Puppet must speak and act as a fully independent country toward anyone not party to the arrangement.
+- Return relationUpdates:"", agreementUpdates:"" and puppetUpdates:"" when nothing material changes.`;
 };
 
 const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
@@ -630,6 +644,7 @@ Kinds:
 - storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
 - war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
 - agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
+- puppet:open | puppet:covert: polities=[overlord, puppet], category (puppet kind: protectorate | satellite | client - which powers the overlord holds, not how tightly), score (the puppet's loyalty to its overlord, 0-100), detail (how it came about). A polity whose will another directs while it remains a separate country, holding its own territory - a Slovakia under Germany, a Manchukuo under Japan. open if the world knows of it; covert only if it is genuinely secret. One overlord per puppet, and a puppet holds no puppets of its own. Only arrangements standing on the start date.
 Never output relation status or event indexes/ids; the engine owns those.
 
 ROUND-ZERO AUDIT
@@ -735,7 +750,10 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
     }
   }
 
-  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates };
+  // Subordinations already standing on the start date (puppet:open / puppet:covert).
+  const puppetUpdates = puppetUpdatesFromCanonical(candidate.canonicalUpdates);
+
+  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates, puppetUpdates };
   delete expanded.canonicalUpdates;
   return expanded;
 };
@@ -885,6 +903,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
   const boundEvents = normalizeArray(candidate.events);
   candidate.warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), boundEvents);
   candidate.relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), boundEvents);
+  candidate.puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), boundEvents);
   candidate.agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), boundEvents);
   return "";
 };
@@ -1025,6 +1044,7 @@ const screenSegmentPayload = (payload, {
   delete payload.boardProvisionalEventIds;
   payload.warUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.warUpdates, taggedEvents, screened.events);
   payload.relationUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.relationUpdates, taggedEvents, screened.events);
+  payload.puppetUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.puppetUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
   payload.storylineUpdates = filterStorylineUpdatesAfterIntegrityScreen({
     updates: decodedStorylineUpdates,
@@ -1061,6 +1081,13 @@ const selectBreadthRepairContext = (state, context) => {
   };
 };
 
+// The map's regions, for the one question a subordination needs of them: does
+// the would-be Puppet still hold land (landedPolityCheck). Loaded only when
+// there is a subordination to check.
+const regionCatalogForPuppets = async (puppetUpdates, world) => (normalizeArray(puppetUpdates).length
+  ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world)
+  : []);
+
 // The world a later segment is validated against and shown: the base world plus
 // the war, diplomacy and storyline records of the segments already in hand. No impacts are
 // applied here - the round's events are applied once, at the end.
@@ -1077,6 +1104,7 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     world: warMerge.world,
     relationUpdates: normalizeArray(payload?.relationUpdates),
     agreementUpdates: normalizeArray(payload?.agreementUpdates),
+    puppetUpdates: normalizeArray(payload?.puppetUpdates),
     events,
     stopDate,
     round,
@@ -6338,6 +6366,8 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
       ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
     };
     const leaderMessage = {
+      // Set here so a demand this reply makes can be attached to it.
+      id: mintDemandId("msg"),
       role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate,
       ...(memorySummary ? { memorySummary } : {}),
     };
@@ -6351,10 +6381,30 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     });
     if (!built) throw new Error("Could not build the message.");
 
-    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
+    let nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
     await writeChatsState(nextChats);
 
-    const finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    let finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+
+    // The advisor's send button is a one-on-one exchange like the panel's, so a
+    // reply here can make, answer or settle a demand too (runtime/demandCheck.js).
+    // checkDemandReply returns at once, without a request, anywhere but the
+    // thread between the player and their own Overlord or Puppet.
+    const demandEvents = finalChat
+      ? await checkDemandReply({ chat: finalChat, speaker: recipient.name, reply, answering: trimmedText, messageId: leaderMessage.id, time: gameDate })
+        .catch(() => [])
+      : [];
+    if (demandEvents.length) {
+      const logged = normalizeChats([{
+        ...finalChat,
+        events: [...(finalChat.events?.length ? finalChat.events : eventsFromLegacyChat(finalChat)), ...demandEvents],
+      }])[0];
+      if (logged) {
+        nextChats = nextChats.map((chat) => (chat === finalChat ? logged : chat));
+        await writeChatsState(nextChats);
+        finalChat = logged;
+      }
+    }
     return { chat: finalChat, reply };
   } finally {
     endSimulation();
@@ -6579,6 +6629,7 @@ const applySimulationResult = async ({
   const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(result.warUpdates, dedupedEvents, curatedEvents);
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
+  const keptPuppetUpdates = filterBoundLedgerUpdatesToKeptEvents(result.puppetUpdates, dedupedEvents, curatedEvents);
   const keptStorylineUpdates = filterBoundLedgerUpdatesToKeptEvents(result.storylineUpdates, dedupedEvents, curatedEvents);
 
   // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
@@ -6594,6 +6645,7 @@ const applySimulationResult = async ({
   const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
   const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
   const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
+  const puppetUpdates = remapLedgerEventIds(normalizeArray(keptPuppetUpdates), canonicalEventIdentity.idMap);
   const storylineUpdates = remapLedgerEventIds(normalizeArray(keptStorylineUpdates), canonicalEventIdentity.idMap);
   let nextGame = normalizeGameData({
     ...baseGame,
@@ -6842,19 +6894,41 @@ const applySimulationResult = async ({
     });
   });
 
+  // THE ONE DETERMINISTIC LOYALTY RULE: a demand the Puppet REFUSED costs a
+  // fixed amount, once. A demand is a record in its thread's log
+  // (chatThreads.js), answered from the demand card by the player or read off
+  // an AI's reply by the demandCheck task (runtime/demandCheck.js). Collected
+  // here, off the saved threads, rather than charged when it happened, because a
+  // world write from the chat panel would race the turn's. chargeRefusals owns
+  // the rest — once per refused demand, recorded in world.chargedRefusals where
+  // no chat writer can erase it — and is where it can be tested.
+  const refusalCharge = chargeRefusals(nextChats, worldWithImpacts.chargedRefusals);
+  const refusedDemands = refusalCharge.refusedDemands;
+  worldWithImpacts = { ...worldWithImpacts, chargedRefusals: refusalCharge.charged };
+
   const diplomaticMerge = applyDiplomaticUpdates({
     world: worldWithImpacts,
     relationUpdates: [...relationUpdates, ...espionageRelationUpdates],
     agreementUpdates,
+    puppetUpdates,
+    refusedDemands,
+    regionCatalog: await regionCatalogForPuppets(puppetUpdates, worldWithImpacts),
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
   });
-  worldWithImpacts = diplomaticMerge.world;
+  // Agents report on the ledger as this turn left it: an arrangement installed
+  // or ended this turn is what an agent inside either party now sees. After the
+  // merge, and after espionage has decided which agents are still in place.
+  worldWithImpacts = revealPuppetsToSpies(diplomaticMerge.world, nextGame.gameDate);
   // Storylines last: they read the wars and relations as this turn left them.
+  // A Puppet whose Loyalty has collapsed is handed a hidden Storyline by the
+  // engine, not the model — a turn that forgot to open one would mean a decade
+  // of mistreatment silently never happened. The director decides WHEN anything
+  // comes of it, exactly as for every other ongoing situation.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
-    updates: normalizeArray(storylineUpdates),
+    updates: [...normalizeArray(storylineUpdates), ...normalizeArray(diplomaticMerge.puppetStorylineSeeds)],
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
@@ -11203,6 +11277,23 @@ export const runChatActionBatch = async ({
     ? `${knowledgeBlocks.join("\n\n")}\n\nEach block above belongs to ONE polity. What is in another polity's block is not known to this one: write each leader from its own cables alone.`
     : "";
 
+  // What each AI participant's country knows of who directs whom
+  // (runtime/puppets.js) — the group twin of the one-on-one leader's briefing,
+  // held to the same discipline as the cables above: one block per polity, and a
+  // polity knows only its own. Without it a covert Puppet at the table does not
+  // know to present itself as independent, nor that the demand it is refusing
+  // came from its own Overlord, so it cannot mark the refusal either. The room is
+  // every AI participant and the player, who is exactly who a covert Puppet most
+  // needs to deceive.
+  const briefingWorld = normalizeWorldState(bundle.world);
+  const inTheRoom = [...aiParticipants, player];
+  const subordinationBlocks = aiParticipants
+    .map((speaker) => describePuppetBriefing(puppetBriefingFor(briefingWorld, speaker, { present: inTheRoom }), speaker))
+    .filter(Boolean);
+  const subordinationKnowledge = subordinationBlocks.length
+    ? `${subordinationBlocks.join('\n\n')}\n\nEach subordinations block belongs to ONE polity, like the cables. A polity may not reveal a covert arrangement it is party to to anyone its block lists as not knowing, and never knows another polity's covert arrangements unless its own block says so.`
+    : "";
+
   const openPolls = projected.polls.filter((poll) => poll.options.length);
   const pollText = openPolls.length
     ? `\n[Polls open in this conversation]\n${openPolls.map((poll) => (
@@ -11242,7 +11333,9 @@ export const runChatActionBatch = async ({
     chatParticipants: rosterText,
     chatHistory: transcript || "(nothing said yet)",
     CHAT_OPEN_POLLS: pollText,
-    CROSS_CHAT_KNOWLEDGE: crossChatKnowledge ? `\n${crossChatKnowledge}` : "",
+    CROSS_CHAT_KNOWLEDGE: [crossChatKnowledge, subordinationKnowledge].some(Boolean)
+      ? `\n${[crossChatKnowledge, subordinationKnowledge].filter(Boolean).join('\n\n')}`
+      : "",
     CHAT_ACTION_FEEDBACK: normalizeString(chat?.actionFeedback) ? `\n${chat.actionFeedback}` : "",
   };
 
@@ -11290,6 +11383,52 @@ export const runChatActionBatch = async ({
     cursors: nextCursors,
     actions: normalizeArray(payload?.actions),
   };
+};
+
+// What an AI's reply does about a demand, in the one-on-one thread between the
+// player and their own Overlord or Puppet (runtime/demandCheck.js): the events to
+// append to the thread's log — a demand made, answered, or settled — or none.
+//
+// One small request, and only there: every other reply in the game is never
+// checked. Its answer is a REQUIRED choice from a fixed list, which is the whole
+// point — the optional hidden line it replaces was left off by a model that had
+// plainly understood the refusal. A failed request records nothing: no card, no
+// charge, never a guess.
+//
+// `answering` is the message the reply answers, so the check can tell a refusal
+// from a reply to something else. The caller appends what comes back.
+const mintDemandId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null } = {}) => {
+  const stored = normalizeChats([chat])[0];
+  if (!stored || !normalizeString(reply)) return [];
+  const [world, game] = await Promise.all([readWorldState({ force: true }), readGameData({ force: true })]);
+  const context = demandCheckContext({
+    world,
+    speaker,
+    playerCountry: normalizeString(game?.country),
+    participants: stored.countries,
+  });
+  if (!context) return [];
+  // A Puppet answers the demand in play, or thinks better of one it refused;
+  // an Overlord acts on whatever is on the table. A Puppet's reply matters only
+  // while there is something for it to answer; an Overlord's always might,
+  // since any reply of its may make a demand.
+  const openDemand = context.role === "puppet" ? answerableDemandOf(stored) : openDemandOf(stored);
+  if (context.role === "puppet" && !openDemand) return [];
+
+  const { payload } = await runJsonTask("demandCheck", {
+    fallback: () => ({ outcome: "none", summary: "" }),
+    signal,
+    userMessage: demandCheckPrompt({ context, reply, openDemand, answering, demands: stored.demands }),
+    variables: {},
+    requestKind: BACKGROUND_REQUEST,
+  });
+  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId, demands: stored.demands });
+  logDebugEvent("diplomacy",
+    `Demand check on ${speaker}'s reply (${context.role}): ${normalizeString(payload?.outcome) || "none"}${events.length ? ` — ${events.map((event) => event.kind === "demand_made" ? "demand made" : `demand ${event.answer}`).join(", ")}` : ""}.`,
+    { outcome: payload?.outcome, summary: payload?.summary, openDemand: openDemand?.id ?? null });
+  return events;
 };
 
 export const chooseNextDiplomaticSpeaker = async ({
@@ -13204,7 +13343,8 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
   return linked(candidate?.countryStatPatches)
     || linked(candidate?.warUpdates)
     || linked(candidate?.relationUpdates)
-    || linked(candidate?.agreementUpdates);
+    || linked(candidate?.agreementUpdates)
+    || linked(candidate?.puppetUpdates);
 };
 
 const validateGameMasterChronology = (candidate, game) => {
@@ -13554,6 +13694,24 @@ const validateGameMasterPreviewPayload = async (candidate, {
   }, { world });
   if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
 
+  // Subordinations, tried against the live world exactly as Apply will run
+  // them: every change must apply, or the preview is refused with the reason.
+  // A skip may drop a bad line; the GM may not, because a player who asks for
+  // a puppet and silently gets none is the bug this closes.
+  const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), normalizedEvents);
+  if (puppetUpdates.length) {
+    const trial = applyPuppetUpdates({
+      world,
+      updates: puppetUpdates,
+      regionCatalog: await regionCatalogForPuppets(puppetUpdates, world),
+      events: normalizedEvents,
+      stopDate: normalizeString(game?.gameDate || game?.startDate),
+      round: Number(game?.round) || 0,
+    });
+    const [first] = normalizeArray(trial.dropped);
+    if (first) return `[canonical subordination-state] puppetUpdates[${first.index}]: ${first.reason}`;
+  }
+
   const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request });
   if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
@@ -13707,6 +13865,7 @@ const gameMasterTransactionCandidate = (transaction) => ({
   warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
   relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
   agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
+  puppetUpdates: cloneValue(normalizeArray(transaction?.puppetUpdates)),
   diplomaticOutreach: cloneValue(normalizeArray(transaction?.diplomaticOutreach)),
 });
 
@@ -13728,6 +13887,7 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
     count(transaction?.agreementUpdates, "agreement", "agreements"),
+    count(transaction?.puppetUpdates, "subordination", "subordinations"),
     count(transaction?.storylineUpdates, "storyline", "storylines"),
     count(transaction?.diplomaticOutreach, "diplomatic note", "diplomatic notes"),
   ].filter(Boolean);
@@ -13757,6 +13917,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
   normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
   normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.puppetUpdates).forEach((entry, index) => labels.push(`puppet:${index}:${normalizeString(entry?.op)}:${normalizeString(entry?.overlord)}->${normalizeString(entry?.puppet)}`));
   normalizeArray(transaction?.diplomaticOutreach).forEach((_, index) => labels.push(`outreach:${index}`));
   return labels.filter(Boolean).slice(0, 128);
 };
@@ -13867,6 +14028,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
+    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), events);
     const countryStatPatches = normalizeGameMasterStatPatches(payload?.countryStatPatches, bundle.world);
 
     return {
@@ -13887,6 +14049,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         warUpdates,
         relationUpdates,
         agreementUpdates,
+        puppetUpdates,
         diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
       },
       generation,
@@ -14049,21 +14212,31 @@ export const applyGameMasterPreview = async (preview) => {
 
     const relationUpdatesForApply = normalizeArray(transaction.relationUpdates);
     const agreementUpdatesForApply = normalizeArray(transaction.agreementUpdates);
-    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length
+    // Subordinations ride the same merge as relations and agreements, so a
+    // puppet the GM makes is a ledger row like any other: the country panel
+    // shows it, the advisor is briefed on it, and a refusal later charges it.
+    const puppetUpdatesForApply = normalizeArray(transaction.puppetUpdates);
+    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length || puppetUpdatesForApply.length
       ? applyDiplomaticUpdates({
           world: nextWorld,
           relationUpdates: relationUpdatesForApply,
           agreementUpdates: agreementUpdatesForApply,
+          puppetUpdates: puppetUpdatesForApply,
+          regionCatalog: await regionCatalogForPuppets(puppetUpdatesForApply, nextWorld),
           events,
           stopDate: bundle.game.gameDate || bundle.game.startDate || "",
           round: bundle.game.round || 0,
         })
-      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [] };
+      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [], appliedPuppetIds: [], droppedPuppetUpdates: [] };
     if (diplomaticMerge.appliedRelationIds.length !== relationUpdatesForApply.length) {
       throw new Error("A canonical relation operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
     }
     if (diplomaticMerge.appliedAgreementIds.length !== agreementUpdatesForApply.length) {
       throw new Error("A canonical agreement operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    if (normalizeArray(diplomaticMerge.appliedPuppetIds).length !== puppetUpdatesForApply.length) {
+      const [first] = normalizeArray(diplomaticMerge.droppedPuppetUpdates);
+      throw new Error(`A subordination change failed during the in-memory apply${first ? `: ${first.reason}` : ""}. Nothing was persisted; regenerate the preview.`);
     }
     nextWorld = diplomaticMerge.world;
 
@@ -14976,6 +15149,7 @@ export const maybeGeneratePregameHistory = async () => {
     const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), bootstrapEvents);
+    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), bootstrapEvents);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), bootstrapEvents);
     const warMerge = applyWarUpdates({
       world: currentWorld,
@@ -14988,6 +15162,7 @@ export const maybeGeneratePregameHistory = async () => {
       world: warMerge.world,
       relationUpdates,
       agreementUpdates,
+      puppetUpdates,
       events: bootstrapEvents,
       stopDate: startDate,
       round: 1,
