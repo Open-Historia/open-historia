@@ -255,7 +255,8 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
         parts.push(
             "[The World's Share — counted by the engine]\n"
             + `At least ${Math.round(share)}% of this period's events must be developments that do not involve ${player} at all: other powers acting on each other, in theatres ${player} is not in. `
-            + `An event that names ${player}, or that you mark playerRelated, counts as ${player}'s. The engine counts this on every answer and tells you when you fall short.`,
+            + `An event that names ${player}, or that you mark playerRelated, counts as ${player}'s. The engine counts this on every answer and tells you when you fall short. `
+            + `This is a floor on how much of the world you show, NOT a ceiling on what the world does to ${player}: meet it by writing more elsewhere, never by leaving a rival's move against the player unwritten.`,
         );
     }
     const tempo = Number(direction.territoryTempo);
