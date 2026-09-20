@@ -16,6 +16,7 @@ import {
 // carries every feature, so the exact-object checks below spread it in.
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
+const puppetStates = featureDefaults().puppetStates;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -37,6 +38,7 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(settings, {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
+    puppetStates,
     worldDirection,
     playerFocus,
   });
@@ -44,6 +46,7 @@ test("a scenario's configuration is made complete, with malformed values replace
   assert.deepEqual(normalizeFeatureSettings({ espionage: false, idleDiplomacy: { averageMinutes: 100000 } }), {
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
+    puppetStates,
     worldDirection,
     playerFocus,
   });

@@ -948,6 +948,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
     // DEMANDS, in the one-on-one thread between the player and their own
     // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
     // player, from the same shared rule as the list's markers.
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     const puppetRelations = usePuppetMarkers();
     const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
     // The composer offers "make this a demand" only to an Overlord writing to
@@ -1516,9 +1517,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
         // DEMANDS, placed in the conversation rather than under it
         // (runtime/demandCheck.js placeDemandCards).
+        // A demand belongs to an overlord and its puppet, so a game with the
+        // system switched off shows none — including ones a thread was already
+        // carrying when it was switched off. They are not deleted: the thread
+        // keeps its log, and switching back on brings the open ones back.
         const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
             messages: visibleEntries.map(({ msg }) => msg),
-            demands: chat.demands,
+            demands: puppetStatesOn ? chat.demands : [],
             isGroup,
         });
         const renderDemandCard = (demand) => (

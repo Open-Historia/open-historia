@@ -1805,6 +1805,10 @@ export const applyDiplomaticUpdates = ({
   round = 0,
   allowUnboundBaseline = false,
   regionCatalog = [],
+  // The scenario's "Puppet states" feature. Passed in rather than read from
+  // runtime/gameFeatures.js so this module stays testable without the browser
+  // runtime, exactly as the rest of the director is.
+  puppetStates = true,
 } = {}) => {
   const relationMerge = applyRelationUpdates({
     world,
@@ -1824,16 +1828,31 @@ export const applyDiplomaticUpdates = ({
   });
   // Puppets merge LAST, so a revolt's fallout lands on the relation and the
   // agreements this same pass has already written rather than under them.
-  const puppetMerge = applyPuppetUpdates({
-    world: agreementMerge.world,
-    updates: puppetUpdates,
-    refusedDemands,
-    regionCatalog,
-    events,
-    stopDate,
-    round,
-    allowUnboundBaseline,
-  });
+  //
+  // With the system off the pass is SKIPPED WHOLE rather than handed no updates:
+  // applyPuppetUpdates also seeds a coup storyline off every row ALREADY in the
+  // ledger and charges refused demands, so a game that switched the system off
+  // with arrangements standing would otherwise go on brewing risings inside it.
+  // The rows themselves are left untouched, ready for a game that switches back.
+  const puppetMerge = puppetStates
+    ? applyPuppetUpdates({
+        world: agreementMerge.world,
+        updates: puppetUpdates,
+        refusedDemands,
+        regionCatalog,
+        events,
+        stopDate,
+        round,
+        allowUnboundBaseline,
+      })
+    : {
+        world: agreementMerge.world,
+        puppets: array(agreementMerge.world?.puppets),
+        appliedIds: [],
+        dropped: [],
+        refusedDemandCount: 0,
+        storylineSeeds: [],
+      };
   return {
     world: puppetMerge.world,
     relations: relationMerge.relations,
@@ -1897,6 +1916,7 @@ export const buildBoundedDiplomaticContext = (
     focusActors = [],
     selectedStorylines = [],
     maxActors = MAX_CONTEXT_ACTORS,
+    puppetStates = true,
   } = {},
 ) => {
   const world = normalizeWorldState(worldLike);
@@ -1961,7 +1981,7 @@ export const buildBoundedDiplomaticContext = (
   // (runtime/puppets.js puppetBriefingFor). An earlier comment here said the chat
   // task read this block; it never did, and believing so hid that a covert
   // Puppet in conversation did not know it was one.
-  const puppets = array(world.puppets)
+  const puppets = (puppetStates ? array(world.puppets) : [])
     .filter((row) => row.status === "active")
     .filter((row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet)))
     .slice(0, MAX_CONTEXT_PUPPETS);
@@ -1975,10 +1995,15 @@ export const buildBoundedDiplomaticContext = (
     "",
     "FORMAL AGREEMENTS / COMMITMENTS",
     agreements.length ? agreements.map((agreement) => agreementDisplay(agreement, world)).join("\n") : "No active/suspended formal agreement among these attention actors.",
-    "",
-    "SUBORDINATIONS (who directs whom)",
-    puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
-    "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
+    // With the system off the section is left out ENTIRELY rather than saying
+    // nobody directs anybody: the simulator is never told the concept exists,
+    // so it cannot narrate a subordination the engine would refuse to record.
+    ...(puppetStates ? [
+      "",
+      "SUBORDINATIONS (who directs whom)",
+      puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
+      "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
+    ] : []),
     "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
     "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
     "world.wars remains the sole authority for actual belligerency. A hostile relation or alliance does not itself start a war.",

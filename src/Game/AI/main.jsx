@@ -27,7 +27,7 @@ import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
-import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor } from "../../runtime/puppets.js";
+import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   buildDiplomaticTurnInstruction,
@@ -2781,6 +2781,10 @@ export const CONVERSATION_IN_TURNS = "(given below as the message turns, oldest 
 // context). A player's-eye view reaching the simulator would have it resolving
 // the world from a picture it knows to be incomplete.
 const buildAdvisorPuppetsDirective = (world, playerCountry) => {
+    // With the system off the whole section goes, rather than saying nobody
+    // directs anybody: the directives list is filtered, and an advisor told the
+    // concept exists will reach for it when a player asks about their "puppets".
+    if (!puppetStatesEnabled()) return "";
     const rows = livePuppetsFor(world, playerCountry);
     const lines = rows.slice(0, 40).map((row) => {
         const who = describeRole(row, {
