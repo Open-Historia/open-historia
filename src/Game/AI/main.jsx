@@ -50,6 +50,7 @@ import {
     isContextWindowErrorText,
     isStreamingRefusal,
     isStreamingRequired,
+    isTemperatureRefusal,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
@@ -58,6 +59,7 @@ import {
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
+import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
@@ -100,11 +102,13 @@ const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
 // with the other AI settings. Storage is reached at every call rather than
 // once: the harness installs its localStorage after this module has loaded,
 // and a browser that refuses storage simply forgets between sessions.
-export const contextWindows = createContextWindowMemory({
+const settingsStorage = {
     getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
     setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
     removeItem: (key) => { try { localStorage.removeItem(key); } catch { /* nothing to forget */ } },
-});
+};
+export const contextWindows = createContextWindowMemory(settingsStorage);
+export const temperatureRefusals = createTemperatureMemory(settingsStorage);
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
 
@@ -901,6 +905,7 @@ async function callGemini(systemPrompt, history, {
     onModel,
     signal,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -924,6 +929,7 @@ async function callGemini(systemPrompt, history, {
     onModel?.(model);
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
+    const samplingConfig = temperatureBody(taskKey);
 
     // Sorted once for every retryable status either path below can see, so the
     // Fallback list and the retry count agree (shouldRetryProviderFailure).
@@ -975,6 +981,7 @@ async function callGemini(systemPrompt, history, {
                     contents: geminiContentsFromHistory(history),
                     generationConfig: {
                         maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
+                        ...samplingConfig,
                         ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
                     },
                     ...customParams,
@@ -1022,16 +1029,17 @@ async function callGemini(systemPrompt, history, {
         // changes. (The advisor's own streaming is handled above, where the
         // tokens go to the UI as they arrive.)
         const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
+        const generationConfig = {
+            ...samplingConfig,
+            ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+        };
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
                 contents: geminiContentsFromHistory(history),
-                // Reasoning toggle (settings): let thinking-capable Gemini models think.
-                ...(getReasoningEnabled()
-                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
-                     : {}),
+                ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
                 ...customParams,
                 ...(tool ? {
                     tools: [{ functionDeclarations: [
@@ -1165,6 +1173,7 @@ async function callOpenAIStyleChatCompletions({
     maxTokens,
     tokenLimitField = "max_tokens",
     lookupTools,
+    taskKey = "",
     requireOutputTool = false,
 }) {
     // Lookup functions (lookupTools.js) beside the output function. On the
@@ -1204,6 +1213,9 @@ async function callOpenAIStyleChatCompletions({
     // discipline as the two above: it drives a retry that does not consume one of
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
+    const samplingKey = temperatureRefusalKey({ provider: providerLabel, endpoint, model });
+    const ownTemperature = temperatureBody(taskKey);
+    let disableTemperature = temperatureRefusals.refuses(samplingKey);
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -1273,6 +1285,7 @@ async function callOpenAIStyleChatCompletions({
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
                     : {}),
+                ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -1326,7 +1339,16 @@ async function callOpenAIStyleChatCompletions({
             // walking the ladder would spend a request per rung finding that out.
             if (failure.kind === "tooBig") throw providerFailureError(contextWindowMessage(providerLabel, errorMessage, requestChars), failure);
 
-            // Cheapest concession first. A gateway that refuses stream+tools still
+            const sentOwnTemperature = Object.keys(ownTemperature).length > 0
+                && requestCustomParams.temperature === undefined;
+            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage)) {
+                disableTemperature = true;
+                temperatureRefusals.learn(samplingKey);
+                console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
+                continue;
+            }
+
+            // Next cheapest. A gateway that refuses stream+tools still
             // does tools, it just stops keeping the connection warm — whereas
             // dropping out of tool mode costs structured output, which is the
             // difference between a real turn and canned events.
@@ -1695,6 +1717,7 @@ async function callAnthropic(systemPrompt, history, {
     signal,
     staticPrefixEnd,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -1755,6 +1778,7 @@ async function callAnthropic(systemPrompt, history, {
             system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -1910,6 +1934,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
     signal,
     staticPrefixEnd,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -1997,6 +2022,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -3297,6 +3323,7 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         max_tokens: Math.max(anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT, 1024),
         messages: toAnthropicMessages(history),
         system: systemPrompt,
+        ...temperatureBody(taskKey),
         ...(tool ? {
             tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
             tool_choice: { type: "tool", name: tool.name },

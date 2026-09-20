@@ -386,6 +386,16 @@ export const isStreamingRequired = (message) => {
     return STREAM_REQUIRED_TEXT.test(text);
 };
 
+// Did the provider reject the request because it carried a TEMPERATURE?
+const TEMPERATURE_REFUSAL =
+    /temperature[^.]{0,80}(?:not\s+support|unsupported|not\s+allowed|not\s+enabled|not\s+available|must\s+be|may\s+only|can\s+only|only\s+(?:be\s+set|(?:the\s+)?default)|cannot|can't|invalid)|(?:not\s+support|unsupported|unsupported\s+value|invalid|unknown|unrecognized)[^.]{0,80}\btemperature/i;
+
+export const isTemperatureRefusal = (message) => {
+    const text = errorPayloadText(message);
+    if (!text || !/temperature/i.test(text)) return false;
+    return TEMPERATURE_REFUSAL.test(text);
+};
+
 // ---------------------------------------------------------------------------
 // The request does not fit the model's context window
 // ---------------------------------------------------------------------------

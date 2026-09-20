@@ -21,6 +21,7 @@ This page documents the plumbing. For the prompt templates and how they are asse
 | `src/Game/AI/lookupTools.js` | The lookup functions a structured task may call before answering: their declarations, the directive, and the executor that answers them from the live campaign and the rendered map. |
 | `src/Game/AI/toolTurns.js` | A lookup round in the conversation: one stored shape (Gemini parts), rendered as each provider's tool-call exchange, and the readers that pull a model's calls out of each envelope. |
 | `src/Game/AI/structuredMode.js` | The structured-output ladder (`tool → json_schema → json_object → text_json`), the per-entry setting, and the observer that offers it to the player. |
+| `src/Game/AI/sampling.js` | What temperature each task is asked at, and the tasks deliberately left at the provider's own. |
 | `src/Game/AI/promptDedupe.js` | Skipping a call-time directive the template already carries, and collapsing a large block the prompt would otherwise send twice. |
 | `src/Game/AI/usageStats.js` | Token counts and time-to-first-byte, normalized across the three providers' reporting shapes. |
 | `src/Game/AI/jsonSalvage.js` | Tolerant parsing of a model's answer: think-block stripping, the answer sentinel, fenced and balanced-brace recovery. |
@@ -123,6 +124,27 @@ Not built, on purpose: trimming the prompt to fit. The sections a skip carries a
 ### `customParams` — the request‑body escape hatch
 
 Each provider has a free‑text `customParams` field: a JSON object shallow‑merged **last** into the outgoing request body (`parseCustomParams`, `main.jsx`). It lets a player set body fields the UI doesn't expose (reasoning budgets, sampling params) and can override a built‑in key. Invalid JSON is warned and ignored — never fatal to a turn. A nested built‑in object (e.g. Gemini `generationConfig`) must be supplied whole to override any of its keys. For Anthropic, a `max_tokens` inside `customParams` is lifted into the token‑cap `Math.max` and then deleted so it can't fight the floor (`main.jsx`).
+
+### Per-task sampling temperature
+
+The game used to set no sampling parameters at all, so every call ran at the provider default of 1.0. `src/Game/AI/sampling.js` (import-free, tested) is a table of task key to temperature, applied in every provider path by `temperatureBody(taskKey)`. Each value is set from what the task's own prompt asks for, not from its model tier.
+
+| Band | Tasks | Why |
+|---|---|---|
+| **0.1** | `demandCheck`, `geographyResolver`, `nextSpeaker` | Classification and matching, where one answer is right and the rest are wrong: "you are recording, exactly, what the reply already says", "ONE job: translate ... you have NO authority to decide". `nextSpeaker` is here for obedience, since its prompt forbids the last speaker three times over. |
+| **0.2** | `eventConsolidator`, `gameMaster`, `projects`, `structureDirector`, `territoryDirector`, `timelineCurator`, `unitDirector` | Reconciliation and summary. Every one of these is told that changing nothing is a correct answer: "be conservative", "an empty projectOps list is normal", "inventing progress is worse than reporting none", "default verdict = KEEP". |
+| **0.3** | `countryStatSheet`, `intelligenceAssessment`, `interactiveSummary` | Bounded estimation, where the model must supply what the record does not: "provide plausible estimates ... do not answer unknown", "where the record is silent use your best historical judgement". |
+| **0.3** | `turnReview` | A compromise, because this one request carries five jobs: the four 0.2 reconcilers above plus the agents' reports, which are written prose (the `spyIntercept` template). |
+
+**A task not in the table sends no temperature and runs exactly as it did before.** Absence means no deliberate choice was made, not 1.0. Left out on purpose, because they write prose someone reads in character: `jumpForward`, `autoJumpForward`, both world repairs, `pregameHistory`, both interactive tasks, `actions`, `idleDiplomacy`, `spyIntercept`, `chatActions`, `advisor`, `diplomacy`. `descriptionToAction` is out for the same reason despite its name: it is told to expand the player's own writing by half, match their tone, and "increase the quality and entertainment", which is creative writing rather than parsing.
+
+**Where each provider takes it.** Gemini: `generationConfig.temperature`, in the same object as the thinking budget so setting either keeps the other. OpenAI and compatible: `temperature`, sent before `customParams` so a player's own still wins. Anthropic and compatible: `temperature`, but **only where extended thinking is not**, since the Messages API refuses the two together (`reasoning && !tool` is the existing gate). The Anthropic batch path has no thinking, so it always applies. The relay forwards a request body opaquely, so a relayed call carries it unchanged.
+
+**When a model refuses it.** An OpenAI reasoning model takes only its own temperature ("Unsupported value: 'temperature' does not support 0.2 with this model"), and some gateways reject the parameter outright. `isTemperatureRefusal` (`providerErrors.js`) recognises that 400/422 and the call retries once without the field, ahead of the streaming and structured-output concessions: it is the cheapest of the three, because giving the temperature back leaves the call exactly as it ran before this existed. The concession only fires for a temperature the game set; one the player put in `customParams` survives and is theirs to fix.
+
+**The refusal is remembered, per endpoint and model.** A reasoning model rejects every call that carries a temperature, so a concession scoped to one call would rediscover the same 400 forever, at one refused request each time, against the allowance the whole [request budget](#the-request-budget) exists to protect. This is the failure `structuredMode.js` was written about, and it was made again here before being caught. `createTemperatureMemory` (`sampling.js`, keyed by `temperatureRefusalKey({ provider, endpoint, model })`, stored under `ai_temperature_refusals`) holds what was learned, so `disableTemperature` starts true for a model already known to refuse and no request is spent. It is kept in memory as well as in localStorage, so a browser refusing storage still forgets only between sessions rather than between calls, and an entry goes stale after 30 days because a provider may change what it accepts.
+
+**A key that names no task is silently inert**, which is the one way this table can be wrong without anything failing, so `sampling.test.js` checks every key against the prompt pack.
 
 ### Reasoning toggle
 
