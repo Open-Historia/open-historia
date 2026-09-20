@@ -848,6 +848,26 @@ const institutionLifecycleImpactOpSchema = {
   additionalProperties: false,
 };
 
+const politicalActorImpactOpSchema = {
+  type: "object",
+  description: "One canonical PWv2 mutation; operation arguments are JSON in argsJson.",
+  properties: {
+    op: {
+      type: "string",
+      enum: [
+        "create-party", "update-party", "set-party-support", "set-party-influence", "set-party-leader",
+        "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
+        "set-political-system", "set-government", "form-coalition", "leave-coalition",
+        "replace-leader", "set-strategy", "set-traits", "set-perceptions", "remove-perception",
+      ],
+    },
+    polityKey: { type: "string", minLength: 1 },
+    argsJson: { type: "string", minLength: 1 },
+  },
+  required: ["op", "polityKey", "argsJson"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -862,6 +882,11 @@ const impactsSchema = {
       type: "array",
       description: "Polity changes.",
       items: polityChangeSchema,
+    },
+    politicalActorOps: {
+      type: "array",
+      description: "Canonical government, leader, party and strategy mutations.",
+      items: politicalActorImpactOpSchema,
     },
     regionTransfers: {
       type: "array",
@@ -1360,8 +1385,56 @@ export const PREGAME_HISTORY_SCHEMA = {
       items: canonicalUpdateSchema,
     },
   },
-  required: ["events", "summary"],
+  required: ["events", "summary", "canonicalUpdates"],
   additionalProperties: false,
+};
+
+export const PREGAME_HISTORY_TRANSPORT_SCHEMA = {
+  type: "object",
+  description: "Compact provider transport for pre-game history and the Round-Zero canonical bootstrap.",
+  properties: {
+    eventsJson: textSchema("JSON array text for chronological pre-game event objects. Must contain at least one event."),
+    summary: textSchema("One-paragraph summary of the era leading into the start date."),
+    canonicalUpdatesJson: textSchema("JSON array text for Day-One canonical-state facts. Use [] only when no qualifying state exists."),
+  },
+  required: ["eventsJson", "summary", "canonicalUpdatesJson"],
+  additionalProperties: false,
+};
+
+const parsePregameTransportArray = (value, field) => {
+  if (Array.isArray(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error("decoded value is not an array");
+    return parsed;
+  } catch (strictError) {
+    const salvaged = extractJsonArray(text);
+    if (!Array.isArray(salvaged)) {
+      throw new Error(`$.${field} must contain valid JSON array text: ${strictError?.message || strictError}.`);
+    }
+    return salvaged;
+  }
+};
+
+export const decodePregameHistoryTransportPayload = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { payload: value, error: "" };
+  const isTransport = Object.prototype.hasOwnProperty.call(value, "eventsJson")
+    || Object.prototype.hasOwnProperty.call(value, "canonicalUpdatesJson");
+  if (!isTransport) return { payload: value, error: "" };
+  try {
+    return {
+      payload: {
+        events: parsePregameTransportArray(value.eventsJson, "eventsJson"),
+        summary: String(value.summary ?? "").trim(),
+        canonicalUpdates: parsePregameTransportArray(value.canonicalUpdatesJson, "canonicalUpdatesJson"),
+      },
+      error: "",
+    };
+  } catch (error) {
+    return { payload: null, error: String(error?.message || error || "Invalid pre-game history transport payload.") };
+  }
 };
 
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
@@ -1381,6 +1454,12 @@ export const IDLE_DIPLOMACY_SCHEMA = {
       anyOf: [
         { type: "null", description: "No polity would plausibly reach out right now." },
         createdChatSchema,
+      ],
+    },
+    chatInstitutionId: {
+      anyOf: [
+        { type: "null", description: "No institution Council route requested." },
+        textSchema("Exact shared institution id when this note belongs in that institution's Council; otherwise empty or null."),
       ],
     },
     unitOps: {
@@ -1511,7 +1590,10 @@ export const CHAT_ACTIONS_SCHEMA = {
     actions: {
       type: "array",
       description: "The actions, in order. An empty list is a valid answer: silence is an answer.",
-      maxItems: 16,
+      // Formal institution maintenance may need one ballot per member (NATO-
+      // sized councils included). Ordinary chat remains prompt-bounded; native
+      // authority still validates every action independently.
+      maxItems: 48,
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
@@ -1746,6 +1828,25 @@ const gameMasterEventSchema = {
   },
 };
 
+const gmTerritorialScopeSchema = {
+  type: "object",
+  description: "Native exhaustive rendered-geography scope for a GM territorial instruction. Use this instead of sampling representative provinces.",
+  properties: {
+    kind: { type: "string", enum: ["legal-transfer", "control", "contest"] },
+    baseCountries: {
+      type: "array",
+      minItems: 1,
+      maxItems: 24,
+      items: nonEmptyTextSchema("Exact rendered base-geography country name, e.g. Estonia, Latvia, Lithuania."),
+    },
+    toCode: nonEmptyTextSchema("Recipient/controller/contender polity full name."),
+    eventIndex: { type: "integer", minimum: 0, maximum: 7 },
+    note: textSchema("Brief reason for the exhaustive scope."),
+  },
+  required: ["kind", "baseCountries", "toCode", "eventIndex", "note"],
+  additionalProperties: false,
+};
+
 // The GM transaction the app validates and previews. The AI plans structured
 // canonical operations; the payload is not itself permission to persist them —
 // only the administrator's Apply of the exact preview is.
@@ -1765,6 +1866,12 @@ export const GAME_MASTER_SCHEMA = {
       description: "Canonical timeline events authored by this transaction. Direct corrections may legitimately contain none.",
       maxItems: 8,
       items: gameMasterEventSchema,
+    },
+    territorialScopes: {
+      type: "array",
+      description: "Exhaustive rendered base-geography scopes. Native code expands each scope into exact per-region operations before preview.",
+      maxItems: 12,
+      items: gmTerritorialScopeSchema,
     },
     countryStatPatches: {
       type: "array",
@@ -1807,6 +1914,7 @@ export const GAME_MASTER_SCHEMA = {
     "mode",
     "summary",
     "events",
+    "territorialScopes",
     "countryStatPatches",
     "storylineUpdates",
     "warUpdates",
@@ -1833,6 +1941,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     },
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
+    territorialScopesJson: textSchema("JSON array text for exhaustive rendered base-geography territorial scopes. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
     storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
@@ -1844,6 +1953,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "mode",
     "summary",
     "eventsJson",
+    "territorialScopesJson",
     "countryStatPatchesJson",
     "storylineUpdatesJson",
     "warUpdatesJson",
@@ -1856,6 +1966,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
 
 const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["eventsJson", "events"],
+  ["territorialScopesJson", "territorialScopes"],
   ["countryStatPatchesJson", "countryStatPatches"],
   ["storylineUpdatesJson", "storylineUpdates"],
   ["warUpdatesJson", "warUpdates"],
@@ -2348,7 +2459,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
     },
     territorialComponentSplitText: {
       type: "string",
@@ -2779,8 +2890,8 @@ export const IDLE_DIPLOMACY_TOOL = makeTool(
 
 export const PREGAME_HISTORY_TOOL = makeTool(
   "submit_pregame_history",
-  "Submit the pre-game backstory events that led up to the campaign's start date.",
-  PREGAME_HISTORY_SCHEMA,
+  "Submit the compact provider transport for the pre-game backstory and Round-Zero canonical bootstrap. Native code decodes and validates the full structured payload.",
+  PREGAME_HISTORY_TRANSPORT_SCHEMA,
 );
 
 export const SPY_INTERCEPT_TOOL = makeTool(
@@ -3234,6 +3345,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "actionIds",
   "createdChats",
   "polityChanges",
+  "politicalActorOps",
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
@@ -3317,6 +3429,9 @@ const normalizeIdleDiplomacyShape = (value) => {
   const candidate = { ...value };
   if (typeof candidate.chat === "string") candidate.chat = null;
   if (isPlainRecord(candidate.chat)) candidate.chat = normalizeChatShape(candidate.chat);
+  if (candidate.chatInstitutionId === undefined && candidate.institutionId !== undefined) candidate.chatInstitutionId = candidate.institutionId;
+  if (candidate.chatInstitutionId === null) candidate.chatInstitutionId = "";
+  delete candidate.institutionId;
   if (Array.isArray(candidate.unitOps)) candidate.unitOps = candidate.unitOps.map(normalizeUnitOperationShape);
   return candidate;
 };

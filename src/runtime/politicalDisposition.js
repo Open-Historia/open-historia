@@ -7,6 +7,7 @@ import {
 } from "./politicalActors.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
 import { applyPoliticalActorOperations, POLITICAL_ACTOR_OPS } from "./politicalActorOps.js";
+import { canonicalPoliticalTraitKey } from "./politicalTraitRegistry.js";
 
 export const POLITICAL_DISPOSITION_RESULT_VERSION = 1;
 
@@ -21,11 +22,10 @@ const finite = (value) => {
 };
 const metricKey = (value) => clean(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, "");
 
-const metricFromRecord = (record, aliases) => {
+const traitMetricFromRecord = (record, canonicalKey) => {
   if (!record || typeof record !== "object" || Array.isArray(record)) return null;
-  const aliasSet = new Set(aliases.map(metricKey));
   for (const [key, raw] of Object.entries(record)) {
-    if (!aliasSet.has(metricKey(key))) continue;
+    if (canonicalPoliticalTraitKey(key) !== canonicalKey) continue;
     const number = finite(raw);
     if (number == null) continue;
     return clamp(number, 0, 100);
@@ -132,16 +132,16 @@ export const derivePoliticalDispositionForActor = (inputActor, { polityKey = "",
   const pressures = normalizePoliticalPressureState(actor.politicalPressures);
   const government = actor.government && typeof actor.government === "object" ? actor.government : {};
 
-  const riskTolerance = metricFromRecord(traits, ["riskTolerance", "risk_tolerance"]);
-  const recklessness = metricFromRecord(traits, ["recklessness", "reckless"]);
-  const caution = metricFromRecord(traits, ["caution", "cautious"]);
-  const opportunism = metricFromRecord(traits, ["opportunism", "opportunistic"]);
-  const militarism = metricFromRecord(traits, ["militarism", "militaristic"]);
-  const conciliatory = metricFromRecord(traits, ["conciliatory", "conciliation"]);
-  const pragmatism = metricFromRecord(traits, ["pragmatism", "pragmatic"]);
-  const paranoia = metricFromRecord(traits, ["paranoia", "paranoid"]);
-  const vindictiveness = metricFromRecord(traits, ["vindictiveness", "vindictive"]);
-  const consensus = metricFromRecord(traits, ["consensusDriven", "consensus_driven", "consensus"]);
+  const riskTolerance = traitMetricFromRecord(traits, "riskTolerance");
+  const recklessness = traitMetricFromRecord(traits, "recklessness");
+  const caution = traitMetricFromRecord(traits, "caution");
+  const opportunism = traitMetricFromRecord(traits, "opportunism");
+  const militarism = traitMetricFromRecord(traits, "militarism");
+  const conciliatory = traitMetricFromRecord(traits, "conciliatory");
+  const pragmatism = traitMetricFromRecord(traits, "pragmatism");
+  const paranoia = traitMetricFromRecord(traits, "paranoia");
+  const vindictiveness = traitMetricFromRecord(traits, "vindictiveness");
+  const consensus = traitMetricFromRecord(traits, "consensusDriven");
 
   add(buckets.riskTolerance, riskTolerance, 1.0);
   add(buckets.riskTolerance, recklessness, 0.55);

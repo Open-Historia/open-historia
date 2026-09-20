@@ -166,3 +166,24 @@ test("dissolved institution keeps historical channel but closes it", () => {
   assert.equal(result.institution.channelId, result.channel.id);
   assert.equal(result.chats.length, 1);
 });
+
+
+test("lifecycle hearing with institutionId is never adopted as the permanent Council channel", () => {
+  const world = makeWorld();
+  const chats = [{
+    id: "institution-invite-council-b-2000-01-02",
+    institutionId: "council",
+    lifecycleInstitutionId: "council",
+    lifecycleCaseIds: ["council-invitation-b-2000-01-02"],
+    countries: [{ polityKey: "B", code: "B", name: "B Republic" }],
+    messages: history("Invitation negotiation history."),
+  }];
+  const result = materializeInstitutionalChannel({
+    world, chats, institutionId: "council", playerCountry: "A", date: "2000-01-02",
+  });
+  assert.equal(result.channel.id, "institution-channel-council");
+  assert.equal(result.institution.channelId, "institution-channel-council");
+  assert.equal(result.chats.length, 2);
+  assert.ok(result.chats.some((row) => row.id === "institution-invite-council-b-2000-01-02"));
+  assert.ok(result.chats.some((row) => row.id === "institution-channel-council"));
+});

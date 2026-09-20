@@ -14,6 +14,7 @@ import {
   resolvePoliticalPowerBloc,
 } from "./politicalActors.js";
 import { normalizePoliticalPressureState } from "./politicalPressure.js";
+import { validatePoliticalTraitPatch } from "./politicalTraitRegistry.js";
 
 export const POLITICAL_ACTOR_OPS = Object.freeze({
   CREATE_PARTY: "create-party",
@@ -36,6 +37,90 @@ export const POLITICAL_ACTOR_OPS = Object.freeze({
   SET_PERCEPTIONS: "set-perceptions",
   REMOVE_PERCEPTION: "remove-perception",
 });
+
+// Provider-facing examples are generated from this one registry instead of being
+// re-invented independently in the GM and turn prompts. These are decoded
+// argsJson objects - the provider still serializes each object into argsJson.
+// Keep examples state-independent so every one can be shape-validated without a
+// live world; state-dependent identity checks still happen during application.
+export const POLITICAL_ACTOR_GENERATED_OP_EXAMPLES = Object.freeze({
+  [POLITICAL_ACTOR_OPS.CREATE_PARTY]: Object.freeze({
+    party: Object.freeze({ id: "stable-party-id", name: "Party Name", ideology: "Political ideology" }),
+  }),
+  [POLITICAL_ACTOR_OPS.UPDATE_PARTY]: Object.freeze({
+    partyId: "stable-party-id",
+    patch: Object.freeze({ ideology: "Updated ideology", publicDescription: "Public description" }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT]: Object.freeze({ partyId: "stable-party-id", percent: 42 }),
+  [POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE]: Object.freeze({ partyId: "stable-party-id", percent: 42 }),
+  [POLITICAL_ACTOR_OPS.SET_PARTY_LEADER]: Object.freeze({
+    partyId: "stable-party-id", leader: Object.freeze({ name: "Party Leader" }),
+  }),
+  [POLITICAL_ACTOR_OPS.CREATE_POWER_BLOC]: Object.freeze({
+    bloc: Object.freeze({ id: "stable-bloc-id", name: "Power Bloc", kind: "court", ideology: "Political outlook" }),
+  }),
+  [POLITICAL_ACTOR_OPS.UPDATE_POWER_BLOC]: Object.freeze({
+    blocId: "stable-bloc-id",
+    patch: Object.freeze({ ideology: "Updated outlook", publicDescription: "Public description" }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_POWER_BLOC_INFLUENCE]: Object.freeze({
+    blocId: "stable-bloc-id", percent: 40, label: "strong",
+  }),
+  [POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM]: Object.freeze({
+    patch: Object.freeze({
+      type: "parliamentary_republic", representation: "electoral", regimeCharacter: "democratic", publicLabel: "Parliamentary Republic",
+    }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: Object.freeze({
+    patch: Object.freeze({ form: "Parliamentary Republic", ideology: "social liberalism" }),
+  }),
+  [POLITICAL_ACTOR_OPS.FORM_COALITION]: Object.freeze({
+    rulingPartyIds: Object.freeze(["stable-party-id"]),
+    coalitionPartyIds: Object.freeze(["coalition-party-id"]),
+    coalitionName: "Governing Coalition",
+  }),
+  [POLITICAL_ACTOR_OPS.LEAVE_COALITION]: Object.freeze({ partyId: "stable-party-id" }),
+  [POLITICAL_ACTOR_OPS.REPLACE_LEADER]: Object.freeze({
+    office: "headOfGovernment", leader: Object.freeze({ name: "Officeholder" }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_STRATEGY]: Object.freeze({
+    patch: Object.freeze({
+      goals: Object.freeze(["Goal"]), fears: Object.freeze(["Fear"]), ambitions: Object.freeze(["Ambition"]), domesticPressures: Object.freeze(["Domestic pressure"]),
+    }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_TRAITS]: Object.freeze({
+    traits: Object.freeze({ pragmatism: 70, caution: 55 }),
+  }),
+  [POLITICAL_ACTOR_OPS.SET_PERCEPTIONS]: Object.freeze({
+    perceptions: Object.freeze({
+      "Other Polity": Object.freeze({ threat: 70, opportunity: 30, weakness: 40, cohesionEstimate: 65 }),
+    }),
+  }),
+  [POLITICAL_ACTOR_OPS.REMOVE_PERCEPTION]: Object.freeze({ target: "Other Polity" }),
+});
+
+const GENERATED_OP_NOTES = Object.freeze({
+  [POLITICAL_ACTOR_OPS.CREATE_PARTY]: "party fields MUST be nested under party; do not put name/id/ideology at argsJson root",
+  [POLITICAL_ACTOR_OPS.CREATE_POWER_BLOC]: "power-bloc fields MUST be nested under bloc (or powerBloc)",
+  [POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT]: "use for electoral/popular support; percent is 0-100",
+  [POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE]: "use for non-electoral or party-state influence; percent is 0-100",
+  [POLITICAL_ACTOR_OPS.SET_POWER_BLOC_INFLUENCE]: "percent is 0-100; label is optional",
+  [POLITICAL_ACTOR_OPS.SET_GOVERNMENT]: "government fields belong inside patch; this does NOT establish governing party membership - use form-coalition for that",
+  [POLITICAL_ACTOR_OPS.FORM_COALITION]: "use to establish governing party membership even for a single-party or minority government; REUSE exact existing canonical party ids when parties already exist; rulingPartyIds may contain one party and coalitionPartyIds may be empty",
+  [POLITICAL_ACTOR_OPS.SET_TRAITS]: "trait keys must come from the canonical trait registry and values are 0-100",
+  [POLITICAL_ACTOR_OPS.SET_PERCEPTIONS]: "perceptions are subjective beliefs keyed by target polity; common bounded metrics include threat, opportunity, weakness and cohesionEstimate",
+});
+
+export const POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE = [
+  "Inside argsJson, encode EXACTLY one JSON object using the native shape for the chosen op:",
+  ...Object.entries(POLITICAL_ACTOR_GENERATED_OP_EXAMPLES).map(([op, args]) => {
+    const note = GENERATED_OP_NOTES[op] ? ` - ${GENERATED_OP_NOTES[op]}` : "";
+    return `- ${op} argsJson=${JSON.stringify(args)}${note}`;
+  }),
+  "Dependency order inside one event: create-party/create-power-bloc first; then update/support/influence/party-leader; then form-coalition/set-government/replace-leader; then strategy/traits/perceptions. When a later op references an entity created earlier in the same event, use that create op's exact stable id.",
+  "Government formation in a parliamentary party system must identify the governing force canonically. Use form-coalition to set rulingPartyIds/coalitionPartyIds; set-government plus replace-leader alone does not say which party or parties govern.",
+  "When a polity already has canonical parties, government formation MUST reuse their exact existing ids. Do not create replacement/near-duplicate parties merely to populate form-coalition. create-party is only for an event that actually establishes a genuinely new party, split, merger or reorganization.",
+].join("\n");
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
@@ -129,11 +214,102 @@ const result = ({ applied = false, op = "", actor = null, error = "", detail = "
   ...(detail ? { detail } : {}),
 });
 
+const objectPatch = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null;
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value || {}, key);
+
+// Provider-facing politicalActorOps deliberately use a compact argsJson envelope.
+// Validate the decoded native operation BEFORE it reaches canonical state so a GM
+// preview or generated event can never claim to be valid while carrying a native
+// no-op such as {government:"Parliamentary Democracy"} instead of
+// {patch:{form:"Parliamentary Democracy"}}. State-dependent references (party ids,
+// power-bloc ids) are still checked by applyPoliticalActorOperation itself.
+export const validatePoliticalActorOperationShape = (operation, { allowNativeDerived = true } = {}) => {
+  const op = clean(operation?.op);
+  const polityKey = clean(operation?.polityKey || operation?.polity || operation?.country);
+  if (!op) return "Political Actor operation is missing op.";
+  if (!polityKey) return "Political Actor operation is missing polityKey.";
+
+  const knownOps = new Set(Object.values(POLITICAL_ACTOR_OPS));
+  if (!knownOps.has(op)) return `Unsupported Political Actor operation: ${op}.`;
+  if (!allowNativeDerived && [
+    POLITICAL_ACTOR_OPS.SET_POLITICAL_PRESSURES,
+    POLITICAL_ACTOR_OPS.SET_BEHAVIORAL_DISPOSITION,
+  ].includes(op)) {
+    return `${op} is native-derived and may not be written by generated events or Game Master output.`;
+  }
+
+  if (op === POLITICAL_ACTOR_OPS.CREATE_PARTY) {
+    if (!normalizePoliticalParty(operation.party)) return "create-party requires a party with a name or id.";
+  } else if (op === POLITICAL_ACTOR_OPS.UPDATE_PARTY) {
+    if (!clean(operation.partyId || operation.party)) return "update-party requires partyId/party.";
+    const patch = objectPatch(operation.patch);
+    if (!patch || !Object.keys(patch).length) return "update-party requires a non-empty patch object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_PARTY_SUPPORT || op === POLITICAL_ACTOR_OPS.SET_PARTY_INFLUENCE) {
+    if (!clean(operation.partyId || operation.party)) return `${op} requires partyId/party.`;
+    if (clampPercent(operation.percent) == null) return `${op} requires a numeric percent.`;
+  } else if (op === POLITICAL_ACTOR_OPS.SET_PARTY_LEADER) {
+    if (!clean(operation.partyId || operation.party)) return "set-party-leader requires partyId/party.";
+    const leader = operation.leader;
+    if (!(typeof leader === "string" || objectPatch(leader))) return "set-party-leader requires a leader name/object.";
+  } else if (op === POLITICAL_ACTOR_OPS.CREATE_POWER_BLOC) {
+    if (!normalizePoliticalPowerBloc(operation.bloc || operation.powerBloc)) return "create-power-bloc requires a power bloc with a name or id.";
+  } else if (op === POLITICAL_ACTOR_OPS.UPDATE_POWER_BLOC) {
+    if (!clean(operation.blocId || operation.powerBlocId || operation.bloc || operation.powerBloc)) return "update-power-bloc requires a bloc id/name.";
+    const patch = objectPatch(operation.patch);
+    if (!patch || !Object.keys(patch).length) return "update-power-bloc requires a non-empty patch object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_POWER_BLOC_INFLUENCE) {
+    if (!clean(operation.blocId || operation.powerBlocId || operation.bloc || operation.powerBloc)) return "set-power-bloc-influence requires a bloc id/name.";
+    if (!hasOwn(operation, "percent") && !hasOwn(operation, "label")) return "set-power-bloc-influence requires percent and/or label.";
+    if (hasOwn(operation, "percent") && clampPercent(operation.percent) == null) return "set-power-bloc-influence percent must be numeric.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_PRESSURES) {
+    if (!objectPatch(operation.state || operation.pressures)) return "set-political-pressures requires a state/pressures object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_BEHAVIORAL_DISPOSITION) {
+    if (!objectPatch(operation.state || operation.disposition)) return "set-behavioral-disposition requires a state/disposition object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM) {
+    const patch = objectPatch(operation.patch) || objectPatch(operation.system);
+    if (!patch || !Object.keys(patch).length) return "set-political-system requires a non-empty patch/system object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_GOVERNMENT) {
+    const patch = objectPatch(operation.patch);
+    if (!patch || !Object.keys(patch).length) return "set-government requires a non-empty patch object.";
+  } else if (op === POLITICAL_ACTOR_OPS.FORM_COALITION) {
+    const ruling = asArray(operation.rulingPartyIds || operation.rulingParties);
+    const coalition = asArray(operation.coalitionPartyIds || operation.coalitionParties);
+    if (!ruling.length && !coalition.length) return "form-coalition requires at least one governing party.";
+  } else if (op === POLITICAL_ACTOR_OPS.LEAVE_COALITION) {
+    if (!clean(operation.partyId || operation.party)) return "leave-coalition requires partyId/party.";
+  } else if (op === POLITICAL_ACTOR_OPS.REPLACE_LEADER) {
+    const office = clean(operation.office);
+    if (office !== "headOfState" && office !== "headOfGovernment") return "replace-leader office must be headOfState or headOfGovernment.";
+    const leader = operation.leader;
+    if (!(typeof leader === "string" || objectPatch(leader))) return "replace-leader requires a leader name/object.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_STRATEGY) {
+    const patch = objectPatch(operation.patch);
+    const allowed = ["goals", "fears", "ambitions", "domesticPressures"];
+    if (!patch || !allowed.some((field) => hasOwn(patch, field))) return "set-strategy requires a patch containing goals, fears, ambitions and/or domesticPressures.";
+    for (const field of allowed) {
+      if (hasOwn(patch, field) && !Array.isArray(patch[field])) return `set-strategy patch.${field} must be an array.`;
+    }
+  } else if (op === POLITICAL_ACTOR_OPS.SET_TRAITS) {
+    const validated = validatePoliticalTraitPatch(operation.traits);
+    if (validated.error) return `set-traits ${validated.error}`;
+    if (!validated.traits || !Object.keys(validated.traits).length) return "set-traits requires at least one canonical trait value.";
+  } else if (op === POLITICAL_ACTOR_OPS.SET_PERCEPTIONS) {
+    const perceptions = objectPatch(operation.perceptions);
+    if (!perceptions || !Object.keys(perceptions).length) return "set-perceptions requires a non-empty perceptions object.";
+  } else if (op === POLITICAL_ACTOR_OPS.REMOVE_PERCEPTION) {
+    if (!clean(operation.target || operation.perceptionTarget)) return "remove-perception requires target.";
+  }
+
+  return "";
+};
+
 export const applyPoliticalActorOperation = (world, operation) => {
   const op = clean(operation?.op);
   const polityKey = clean(operation?.polityKey || operation?.polity || operation?.country);
   if (!op) return result({ error: "Political Actor operation is missing op." });
   if (!polityKey) return result({ op, error: "Political Actor operation is missing polityKey." });
+  const shapeError = validatePoliticalActorOperationShape({ ...operation, op, polityKey });
+  if (shapeError) return result({ op, error: shapeError });
 
   const context = actorContext(world, polityKey, {
     create: [
@@ -141,6 +317,10 @@ export const applyPoliticalActorOperation = (world, operation) => {
       POLITICAL_ACTOR_OPS.CREATE_POWER_BLOC,
       POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM,
       POLITICAL_ACTOR_OPS.SET_GOVERNMENT,
+      POLITICAL_ACTOR_OPS.REPLACE_LEADER,
+      POLITICAL_ACTOR_OPS.SET_STRATEGY,
+      POLITICAL_ACTOR_OPS.SET_TRAITS,
+      POLITICAL_ACTOR_OPS.SET_PERCEPTIONS,
     ].includes(op),
   });
   if (!context) return result({ op, error: `No Political Actor exists for ${polityKey}.` });
@@ -391,12 +571,16 @@ export const applyPoliticalActorOperation = (world, operation) => {
   }
 
   if (op === POLITICAL_ACTOR_OPS.SET_TRAITS) {
-    if (!operation.traits || typeof operation.traits !== "object" || Array.isArray(operation.traits)) {
-      return result({ op, error: "set-traits requires a traits object." });
+    const validated = validatePoliticalTraitPatch(operation.traits);
+    if (validated.error) {
+      return result({ op, error: `set-traits ${validated.error}` });
+    }
+    if (!validated.traits || !Object.keys(validated.traits).length) {
+      return result({ op, error: "set-traits requires at least one canonical trait value." });
     }
     actor.traits = {
       ...(actor.traits && typeof actor.traits === "object" ? actor.traits : {}),
-      ...cloneValue(operation.traits),
+      ...cloneValue(validated.traits),
     };
     return result({ applied: true, op, actor: commitActor(world, key, actor) });
   }

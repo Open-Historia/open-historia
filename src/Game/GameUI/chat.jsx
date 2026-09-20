@@ -940,7 +940,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         return { ...base, cases, responseCases, awaitingApprovalCases, resolvedCases, responseComplete: cases.length > 0 && responseCases.length === 0 };
     }, [isLifecycleConversation, world, chat.lifecycleInstitutionId, chat.lifecycleCaseIds, lifecycleCaseOverrides]);
     const lifecycleCanRequestResponse = isLifecycleConversation && !isInstitutional && (lifecycleState.cases.length === 0 || lifecycleState.responseCases.length > 0);
-    const lifecycleNegotiationConcluded = isLifecycleConversation && !isInstitutional && lifecycleState.cases.length > 0 && lifecycleState.responseComplete && !lifecycleRevealInProgress;
+    const lifecycleTerminal = isLifecycleConversation
+        && lifecycleState.cases.length > 0
+        && lifecycleState.resolvedCases.length === lifecycleState.cases.length
+        && !lifecycleRevealInProgress;
+    const lifecycleNegotiationConcluded = isLifecycleConversation
+        && lifecycleState.cases.length > 0
+        && lifecycleState.responseComplete
+        && !lifecycleRevealInProgress;
     const lifecycleHasRecordedResponse = lifecycleState.cases.some((entry) => Boolean(entry?.decision) || String(entry?.status || "pending").toLowerCase() !== "pending");
 
     const nextSpeakerIdx    = useRef(0);
@@ -1534,21 +1541,25 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 >Let {pendingCountry.name} speak →</button>
                 </div>
                 </div>
+            ) : lifecycleTerminal ? (
+                <div data-lifecycle-terminal-history="true" style={{ padding: ".62rem 1rem .76rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(13,13,16,.46)", flexShrink: 0 }}>
+                    <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />
+                </div>
             ) : phase === "player" && !isLoading ? (
                 <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
                     <button type="button" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
                 </div>}
-                {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
-                {isLifecycleConversation && !lifecycleNegotiationConcluded && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid rgba(167,139,250,.16)", borderRadius: 9, background: "rgba(139,92,246,.055)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
+                {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleTerminal || lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
+                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid rgba(167,139,250,.16)", borderRadius: 9, background: "rgba(139,92,246,.055)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "#ddd6fe" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
                     {playerLifecycleCase ? <div data-player-lifecycle-chat-controls="true" style={{ display: "flex", gap: ".28rem", flexWrap: "wrap" }}>
                         <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
                         <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ddd6fe", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
                         <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
                         <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
-                    </div> : isInstitutional ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
                 </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <textarea
@@ -2002,9 +2013,23 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
 // composer for the player to read over and send themselves. Nothing here sends
 // anything: `draft` is text in a textarea until the player presses the button.
 const _chatOpenSubs = new Set();
-export const requestDiplomaticChat = (country, { draft = "" } = {}) => {
-    if (!country || !country.name) return;
-    _chatOpenSubs.forEach((fn) => { try { fn(country, draft); } catch { /* noop */ } });
+export const requestDiplomaticChat = (target, { draft = "" } = {}) => {
+    if (!target) return;
+    const normalized = typeof target === "string"
+        ? { targetType: "private", country: target, name: target }
+        : {
+            ...target,
+            targetType: String(target.targetType || "private").trim().toLowerCase(),
+            country: String(target.country || target.name || "").trim(),
+            name: String(target.name || target.country || "").trim(),
+            institutionId: String(target.institutionId || "").trim(),
+            caseId: String(target.caseId || "").trim(),
+            threadId: String(target.threadId || "").trim(),
+        };
+    if (normalized.targetType === "private" && !normalized.name) return;
+    if (normalized.targetType === "institution-council" && !normalized.institutionId && !normalized.threadId) return;
+    if (normalized.targetType === "institution-lifecycle" && !normalized.threadId && (!normalized.institutionId || !normalized.caseId)) return;
+    _chatOpenSubs.forEach((fn) => { try { fn(normalized, draft); } catch { /* noop */ } });
 };
 
 // ---- Spy tab ----------------------------------------------------------------
@@ -2894,8 +2919,55 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup
     // or from the advisor, optionally seeding the composer with a drafted letter.
-    const consumePending = (country, draftText = "") => {
+    const consumePending = (request, draftText = "") => {
         setShowSelector(false);
+        const targetType = String(request?.targetType || "private").trim().toLowerCase();
+
+        if (targetType === "institution-council" || targetType === "institution-lifecycle") {
+            const institutionId = String(request?.institutionId || "").trim().toLowerCase();
+            const caseId = String(request?.caseId || "").trim();
+            const threadId = String(request?.threadId || "").trim();
+            const exact = chats.find((chat) => {
+                if (threadId && String(chat?.id || "") === threadId) return true;
+                if (targetType === "institution-council") {
+                    return String(chat?.institutionId || "").trim().toLowerCase() === institutionId
+                        && !(chat?.lifecycleInstitutionId && Array.isArray(chat?.lifecycleCaseIds) && chat.lifecycleCaseIds.length);
+                }
+                return String(chat?.lifecycleInstitutionId || "").trim().toLowerCase() === institutionId
+                    && Array.isArray(chat?.lifecycleCaseIds)
+                    && chat.lifecycleCaseIds.some((id) => String(id || "").trim() === caseId);
+            });
+            if (exact) {
+                setHeldUnreadId(null);
+                setChatReadState(shownVersion(exact), true);
+                if (draftText) setComposerDraft({ chatId: exact.id, text: draftText });
+                if (targetType === "institution-council") {
+                    setActiveChat(null);
+                    setView("institutions");
+                    setInstitutionFocusRequest({ institutionId: exact.institutionId, section: "council", nonce: Date.now() });
+                } else {
+                    setView("chats");
+                    setActiveChat(exact);
+                }
+                return;
+            }
+            // Never fall through to "whatever chat has the same country". An
+            // explicit institution target that cannot be resolved stays explicit.
+            if (institutionId) {
+                setActiveChat(null);
+                setView("institutions");
+                setInstitutionFocusRequest({ institutionId: request.institutionId, section: targetType === "institution-council" ? "council" : "members", nonce: Date.now() });
+            }
+            logDebugEvent("diplomacy", `Advisor draft target could not resolve an exact ${targetType} thread.`, {
+                institutionId: request?.institutionId || "",
+                caseId: request?.caseId || "",
+                threadId,
+            }, { problem: true });
+            return;
+        }
+
+        const country = { name: String(request?.name || request?.country || "").trim(), code: request?.code || "" };
+        if (!country.name) return;
         // The advisor knows a polity by name only; the flag and the nation colour
         // both key off the code, so fill it in from the loaded roster rather than
         // opening a chat wearing the fallback white flag.
@@ -2904,10 +2976,15 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             || "";
         setChats(prev => {
             const existing = prev.find(
-                c => c.status !== "closed" && Array.isArray(c.countries) && c.countries.length === 1 &&
-                     (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
+                c => c.status !== "closed"
+                    && !c.institutionId
+                    && !c.lifecycleInstitutionId
+                    && Array.isArray(c.countries)
+                    && c.countries.length === 1
+                    && (c.countries[0]?.name || "").toLowerCase() === country.name.toLowerCase(),
             );
             if (existing) {
+                setView("chats");
                 setActiveChat(existing);
                 if (draftText) setComposerDraft({ chatId: existing.id, text: draftText });
                 return prev;
@@ -2915,6 +2992,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             const newChat = { id: Date.now(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
             saveAllChats(u);
+            setView("chats");
             setActiveChat(newChat);
             if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
             return u;
@@ -3026,6 +3104,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 onThreadUpdate={handleThreadUpdate}
                                 unread={unreadIds.has(String(channel.id))}
                                 onToggleRead={() => toggleActiveChatRead(channel)}
+                                draft={composerDraft?.chatId === channel.id ? composerDraft.text : ""}
+                                onDraftApplied={() => setComposerDraft(null)}
                                 onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
                                 onLifecycleResult={adoptInstitutionalResult}
                                 embeddedInstitution

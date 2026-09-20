@@ -11,29 +11,34 @@
 // what the world state does not carry — the game's own polity, queued orders,
 // chats, flags and the stock map's baked regions. Shared with the server, so no
 // src/ imports, like ownerMigration.js.
-
 const str = (value) => String(value ?? "").trim();
 // The same identity as ownerNames.js ownerIdentityKey: case, diacritics and
 // punctuation do not make a different country.
 const identity = (value) => str(value).normalize("NFD").toLowerCase().replace(/[^a-z0-9]+/g, "");
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const unique = (list) => [...new Set(list.map(str).filter(Boolean))];
-
 export const samePolityName = (a, b) => {
   const left = identity(a);
   return Boolean(left) && left === identity(b);
 };
-
 const mapName = (value, from, to) => (samePolityName(value, from) ? to : value);
 const mapList = (list, from, to) => (Array.isArray(list) ? unique(list.map((value) => mapName(value, from, to))) : list);
+// A map keyed by polity names, re-keyed: the country's own value — under its
+// exact old key, else under a spelling of it — moves to the new name, where the
+// old key stood. Anything else that answers to the new name is not this country
+// and not any other (refuseClash refuses a name another polity has), so it is a
+// leftover: an unused stock-palette colour, a flag or figures kept under a name
+// nobody holds. It goes, rather than repaint or restate the renamed country —
+// even when the country had no value of its own there.
 const mapKeys = (record, from, to) => {
   if (!isRecord(record)) return record;
+  const own = Object.prototype.hasOwnProperty.call(record, from)
+    ? from
+    : Object.keys(record).find((key) => samePolityName(key, from));
   const out = {};
   for (const [key, value] of Object.entries(record)) {
-    const next = mapName(key, from, to);
-    // A key already present under the new name keeps its own value.
-    if (next !== key && Object.prototype.hasOwnProperty.call(out, next)) continue;
-    out[next] = value;
+    if (key === own) out[to] = value;
+    else if (!samePolityName(key, from) && !samePolityName(key, to)) out[key] = value;
   }
   return out;
 };
@@ -46,11 +51,9 @@ const mapValues = (record, from, to) => {
   return out;
 };
 const mapRows = (rows, mapper) => (Array.isArray(rows) ? rows.map((row) => (isRecord(row) ? mapper(row) : row)) : rows);
-
 // The key a name resolves to in a registry keyed by names, or "".
 export const findPolityKey = (polityOverrides, name) =>
   Object.keys(isRecord(polityOverrides) ? polityOverrides : {}).find((key) => samePolityName(key, name)) ?? "";
-
 // Every record whose display name is not its key — a save from before renames
 // re-keyed, or a code-shaped key with a real name — is a rename waiting to be
 // run. Two records answering to one name are left alone, and so is a display
@@ -72,7 +75,6 @@ export const displayNameMigrations = (world, { isReserved = () => false } = {}) 
   }
   return out;
 };
-
 const renamedRecord = (record, fromKey, to) => {
   const previous = unique([fromKey, record.name]).filter((name) => !samePolityName(name, to));
   const notNew = (name) => !samePolityName(name, to);
@@ -84,7 +86,6 @@ const renamedRecord = (record, fromKey, to) => {
     formerNames: unique([...(Array.isArray(record.formerNames) ? record.formerNames : []), ...previous]).filter(notNew),
   };
 };
-
 const rekeyRegistry = (registry, fromKey, to, fallback) => {
   const record = isRecord(registry[fromKey]) ? registry[fromKey] : fallback;
   const next = {};
@@ -94,10 +95,51 @@ const rekeyRegistry = (registry, fromKey, to, fallback) => {
   next[to] = renamedRecord(record, fromKey, to);
   return next;
 };
-
 const refuseClash = (registry, fromKey, to) => {
   const clash = Object.keys(registry).find((key) => samePolityName(key, to) && !samePolityName(key, fromKey));
   if (clash) throw new Error(`"${to}" is already the name of another polity ("${clash}"); a rename cannot merge two countries.`);
+};
+
+// Political Actors are canonical political truth and carry much more than the
+// public country name (private perceptions, pressures, party state, traits,
+// government composition, etc.). A polity rename must therefore MOVE the
+// existing actor record, never recreate it from visible stats. This helper is
+// intentionally local to the shared rename seam so every rename path — event,
+// Workshop and GM — preserves the same actor identity.
+const rekeyPoliticalActors = (politicalActors, fromKey, to) => {
+  if (!isRecord(politicalActors) || !isRecord(politicalActors.byPolity)) return politicalActors;
+  const registry = politicalActors.byPolity;
+  const sourceKey = Object.keys(registry).find((key) => {
+    const actor = registry[key];
+    return samePolityName(key, fromKey)
+      || samePolityName(actor?.polityKey, fromKey)
+      || samePolityName(actor?.name, fromKey);
+  });
+  if (!sourceKey) return politicalActors;
+
+  const clash = Object.keys(registry).find((key) => {
+    if (key === sourceKey) return false;
+    const actor = registry[key];
+    return samePolityName(key, to)
+      || samePolityName(actor?.polityKey, to)
+      || samePolityName(actor?.name, to);
+  });
+  if (clash) {
+    throw new Error(`"${to}" already has Political Actor state under "${clash}"; a rename cannot merge two political ledgers.`);
+  }
+
+  const source = isRecord(registry[sourceKey]) ? registry[sourceKey] : {};
+  const moved = {
+    ...source,
+    polityKey: to,
+    ...(samePolityName(source.name, fromKey) ? { name: to } : {}),
+  };
+  const byPolity = {};
+  for (const [key, value] of Object.entries(registry)) {
+    if (key !== sourceKey) byPolity[key] = value;
+  }
+  byPolity[to] = moved;
+  return { ...politicalActors, byPolity };
 };
 
 // The rename in a world: returns { world, from, to } with `from` the key the
@@ -110,7 +152,6 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   const fromKey = findPolityKey(overrides, from) || from;
   refuseClash(overrides, fromKey, to);
   const polityOverrides = rekeyRegistry(overrides, fromKey, to, { aliases: [], code: fromKey, color: "", name: "", note: "" });
-
   const next = { ...world, polityOverrides };
   const put = (field, value) => {
     if (value !== undefined) next[field] = value;
@@ -135,9 +176,9 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   for (const field of ["countryStats", "countryTags", "internationalReputation", "intelligence", "playerGoals"]) {
     put(field, mapKeys(world?.[field], fromKey, to));
   }
+  put("politicalActors", rekeyPoliticalActors(world?.politicalActors, fromKey, to));
   return { world: next, from: fromKey, to };
 };
-
 // The stores the world does not hold. Each returns its input untouched when
 // nothing matched.
 export const renamePolityInColors = (colors, from, to) => mapKeys(colors, from, to);
@@ -163,7 +204,6 @@ export const renamePolityInActions = (actions, from, to) =>
     participants: mapList(action.participants, from, to),
     invitees: mapList(action.invitees, from, to),
   }));
-
 // On a stock map most regions carry no override: their owner is the country
 // baked into the tiles. Renaming such a country has to say so for every one
 // of them, or the tiles keep painting the old name where nothing overrode it.
@@ -179,7 +219,6 @@ export const expandBakedRegionsForRename = (world, regions, from, to) => {
   }
   return added ? { ...world, regionOwnershipOverrides: overrides } : world;
 };
-
 // The Workshop's document: the registry record moves to the new name and the
 // colour, flag, tags and city markers keyed by the old one follow. The map's
 // regions live in OpenLayers and are re-keyed by OlMap.renameOwner.

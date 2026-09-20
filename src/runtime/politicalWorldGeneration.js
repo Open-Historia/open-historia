@@ -5,6 +5,7 @@ import {
   POLITICAL_REPRESENTATIONS,
 } from "./politicalActors.js";
 import { isReferenceDatePermitted } from "./scenarioHistoryAuthority.js";
+import { validatePoliticalTraitPatch } from "./politicalTraitRegistry.js";
 
 export const POLITICAL_WORLD_GENERATION_SCHEMA_VERSION = 1;
 
@@ -973,6 +974,10 @@ export const validatePoliticalGenerationProposal = (proposal, {
     errors,
   });
   validatePoliticalSystemSemantics(patch, errors);
+  if (patch.traits !== undefined) {
+    const traitValidation = validatePoliticalTraitPatch(patch.traits);
+    if (traitValidation.error) errors.push(`actorPatch.traits ${traitValidation.error}`);
+  }
 
   const mergedPreview = mergeMissingPoliticalActor(existingActor, patch, {
     allowEntityExpansion,

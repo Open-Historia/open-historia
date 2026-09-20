@@ -81,6 +81,9 @@ const baseStyle = {
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
 );
+const LazyCountryPanel = lazy(() =>
+  import("./countryPanel.jsx").then((module) => ({ default: module.CountryPanel })),
+);
 const LazyCheatsPanel = lazy(() =>
   import("./cheats").then((module) => ({ default: module.CheatsPanel })),
 );
@@ -207,6 +210,7 @@ const Main = ({
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isCatalystOpen, setIsCatalystOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [isCountryOpen, setIsCountryOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
   // A starter message queued for the advisor's input box — set when something
   // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
@@ -216,6 +220,7 @@ const Main = ({
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
+  const [shouldLoadCountry, setShouldLoadCountry] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
 
@@ -263,10 +268,11 @@ const Main = ({
       isSettingsOpen && "settings",
       isCheatsOpen && "cheats",
       isAdvisorOpen && "advisor",
+      isCountryOpen && "country",
       isForcesOpen && "forces",
     ].filter(Boolean);
     logDebugEvent("ui", `Open panels: ${open.length ? open.join(", ") : "(none)"}`, undefined, { verbose: true });
-  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isForcesOpen]);
+  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isCountryOpen, isForcesOpen]);
 
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
@@ -305,6 +311,10 @@ const Main = ({
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);
+
+  useEffect(() => {
+    if (isCountryOpen) setShouldLoadCountry(true);
+  }, [isCountryOpen]);
 
   useEffect(() => {
     localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
@@ -356,6 +366,7 @@ const Main = ({
   }, []);
 
   const openAdvisor = useCallback((seedPrompt) => {
+    setIsCountryOpen(false);
     setIsAdvisorOpen(true);
     if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
@@ -405,11 +416,12 @@ const Main = ({
   // one. A drag changes only the width, which `right` follows with no
   // transition at all. (Easing `right` instead made the HUD cover less
   // distance than the drawer in the same time, on the busy main thread.)
+  const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
   const advisorDockStyle = useMemo(() => ({
     right: `calc(${advisorCssWidth} + 0.5rem)`,
-    transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+    transform: rightDrawerOpen ? "none" : `translateX(${advisorCssWidth})`,
     transition: `transform ${ADVISOR_SLIDE}`,
-  }), [advisorCssWidth, isAdvisorOpen]);
+  }), [advisorCssWidth, rightDrawerOpen]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -442,7 +454,14 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         mapRef={mapRef}
       />
-      <Other dockStyle={advisorDockStyle} />
+      <Other
+        dockStyle={advisorDockStyle}
+        active={isCountryOpen}
+        onToggle={() => {
+          setIsAdvisorOpen(false);
+          setIsCountryOpen((open) => !open);
+        }}
+      />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
@@ -453,7 +472,10 @@ const Main = ({
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         dockStyle={advisorDockStyle}
-        onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
+        onToggle={() => {
+          setIsCountryOpen(false);
+          setIsAdvisorOpen((open) => !open);
+        }}
       />
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
@@ -468,6 +490,17 @@ const Main = ({
             onOpenProjects={() => setActiveBottomPanel("projects")}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadCountry && (
+          <LazyCountryPanel
+            open={isCountryOpen}
+            onClose={() => setIsCountryOpen(false)}
+            width={advisorCssWidth}
+            onResize={handleAdvisorResize}
+            onResizeEnd={handleAdvisorResizeEnd}
           />
         )}
       </Suspense>

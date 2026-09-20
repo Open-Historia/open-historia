@@ -51,6 +51,7 @@ const baseImpacts = () => ({
   regionControlOps: [],
   regionClaims: [],
   polityChanges: [],
+  politicalActorOps: [],
   unitOps: [],
   markerOps: [],
   createdChats: [],
@@ -224,6 +225,94 @@ test("player-order requires an exact current action id in both provenance and im
     agency: agency({ authority: "player-order", authorityRef: "action-cerulean" }),
   });
   assert.match(playerAgencyViolationReason(unbound, { world, gameCountry: game.country, actions }), /impacts\.actionIds/i);
+});
+
+test("politicalActorOps may apply an endogenous canonical political consequence to the human polity", () => {
+  const candidate = event({
+    title: "Latvian Election Produces a New Coalition",
+    description: "The already-scheduled election concludes and the resulting coalition takes office.",
+    agency: agency({
+      principal: "Latvian election cycle",
+      principalKind: "exogenous-process",
+      sovereignPolity: "",
+      authority: "canonical-process",
+      authorityRef: "latvia-election-2014",
+    }),
+    impacts: {
+      ...baseImpacts(),
+      politicalActorOps: [{
+        op: "set-government",
+        polityKey: "Republic of Latvia",
+        argsJson: JSON.stringify({ patch: { name: "Election Coalition" } }),
+      }, {
+        op: "replace-leader",
+        polityKey: "Republic of Latvia",
+        argsJson: JSON.stringify({ leader: { name: "New Prime Minister" } }),
+      }],
+    },
+  });
+
+  assert.equal(
+    playerAgencyViolationReason(candidate, { world, gameCountry: game.country, actions: [] }),
+    "",
+  );
+});
+
+test("politicalActorOps cannot smuggle a fresh human sovereign-policy choice through non-player provenance", () => {
+  const candidate = event({
+    title: "Latvian Cabinet Adopts a New National Security Doctrine",
+    description: "The government adopts a new national security policy and orders ministries to implement it.",
+    agency: agency({
+      principal: "Coalition Working Group",
+      principalKind: "domestic-actor",
+      sovereignPolity: "",
+      authority: "independent",
+    }),
+    impacts: {
+      ...baseImpacts(),
+      politicalActorOps: [{
+        op: "set-strategic-goals",
+        polityKey: "Republic of Latvia",
+        argsJson: JSON.stringify({ goals: ["Adopt the generated security doctrine"] }),
+      }],
+    },
+  });
+
+  assert.match(
+    playerAgencyViolationReason(candidate, { world, gameCountry: game.country, actions: [] }),
+    /politicalActorOps encodes a fresh sovereign-policy choice .* without player-order or player-commitment authority/i,
+  );
+});
+
+test("politicalActorOps may encode a fresh human sovereign-policy choice when bound to the exact current player order", () => {
+  const actions = [{ id: "action-doctrine", status: "planned", text: "Adopt the Cerulean Security Doctrine" }];
+  const candidate = event({
+    title: "Latvian Cabinet Adopts the Cerulean Security Doctrine",
+    description: "The government adopts the player's ordered national security policy.",
+    agency: agency({
+      authority: "player-order",
+      authorityRef: "action-doctrine",
+      sovereignActors: [{
+        polity: "Republic of Latvia",
+        authority: "player-order",
+        authorityRef: "action-doctrine",
+      }],
+    }),
+    impacts: {
+      ...baseImpacts(),
+      actionIds: ["action-doctrine"],
+      politicalActorOps: [{
+        op: "set-strategic-goals",
+        polityKey: "Republic of Latvia",
+        argsJson: JSON.stringify({ goals: ["Implement the Cerulean Security Doctrine"] }),
+      }],
+    },
+  });
+
+  assert.equal(
+    playerAgencyViolationReason(candidate, { world, gameCountry: game.country, actions }),
+    "",
+  );
 });
 
 test("player-commitment requires an exact existing player-authored diplomatic message id", () => {

@@ -11,6 +11,7 @@ import {
   completeGeneratedPoliticalLandscapePatch,
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
+import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -569,6 +570,10 @@ const canonicalizeWireActorPatch = (value) => {
   const out = clone(value);
 
   canonicalizeGeneratedLeaderAliases(out);
+  if (isPlainObject(out.traits)) {
+    const traitValidation = validatePoliticalTraitPatch(out.traits);
+    if (!traitValidation.error && traitValidation.traits) out.traits = traitValidation.traits;
+  }
   canonicalizeDomesticContextAlias(out);
   // Gemini occasionally serializes entity collections as id-keyed JSON maps
   // even though the canonical Political Actor schema requires arrays. Normalize
@@ -1554,7 +1559,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- Parties and power blocs require stable lowercase slug-like ids that survive renames. Government party references use those exact ids.\n`
     + `- For competitive electoral systems, political significance—not a fixed party count—controls roster breadth. ALWAYS materialize every ruling/governing/formal coalition or confidence-support force needed to explain the current government, even when small. Then include individually significant opposition forces and continue until the named modeled parties explain at least ${POLITICAL_GENERATED_ELECTORAL_NAMED_COVERAGE_MIN}% of estimated support. Only the genuinely diffuse remainder belongs in Other. Set government.rulingPartyIds/coalitionPartyIds to the stable ids you generated when those roles are known. When quantitative_landscape is requested, provide supportEstimate for EVERY represented party so native coverage validation does not mistake fallback arithmetic for evidence that the roster is broad enough.\n`
     + `- behavioralDisposition and politicalPressures are native runtime-derived state and MUST NEVER appear in actorPatch.\n`
-    + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields such as id/name/title. Traits should use bounded 0-100 values when justified. Useful native keys include riskTolerance, recklessness, caution, opportunism, militarism, conciliatory, pragmatism, paranoia, vindictiveness, consensusDriven. Do not force every key.\n`
+    + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields such as id/name/title. Traits use bounded 0-100 values and MUST use only the canonical registered keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not force every key; omit dimensions the evidence does not establish.\n`
     + `- Hidden politicalResponse profiles may use organization/credibility/inertia/resilience 0-100 and sparse issues. Issue position/strainResponse are -100..100; sensitivity is 0-100. Only encode issues that materially distinguish the entity.\n`
     + `- Structured perceptions should describe beliefs, not truth. Useful bounded keys include threat, opportunity, weakness, cohesionEstimate.\n`
     + `- Never create extra polities. Never generate events. Never simulate future campaign outcomes.\n\n`

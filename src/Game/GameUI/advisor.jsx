@@ -13,7 +13,6 @@ import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validate
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
-import StatsPane from "./stats.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -488,7 +487,7 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
             fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
             textAlign: "left",
         }}>
-        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.country}`}
+        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.targetType === "institution-council" ? `Council · ${draft.institutionId}` : draft.targetType === "institution-lifecycle" ? `hearing · ${draft.country || draft.institutionId}` : draft.country}`}
         </button>
         </div>
     );
@@ -647,28 +646,6 @@ const loadMessages = async () => {
         return await readJson(JSON_URLS.advisor, { defaultValue: [] });
     } catch { return []; }
 };
-
-const TabButton = ({ icon, label, active, onClick }) => (
-    <button
-    onClick={onClick}
-    style={{
-        alignItems: "center",
-        background: "none",
-        border: "none",
-        borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent",
-        color: active ? "white" : "rgba(255,255,255,0.55)",
-        cursor: "pointer",
-        display: "flex",
-        fontFamily: "sans-serif",
-        fontSize: "0.88rem",
-        fontWeight: active ? 700 : 500,
-        gap: "0.4rem",
-        padding: "0.9rem 0.85rem",
-    }}
-    >
-    <span style={{ fontSize: "1rem" }}>{icon}</span> {label}
-    </button>
-);
 
 // An advisor reply's prose, with each drafted letter's Send button rendered
 // immediately under the letter it would send.
@@ -983,7 +960,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
-    const [activeTab, setActiveTab] = useState("advisor");
     const inputRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
@@ -1308,8 +1284,16 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // separately by the diplomacy path (AI/main.jsx), after whatever the
         // player edited in the composer — and the pair is the only way to answer
         // "the advisor drafted one thing and something else went out".
-        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${draft.country}.`, draft.text, { verbose: true });
-        requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
+        const target = draft.targetType === "institution-council"
+            ? { targetType: "institution-council", institutionId: draft.institutionId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+            : draft.targetType === "institution-lifecycle"
+                ? { targetType: "institution-lifecycle", institutionId: draft.institutionId, caseId: draft.caseId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+                : { targetType: "private", country: draft.country, name: draft.country };
+        const destination = target.targetType === "private"
+            ? draft.country
+            : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
+        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
+        requestDiplomaticChat(target, { draft: draft.text });
     }, []);
 
     // Places one deployment the advisor recommended, through the very same
@@ -1405,20 +1389,16 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 }} />
             </div>
         )}
-        {/* Header: tabs to flip between the advisor chat and national stats. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
-        <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
-        <TabButton icon="📊" label="Stats" active={activeTab === "stats"} onClick={() => setActiveTab("stats")} />
+        {/* Advisor is its own system. Country/Stats lives in the separate flag drawer. */}
+        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem", padding: "0.78rem 0.75rem" }}>
+        <span aria-hidden="true" style={{ fontSize: "1rem" }}>🧭</span>
+        <span style={{ fontSize: "0.9rem", fontWeight: 800 }}>Advisor</span>
         <div style={{ flex: 1 }} />
-        {activeTab === "advisor" && (
-            <button
-            onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
-            title="Clear chat"
-            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
-            >🗑</button>
-        )}
-        {/* On phones the panel slides over the 🧭 launcher, making it
-            untappable — this ✕ is the way out. */}
+        <button
+        onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
+        title="Clear chat"
+        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+        >🗑</button>
         {onClose && (
             <button
             onClick={onClose}
@@ -1428,12 +1408,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         )}
         </div>
 
-        {/* National stats pane — kept mounted so flipping tabs is instant. */}
-        <div style={{ display: activeTab === "stats" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        <StatsPane active={isAdvisorOpen && activeTab === "stats"} />
-        </div>
-
-        <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages — memoized as its own component so typing below (state that
             lives in AdvisorPanel) doesn't re-render the whole history on every
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}

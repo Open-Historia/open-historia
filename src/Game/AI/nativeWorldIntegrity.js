@@ -592,6 +592,7 @@ const hardImpactKeysForEvent = (event) => {
     "regionTransfers",
     "regionClaims",
     "regionControlOps",
+    "politicalActorOps",
     "unitOps",
     "markerOps",
     "createdChats",
@@ -2365,7 +2366,7 @@ const FRESH_SOVEREIGN_POLICY_RE = new RegExp([
   "\\b(?:deploys?|orders?)\\b[\\s\\S]{0,80}\\b(?:troops|brigade|division|battalion|warships?|fighter\\s+aircraft|missile\\s+units?)\\b",
 ].join("|"), "i");
 
-const GOVERNMENT_POLICY_DECISION_RE = /\\b(?:government|cabinet|parliament|legislature|president|prime\\s+minister|foreign\\s+ministry|ministry\\s+of\\s+foreign\\s+affairs|defen[cs]e\\s+ministry|ministry\\s+of\\s+defen[cs]e)\\b[\\s\\S]{0,100}\\b(?:approves?|adopts?|passes?|authorizes?|orders?|declares?|signs?|ratifies?|recognizes?|imposes?|withdraws?|expels?|recalls?|allocates?)\\b/i;
+const GOVERNMENT_POLICY_DECISION_RE = /\b(?:government|cabinet|parliament|legislature|president|prime\s+minister|foreign\s+ministry|ministry\s+of\s+foreign\s+affairs|defen[cs]e\s+ministry|ministry\s+of\s+defen[cs]e)\b[\s\S]{0,100}\b(?:approves?|adopts?|passes?|authorizes?|orders?|declares?|signs?|ratifies?|recognizes?|imposes?|withdraws?|expels?|recalls?|allocates?)\b/i;
 
 // A subordinate body may execute standing cross-border procedures, but it may
 // not use delegated-routine to CREATE a new international/security commitment.
@@ -2774,7 +2775,7 @@ const deriveNativeEventAgency = (event, {
 
 const delegatedStructuredSovereignReason = (event) => {
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  for (const key of ["actionIds", "polityChanges", "regionTransfers", "regionClaims", "spyOps"]) {
+  for (const key of ["actionIds", "polityChanges", "politicalActorOps", "regionTransfers", "regionClaims", "spyOps"]) {
     if (normalizeArray(impacts?.[key]).length) return `${key} changes sovereign/legal state and cannot be justified by delegated-routine authority`;
   }
   for (const op of normalizeArray(impacts?.unitOps)) {
@@ -2879,6 +2880,25 @@ const eventAgencyAuthorityReason = (event, {
   const resolver = createWorldActorResolver(world, player);
   const playerCanonical = resolver.canonical(player);
   const sovereignActors = normalizeArray(agency.sovereignActors);
+
+  const playerPoliticalActorMutation = normalizeArray(event?.impacts?.politicalActorOps).some((operation) => {
+    const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
+    return Boolean(target && playerCanonical && resolver.equivalent(target, playerCanonical));
+  });
+  if (playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary(event)) {
+    const authorizedPlayerRow = sovereignActors.some((row) => {
+      const target = resolver.canonical(normalizeString(row?.polity));
+      const authority = normalizeString(row?.authority).toLowerCase();
+      return Boolean(
+        target
+        && resolver.equivalent(target, playerCanonical)
+        && ["player-order", "player-commitment"].includes(authority)
+      );
+    });
+    if (!authorizedPlayerRow) {
+      return `politicalActorOps encodes a fresh sovereign-policy choice for the human-controlled polity ${playerCanonical} without player-order or player-commitment authority`;
+    }
+  }
 
   const nonSovereignReason = nonSovereignPlayerActivityReason(event, agency, { world, resolver, playerCanonical });
   if (nonSovereignReason) return nonSovereignReason;
@@ -3030,6 +3050,11 @@ const eventReferencesPlayerSovereignty = (event, {
   const playerCanonical = resolver.canonical(normalizeString(gameCountry));
   if (!playerCanonical) return false;
   if (rawAgencyClaimsPlayerSovereignty(event?.agency, resolver, playerCanonical)) return true;
+  const playerPoliticalActorMutation = normalizeArray(event?.impacts?.politicalActorOps).some((operation) => {
+    const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
+    return Boolean(target && resolver.equivalent(target, playerCanonical));
+  });
+  if (playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary(event)) return true;
   if (normalizeString(unresolved?.source).includes("player")) return true;
   const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
   return actorFamilyMentioned(text, resolver.aliasesFor(playerCanonical))

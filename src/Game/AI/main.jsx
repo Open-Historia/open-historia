@@ -2607,15 +2607,22 @@ ${plannedActionsWithIds}`;
 // or one real line break (very likely in a multi-paragraph letter) makes the
 // fence invalid JSON, which advisor.jsx's extractFencedJson discards without
 // a trace — the button just never appears, with nothing to explain why. The
-// JSON now carries only the country name, and advisor.jsx pulls the actual
-// text back out of the blockquote itself, positionally.
+// JSON now carries only the explicit destination identity, and advisor.jsx
+// pulls the actual text back out of the blockquote itself, positionally.
 const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
-Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do, and quote nothing else in the reply that way. Immediately after all such blockquotes, in ADDITION to your normal prose (never instead of it), append a single fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, IN THE SAME ORDER their blockquotes appear above: {"country":"<the exact recipient polity name>"}. Do not repeat the message text in this block — do not include a "text" field — the blockquote itself is the message. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
+Whenever you draft an actual diplomatic message the player could send right now — not a summary or paraphrase, but the literal message text — write it as a markdown blockquote (a line starting with "> "), and quote nothing else in the reply that way. Immediately after all such blockquotes, append one fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, in the SAME ORDER the blockquotes appear. Do not repeat the message text in JSON.
+
+Every draft MUST carry an explicit destination:
+- Private bilateral: {"targetType":"private","country":"<exact recipient polity name>"}.
+- Institution Council: {"targetType":"institution-council","institutionId":"<exact institution id>","country":"<optional display recipient>"}.
+- Institution lifecycle/accession hearing: {"targetType":"institution-lifecycle","institutionId":"<exact institution id>","caseId":"<exact lifecycle case id>","country":"<counterparty display name>"}.
+
+Use only exact ids exposed in [Current Diplomatic & Institutional Options]. NEVER omit targetType for an institutional message and NEVER assume the current/latest diplomacy chat is the destination. If you are drafting ordinary bilateral correspondence, targetType must be "private" even when that polity also shares an institution with the player. Omit the block entirely when you have not drafted a sendable message this turn.
 
 Example:
 > Your Excellency, I write to propose a mutual non-aggression pact between our nations...
 \`\`\`senddraft
-[{"country":"France"}]
+[{"targetType":"private","country":"France"}]
 \`\`\``;
 
 // The advisor has always been handed the whole world's unit list, but under a
@@ -2800,6 +2807,7 @@ async function buildAdvisorSystemPrompt() {
     const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
         world: worldData,
         playerPolity: gameData?.country || "",
+        chats: chatData,
     });
     const directives = [
         advisorPoliticalDiplomacy.text,

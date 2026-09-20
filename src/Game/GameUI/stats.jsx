@@ -6,6 +6,7 @@ import { isPolityLandless, readGameData, readWorldState, readWorldStateView, wri
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
@@ -1073,33 +1074,25 @@ const HistoricalTrackingModal = ({
         };
     }, [open, onClose]);
 
-    const candidates = useMemo(() => {
-        const collected = new Map();
-        const add = (value) => {
-            const key = canonicalPolityKey(value, world);
-            if (!key || collected.has(lowerText(key))) return;
-            if (world && isPolityLandless(world, key)) return;
-            collected.set(lowerText(key), key);
-        };
-        add(playerCountry);
-        add(currentCountry);
-        Object.keys(world?.countryStats || {}).forEach(add);
-        Object.keys(world?.polityOverrides || {}).forEach(add);
-        return [...collected.values()].sort((a, b) => polityDisplayName(world, a).localeCompare(polityDisplayName(world, b)));
-    }, [world, playerCountry, currentCountry]);
+    // One bounded index for the whole modal. The previous implementation rebuilt
+    // polity identity and normalized/scanned the region ledger once per candidate,
+    // then resolved every label again on EVERY keystroke. On detailed scenarios
+    // that turned a country search into tens of seconds of synchronous work.
+    const trackingCandidates = useMemo(() => buildHistoricalTrackingCandidateRows({
+        world,
+        playerCountry,
+        currentCountry,
+    }), [world, playerCountry, currentCountry]);
+    const candidateRows = trackingCandidates.rows;
 
     const trackedPolities = settings?.trackedPolities || [];
-    const filteredCandidates = useMemo(() => {
-        const query = lowerText(search);
-        if (!query) return candidates;
-        return candidates.filter((key) => {
-            const label = polityDisplayName(world, key);
-            return lowerText(key).includes(query) || lowerText(label).includes(query);
-        });
-    }, [candidates, search, world]);
+    const filteredCandidates = useMemo(
+        () => filterHistoricalTrackingCandidateRows(candidateRows, search),
+        [candidateRows, search],
+    );
 
     const toggleCountry = useCallback((key) => {
-        const canonical = canonicalPolityKey(key, world) || key;
+        const canonical = trackingCandidates.index.canonicalKey(key) || key;
         const current = normalizeCountryStatsTracking(settings, { playerCountry });
         const alreadyTracked = current.trackedPolities.some((item) => lowerText(item) === lowerText(canonical));
         let nextTracked = current.trackedPolities;
@@ -1109,7 +1102,7 @@ const HistoricalTrackingModal = ({
             nextTracked = [...current.trackedPolities, canonical];
         }
         onChange({ ...current, trackedPolities: nextTracked });
-    }, [settings, onChange, playerCountry, world]);
+    }, [settings, onChange, playerCountry, trackingCandidates]);
 
     const setIntervalMonths = useCallback((intervalMonths) => {
         onChange({ ...(settings || {}), intervalMonths });
@@ -1190,7 +1183,7 @@ const HistoricalTrackingModal = ({
 
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.7rem" }}>
                                 {trackedPolities.map((key) => {
-                                    const label = polityDisplayName(world, key);
+                                    const label = trackingCandidates.index.displayName(key);
                                     const isPlayer = lowerText(key) === lowerText(playerCountry);
                                     return (
                                         <button
@@ -1212,7 +1205,8 @@ const HistoricalTrackingModal = ({
                             </div>
 
                             <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.85rem", minHeight: 0, overflowY: "auto", paddingTop: "0.85rem" }}>
-                                {filteredCandidates.map((key) => {
+                                {filteredCandidates.map((row) => {
+                                    const key = row.key;
                                     const tracked = trackedPolities.some((item) => lowerText(item) === lowerText(key));
                                     const isPlayer = lowerText(key) === lowerText(playerCountry);
                                     const isViewed = lowerText(key) === lowerText(currentCountry);
@@ -1241,7 +1235,7 @@ const HistoricalTrackingModal = ({
                                             <span style={{ minWidth: 0 }}>
                                                 <span style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0 }}>
                                                     <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: tracked ? "#22c55e" : "rgba(255,255,255,0.06)", border: `1px solid ${tracked ? "#22c55e" : "rgba(255,255,255,0.12)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{tracked ? "✓" : ""}</span>
-                                                    <span style={{ fontSize: "0.74rem", fontWeight: tracked ? 800 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polityDisplayName(world, key)}</span>
+                                                    <span style={{ fontSize: "0.74rem", fontWeight: tracked ? 800 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                                                 </span>
                                                 <span style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flexWrap: "wrap", fontSize: "0.62rem", gap: "0.35rem", marginTop: "0.18rem" }}>
                                                     {isPlayer && <span style={{ color: "#fbbf24" }}>your country</span>}

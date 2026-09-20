@@ -114,3 +114,16 @@ test("lifecycle batch replies are staged after one canonical group request", () 
   assert.match(source, /await new Promise\(\(resolve\) => setTimeout\(resolve, row\.gapMs\)\)/);
   assert.match(source, /stagedLifecycleSpeaker/);
 });
+
+test("fully resolved lifecycle hearings become terminal read-only history", () => {
+  const source = read("./chat.jsx");
+  assert.match(source, /const lifecycleTerminal = isLifecycleConversation/);
+  assert.match(source, /lifecycleState\.resolvedCases\.length === lifecycleState\.cases\.length/);
+  assert.match(source, /!lifecycleTerminal[\s\S]*Continue hearing →/);
+  assert.match(source, /data-lifecycle-terminal-history="true"/);
+});
+
+test("Council workspace excludes lifecycle negotiations from the persistent Council channel", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  assert.match(source, /chat\?\.institutionId && !\(chat\?\.lifecycleInstitutionId && list\(chat\?\.lifecycleCaseIds\)\.length\)/);
+});

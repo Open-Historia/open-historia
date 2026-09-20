@@ -298,6 +298,7 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
     "regionClaims",
     "regionControlOps",
     "polityChanges",
+    "politicalActorOps",
     "createdChats",
     "unitOps",
     "markerOps",
@@ -430,6 +431,7 @@ const eventConsequenceScore = (event) => {
   if (normalizeArray(impacts.regionClaims).length) score += 4;
   if (normalizeArray(impacts.regionControlOps).length) score += 4;
   if (normalizeArray(impacts.polityChanges).length) score += 4;
+  if (normalizeArray(impacts.politicalActorOps).length) score += 4;
 
   const unitOps = normalizeArray(impacts.unitOps);
   if (unitOps.some((op) => ["remove"].includes(normalizeString(op?.op).toLowerCase()))) score += 3;
@@ -595,6 +597,7 @@ const countImpactSignals = (event) => {
     "regionClaims",
     "regionControlOps",
     "polityChanges",
+    "politicalActorOps",
     "unitOps",
     "markerOps",
     "createdChats",
@@ -1495,6 +1498,7 @@ const storylineEventStructuredActors = (event) => {
   return [
     ...normalizeArray(event?.combatants),
     ...normalizeArray(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
+    ...normalizeArray(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
     ...normalizeArray(impacts?.regionTransfers).flatMap((entry) => [entry?.fromCode, entry?.toCode]),
     ...normalizeArray(impacts?.regionClaims).flatMap((entry) => [
       entry?.claimantCode,

@@ -17,7 +17,12 @@ import {
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
-import { detectExplicitBaseTerritoryScope, scopeContainsRegion } from "./gmTerritoryScope.js";
+import {
+  detectExplicitBaseTerritoryScope,
+  requestDemandsExhaustiveTerritorialScope,
+  resolveGameMasterBaseGeographyScope,
+  scopeContainsRegion,
+} from "./gmTerritoryScope.js";
 import { buildCuratorInput, candidatesWorthJudging, curateGeneratedEventsWithHidden } from "./nativeTimelineCurator.js";
 import {
   applyWorldStorylineUpdates,
@@ -47,6 +52,13 @@ import {
   stripWorldSweepAudit,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
+import { validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
+import {
+  applyPoliticalActorOperation,
+  POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
+  validatePoliticalActorOperationShape,
+} from "../../runtime/politicalActorOps.js";
 import { buildPromptFingerprint, isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
@@ -70,6 +82,7 @@ import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import {
   decodeGameMasterTransportPayload,
+  decodePregameHistoryTransportPayload,
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
@@ -228,6 +241,8 @@ import {
   mergeCountryStatPatch,
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
+  normalizeCountryStatsMacroEstimate,
+  resolveCountryStatsPopulationCalibration,
   decodeTerritorialComponentSplit,
   expandTerritorialMacroEstimates,
 } from "../../runtime/countryStats.js";
@@ -255,7 +270,15 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { commitInstitutionalChatGovernanceBatch } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply } from "../../runtime/institutionalGovernance.js";
+import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { autonomousInstitutionBallotDirective, collectAutonomousInstitutionBallotWork } from "./institutionAutonomy.js";
+import { buildIdleInstitutionRoutingContext, resolveIdleInstitutionRoute } from "./institutionIdleRouting.js";
+import {
+  buildIdleDiplomacyPoliticalDecisionSet,
+  idleDiplomacyPoliticalContextText,
+  idleDiplomacySpeakerHasContext,
+} from "./idlePoliticalDiplomacyContext.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleImpactBatchCore,
@@ -272,7 +295,11 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindCatalystTo, isSceneInProgress, openCatalyst, recordCatalystBeat, rewindCatalyst } from "./catalystRewind.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
-import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import {
+  getPoliticalProfile,
+  getPoliticalProfileKey,
+  normalizePoliticalActorRecord,
+} from "../../runtime/politicalActors.js";
 import { normalizePoliticalIntelligenceAssessment } from "../../runtime/politicalKnowledge.js";
 import { buildFutureHistoryBoundaryDirective } from "./futureHistoryBoundary.js";
 import {
@@ -623,8 +650,15 @@ const buildPregameBootstrapDirective = (variables) => {
   return `[Round-Zero World Bootstrap Contract]
 This ONE pregameHistory response writes bounded history strictly BEFORE ${roundOneDate} and compiles the belligerency and diplomacy ALREADY TRUE at Round 1 into the canonical war, relation and agreement ledgers. It is not a future-history scheduler.
 
+PROVIDER TRANSPORT
+The submit_pregame_history function declaration is deliberately shallow. Return exactly these tool fields:
+- eventsJson: a STRING containing the JSON array of chronological pre-game event objects.
+- summary: the one-paragraph era summary as normal text.
+- canonicalUpdatesJson: a STRING containing the JSON array of Day-One canonical-state facts. Use [] only when none qualify.
+Native code decodes both JSON strings immediately and validates the resulting events and canonicalUpdates against the full internal schema before any Round-Zero state is accepted. Do not return events or canonicalUpdates as direct top-level tool fields.
+
 CANONICAL ENVELOPE
-Use canonicalUpdates only. Every item uses the same flat required fields; fill the fields a kind does not use with "", [] or 0.
+The objects encoded inside canonicalUpdatesJson are canonicalUpdates. Every item uses the same flat required fields; fill the fields a kind does not use with "", [] or 0.
 Kinds:
 - relation: polities=[A,B], score (absolute, -100..100), detail (summary).
 - storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
@@ -656,7 +690,7 @@ ${normalizeString(variables?.canonicalWarContext) || "None recorded."}
 Diplomacy:
 ${normalizeString(variables?.canonicalDiplomaticContext) || "None recorded."}
 
-Do not duplicate canonical state already present. Return canonicalUpdates:[] only when no qualifying Day-1 canonical state exists.
+Do not duplicate canonical state already present. Return canonicalUpdatesJson:"[]" only when no qualifying Day-1 canonical state exists.
 
 [Round-Zero Diplomatic Baseline]
 Round-Zero relations are absolute as-of-start political memory, not single-event deltas. Existing agreements are standing Day-1 state, not necessarily newly signed during the displayed backstory window. Emit historically justified relation and agreement baseline records even when no single generated event card uniquely anchors them: the engine attaches a source event when one is clear and otherwise keeps the valid baseline fact without inventing causality. Do NOT create filler event cards solely to satisfy bookkeeping; within the envelope's capacity, cover the material diplomatic graph rather than stopping after a handful of obvious pairs.`;
@@ -1166,23 +1200,16 @@ const decodeCountryStatMacroEstimates = (value, macroPlan = []) => {
       const parts = line.split("~").map((part) => part.trim());
       if (parts.length !== 4) continue;
 
-      const index = Number(parts[0]);
-      const group = parts[1].toLowerCase();
-      const population = Number(String(parts[2]).replace(/[,_\s]/g, ""));
-      const gdpPerCapita = Number(String(parts[3]).replace(/[,_€$£\s]/g, ""));
-
-      if (!Number.isInteger(index) || !nativePlan.some((entry) => entry.index === index)) continue;
-      if (!["core", "integrated", "overseas/dependent"].includes(group)) continue;
-      if (!Number.isFinite(population) || population < 0) continue;
-      if (!Number.isFinite(gdpPerCapita) || gdpPerCapita <= 0) continue;
-      if (estimates.has(index)) continue;
-
-      estimates.set(index, {
-        index,
-        group,
-        population: Math.round(population),
-        gdpPerCapita,
+      const normalized = normalizeCountryStatsMacroEstimate({
+        index: Number(parts[0]),
+        group: parts[1],
+        population: Number(String(parts[2]).replace(/[,_\s]/g, "")),
+        gdpPerCapita: Number(String(parts[3]).replace(/[,_€$£\s]/g, "")),
       });
+
+      if (!normalized || !nativePlan.some((entry) => entry.index === normalized.index)) continue;
+      if (estimates.has(normalized.index)) continue;
+      estimates.set(normalized.index, normalized);
     }
 
     const missing = nativePlan.map((entry) => entry.index).filter((index) => !estimates.has(index));
@@ -1514,6 +1541,62 @@ const buildPlayerPolityIntelligenceText = (bundle) => {
   return lines.join("\n");
 };
 
+const gameMasterPoliticalActorReferenceContext = (worldLike, request = "", playerPolity = "") => {
+  const world = normalizeWorldState(worldLike);
+  const byPolity = world?.politicalActors?.byPolity && typeof world.politicalActors.byPolity === "object"
+    ? world.politicalActors.byPolity
+    : {};
+  const requestText = normalizeString(request).toLocaleLowerCase();
+  const simplify = (value) => normalizeString(value).toLocaleLowerCase().replace(/^the\s+/, "");
+  const isPoliticalRequest = /\b(?:government|cabinet|prime minister|president|monarch|election|party|parties|coalition|parliament|political|constitution|regime|leader)\b/i.test(requestText);
+
+  const selected = [];
+  const seen = new Set();
+  const add = (key) => {
+    const actualKey = getPoliticalProfileKey(world, key);
+    if (!actualKey || seen.has(actualKey) || !byPolity[actualKey]) return;
+    seen.add(actualKey);
+    selected.push([actualKey, byPolity[actualKey]]);
+  };
+
+  for (const key of Object.keys(byPolity)) {
+    const full = normalizeString(key).toLocaleLowerCase();
+    const short = simplify(key);
+    if ((full && requestText.includes(full)) || (short.length >= 4 && requestText.includes(short))) add(key);
+    if (selected.length >= 6) break;
+  }
+  if (!selected.length && isPoliticalRequest && playerPolity) add(playerPolity);
+  if (!selected.length) return "No Political Actor named by this request; do not invent party ids from this section.";
+
+  const lines = [
+    "Exact canonical Political Actor references for polities named by this GM request.",
+    "IDs below are mutation identifiers, not suggestions. Reuse them exactly. create-party/create-power-bloc is only for a genuinely new entity established by the authored event.",
+  ];
+  for (const [polityKey, actor] of selected) {
+    const government = actor?.government && typeof actor.government === "object" ? actor.government : {};
+    lines.push(`POLITY: ${polityKey}`);
+    lines.push(`Government rulingPartyIds=${JSON.stringify(normalizeArray(government.rulingPartyIds))}; coalitionPartyIds=${JSON.stringify(normalizeArray(government.coalitionPartyIds))}`);
+    const parties = normalizeArray(actor?.parties).slice(0, 12);
+    if (parties.length) {
+      lines.push("Canonical parties:");
+      for (const party of parties) {
+        const support = Number(party?.support?.percent);
+        const influence = Number(party?.influence?.percent);
+        const leader = normalizeString(typeof party?.leader === "string" ? party.leader : party?.leader?.name);
+        lines.push(`- id=${JSON.stringify(normalizeString(party?.id))} name=${JSON.stringify(normalizeString(party?.name))}${normalizeString(party?.ideology) ? ` ideology=${JSON.stringify(normalizeString(party.ideology))}` : ""}${Number.isFinite(support) ? ` support=${support}` : ""}${Number.isFinite(influence) ? ` influence=${influence}` : ""}${leader ? ` leader=${JSON.stringify(leader)}` : ""}`);
+      }
+    } else {
+      lines.push("Canonical parties: none");
+    }
+    const blocs = normalizeArray(actor?.powerBlocs).slice(0, 8);
+    if (blocs.length) {
+      lines.push("Canonical power blocs:");
+      for (const bloc of blocs) lines.push(`- id=${JSON.stringify(normalizeString(bloc?.id))} name=${JSON.stringify(normalizeString(bloc?.name))}`);
+    }
+  }
+  return lines.join("\n").slice(0, 5000);
+};
+
 const buildTemplateVariables = async (bundle, options = {}) => {
   const startedAt = perfNow();
   const taskKey = normalizeString(options?.taskKey);
@@ -1577,6 +1660,13 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
+  if (taskKey === "gameMaster" && wants("gameMasterPoliticalActorContext")) {
+    variables.gameMasterPoliticalActorContext = gameMasterPoliticalActorReferenceContext(
+      bundle.world,
+      options?.gameMasterRequest,
+      bundle?.game?.country,
+    );
+  }
   if (wants("playerPolityReputationContext")) {
     variables.playerPolityReputationContext = await buildPlayerPolityReputationText(bundle);
   }
@@ -1605,7 +1695,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. toCode may name a polity that does not exist yet: the exact name you write founds it (a new state, a breakaway, a successor), so spell a new polity as it should appear on the map and an existing polity exactly as the map does, since a short form or translation of an existing country founds a second country beside it; add a polityChanges entry in the same event only to give the new polity a colour, aliases or a note. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color, or simply by handing it territory in regionTransfers or regionControlOps (it is founded under that exact name; an entry here then sets its colour, aliases and note). Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then re-keys the country to the new one, so from then on the country IS the new name everywhere and the old one survives only as a former name; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-100,\"composition\":\"\",\"at\":\"<where, in words: near Kharkiv / eastern Ukraine / off Sevastopol>\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"at\":\"<where, in words>\",\"posture\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-100,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. Say WHERE with at, in words (see [Placing Things]); the engine finds the point and keeps counters off each other. Give lng/lat only for a spot no name describes. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"at\":\"<where, in words: near Odesa / coast of Crimea>\",\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• institutionLifecycleOps — Change the LIVE lifecycle of canonical institutions when this event actually contains such a political act. Operations: found, invite, apply, respond, withdraw, expel, suspend, reinstate, dissolve. Every op names actorPolity using the exact current polity name. Existing institutions use institutionId copied exactly from canonical institution context; respond also copies the exact pending caseId. These are sovereign political decisions, not bookkeeping: judge them through the actor's current PWv2 government/ideology/goals/fears/domestic pressure, relations with current members, the institution's purpose/geographic scope/obligations and its threat model. FRIENDLY RELATIONS ALONE NEVER MEAN JOIN. A government can prefer observer status, reject, delay or demand terms because the institution is the wrong regional/political fit. An actor explicitly named as the institution's adversary ordinarily should not seek/accept membership absent a real campaign transformation. NEVER act for the human player's acceptance/application/founding/withdrawal/response; AI governments may invite or formally discipline the player, but the player decides their own membership. An invitation/application is NOT membership: native institution law/ballots resolve it. founding invitees are invitations, not automatic founders.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. toCode may name a polity that does not exist yet: the exact name you write founds it (a new state, a breakaway, a successor), so spell a new polity as it should appear on the map and an existing polity exactly as the map does, since a short form or translation of an existing country founds a second country beside it; add a polityChanges entry in the same event only to give the new polity a colour, aliases or a note. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color, or simply by handing it territory in regionTransfers or regionControlOps (it is founded under that exact name; an entry here then sets its colour, aliases and note). Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then re-keys the country to the new one, so from then on the country IS the new name everywhere and the old one survives only as a former name; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's non-political national statistics move through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. IMPORTANT: Political Actors are the canonical write authority for government, leaders, parties, coalitions, political systems, traits, strategy and perceptions. Do NOT use stats.leader or stats.government to enact a political change; use politicalActorOps below. Native code projects the canonical Political Actor back into an existing legacy Stats sheet where needed, never the other way around.\n\n• politicalActorOps — Make a durable political change caused by this event. Shape: {\"op\":\"<native operation>\",\"polityKey\":\"<exact CURRENT full polity name; if this event also renames it, use the NEW name>\",\"argsJson\":\"<one JSON object string with the operation-specific fields>\"}. Use set-government for administration details, replace-leader for head-of-state/head-of-government succession, form-coalition/leave-coalition for governing membership, create/update/set-party-* for party change, create/update/set-power-bloc-* for power blocs, set-political-system for constitutional structure, set-strategy for goals/fears/ambitions/domestic pressures, set-traits for persistent leader/government traits, and set-perceptions/remove-perception for campaign-derived political beliefs. Never guess the decoded argsJson shape.\n" + POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE + "\nNever use native-derived set-political-pressures or set-behavioral-disposition here. A political event that changes who governs but emits no politicalActorOps changes only the story, not canonical politics. FOUNDATIONAL POLITICAL MATURATION: when an election result or government formation is the first durable settlement of a sparse/emergent polity, do not stop at one government label. Establish the represented parties/power actors and their support/influence, governing force/coalition/leadership, system, goals/fears/ambitions and justified decision-maker traits in the SAME event. Use set-traits only with canonical keys: " + POLITICAL_TRAIT_KEYS.join(", ") + ". Omit facts the campaign has not established; if results are not known, narrate polling/counting rather than a completed result.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-100,\"composition\":\"\",\"at\":\"<where, in words: near Kharkiv / eastern Ukraine / off Sevastopol>\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"at\":\"<where, in words>\",\"posture\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-100,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. Say WHERE with at, in words (see [Placing Things]); the engine finds the point and keeps counters off each other. Give lng/lat only for a spot no name describes. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"at\":\"<where, in words: near Odesa / coast of Crimea>\",\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• institutionLifecycleOps — Change the LIVE lifecycle of canonical institutions when this event actually contains such a political act. Operations: found, invite, apply, respond, withdraw, expel, suspend, reinstate, dissolve. Every op names actorPolity using the exact current polity name. Existing institutions use institutionId copied exactly from canonical institution context; respond also copies the exact pending caseId. These are sovereign political decisions, not bookkeeping: judge them through the actor's current PWv2 government/ideology/goals/fears/domestic pressure, relations with current members, the institution's purpose/geographic scope/obligations and its threat model. FRIENDLY RELATIONS ALONE NEVER MEAN JOIN. A government can prefer observer status, reject, delay or demand terms because the institution is the wrong regional/political fit. An actor explicitly named as the institution's adversary ordinarily should not seek/accept membership absent a real campaign transformation. NEVER act for the human player's acceptance/application/founding/withdrawal/response; AI governments may invite or formally discipline the player, but the player decides their own membership. An invitation/application is NOT membership: native institution law/ballots resolve it. founding invitees are invitations, not automatic founders.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -2570,7 +2660,8 @@ ${variables?.statsEconomicCalibrationRequested ? `
 - The canonical GDP ledger is NOMINAL economic output expressed in a common constant-2026-EUR accounting unit. It is NOT PPP, purchasing-power parity, international dollars, real living-standard output, or a modernization/productivity adjustment.
 - Start from a historically/causally legitimate NOMINAL GDP and NOMINAL GDP/capita anchor at or before the shared-history frontier. economicCalibration.anchorCurrency must be USD or EUR and the two nominal anchor values must be contemporaneous nominal values for anchorYear.
 - economicCalibration.rebasedGdpPerCapita2026Eur is ONLY the monetary rebasing of that nominal GDP/capita into constant 2026 EUR. It may reflect ordinary inflation and USD/EUR conversion. It MUST NOT incorporate PPP or make a poorer historical country look like a 2026 rich-country economy.
-- economicCalibration.nominalGdpBillions and nominalGdpPerCapita must describe the SAME territorial scope. Native code audits their implied population against the authoritative live baseline when mode=historical_start.
+- economicCalibration.nominalGdpBillions and nominalGdpPerCapita must describe the SAME territorial scope, and that scope must be the ENTIRE authoritative live Stats basis above - not merely the metropolitan/core state. Native code audits their implied population against the authoritative live baseline when mode=historical_start.
+- For empires, federations, composite monarchies, colonial systems, or other mixed territorial polities, NEVER substitute a metropole-only headline GDP/GDP-per-capita anchor for the whole live polity. If no single same-scope historical aggregate exists, construct a defensible same-scope nominal anchor from the supplied regional/macro territorial evidence and say that explicitly in basis.
 - If the current generated GDP/capita materially departs from the rebased nominal anchor, cite ONLY canonical IDs from this bounded list in economicCalibration.divergenceEventIds: ${normalizeArray(variables?.statsEconomicEvidenceIds).join(", ") || "(none)"}.
 - An empty divergenceEventIds array means no supplied campaign event justifies a large departure from the nominal baseline. Do not invent a boom, convergence miracle, collapse, sanctions shock, reform dividend, or productivity leap.
 - mode/historyAuthorityCutoff must obey the same scenario-causality frontier as populationCalibration when both are present. Real-world economic outcomes after divergence are forbidden unless scenario canon explicitly preserves them.
@@ -2582,6 +2673,7 @@ BOUNDED REGIONAL METHOD — REQUIRED:
 - Native code retains EVERY exact live-map province/component internally, but it has grouped them into a SMALL set of spatial demographic macro buckets for this AI call. This is a performance boundary only.
 - Return territorialMacroComponentsText with EXACTLY ONE row for EVERY [M#] macro bucket, in this exact transport format: index~group~population~gdpPerCapita
 - Example rows: 1~core~32000000~4200 OR 2~overseas/dependent~4200000~900
+- A genuinely uninhabited bucket may be returned as index~group~0~0. Native code treats that as zero population and zero GDP; do NOT invent inhabitants merely to keep GDP/capita positive.
 - index MUST be the supplied macro integer. Do not return province-by-province rows. Do not add, omit, split, or merge macro buckets.
 - NON-TERRITORIAL COMPATIBILITY: if the authoritative basis explicitly says NON-TERRITORIAL and no mapped macro buckets exist, territorialMacroComponentsText may use group~geography~population~gdpPerCapita rows ONLY for a genuinely campaign-supported distributed people, organization, workforce, exile community, or other non-map economic/demographic scope. If no defensible quantitative scope exists, return exactly NONE. Never invent a fake province, population, or GDP merely to satisfy the schema.
 - Allowed group values: core | integrated | overseas/dependent.
@@ -3030,6 +3122,10 @@ const runJsonTask = async (taskKey, {
         const decoded = decodeGameMasterTransportPayload(parsed);
         transportDecodeError = normalizeString(decoded?.error);
         parsed = decoded?.payload;
+      } else if (taskKey === "pregameHistory" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const decoded = decodePregameHistoryTransportPayload(parsed);
+        transportDecodeError = normalizeString(decoded?.error);
+        parsed = decoded?.payload;
       }
       // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
       // envelope, a singular event, synonym keys, doubled impacts wrappers —
@@ -3112,7 +3208,22 @@ const runJsonTask = async (taskKey, {
         }
 
         const calibrationRequested = Boolean(variables?.statsPopulationCalibrationRequested);
-        const calibration = parsed.populationCalibration;
+        let calibration = parsed.populationCalibration;
+        if (calibrationRequested && (calibration === undefined || calibration === null)) {
+          const resolvedCalibration = resolveCountryStatsPopulationCalibration(
+            calibration,
+            parsed.economicCalibration,
+          );
+          calibration = resolvedCalibration.calibration;
+          if (resolvedCalibration.synthesized) {
+            parsed.populationCalibration = calibration;
+            console.warn(
+              `[stats 8B.2.18.2] ${normalizeString(variables?.statsCalibrationTargetName) || "polity"}: ` +
+                "provider omitted populationCalibration provenance; recovered its scenario-causality frontier from economicCalibration. " +
+                "Regional macro estimates remain the numeric authority.",
+            );
+          }
+        }
         if (calibrationRequested) {
           const allowedModes = new Set(["historical_start", "counterfactual_start", "campaign_reconstruction"]);
           const mode = normalizeString(calibration?.mode);
@@ -3612,7 +3723,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // resolved player orders count too — hiding such an event would leave what it
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
-  "regionTransfers", "regionClaims", "regionControlOps", "polityChanges",
+  "regionTransfers", "regionClaims", "regionControlOps", "polityChanges", "politicalActorOps",
   "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "actionIds",
 ];
 const eventCarriesOwnConsequence = (event) =>
@@ -5826,6 +5937,87 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       }
     }
   }
+
+  // Provider transport validation is not enough for politicalActorOps because
+  // argsJson is intentionally an opaque string in the compact schema. Decode each
+  // native operation, validate its shape, then DRY-RUN it sequentially against a
+  // scratch Political Actor world before Preview/turn acceptance. The sequential
+  // dry-run is important: a party created earlier in the same transaction becomes
+  // a valid later reference, while an invented form-coalition party id fails closed
+  // instead of producing a green preview that would be dropped at apply time.
+  const politicalValidationSource = typeof structuredClone === "function"
+    ? structuredClone(world || {})
+    : JSON.parse(JSON.stringify(world || {}));
+  const politicalValidationWorld = normalizeWorldState(politicalValidationSource);
+  for (const { event, impacts, path } of containers) {
+    if (!impacts || typeof impacts !== "object") continue;
+
+    // Runtime polity renames are applied before Political Actor operations. Mirror
+    // just that identity effect on the scratch actor map so rename + political op in
+    // one event validates against the same identity ordering as real application.
+    for (const change of normalizeArray(impacts.polityChanges)) {
+      const changeOp = normalizeString(change?.operation).toLocaleLowerCase();
+      const from = normalizeString(change?.code);
+      const to = normalizeString(change?.name);
+      if (!from || !to || from.toLocaleLowerCase() === to.toLocaleLowerCase()) continue;
+      if (!["rename", "restore", "update"].includes(changeOp)) continue;
+      const fromKey = getPoliticalProfileKey(politicalValidationWorld, from);
+      if (!fromKey) continue;
+      const actor = politicalValidationWorld?.politicalActors?.byPolity?.[fromKey];
+      if (!actor) continue;
+      delete politicalValidationWorld.politicalActors.byPolity[fromKey];
+      politicalValidationWorld.politicalActors.byPolity[to] = normalizePoliticalActorRecord(
+        { ...actor, polityKey: to, name: to },
+        to,
+      );
+    }
+
+    const keptPoliticalOps = [];
+    for (let index = 0; index < normalizeArray(impacts.politicalActorOps).length; index += 1) {
+      const packed = normalizeArray(impacts.politicalActorOps)[index];
+      const operationPath = `${path}.politicalActorOps[${index}]`;
+      let args = null;
+      try {
+        args = JSON.parse(normalizeString(packed?.argsJson));
+      } catch (error) {
+        const reason = `argsJson is not valid JSON: ${error?.message || error}`;
+        if (strict) return `${operationPath} was refused: ${reason}`;
+        drop(path, `a Political Actor operation was dropped — ${reason}.`);
+        continue;
+      }
+      if (!args || typeof args !== "object" || Array.isArray(args)) {
+        const reason = "argsJson must decode to a JSON object";
+        if (strict) return `${operationPath} was refused: ${reason}.`;
+        drop(path, `a Political Actor operation was dropped — ${reason}.`);
+        continue;
+      }
+      const operation = { ...args, op: normalizeString(packed?.op), polityKey: normalizeString(packed?.polityKey) };
+      const shapeError = validatePoliticalActorOperationShape(operation, { allowNativeDerived: false });
+      if (shapeError) {
+        if (strict) return `${operationPath} was refused: ${shapeError}`;
+        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${shapeError}`);
+        continue;
+      }
+      const nativeOutcome = applyPoliticalActorOperation(politicalValidationWorld, operation);
+      if (!nativeOutcome?.applied) {
+        const reason = normalizeString(nativeOutcome?.error) || "native Political Actor state validation refused it";
+        if (strict) return `${operationPath} was refused: ${reason}`;
+        drop(path, `the Political Actor operation ${normalizeString(packed?.op) || "(unknown)"} was dropped — ${reason}`);
+        continue;
+      }
+      keptPoliticalOps.push(packed);
+    }
+    if (Array.isArray(impacts.politicalActorOps)) impacts.politicalActorOps = keptPoliticalOps;
+  }
+
+  // A completed structural political event may not exist as narrative-only history.
+  // PWv2 is the canonical owner of governments, leaders, parties, coalitions and
+  // political systems; if the prose establishes one of those facts, require the
+  // matching politicalActorOps before the event can enter the timeline. This is
+  // deliberately semantic/completeness validation, not a second political engine.
+  const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world });
+  if (politicalCompletenessError) return politicalCompletenessError;
+
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
   for (const { impacts } of containers) generatedPolities.push(...normalizeArray(impacts?.polityChanges));
@@ -11435,7 +11627,8 @@ const institutionGovernancePrompt = (world, institutionId, playerCountry = "") =
     + `The human-controlled polity is ${playerCountry || "the player"}. NEVER use an institution_* action for it.\n`
     + `Speech, reactions and create_poll/poll_vote are conversation only. They DO NOT create proposals, amendments, legal ballots, membership changes or binding institutional outcomes.\n`
     + `Do not use add_member/remove_member in this channel: membership belongs to the institution ledger.\n`
-    + `Use institution_lodge_proposal only when an AI member genuinely tables new formal business. Use institution_submit_proposal only for an exact existing proposal id when its sponsor is ready to open the charter-defined vote. Use institution_amendment / institution_resolve_amendment only for exact proposal/amendment ids below. Use institution_vote only for an AI polity's formal legal ballot, never for the player. Native code checks every action and the charter; prose cannot override it.\n`
+    + `Use institution_lodge_proposal only when an AI member genuinely tables new formal business. When an eligible AI member has clearly advanced a concrete, actionable institutional proposal in Council, especially when another member or the player endorses it or asks to make it official, table it NOW in this same turn with institution_lodge_proposal instead of merely promising to draft it later. Example pattern: an AI member says "we propose X", the Council engages with X, and the player says "make it official"; that same AI sponsor should lodge X alongside any conversational reply. Keep sponsorship with the AI polity that actually originated the proposal; player endorsement does not transfer authorship to the player. Vague commentary, repetition, or an idea already represented on the formal agenda stays speech only. Lodging puts business on the agenda for debate; do NOT jump straight to a ballot unless the exact sponsor also genuinely submits the existing proposal and native rules permit it.\n`
+    + `Use institution_submit_proposal only for an exact existing proposal id when its sponsor is ready to open the charter-defined vote. Use institution_amendment / institution_resolve_amendment only for exact proposal/amendment ids below. Use institution_vote only for an AI polity's formal legal ballot, never for the player. Native code checks every action and the charter; prose cannot override it.\n`
     + `For accession votes, evaluate the applicant against the institution's actual identity, scope, obligations and threat model as well as that government's PWv2 and relations. Friendly relations alone are not a reason to vote yes; do not hardcode real-world countries either, because campaign politics may have diverged.\n`
     + `[Formal agenda]\n${proposalLines}`;
 };
@@ -11452,18 +11645,37 @@ export const runChatActionBatch = async ({
   signal = null,
   requestKind = undefined,
   lifecycleResponseRequested = false,
+  formalBusinessRequested = false,
+  useCanonicalState = false,
+  budget = null,
+  spender = "",
+  onRequest = null,
 } = {}) => {
-  // The table is told what the player has been shown (readSeenGameStateBundle);
-  // the thread's own log is applied to in full, so nothing unseen is lost from it.
-  const bundle = await readSeenGameStateBundle({ force: true });
+  // Player-facing conversation normally reasons from what has been revealed. A
+  // post-turn autonomous ballot is different: it is world simulation and must
+  // see the just-committed canonical proposal/ballot state even before the
+  // timeline reveal has finished animating.
+  const readBundle = useCanonicalState
+    ? await readGameStateBundle({ force: true })
+    : await readSeenGameStateBundle({ force: true });
+  const bundle = useCanonicalState ? { ...readBundle, savedGame: readBundle.game, unseen: new Set() } : readBundle;
   const unseen = bundle.unseen ?? new Set();
   const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   const stored = normalizeChats([chat])[0];
   if (!stored) return { events: [], applied: [], rejected: [], actions: [] };
-  const formalInstitutionPrompt = stored.institutionId
+  // An accepted invitation hearing may carry institutionId so it can be tied to
+  // the institution ledger, but it remains a lifecycle negotiation thread until
+  // the case is closed. Never let that dual identity masquerade as the permanent
+  // Council channel. The formal channel has its own stable thread identity.
+  const lifecycleGovernanceThread = Boolean(
+    stored.institutionId &&
+    stored.lifecycleInstitutionId &&
+    normalizeArray(stored.lifecycleCaseIds).length,
+  );
+  const formalInstitutionPrompt = stored.institutionId && !lifecycleGovernanceThread
     ? institutionGovernancePrompt(bundle.world, stored.institutionId, player)
     : "";
-  const lifecycleDecisionContext = !stored.institutionId && stored.lifecycleInstitutionId && normalizeArray(stored.lifecycleCaseIds).length
+  const lifecycleDecisionContext = stored.lifecycleInstitutionId && normalizeArray(stored.lifecycleCaseIds).length
     ? buildInstitutionLifecycleDecisionContext(bundle.world, {
       institutionId: stored.lifecycleInstitutionId,
       caseIds: stored.lifecycleCaseIds,
@@ -11472,6 +11684,11 @@ export const runChatActionBatch = async ({
     })
     : null;
   const institutionLifecyclePrompt = lifecycleDecisionContext?.text || "";
+  const autonomousBallotWork = formalBusinessRequested && stored.institutionId && !lifecycleGovernanceThread
+    ? collectAutonomousInstitutionBallotWork(bundle.world, player, { maxInstitutions: 8, maxVotersPerInstitution: 32 })
+      .find((entry) => regionKey(entry.institutionId) === regionKey(stored.institutionId)) || null
+    : null;
+  const autonomousBallotActors = new Set(normalizeArray(autonomousBallotWork?.actors).map(regionKey).filter(Boolean));
 
   // The log is the truth; a thread saved before it existed is migrated on read.
   // The normalized entry has already folded in what was written beside the log —
@@ -11485,7 +11702,8 @@ export const runChatActionBatch = async ({
   const aiParticipants = projected.countries
     .map((country) => normalizeString(country?.name))
     .filter((name) => name && regionKey(name) !== regionKey(player))
-    .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)));
+    .filter((name) => !(lifecycleResponseRequested && institutionLifecyclePrompt) || lifecycleResponseActors.has(regionKey(name)))
+    .filter((name) => !formalBusinessRequested || autonomousBallotActors.has(regionKey(name)));
   if (!aiParticipants.length) return { events: [], applied: [], rejected: [], actions: [] };
 
   // What this polity has heard in its OTHER threads since it last spoke here —
@@ -11552,9 +11770,9 @@ export const runChatActionBatch = async ({
   const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, {
     actorPolities: aiParticipants,
     counterpartByActor: Object.fromEntries(aiParticipants.map((name) => [name, player])),
-    maxActors: 6,
-    perActorMaxChars: 1800,
-    maxTotalChars: 9000,
+    maxActors: formalBusinessRequested ? 32 : 6,
+    perActorMaxChars: formalBusinessRequested ? 900 : 1800,
+    maxTotalChars: formalBusinessRequested ? 26000 : 9000,
     limits: {
       traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 3,
       pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
@@ -11598,9 +11816,11 @@ export const runChatActionBatch = async ({
       normalizeString(catchUp),
       playerMessage
         ? `${player} has just said: ${playerMessage}`
-        : lifecycleResponseRequested && institutionLifecyclePrompt
-          ? "The player explicitly requested a response from this institution membership negotiation. Every AI-controlled government at this table that owns an open lifecycle case MUST now return exactly one lifecycle decision for its own exact case: accept, reject, seek-observer, request-terms, or delay. Use delay if that government is not ready to decide. This lifecycle turn is raw JSON: return an actions array (use send_message with actorName/content for any speech) and return lifecycleResponsesJson as an actual JSON array of response objects. Do not use a dialogue field. Prose alone is not a membership decision."
-          : "Nobody has spoken since your last turn; decide whether anyone would speak now.",
+        : formalBusinessRequested && autonomousBallotWork
+          ? autonomousInstitutionBallotDirective(autonomousBallotWork)
+          : lifecycleResponseRequested && institutionLifecyclePrompt
+            ? "The player explicitly requested a response from this institution membership negotiation. Every AI-controlled government at this table that owns an open lifecycle case MUST now return exactly one lifecycle decision for its own exact case: accept, reject, seek-observer, request-terms, or delay. Use delay if that government is not ready to decide. This lifecycle turn is raw JSON: return an actions array (use send_message with actorName/content for any speech) and return lifecycleResponsesJson as an actual JSON array of response objects. Do not use a dialogue field. Prose alone is not a membership decision."
+            : "Nobody has spoken since your last turn; decide whether anyone would speak now.",
       politicalDecisionSet.text
         ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
         : "",
@@ -11610,12 +11830,16 @@ export const runChatActionBatch = async ({
       "Return this turn's actions as JSON only.",
     ].filter(Boolean).join("\n\n"),
     variables,
-    // Keep the one-request Beta group-diplomacy path, but for lifecycle
-    // membership negotiations ask for raw JSON rather than sending Gemini the
-    // submit_chat_actions function declaration. The result still passes the
-    // normal CHAT_ACTIONS_SCHEMA and native lifecycle validators below.
-    ...(institutionLifecyclePrompt ? { toolOverride: null } : {}),
+    // Keep the one-request Beta group-diplomacy path. Gemini rejects the large
+    // submit_chat_actions function declaration once native institution formal
+    // actions/lifecycle fields are present, so institution conversations use
+    // raw JSON transport. The payload still passes CHAT_ACTIONS_SCHEMA and then
+    // native conversation / governance / lifecycle validators below. Transport
+    // changes; authority does not.
+    ...((institutionLifecyclePrompt || formalInstitutionPrompt) ? { toolOverride: null } : {}),
     ...(requestKind ? { requestKind } : {}),
+    ...(budget ? { budget, spender: spender || "institutionBallots" } : {}),
+    ...(typeof onRequest === "function" ? { onRequest } : {}),
   });
 
   const known = mergePolityCatalog(await loadCountryNames(), bundle.world).map((entry) => entry.name).filter(Boolean);
@@ -11701,6 +11925,57 @@ export const runChatActionBatch = async ({
     ...(committedInstitution ? { institution: committedInstitution.institution } : {}),
     ...(committedLifecycle ? { lifecycle: committedLifecycle.applied } : {}),
   };
+};
+
+// Once a completed turn lands, formal ballots in institutions the player belongs
+// to must not freeze merely because the Council was closed. One bounded existing
+// chatActions request per affected institution asks only the unresolved NPC
+// voters for the oldest open ballot. Native governance still casts, dedupes,
+// closes and implements the vote; this function owns no parallel ballot state.
+export const runPostTurnInstitutionBallots = async ({
+  playerCountry = "",
+  date = "",
+  signal = null,
+  expectedGameId = "",
+  requests = null,
+} = {}) => {
+  const snapshot = await readGameStateBundle({ force: true });
+  const player = normalizeString(playerCountry) || normalizeString(snapshot.game?.country);
+  if (!player) return { attempted: 0, applied: 0, results: [] };
+  const work = collectAutonomousInstitutionBallotWork(snapshot.world, player, { maxInstitutions: 4, maxVotersPerInstitution: 32 });
+  const results = [];
+  let applied = 0;
+  for (const item of work) {
+    if (signal?.aborted) break;
+    try {
+      const materialized = await ensureInstitutionalChannel({
+        institutionId: item.institutionId,
+        playerCountry: player,
+        date: normalizeString(date) || normalizeString(snapshot.game?.gameDate),
+        expectedGameId: expectedGameId || normalizeString(snapshot.game?.id || snapshot.game?.gameId),
+      });
+      const result = await runChatActionBatch({
+        chat: materialized.channel,
+        playerCountry: player,
+        time: normalizeString(date) || normalizeString(snapshot.game?.gameDate),
+        signal,
+        formalBusinessRequested: true,
+        useCanonicalState: true,
+        ...jumpTaskOptions(requests, "institutionBallots"),
+      });
+      const votes = normalizeArray(result?.formalActions).filter((action) => action?.type === "institution_vote");
+      const refusedVotes = normalizeArray(result?.rejected).filter((entry) => entry?.action?.type === "institution_vote").length;
+      applied += Math.max(0, votes.length - refusedVotes);
+      results.push({ ...item, requested: item.actors.length, votes: votes.length, rejected: refusedVotes });
+    } catch (error) {
+      console.warn(`[institution autonomy] ${item.institutionName || item.institutionId} ballot pass failed; the completed turn remains committed.`, error);
+      results.push({ ...item, requested: item.actors.length, votes: 0, rejected: item.actors.length, error: normalizeString(error?.message || error) });
+    }
+  }
+  if (work.length) {
+    logDebugEvent("turn", `Institution autonomy: ${work.length} open ballot(s) checked after the turn; ${applied} NPC ballot action(s) accepted.`, results, { verbose: true });
+  }
+  return { attempted: work.length, applied, results };
 };
 
 export const chooseNextDiplomaticSpeaker = async ({
@@ -12970,6 +13245,20 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   state.phases?.enter("applying");
   try {
     const applied = await applySimulationResult(applyArgs);
+    // Formal institution ballots are part of the living world, not a UI-only
+    // Council interaction. Let unresolved NPC members vote once the new turn is
+    // canonical, even when the player never reopened the institution workspace.
+    try {
+      await runPostTurnInstitutionBallots({
+        playerCountry: applied?.game?.country || bundle.game?.country || "",
+        date: applied?.game?.gameDate || targetDate,
+        signal,
+        expectedGameId: normalizeString(applied?.game?.id || applied?.game?.gameId || bundle.game?.id || bundle.game?.gameId),
+        requests: state.requests,
+      });
+    } catch (error) {
+      console.warn("[institution autonomy] post-turn ballot pass failed; the completed turn remains committed.", error);
+    }
     reportJumpRequests(state.requests);
     // Where the skip's time and requests went, in one line (skipPhases.js),
     // and on the result for the panel's own log entry.
@@ -13400,6 +13689,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     "regionTransfers",
     "regionClaims",
     "polityChanges",
+    "politicalActorOps",
     "createdChats",
     "unitOps",
     "markerOps",
@@ -13679,12 +13969,184 @@ const validateGameMasterBreakawaySovereignty = (candidate) => {
   return "";
 };
 
+// GM exhaustive territorial scopes are a provider-facing semantic shortcut only.
+// The rendered map remains authoritative: the model names immutable base geographies
+// once, native code expands them into exact per-region operations, and the ordinary
+// territory resolver validates every resulting region before the preview is shown.
+const loadGameMasterBaseGeographyCatalog = async (world) => {
+  const normalizedWorld = normalizeWorldState(world);
+  const renderedRegionsGeojson = await readJson(JSON_URLS.regionsGeojson, {
+    defaultValue: null,
+    force: true,
+    clone: false,
+  }).catch(() => null);
+  const features = normalizeArray(renderedRegionsGeojson?.features);
+  if (features.length) {
+    return features.map((feature) => {
+      const props = feature?.properties || {};
+      const id = normalizeString(props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id);
+      const name = normalizeString(props.name ?? props.NAME_1 ?? props.Name ?? props.regionName);
+      const countryCode = normalizeString(props.gid0 ?? props.GID_0 ?? props.gid_0 ?? props.countryCode);
+      // country is intentionally the immutable/base geography here, NOT the current
+      // political owner. Historical maps commonly encode Russia as props.owner while
+      // gid0 still says EST/LVA/LTU.
+      const country = normalizeString(
+        toCountryName(countryCode) ||
+        props.baseCountry ||
+        props.sourceBaseCountry ||
+        props.COUNTRY ||
+        props.Country ||
+        props.country ||
+        "",
+      );
+      const bakedOwner = normalizeString(
+        props.owner ||
+        props.currentOwner ||
+        props.sovereign ||
+        props.COUNTRY ||
+        props.Country ||
+        props.country ||
+        country,
+      );
+      const currentController = normalizeString(normalizedWorld.regionOwnershipOverrides?.[id]) || bakedOwner;
+      const currentSovereign = normalizeString(normalizedWorld.regionSovereigntyOverrides?.[id]) || currentController || bakedOwner;
+      if (!id || !name || !country) return null;
+      return { id, name, country, countryCode, currentController, currentSovereign };
+    }).filter(Boolean);
+  }
+
+  // Compatibility fallback for maps without authored regionsGeojson.
+  return filterToRenderedRegions(await loadRegionCatalog().catch(() => []), normalizedWorld)
+    .map((region) => {
+      const id = normalizeString(region?.id);
+      const countryCode = normalizeString(region?.countryCode);
+      const country = normalizeString(toCountryName(countryCode) || region?.country);
+      const bakedOwner = normalizeString(region?.country) || country;
+      if (!id || !normalizeString(region?.name) || !country) return null;
+      return {
+        ...region,
+        id,
+        country,
+        countryCode,
+        currentController: normalizeString(normalizedWorld.regionOwnershipOverrides?.[id]) || bakedOwner,
+        currentSovereign: normalizeString(normalizedWorld.regionSovereigntyOverrides?.[id]) ||
+          normalizeString(normalizedWorld.regionOwnershipOverrides?.[id]) || bakedOwner,
+      };
+    })
+    .filter(Boolean);
+};
+
+const renderGameMasterBaseGeographyCatalog = (catalog) => {
+  const groups = new Map();
+  for (const row of normalizeArray(catalog)) {
+    const name = normalizeString(row?.country);
+    if (!name) continue;
+    const key = regionKey(name);
+    const prior = groups.get(key) || { name, code: normalizeString(row?.countryCode), count: 0 };
+    prior.count += 1;
+    groups.set(key, prior);
+  }
+  return [...groups.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => `- ${entry.name}${entry.code ? ` [${entry.code}]` : ""}: ${entry.count} rendered region(s)`)
+    .join("\n") || "No rendered base-geography catalog is available.";
+};
+
+const pushUniqueGameMasterTerritoryOp = (list, operation, identity) => {
+  if (!Array.isArray(list)) return;
+  if (list.some((entry) => identity(entry) === identity(operation))) return;
+  list.push(operation);
+};
+
+const expandGameMasterTerritorialScopes = async (candidate, {
+  world,
+  request = "",
+  resolvedRegionIdsOnly = false,
+  baseGeographyCatalog = null,
+} = {}) => {
+  // Apply revalidates the exact expanded preview and intentionally carries no
+  // provider scope envelope. Do not demand or re-expand semantic scopes there.
+  if (resolvedRegionIdsOnly) return "";
+
+  const scopes = normalizeArray(candidate?.territorialScopes);
+  if (requestDemandsExhaustiveTerritorialScope(request) && scopes.length === 0) {
+    return "The administrator requested an exhaustive territorial set (all/every/entire/whole territory), but territorialScopes is empty. Do not sample representative provinces. Put the complete semantic footprint in territorialScopes using exact rendered base-geography names; native code will expand every region before preview.";
+  }
+  if (!scopes.length) return "";
+
+  const catalog = Array.isArray(baseGeographyCatalog) && baseGeographyCatalog.length
+    ? baseGeographyCatalog
+    : await loadGameMasterBaseGeographyCatalog(world);
+  if (!catalog.length) return "Cannot resolve territorialScopes because the rendered base-geography catalog is unavailable.";
+
+  const events = normalizeArray(candidate?.events);
+  for (let scopeIndex = 0; scopeIndex < scopes.length; scopeIndex += 1) {
+    const scope = scopes[scopeIndex] || {};
+    const eventIndex = Number(scope.eventIndex);
+    const event = Number.isInteger(eventIndex) ? events[eventIndex] : null;
+    if (!event) return `$.territorialScopes[${scopeIndex}].eventIndex does not identify an authored GM event.`;
+    const toCode = normalizeString(scope.toCode);
+    if (!toCode) return `$.territorialScopes[${scopeIndex}].toCode must not be blank.`;
+
+    const resolved = resolveGameMasterBaseGeographyScope(scope.baseCountries, catalog);
+    if (resolved.error) return `$.territorialScopes[${scopeIndex}] ${resolved.error}.`;
+    if (!resolved.regions.length) return `$.territorialScopes[${scopeIndex}] resolved to zero rendered regions.`;
+
+    if (!event.impacts || typeof event.impacts !== "object" || Array.isArray(event.impacts)) event.impacts = {};
+    const kind = normalizeString(scope.kind).toLowerCase();
+    const note = normalizeString(scope.note);
+
+    if (kind === "legal-transfer") {
+      if (!Array.isArray(event.impacts.regionTransfers)) event.impacts.regionTransfers = [];
+      for (const row of resolved.regions) {
+        const fromCode = normalizeString(row.currentSovereign || row.currentController);
+        if (regionKey(fromCode) && regionKey(fromCode) === regionKey(toCode)) continue;
+        pushUniqueGameMasterTerritoryOp(
+          event.impacts.regionTransfers,
+          { regionId: row.id, regionName: row.name, fromCode, toCode, note, wholeCountry: false },
+          (entry) => `${normalizeString(entry?.regionId)}|${regionKey(entry?.toCode)}`,
+        );
+      }
+    } else if (kind === "control") {
+      if (!Array.isArray(event.impacts.regionControlOps)) event.impacts.regionControlOps = [];
+      for (const row of resolved.regions) {
+        const fromCode = normalizeString(row.currentController || row.currentSovereign);
+        if (regionKey(fromCode) && regionKey(fromCode) === regionKey(toCode)) continue;
+        pushUniqueGameMasterTerritoryOp(
+          event.impacts.regionControlOps,
+          { op: "control", regionId: row.id, regionName: row.name, fromCode, toCode, note, wholeCountry: false },
+          (entry) => `${normalizeString(entry?.op)}|${normalizeString(entry?.regionId)}|${regionKey(entry?.toCode)}`,
+        );
+      }
+    } else if (kind === "contest") {
+      if (!Array.isArray(event.impacts.regionControlOps)) event.impacts.regionControlOps = [];
+      for (const row of resolved.regions) {
+        const fromCode = normalizeString(row.currentController || row.currentSovereign);
+        pushUniqueGameMasterTerritoryOp(
+          event.impacts.regionControlOps,
+          { op: "contest", regionId: row.id, regionName: row.name, fromCode, actorCode: toCode, note },
+          (entry) => `${normalizeString(entry?.op)}|${normalizeString(entry?.regionId)}|${regionKey(entry?.actorCode)}`,
+        );
+      }
+    } else {
+      return `$.territorialScopes[${scopeIndex}].kind must be legal-transfer, control or contest.`;
+    }
+
+    console.info(
+      `[gm territory] expanded exhaustive scope ${resolved.countries.map((entry) => entry.name).join(", ")}: ` +
+      `${resolved.regions.length} rendered region(s) as ${kind} -> ${toCode}.`,
+    );
+  }
+  return "";
+};
+
 const validateGameMasterPreviewPayload = async (candidate, {
   mode,
   world,
   game,
   request = "",
   resolvedRegionIdsOnly = false,
+  baseGeographyCatalog = null,
 }) => {
   if (!candidate || typeof candidate !== "object") return "The GM did not return a transaction object.";
   if (!GAME_MASTER_MODE_SET.has(mode)) return `Unsupported GM mode "${mode}".`;
@@ -13723,6 +14185,14 @@ const validateGameMasterPreviewPayload = async (candidate, {
 
   const lifecycleError = validateGameMasterPolityLifecycle(candidate, world, activePolities);
   if (lifecycleError) return lifecycleError;
+
+  const territorialScopeError = await expandGameMasterTerritorialScopes(candidate, {
+    world,
+    request,
+    resolvedRegionIdsOnly,
+    baseGeographyCatalog,
+  });
+  if (territorialScopeError) return territorialScopeError;
 
   const breakawaySovereigntyError = validateGameMasterBreakawaySovereignty(candidate);
   if (breakawaySovereigntyError) return breakawaySovereigntyError;
@@ -13935,8 +14405,20 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
   const titles = events.slice(0, 3).map((event) => `"${normalizeString(event?.title) || "untitled"}"`).join(", ");
   const statCountries = [...new Set(normalizeArray(transaction?.countryStatPatches)
     .map((entry) => normalizeString(entry?.country)).filter(Boolean))];
+  const impactCount = (field) => events.reduce(
+    (sum, event) => sum + normalizeArray(event?.impacts?.[field]).length,
+    0,
+  );
+  const legalTransfers = impactCount("regionTransfers");
+  const controlOps = impactCount("regionControlOps");
+  const claims = impactCount("regionClaims");
+  const politicalOps = impactCount("politicalActorOps");
   const parts = [
     events.length ? `wrote ${events.length === 1 ? "the event" : `${events.length} events`} ${titles}${events.length > 3 ? " and more" : ""} into the record` : "",
+    legalTransfers ? `${legalTransfers} legal territorial transfer${legalTransfers === 1 ? "" : "s"}` : "",
+    controlOps ? `${controlOps} de-facto control operation${controlOps === 1 ? "" : "s"}` : "",
+    claims ? `${claims} territorial claim operation${claims === 1 ? "" : "s"}` : "",
+    politicalOps ? `${politicalOps} political-actor operation${politicalOps === 1 ? "" : "s"}` : "",
     statCountries.length ? `set the figures of ${statCountries.join(", ")}` : "",
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
@@ -13958,6 +14440,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
       ["regionClaims", "claim"],
       ["regionControlOps", "control"],
       ["polityChanges", "polity"],
+      ["politicalActorOps", "political-actor"],
       ["unitOps", "unit"],
       ["markerOps", "marker"],
       ["institutionLifecycleOps", "institution"],
@@ -14050,9 +14533,11 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
       readGameStateBundle({ force: true }),
       readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
     ]);
+    const baseGeographyCatalog = await loadGameMasterBaseGeographyCatalog(bundle.world);
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "gameMaster", gameMasterRequest: request, lookups: true })),
       gameMasterMode: selectedMode,
+      gameMasterBaseGeographyCatalog: renderGameMasterBaseGeographyCatalog(baseGeographyCatalog),
     };
 
     const { generation, payload } = await runJsonTask("gameMaster", {
@@ -14063,6 +14548,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         world: bundle.world,
         game: bundle.game,
         request,
+        baseGeographyCatalog,
       }),
       variables,
     });
@@ -14629,6 +15115,8 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       "If you write to a polity already in an open thread, the note is appended there. Reply to what was actually said; never restart the conversation or parrot an existing message.",
     ].join("\n");
 
+    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { event, maxActors: 6 });
+    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet);
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true })),
       idleChatAllowed: "yes",
@@ -14642,12 +15130,17 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
         userMessage:
           "Evaluate the supplied canonical event once. Decide whether one AI-controlled polity or a genuinely joint small group would naturally send the player a diplomatic note about it right now, or whether silence is the natural outcome. Return unitOps as an empty array and no sighting."
           + conversationContext
+          + (politicalDecisionContext ? `\n\n${politicalDecisionContext}` : "")
           + "\n\nReturn JSON only.",
         validatePayload: async (candidate, { finalAttempt } = {}) => {
           if (candidate?.chat == null) return "";
           const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
           if (countries.length === 0) {
             return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
+          }
+          const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
+          if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
+            return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
           }
           return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
         },
@@ -15411,6 +15904,13 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
       idleChatAllowed: allowChat ? "yes" : "no",
     };
     const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
+    const institutionRoutingContext = allowChat
+      ? buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country)
+      : "";
+    const politicalDecisionSet = allowChat
+      ? buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 6 })
+      : buildBoundedPoliticalDecisionContextSet(bundle.world, { actorPolities: [], maxActors: 0 });
+    const politicalDecisionContext = allowChat ? idleDiplomacyPoliticalContextText(politicalDecisionSet) : "";
     // Lifecycle accession/founding negotiations are excluded on purpose. A
     // background diplomatic note is conversation, not legal membership state,
     // and must never look like a canonical acceptance/rejection inside that
@@ -15441,6 +15941,8 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
       userMessage: allowChat
         ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
           + conversationContext
+          + (institutionRoutingContext ? `\n\n${institutionRoutingContext}` : "")
+          + (politicalDecisionContext ? `\n\n${politicalDecisionContext}` : "")
           + "\n\nReturn JSON only."
         : "A quiet moment between rounds. Decide whether any forces would visibly move right now. Return chat as null. Return JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
@@ -15448,6 +15950,20 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
         if (countries.length === 0) {
           return "$.chat.countries must contain at least one known polity (or chat must be null).";
+        }
+        const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
+        if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
+          return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+        }
+        const requestedInstitution = normalizeString(candidate.chatInstitutionId);
+        if (requestedInstitution) {
+          if (!resolveIdleInstitutionRoute(bundle.world, {
+            institutionId: requestedInstitution,
+            playerCountry: bundle.game.country,
+            speaker,
+          })) {
+            return "$.chatInstitutionId must identify an active institution shared by the player and the speaking polity, or be empty.";
+          }
         }
         // Strict on attempt 1: make the model give the note a title AND a first
         // line, so the player can see why the polity reached out. Salvage on the
@@ -15493,6 +16009,28 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
       playerName: bundle.game.country,
     });
     if (!built) return null;
+    const requestedInstitutionId = normalizeString(payload.chatInstitutionId);
+    const opening = built.messages?.[0] || null;
+    const institutionRoute = requestedInstitutionId
+      ? resolveIdleInstitutionRoute(bundle.world, {
+        institutionId: requestedInstitutionId,
+        playerCountry: bundle.game.country,
+        speaker: opening?.speaker,
+      })
+      : null;
+    if (institutionRoute && opening?.speaker && normalizeString(opening?.text)) {
+      const committed = await commitInstitutionalDiplomaticReply({
+        institutionId: institutionRoute.id,
+        playerCountry: bundle.game.country,
+        speakingAs: opening.speaker,
+        code: opening.code || "",
+        reply: opening.text,
+        date: normalizeString(bundle.game?.gameDate),
+        expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
+      });
+      logDebugEvent("diplomacy", `Idle diplomacy routed ${opening.speaker} into ${institutionRoute.name || institutionRoute.id} Council instead of Contacts.`, { institutionId: institutionRoute.id }, { verbose: true });
+      return { ...built, institutionId: institutionRoute.id, id: committed?.channel?.id || built.id };
+    }
     const chats = normalizeChats(await readChatsState({ force: true }));
     const collidesWithLifecycleNegotiation = chats.some((chat) => (
       chat?.status !== "closed"

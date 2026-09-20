@@ -57,7 +57,7 @@ test("a broken transport field is reported rather than silently dropped", () => 
 test("the provider sees a shallow contract while the decoded transaction is validated in full", () => {
   assert.deepEqual(Object.keys(GAME_MASTER_TRANSPORT_SCHEMA.properties).sort(), [
     "agreementUpdatesJson", "countryStatPatchesJson", "diplomaticOutreachJson", "eventsJson",
-    "mode", "relationUpdatesJson", "storylineUpdatesJson", "summary", "warUpdatesJson",
+    "mode", "relationUpdatesJson", "storylineUpdatesJson", "summary", "territorialScopesJson", "warUpdatesJson",
   ]);
   assert.equal("storylineUpdates" in GAME_MASTER_SCHEMA.properties, true);
 

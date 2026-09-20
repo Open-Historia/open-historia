@@ -89,3 +89,33 @@ test("Advisor receives pending institution lifecycle without gaining player auth
   assert.match(result.text, /may NOT silently cast the player's vote, accept an amendment, found\/join\/leave an institution, accept an invitation/);
   assert.deepEqual(result.institutionIds, ["baltic-union"]);
 });
+
+test("Advisor is explicitly taught that institutions are first-class structured game objects", () => {
+  const built = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionViews,
+  });
+  assert.match(built.diplomacyText, /INSTITUTION CAPABILITY MANIFEST/);
+  assert.match(built.diplomacyText, /first-class canonical game objects/);
+  assert.match(built.diplomacyText, /name, short name, type, purpose, political character, geographic scope/);
+  assert.match(built.diplomacyText, /persistent Council channels/);
+  assert.match(built.diplomacyText, /NEVER tell the player that custom institutions are only simulated through treaties\/projects\/bilateral narrative/);
+});
+
+test("Advisor context labels private, Council and lifecycle threads with exact identities", () => {
+  const built = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionViews,
+    threadContexts: [
+      { id: "private-russia", type: "private-bilateral", participants: ["Russian Empire"], latestSpeaker: "Russian Empire", latestText: "Private note" },
+      { id: "institution-channel-nato", type: "institution-council", institutionId: "nato", participants: ["United States", "Republic of Latvia"], latestText: "Council note" },
+      { id: "institution-invite-nato-latvia", type: "institution-lifecycle", institutionId: "nato", lifecycleCaseIds: ["case-1"], participants: ["Republic of Latvia"], latestText: "Accession note" },
+    ],
+  });
+  assert.match(built.diplomacyText, /PRIVATE BILATERAL \[thread=private-russia\]/);
+  assert.match(built.diplomacyText, /INSTITUTION COUNCIL \[institution=nato \| thread=institution-channel-nato\]/);
+  assert.match(built.diplomacyText, /INSTITUTION LIFECYCLE \[institution=nato \| cases=case-1 \| thread=institution-invite-nato-latvia\]/);
+  assert.match(built.diplomacyText, /never rely on whichever chat happened to be opened most recently/i);
+});

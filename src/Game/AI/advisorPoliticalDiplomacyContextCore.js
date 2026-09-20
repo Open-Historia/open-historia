@@ -1,7 +1,7 @@
 /*! Open Historia Continuum — pure Advisor PWv2 + Diplomacy V2 prompt projection. */
 
 export const ADVISOR_POLITICAL_DECISION_MAX_CHARS = 4200;
-export const ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS = 4600;
+export const ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS = 7600;
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const list = (value) => Array.isArray(value) ? value : [];
@@ -46,6 +46,7 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
   politicalContext = null,
   institutionViews = [],
   institutionLifecycleCases = [],
+  threadContexts = [],
 } = {}) => {
   const polity = clean(playerPolity);
   if (!polity) return { text: "", politicalText: "", diplomacyText: "", institutionIds: [], politicalContext: null };
@@ -72,8 +73,10 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
   ].filter(Boolean))];
   const lines = [
     "[Current Diplomatic & Institutional Options — canonical UI/legal affordances]",
+    "INSTITUTION CAPABILITY MANIFEST: Institutions are first-class canonical game objects. The player can found custom institutions with structured identity/charter fields including name, short name, type, purpose, political character, geographic scope, threat/adversary model, decision rule, minimum founding members, accession, observer, withdrawal, expulsion and dissolution rules. Institutions have persistent Council channels, formal agenda/proposals, ballots, amendments, decisions/history, documents and lifecycle cases. NEVER tell the player that custom institutions are only simulated through treaties/projects/bilateral narrative.",
     "Use this to tell the player what diplomatic levers actually exist right now. Conversation is not a vote, membership is not consent, and you must never cast a formal ballot or table binding business on the player's behalf merely because you recommend it.",
-    "You may draft ordinary bilateral messages for the player as before. For formal institutions, explain the available action and direct the player to the institution workspace when a legal click/choice is required.",
+    "Distinguish PRIVATE BILATERAL threads, INSTITUTION COUNCIL threads and INSTITUTION LIFECYCLE/accession hearings. A message in one thread is not automatically known or addressed in another.",
+    "You may draft bilateral or institutional messages for the player. Every draft must identify its exact destination type and canonical target; never rely on whichever chat happened to be opened most recently.",
   ];
 
   if (!views.length) {
@@ -97,7 +100,11 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
         clean(institution?.charter?.note) ? `charter/obligations: ${clean(institution.charter.note).slice(0, 220)}` : "",
         lifecycle?.withdrawal?.mode ? `withdrawal: ${lifecycle.withdrawal.mode}${Number(lifecycle.withdrawal.noticeDays) > 0 ? ` (${lifecycle.withdrawal.noticeDays}d notice)` : ""}` : "",
       ].filter(Boolean);
-      lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${member.status || "member"}${member.role && member.role !== "member" ? ` / ${member.role}` : ""}${options.length ? ` | ${options.join("; ")}` : ""}`);
+      const members = list(institution?.members).slice(0, 16).map((item) => `${clean(item?.polity)} (${clean(item?.status || "member")}${clean(item?.role) && clean(item.role) !== "member" ? `/${clean(item.role)}` : ""})`).filter(Boolean);
+      const voting = institution?.charter?.decisionRule || institution?.charter?.votingRule || institution?.charter?.governance?.decisionRule || "";
+      lines.push(`- ${institution.name || institution.id} [${institution.id}] — ${clean(institution.kind) || "other"} / ${clean(institution.status) || "active"} — ${member.status || "member"}${member.role && member.role !== "member" ? ` / ${member.role}` : ""}${options.length ? ` | ${options.join("; ")}` : ""}`);
+      if (members.length) lines.push(`  members: ${members.join(", ")}`);
+      if (voting && typeof voting === "string") lines.push(`  decision rule: ${clean(voting)}`);
       if (lifecycleBits.length) lines.push(`  ${lifecycleBits.join(" | ")}`);
       for (const proposal of proposalSummary(entry)) lines.push(proposal);
     }
@@ -122,6 +129,23 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
     }
   } else {
     lines.push("Pending institution lifecycle: none.");
+  }
+
+  const threads = list(threadContexts);
+  lines.push("Diplomatic thread identity:");
+  if (!threads.length) {
+    lines.push("- no recent visible diplomatic threads");
+  } else {
+    for (const thread of threads.slice(0, 12)) {
+      const type = clean(thread?.type).toUpperCase().replace(/-/g, " ");
+      const ids = [
+        clean(thread?.institutionId) ? `institution=${clean(thread.institutionId)}` : "",
+        list(thread?.lifecycleCaseIds).length ? `cases=${list(thread.lifecycleCaseIds).join(",")}` : "",
+        clean(thread?.id) ? `thread=${clean(thread.id)}` : "",
+      ].filter(Boolean).join(" | ");
+      lines.push(`- ${type}${ids ? ` [${ids}]` : ""} | participants: ${list(thread?.participants).join(", ") || "—"}${clean(thread?.title) ? ` | title: ${clean(thread.title)}` : ""}`);
+      if (clean(thread?.latestText)) lines.push(`  latest ${clean(thread?.latestSpeaker) || "message"}: ${clean(thread.latestText)}`);
+    }
   }
 
   lines.push(

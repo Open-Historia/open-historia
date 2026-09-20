@@ -53,7 +53,13 @@ export const materializeInstitutionalChannel = ({
   if (!canonicalId || !channelId) throw new Error("Institution cannot resolve a stable channel identity.");
 
   const chats = reconcileChatsForPlayer(chatsInput, world, playerCountry);
-  const existingByInstitution = chats.find((chat) => lower(chat?.institutionId) === lower(canonicalId));
+  // A lifecycle/accession hearing can legitimately carry institutionId as well as
+  // lifecycleInstitutionId. Identity, not that loose foreign key, decides which
+  // chat is the permanent Council. Otherwise an accepted invitation thread can
+  // be adopted as the Council and then "vanish" when reconciliation correctly
+  // restores its lifecycle identity.
+  const institutionThreadKey = `institution:${canonicalId}`;
+  const existingByInstitution = chats.find((chat) => chatThreadIdentityKey(chat, world) === institutionThreadKey);
   const conflictingId = chats.find((chat) => clean(chat?.id) === channelId && lower(chat?.institutionId) !== lower(canonicalId));
   if (conflictingId) {
     throw new Error(`Institutional channel id ${channelId} is already owned by another chat.`);

@@ -293,6 +293,7 @@ export const normalizeParsedSummary = (taskKey, parsed) => {
     regionTransferCount: sum("regionTransfers"),
     controlOpCount: sum("regionControlOps"),
     polityChangeCount: sum("polityChanges"),
+    politicalActorOpCount: sum("politicalActorOps"),
     unitOpCount: sum("unitOps"),
     chatCount: count("createdChats") + count("diplomaticOutreach"),
     warUpdateCount: count("warUpdates"),

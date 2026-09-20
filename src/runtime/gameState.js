@@ -25,7 +25,13 @@ import {
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
-import { normalizePoliticalActors, POLITICAL_ACTORS_SCHEMA_VERSION } from "./politicalActors.js";
+import {
+  buildPoliticalActorLegacyStatsProjection,
+  getPoliticalProfileKey,
+  normalizePoliticalActors,
+  POLITICAL_ACTORS_SCHEMA_VERSION,
+} from "./politicalActors.js";
+import { applyPoliticalActorOperation } from "./politicalActorOps.js";
 import { normalizePoliticalSimulationClock } from "./politicalClock.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import {
@@ -3014,6 +3020,49 @@ const normalizeCreatedChat = (entry, index) => {
   };
 };
 
+const normalizePoliticalActorImpactOp = (entry) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const op = normalizeOptionalString(entry.op);
+  const polityKey = normalizeOptionalString(entry.polityKey || entry.polity || entry.country);
+  if (!op || !polityKey) return null;
+
+  let argsJson = "";
+  if (typeof entry.argsJson === "string") argsJson = entry.argsJson.trim();
+  else if (entry.argsJson && typeof entry.argsJson === "object" && !Array.isArray(entry.argsJson)) {
+    try { argsJson = JSON.stringify(entry.argsJson); } catch { argsJson = ""; }
+  }
+  // Native callers/tests may still use the direct operation shape. The provider
+  // schema deliberately does not: argsJson keeps the jump schema compact.
+  if (!argsJson) {
+    const directArgs = Object.fromEntries(Object.entries(entry).filter(([key]) => ![
+      "op", "polityKey", "polity", "country", "argsJson",
+    ].includes(key)));
+    if (Object.keys(directArgs).length) {
+      try { argsJson = JSON.stringify(directArgs); } catch { argsJson = ""; }
+    }
+  }
+  return { op, polityKey, argsJson };
+};
+
+const politicalActorOperationFromImpact = (entry, resolveOwner = (value) => value) => {
+  const normalized = normalizePoliticalActorImpactOp(entry);
+  if (!normalized) return { operation: null, error: "missing op or polityKey" };
+  let args = {};
+  if (normalized.argsJson) {
+    try {
+      const parsed = JSON.parse(normalized.argsJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { operation: null, error: "argsJson must decode to a JSON object" };
+      }
+      args = parsed;
+    } catch (error) {
+      return { operation: null, error: `argsJson is not valid JSON: ${error?.message || error}` };
+    }
+  }
+  const polityKey = normalizeOptionalString(resolveOwner(normalized.polityKey) || normalized.polityKey);
+  return { operation: { ...args, op: normalized.op, polityKey }, error: "" };
+};
+
 const normalizeEventImpacts = (value) => {
   if (!value || typeof value !== "object") {
     return {
@@ -3022,6 +3071,7 @@ const normalizeEventImpacts = (value) => {
       institutionLifecycleOps: [],
       markerOps: [],
       polityChanges: [],
+      politicalActorOps: [],
       projectOps: [],
       regionClaims: [],
       regionControlOps: [],
@@ -3038,6 +3088,7 @@ const normalizeEventImpacts = (value) => {
     institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
+    politicalActorOps: normalizeArray(value.politicalActorOps).map(normalizePoliticalActorImpactOp).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
     regionControlOps: normalizeArray(value.regionControlOps).map(normalizeRegionControlOp).filter(Boolean),
@@ -4740,9 +4791,36 @@ export const applyEventImpactsToWorld = ({
     });
     if (renamedHere.length) {
       renamedPolities.push(...renamedHere);
-      // The polity is keyed by its new name now: this event's unit and structure
-      // ops, and every later event, must resolve either name to the new key.
+      // The polity is keyed by its new name now: this event's unit, Political
+      // Actor and structure ops, and every later event, must resolve either name
+      // to the new key. This ordering is what makes rename + replace-leader in
+      // one event mutate one canonical actor rather than minting a stale-key twin.
       resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+    }
+
+    if (event.impacts.politicalActorOps?.length) {
+      for (const packed of event.impacts.politicalActorOps) {
+        const decoded = politicalActorOperationFromImpact(packed, resolveOwner);
+        if (!decoded.operation) {
+          console.warn(`[Political Actors] event "${event.title}" dropped ${packed?.op || "operation"}: ${decoded.error}.`);
+          continue;
+        }
+        const outcome = applyPoliticalActorOperation(nextWorld, decoded.operation);
+        if (!outcome?.applied) {
+          console.warn(`[Political Actors] event "${event.title}" could not apply ${decoded.operation.op} to ${decoded.operation.polityKey}: ${outcome?.error || "native validation refused it"}.`);
+          continue;
+        }
+
+        // Political Actors remain the write authority. When the old Stats sheet
+        // already exists, mirror only its legacy government/leader vocabulary so
+        // old UI/consumers do not display a contradicted officeholder. Never mint
+        // a Stats sheet from this compatibility projection.
+        const actorKey = getPoliticalProfileKey(nextWorld, decoded.operation.polityKey) || decoded.operation.polityKey;
+        if (nextWorld.countryStats && Object.prototype.hasOwnProperty.call(nextWorld.countryStats, actorKey)) {
+          const legacyProjection = buildPoliticalActorLegacyStatsProjection(nextWorld, actorKey);
+          if (Object.keys(legacyProjection).length) applyCountryStatPatchToWorld(nextWorld, actorKey, legacyProjection);
+        }
+      }
     }
 
     if (event.impacts.unitOps?.length) {

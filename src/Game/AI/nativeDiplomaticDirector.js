@@ -502,6 +502,7 @@ const eventDiplomaticSearchText = (event) => {
   const structuredActors = [
     ...array(event?.combatants),
     ...array(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
+    ...array(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
     ...array(impacts?.createdChats).flatMap((chat) => [chat?.speaker, ...array(chat?.countries)]),
   ];
   return diplomaticSearchText([

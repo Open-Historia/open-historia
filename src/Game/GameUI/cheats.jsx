@@ -22,8 +22,16 @@ import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
+import {
+    POLITICAL_TRAIT_REGISTRY,
+    canonicalPoliticalTraitKey,
+    normalizePoliticalTraitValue,
+} from "../../runtime/politicalTraitRegistry.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
+import { buildPoliticalDecisionContext } from "../AI/politicalDecisionContext.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
     REMINDER_MAX_CHARS,
@@ -558,10 +566,27 @@ const editorSectionLabelStyle = {
     textTransform: "uppercase",
 };
 
+const debugPreStyle = {
+    background: "rgba(0,0,0,0.3)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 8,
+    color: "rgba(255,255,255,0.72)",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: "0.61rem",
+    lineHeight: 1.42,
+    margin: "0.3rem 0 0",
+    overflow: "auto",
+    padding: "0.55rem",
+    whiteSpace: "pre-wrap",
+};
+
 const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus }) => {
     const [target, setTarget] = useState("");
     const [loading, setLoading] = useState(false);
     const [form, setForm] = useState({});
+    const [politicsForm, setPoliticsForm] = useState(() => politicalActorToEditorState(null));
+    const [politicsDebug, setPoliticsDebug] = useState(null);
+    const [decisionContextText, setDecisionContextText] = useState("");
     const [baseline, setBaseline] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
 
@@ -573,6 +598,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     useEffect(() => {
         if (!target) {
             setForm({});
+            setPoliticsForm(politicalActorToEditorState(null));
+            setPoliticsDebug(null);
+            setDecisionContextText("");
             setBaseline(null);
             return undefined;
         }
@@ -599,6 +627,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
                     perCapita: Number.isFinite(perCapita) ? perCapita : null,
                 });
+                setPoliticsForm(politicalEditorStateFromWorld(world, target));
+                setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
+                setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
                 setForm({
                     name: polity.name || nameOf.get(target) || target,
                     color,
@@ -639,6 +670,68 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     }, [target, reloadKey, nameOf, setStatus]);
 
     const change = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+    const changePolitics = (key, value) => setPoliticsForm((current) => ({ ...current, [key]: value }));
+    const changeTrait = (key, value) => setPoliticsForm((current) => {
+        const next = {
+            ...current,
+            traitValues: { ...(current.traitValues || {}), [key]: value },
+        };
+        // Keep the raw power-user JSON synchronized whenever it is currently
+        // valid. If the user is midway through typing invalid JSON, preserve it
+        // verbatim and let the normal save-time validator explain the problem.
+        try {
+            const raw = JSON.parse(String(current.traitsJson || "{}").trim() || "{}");
+            if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+                for (const rawKey of Object.keys(raw)) {
+                    if (canonicalPoliticalTraitKey(rawKey) === key) delete raw[rawKey];
+                }
+                const normalized = normalizePoliticalTraitValue(value);
+                if (normalized != null) raw[key] = normalized;
+                next.traitsJson = JSON.stringify(raw, null, 2);
+            }
+        } catch { /* raw JSON stays exactly as typed */ }
+        return next;
+    });
+    const changeTraitsJson = (value) => setPoliticsForm((current) => {
+        const next = { ...current, traitsJson: value };
+        try {
+            const parsed = JSON.parse(String(value || "{}").trim() || "{}");
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return next;
+            const traitValues = Object.fromEntries(POLITICAL_TRAIT_REGISTRY.map((definition) => [definition.key, ""]));
+            for (const [rawKey, rawValue] of Object.entries(parsed)) {
+                const key = canonicalPoliticalTraitKey(rawKey);
+                if (!key) continue;
+                const normalized = normalizePoliticalTraitValue(rawValue);
+                if (normalized != null) traitValues[key] = String(normalized);
+            }
+            next.traitValues = traitValues;
+        } catch { /* invalid in-progress JSON is allowed until Save */ }
+        return next;
+    });
+    const changeParty = (index, key, value) => setPoliticsForm((current) => ({
+        ...current,
+        parties: (current.parties || []).map((party, partyIndex) => (partyIndex === index ? { ...party, [key]: value } : party)),
+    }));
+    const changeBloc = (index, key, value) => setPoliticsForm((current) => ({
+        ...current,
+        powerBlocs: (current.powerBlocs || []).map((bloc, blocIndex) => (blocIndex === index ? { ...bloc, [key]: value } : bloc)),
+    }));
+    const addParty = () => setPoliticsForm((current) => ({
+        ...current,
+        parties: [...(current.parties || []), {
+            id: `custom-party-${Date.now().toString(36)}`, name: "New political entity", shortName: "", leader: "", ideology: "", publicDescription: "",
+            publicPrioritiesText: "", publicForeignPolicyText: "", supportPercent: "", influencePercent: "", influenceLabel: "", ruling: false, coalition: false,
+        }],
+    }));
+    const removeParty = (index) => setPoliticsForm((current) => ({ ...current, parties: (current.parties || []).filter((_, partyIndex) => partyIndex !== index) }));
+    const addBloc = () => setPoliticsForm((current) => ({
+        ...current,
+        powerBlocs: [...(current.powerBlocs || []), {
+            id: `custom-bloc-${Date.now().toString(36)}`, name: "New power bloc", shortName: "", kind: "", status: "", leader: "", ideology: "",
+            publicDescription: "", publicPrioritiesText: "", publicForeignPolicyText: "", influencePercent: "", influenceLabel: "",
+        }],
+    }));
+    const removeBloc = (index) => setPoliticsForm((current) => ({ ...current, powerBlocs: (current.powerBlocs || []).filter((_, blocIndex) => blocIndex !== index) }));
 
     const changeSectorShare = (key, rawValue) => {
         const nextValue = Math.max(0, Math.min(100, Math.round(Number(rawValue) || 0)));
@@ -702,6 +795,14 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         };
         world.polityOverrides = { ...(world.polityOverrides || {}), [target]: nextOverride };
 
+        // Political World v2 is the sole political authority. The editor writes
+        // directly into world.politicalActors and never creates a parallel
+        // "country politics" copy inside Stats. Hidden/derived PWv2 fields not
+        // exposed by this surface are preserved by the bridge.
+        const nextPoliticalActor = applyPoliticalEditorStateToWorld(world, target, politicsForm);
+        setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
+        setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
+
         // Before the patch, for the one-line note the next time skip is given.
         const previousName = String(existing.name || nameOf.get(target) || target).trim();
         const sheetBefore = world.countryStats?.[target] ?? null;
@@ -747,8 +848,14 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             const patch = {
                 ...(String(form.capital ?? "").trim() ? { capital: String(form.capital).trim() } : {}),
                 ...(String(form.continent ?? "").trim() ? { continent: String(form.continent).trim() } : {}),
-                ...(String(form.government ?? "").trim() ? { government: String(form.government).trim() } : {}),
-                ...(String(form.leader ?? "").trim() ? { leader: String(form.leader).trim() } : {}),
+                ...(String(nextPoliticalActor?.government?.form ?? "").trim() ? { government: String(nextPoliticalActor.government.form).trim() } : {}),
+                ...((nextPoliticalActor?.government?.headOfGovernment || nextPoliticalActor?.government?.headOfState || nextPoliticalActor?.leader)
+                    ? { leader: String(
+                        typeof (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader) === "string"
+                            ? (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)
+                            : (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)?.name || ""
+                    ).trim() }
+                    : {}),
                 ...(stability == null ? {} : { stability }),
                 ...(Object.keys(indexPatch).length ? { indices: indexPatch } : {}),
                 ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
@@ -792,8 +899,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 ? `stability ${headlineBefore.stability ?? "unset"} → ${Number(nextSheet.stability)}`
                 : "",
         ].filter(Boolean);
+        const politicalSummary = [
+            nextPoliticalActor?.government?.form,
+            nextPoliticalActor?.government?.ideology,
+        ].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
         await noteGmChange(hasComponentBaseline ? "stats" : "polity",
-            `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : " (its figures and details)"}.`);
+            `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}PWv2 ${politicalSummary}` : ""}.`);
 
         if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
@@ -828,10 +939,33 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             />
         </div>
     );
+    const politicsPairedField = (label, key, props = {}) => (
+        <div style={{ minWidth: 0 }}>
+            <label style={{ ...labelStyle, marginTop: 0 }}>{label}</label>
+            <input
+                {...props}
+                style={{ ...inputStyle, ...(props.style || {}) }}
+                value={politicsForm[key] ?? ""}
+                onChange={(event) => changePolitics(key, event.target.value)}
+            />
+        </div>
+    );
+    const politicsTextarea = (label, key, placeholder = "") => (
+        <div style={{ marginTop: "0.55rem" }}>
+            <label style={{ ...labelStyle, marginTop: 0 }}>{label}</label>
+            <textarea
+                rows={4}
+                placeholder={placeholder}
+                style={{ ...inputStyle, lineHeight: 1.42, minHeight: "5.5rem", resize: "vertical" }}
+                value={politicsForm[key] ?? ""}
+                onChange={(event) => changePolitics(key, event.target.value)}
+            />
+        </div>
+    );
 
     return (
         <>
-        {header(meta.title, "Identity, national baseline, and present-state economic administration")}
+        {header(meta.title, "Identity, Political World v2, national baseline, and present-state administration")}
         <div style={{ overflowY: "auto", paddingRight: "0.12rem" }}>
             <div style={{
                 background: "linear-gradient(135deg, rgba(124,58,237,0.13), rgba(59,130,246,0.06))",
@@ -947,6 +1081,234 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                         </div>
                     </div>
 
+                    <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }}>
+                        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+                            <div>
+                                <div style={editorSectionLabelStyle}>Political World v2</div>
+                                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.4 }}>
+                                    Canonical political truth used by the Advisor, diplomacy, institutions and simulation. This is not a Stats-side copy.
+                                </div>
+                            </div>
+                            <span style={{ background: politicsForm.exists ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${politicsForm.exists ? "rgba(34,197,94,0.28)" : "rgba(245,158,11,0.28)"}`, borderRadius: 999, color: politicsForm.exists ? "#86efac" : "#fbbf24", flexShrink: 0, fontSize: "0.58rem", fontWeight: 850, padding: "0.14rem 0.42rem", textTransform: "uppercase" }}>
+                                {politicsForm.exists ? "Canonical actor" : "New actor"}
+                            </span>
+                        </div>
+
+                        <details open style={{ marginTop: "0.65rem" }}>
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Government & political system</summary>
+                            <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.58rem" }}>
+                                {politicsPairedField("Government form", "governmentForm")}
+                                {politicsPairedField("Government ideology", "governmentIdeology")}
+                                {politicsPairedField("Head of state", "headOfState")}
+                                {politicsPairedField("Head of government", "headOfGovernment")}
+                                {politicsPairedField("Operative political leader", "politicalLeader")}
+                                {politicsPairedField("Government status", "governmentStatus")}
+                                {politicsPairedField("Coalition / cabinet name", "coalitionName")}
+                                {politicsPairedField("Political system type", "politicalSystemType")}
+                                <div style={{ minWidth: 0 }}>
+                                    <label style={{ ...labelStyle, marginTop: 0 }}>Representation model</label>
+                                    <select style={inputStyle} value={politicsForm.politicalRepresentation ?? ""} onChange={(event) => changePolitics("politicalRepresentation", event.target.value)}>
+                                        <option value="">Auto / unspecified</option>
+                                        <option value="electoral">Electoral</option>
+                                        <option value="court_factions">Court factions</option>
+                                        <option value="party_state">Party state</option>
+                                        <option value="elite_factions">Elite factions</option>
+                                        <option value="military_factions">Military factions</option>
+                                        <option value="revolutionary_factions">Revolutionary factions</option>
+                                        <option value="colonial">Colonial</option>
+                                        <option value="none">None</option>
+                                    </select>
+                                </div>
+                                <div style={{ minWidth: 0 }}>
+                                    <label style={{ ...labelStyle, marginTop: 0 }}>Regime character</label>
+                                    <select style={inputStyle} value={politicsForm.regimeCharacter ?? ""} onChange={(event) => changePolitics("regimeCharacter", event.target.value)}>
+                                        <option value="">Unspecified</option>
+                                        <option value="democratic">Democratic</option>
+                                        <option value="hybrid">Hybrid</option>
+                                        <option value="authoritarian">Authoritarian</option>
+                                        <option value="totalitarian">Totalitarian</option>
+                                        <option value="theocratic">Theocratic</option>
+                                        <option value="military">Military</option>
+                                        <option value="colonial">Colonial</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+                                {politicsPairedField("Government approval / 100", "approval", { type: "number", min: "0", max: "100", step: "0.1" })}
+                                {politicsPairedField("Political stability / 100", "politicalStability", { type: "number", min: "0", max: "100", step: "0.1" })}
+                            </div>
+                            <div style={{ marginTop: "0.48rem" }}>
+                                {politicsPairedField("Public system label", "politicalSystemLabel")}
+                            </div>
+                            {politicsTextarea("Political-system notes", "politicalSystemNotes")}
+                        </details>
+
+                        <details open style={{ marginTop: "0.7rem" }}>
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Strategic outlook · goals, fears, ambitions, pressure</summary>
+                            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.35rem" }}>One item per line. These are canonical causal inputs, not flavor text.</div>
+                            {politicsTextarea("Goals", "goalsText", "One goal per line")}
+                            {politicsTextarea("Fears", "fearsText", "One fear per line")}
+                            {politicsTextarea("Ambitions", "ambitionsText", "One ambition per line")}
+                            {politicsTextarea("Domestic pressure notes", "domesticPressuresText", "One pressure per line")}
+                        </details>
+
+                        <details open style={{ marginTop: "0.7rem" }}>
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Parties / political entities ({politicsForm.parties?.length || 0})</summary>
+                            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.35rem" }}>Ruling and coalition membership writes directly to canonical government party IDs.</div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.55rem" }}>
+                                {(politicsForm.parties || []).map((party, index) => (
+                                    <details key={party.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 9, padding: "0.5rem" }}>
+                                        <summary style={{ cursor: "pointer", fontSize: "0.7rem", fontWeight: 800 }}>
+                                            {party.name || `Political entity ${index + 1}`}{party.ruling ? " · Government" : party.coalition ? " · Coalition" : ""}
+                                        </summary>
+                                        <div style={{ display: "grid", gap: "0.44rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.55rem" }}>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Name</label><input style={inputStyle} value={party.name ?? ""} onChange={(event) => changeParty(index, "name", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Short name</label><input style={inputStyle} value={party.shortName ?? ""} onChange={(event) => changeParty(index, "shortName", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Leader</label><input style={inputStyle} value={party.leader ?? ""} onChange={(event) => changeParty(index, "leader", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Ideology</label><input style={inputStyle} value={party.ideology ?? ""} onChange={(event) => changeParty(index, "ideology", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Support (%)</label><input type="number" min="0" max="100" step="0.1" style={inputStyle} value={party.supportPercent ?? ""} onChange={(event) => changeParty(index, "supportPercent", event.target.value)} /></div>
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Influence (%)</label><input type="number" min="0" max="100" step="0.1" style={inputStyle} value={party.influencePercent ?? ""} onChange={(event) => changeParty(index, "influencePercent", event.target.value)} /></div>
+                                        </div>
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", marginTop: "0.5rem" }}>
+                                            <label style={{ alignItems: "center", display: "flex", fontSize: "0.67rem", gap: "0.35rem" }}><input type="checkbox" checked={party.ruling === true} onChange={(event) => changeParty(index, "ruling", event.target.checked)} /> Ruling / government</label>
+                                            <label style={{ alignItems: "center", display: "flex", fontSize: "0.67rem", gap: "0.35rem" }}><input type="checkbox" checked={party.coalition === true} disabled={party.ruling === true} onChange={(event) => changeParty(index, "coalition", event.target.checked)} /> Coalition partner</label>
+                                        </div>
+                                        <label style={labelStyle}>Public description</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicDescription ?? ""} onChange={(event) => changeParty(index, "publicDescription", event.target.value)} />
+                                        <label style={labelStyle}>Public priorities · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicPrioritiesText ?? ""} onChange={(event) => changeParty(index, "publicPrioritiesText", event.target.value)} />
+                                        <label style={labelStyle}>Foreign-policy outlook · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={party.publicForeignPolicyText ?? ""} onChange={(event) => changeParty(index, "publicForeignPolicyText", event.target.value)} />
+                                        <button type="button" onClick={() => removeParty(index)} style={{ ...buttonStyle, color: "#fca5a5", marginTop: "0.5rem", width: "100%" }}>Remove political entity</button>
+                                    </details>
+                                ))}
+                            </div>
+                            <button type="button" onClick={addParty} style={{ ...buttonStyle, marginTop: "0.5rem", width: "100%" }}>+ Add political entity</button>
+                        </details>
+
+                        <details style={{ marginTop: "0.7rem" }}>
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Power blocs / non-party actors ({politicsForm.powerBlocs?.length || 0})</summary>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginTop: "0.55rem" }}>
+                                {(politicsForm.powerBlocs || []).map((bloc, index) => (
+                                    <details key={bloc.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 9, padding: "0.5rem" }}>
+                                        <summary style={{ cursor: "pointer", fontSize: "0.7rem", fontWeight: 800 }}>{bloc.name || `Power bloc ${index + 1}`}</summary>
+                                        <div style={{ display: "grid", gap: "0.44rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.55rem" }}>
+                                            {[["Name", "name"], ["Short name", "shortName"], ["Kind", "kind"], ["Status", "status"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]].map(([label, key]) => (
+                                                <div key={key}><label style={{ ...labelStyle, marginTop: 0 }}>{label}</label><input style={inputStyle} value={bloc[key] ?? ""} onChange={(event) => changeBloc(index, key, event.target.value)} /></div>
+                                            ))}
+                                            <div><label style={{ ...labelStyle, marginTop: 0 }}>Influence (%)</label><input type="number" min="0" max="100" step="0.1" style={inputStyle} value={bloc.influencePercent ?? ""} onChange={(event) => changeBloc(index, "influencePercent", event.target.value)} /></div>
+                                        </div>
+                                        <label style={labelStyle}>Public description</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={bloc.publicDescription ?? ""} onChange={(event) => changeBloc(index, "publicDescription", event.target.value)} />
+                                        <label style={labelStyle}>Public priorities · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={bloc.publicPrioritiesText ?? ""} onChange={(event) => changeBloc(index, "publicPrioritiesText", event.target.value)} />
+                                        <label style={labelStyle}>Foreign-policy outlook · one per line</label><textarea rows={3} style={{ ...inputStyle, resize: "vertical" }} value={bloc.publicForeignPolicyText ?? ""} onChange={(event) => changeBloc(index, "publicForeignPolicyText", event.target.value)} />
+                                        <button type="button" onClick={() => removeBloc(index)} style={{ ...buttonStyle, color: "#fca5a5", marginTop: "0.5rem", width: "100%" }}>Remove power bloc</button>
+                                    </details>
+                                ))}
+                            </div>
+                            <button type="button" onClick={addBloc} style={{ ...buttonStyle, marginTop: "0.5rem", width: "100%" }}>+ Add power bloc</button>
+                        </details>
+
+                        <details open style={{ marginTop: "0.75rem" }} data-political-trait-catalog="true">
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Canonical traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
+                            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+                                Every native PWv2 trait is listed here, including traits this actor has never established. Blank means <strong>unset</strong>, not 0. Values are canonical 0-100 inputs used by the native disposition engine.
+                            </div>
+                            <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", marginTop: "0.6rem" }}>
+                                {POLITICAL_TRAIT_REGISTRY.map((trait) => {
+                                    const rawValue = politicsForm.traitValues?.[trait.key] ?? "";
+                                    const isSet = rawValue !== "" && rawValue !== null && rawValue !== undefined;
+                                    return (
+                                        <div key={trait.key} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 9, padding: "0.52rem" }}>
+                                            <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "space-between" }}>
+                                                <label style={{ ...labelStyle, margin: 0 }}>{trait.label}</label>
+                                                <span style={{ color: isSet ? "#86efac" : "rgba(255,255,255,0.35)", fontSize: "0.56rem", fontWeight: 800, textTransform: "uppercase" }}>{isSet ? "set" : "unset"}</span>
+                                            </div>
+                                            <input
+                                                type="number"
+                                                min={trait.min}
+                                                max={trait.max}
+                                                step="0.1"
+                                                placeholder="unset"
+                                                style={{ ...inputStyle, marginTop: "0.3rem" }}
+                                                value={rawValue}
+                                                onChange={(event) => changeTrait(trait.key, event.target.value)}
+                                            />
+                                            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.32rem" }}>{trait.description}</div>
+                                            <code style={{ color: "rgba(196,181,253,0.72)", display: "block", fontSize: "0.55rem", marginTop: "0.3rem" }}>{trait.key}</code>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </details>
+
+                        <details style={{ marginTop: "0.75rem" }} data-political-structured-json="true">
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Advanced structured traits & perceptions</summary>
+                            <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.61rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+                                Raw JSON remains available for power users and legacy extension traits. Registered canonical trait keys stay synchronized with the controls above whenever this JSON is valid.
+                            </div>
+                            <label style={labelStyle}>Traits JSON</label>
+                            <textarea
+                                rows={10}
+                                spellCheck={false}
+                                style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.65rem", lineHeight: 1.4, resize: "vertical" }}
+                                value={politicsForm.traitsJson ?? "{}"}
+                                onChange={(event) => changeTraitsJson(event.target.value)}
+                            />
+                            <label style={labelStyle}>Perceptions JSON</label>
+                            <textarea
+                                rows={12}
+                                spellCheck={false}
+                                style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.65rem", lineHeight: 1.4, resize: "vertical" }}
+                                value={politicsForm.perceptionsJson ?? "{}"}
+                                onChange={(event) => changePolitics("perceptionsJson", event.target.value)}
+                            />
+                        </details>
+
+                        <details style={{ marginTop: "0.75rem" }} data-political-debug="true">
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Political Debug · prove what the simulator sees</summary>
+                            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.61rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+                                Read-only canonical and derived state. This includes values the editor cannot directly modify, plus the complete supported trait catalog with unset dimensions preserved.
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.42rem", marginTop: "0.55rem" }}>
+                                <button type="button" style={buttonStyle} onClick={async () => {
+                                    const ok = await copyToClipboard(JSON.stringify(politicsDebug?.actor ?? null, null, 2));
+                                    setStatus(ok ? "Copied full Political Actor JSON." : "Failed to copy Political Actor JSON.");
+                                }}>Copy full actor JSON</button>
+                                <button type="button" style={buttonStyle} onClick={async () => {
+                                    const ok = await copyToClipboard(decisionContextText || "");
+                                    setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.");
+                                }}>Copy decision capsule</button>
+                                <button type="button" style={buttonStyle} onClick={async () => {
+                                    const ok = await copyToClipboard(JSON.stringify(politicsDebug ?? null, null, 2));
+                                    setStatus(ok ? "Copied political numeric/debug snapshot." : "Failed to copy political debug snapshot.");
+                                }}>Copy numeric/debug snapshot</button>
+                            </div>
+                            <div style={{ marginTop: "0.65rem" }}>
+                                <div style={editorSectionLabelStyle}>All supported traits · current canonical values</div>
+                                <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", marginTop: "0.4rem" }}>
+                                    {(politicsDebug?.traitCatalog?.traits || POLITICAL_TRAIT_REGISTRY.map((trait) => ({ ...trait, value: null, status: "unset" }))).map((trait) => (
+                                        <div key={trait.key} style={{ alignItems: "center", background: "rgba(255,255,255,0.025)", borderRadius: 7, display: "flex", fontSize: "0.62rem", justifyContent: "space-between", padding: "0.35rem 0.45rem" }}>
+                                            <span>{trait.label}</span>
+                                            <code style={{ color: trait.value == null ? "rgba(255,255,255,0.34)" : "#c4b5fd" }}>{trait.value == null ? "unset" : trait.value}</code>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <label style={labelStyle}>Decision authority · derived/native</label>
+                            <pre style={{ ...debugPreStyle, maxHeight: "13rem" }}>{JSON.stringify(politicsDebug?.decisionAuthority ?? null, null, 2)}</pre>
+                            <label style={labelStyle}>Behavioral disposition · stored</label>
+                            <pre style={{ ...debugPreStyle, maxHeight: "13rem" }}>{JSON.stringify(politicsDebug?.storedDisposition ?? null, null, 2)}</pre>
+                            <label style={labelStyle}>Behavioral disposition · derived now</label>
+                            <pre style={{ ...debugPreStyle, maxHeight: "13rem" }}>{JSON.stringify(politicsDebug?.derivedDisposition ?? null, null, 2)}</pre>
+                            <label style={labelStyle}>Full Political Actor JSON</label>
+                            <pre style={{ ...debugPreStyle, maxHeight: "22rem" }}>{JSON.stringify(politicsDebug?.actor ?? null, null, 2)}</pre>
+                            <label style={labelStyle}>Bounded Political Decision Context capsule</label>
+                            <textarea
+                                readOnly
+                                rows={18}
+                                spellCheck={false}
+                                style={{ ...inputStyle, color: "rgba(255,255,255,0.72)", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.62rem", lineHeight: 1.4, resize: "vertical" }}
+                                value={decisionContextText || ""}
+                            />
+                        </details>
+                    </div>
+
                     {!hasComponentBaseline ? (
                         <div style={{
                             background: "rgba(245,158,11,0.08)",
@@ -993,11 +1355,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             </div>
 
                             <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }}>
-                                <div style={editorSectionLabelStyle}>Government & macroeconomy</div>
+                                <div style={editorSectionLabelStyle}>Macroeconomy & administration</div>
                                 <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "1fr 1fr" }}>
                                     {pairedField("Capital", "capital")}
-                                    {pairedField("Leader", "leader")}
-                                    {pairedField("Government", "government")}
                                     {pairedField("Currency", "currency")}
                                     {pairedField("Continent / region", "continent")}
                                     {pairedField("Stability / 100", "stability", { type: "number", min: "0", max: "100", step: "1" })}
@@ -2373,11 +2733,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             acc.territory += (Array.isArray(impacts.regionTransfers) ? impacts.regionTransfers.length : 0)
                 + (Array.isArray(impacts.regionClaims) ? impacts.regionClaims.length : 0);
             acc.polities += Array.isArray(impacts.polityChanges) ? impacts.polityChanges.length : 0;
+            acc.politics += Array.isArray(impacts.politicalActorOps) ? impacts.politicalActorOps.length : 0;
             acc.units += Array.isArray(impacts.unitOps) ? impacts.unitOps.length : 0;
             acc.markers += Array.isArray(impacts.markerOps) ? impacts.markerOps.length : 0;
             acc.chats += Array.isArray(impacts.createdChats) ? impacts.createdChats.length : 0;
             return acc;
-        }, { territory: 0, polities: 0, units: 0, markers: 0, chats: 0 });
+        }, { territory: 0, polities: 0, politics: 0, units: 0, markers: 0, chats: 0 });
 
         const eventOps = (field) => events.flatMap((event, eventIndex) =>
             (Array.isArray(event?.impacts?.[field]) ? event.impacts[field] : []).map((op, opIndex) => ({
@@ -2391,6 +2752,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const claimOps = eventOps("regionClaims");
         const controlOps = eventOps("regionControlOps");
         const polityOps = eventOps("polityChanges");
+        const politicalOps = eventOps("politicalActorOps");
         const unitOps = eventOps("unitOps");
         const markerOps = eventOps("markerOps");
         const eventChats = eventOps("createdChats");
@@ -2590,6 +2952,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("events", events.length)}
                             {countChip("territory", impactCounts.territory)}
                             {countChip("polities", impactCounts.polities)}
+                            {countChip("politics", impactCounts.politics)}
                             {countChip("stats", statPatches.length)}
                             {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
@@ -2715,6 +3078,27 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                     </div>
                                                 ) : null}
                                                 {Object.keys(details).length > 0 ? <div style={{ color: "rgba(255,255,255,0.44)", marginTop: "0.14rem" }}>{compactJson(details)}</div> : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {politicalOps.length > 0 && (
+                                <div data-gm-political-actor-ops="true">
+                                    {subsectionTitle("Political Actor / PWv2", politicalOps.length, "exact canonical political mutations")}
+                                    {politicalOps.map((entry, index) => {
+                                        let args = entry.argsJson;
+                                        try { args = JSON.parse(entry.argsJson); } catch { /* keep raw text */ }
+                                        return (
+                                            <div key={`politics-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                    {String(entry.op || "update").toUpperCase()} · {entry.polityKey || entry.polity || entry.country || "Unknown polity"}
+                                                </strong>
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                <div style={{ color: "rgba(255,255,255,0.5)", marginTop: "0.14rem" }}>
+                                                    {compactJson(args)}
+                                                </div>
                                             </div>
                                         );
                                     })}
