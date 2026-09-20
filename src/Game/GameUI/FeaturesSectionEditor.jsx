@@ -63,6 +63,8 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                   <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{definition.label}</div>
                   <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", lineHeight: 1.45, marginTop: "0.15rem" }}>{definition.description}</div>
                 </div>
+{/* A feature with no on/off (Player focus) is a choice, not a switch. */}
+                {definition.toggleable !== false && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                   {isGame && (
                     <button type="button" style={choice(enabledState === "default")} onClick={() => setFeature(definition.key, { enabled: undefined })}>
@@ -72,12 +74,47 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                   <button type="button" style={choice(enabledState === "on")} onClick={() => setFeature(definition.key, { enabled: true })}>On</button>
                   <button type="button" style={choice(enabledState === "off")} onClick={() => setFeature(definition.key, { enabled: false })}>Off</button>
                 </div>
+                )}
               </div>
               {definition.settings.length > 0 && (
                 <div style={{ display: "grid", gap: "0.6rem", marginTop: "0.6rem" }}>
                   {definition.settings.map((setting) => {
                     const overridden = isGame && override[setting.key] !== undefined;
                     const value = isGame ? (override[setting.key] ?? "") : effective[definition.key][setting.key];
+                    // A choice of named levels (Player focus). One button per
+                    // option, and on a game a "Scenario default" button beside
+                    // them, exactly as the on/off row above reads.
+                    if (setting.type === "choice") {
+                      const scenarioChoice = String(base[definition.key][setting.key] ?? setting.defaultValue);
+                      const scenarioLabel = setting.options.find((option) => option.value === scenarioChoice)?.label ?? scenarioChoice;
+                      const selected = isGame ? (override[setting.key] ?? "") : String(effective[definition.key][setting.key] ?? "");
+                      const shown = setting.options.find((option) => option.value === (selected || scenarioChoice));
+                      return (
+                        <div key={setting.key}>
+                          <label style={styles.fieldLabelStyle}>{setting.label}</label>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                            {isGame && (
+                              <button type="button" style={choice(!overridden)} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
+                                Scenario default ({scenarioLabel})
+                              </button>
+                            )}
+                            {setting.options.map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                style={choice(selected === option.value || (!isGame && effective[definition.key][setting.key] === option.value))}
+                                onClick={() => setFeature(definition.key, { [setting.key]: option.value })}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.3rem" }}>
+                            {shown?.description ? `${shown.label}: ${shown.description} ` : ""}{setting.description}
+                          </div>
+                        </div>
+                      );
+                    }
                     // A text setting (the director's priority rules). A game's
                     // blank follows the scenario, exactly as a blank number does.
                     if (setting.type === "text") {

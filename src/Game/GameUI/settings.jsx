@@ -36,6 +36,9 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { playerFocusOf } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -58,7 +61,7 @@ import {
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildLoggingFile,
@@ -1010,6 +1013,7 @@ const ReasoningSection = () => {
 const REVIEW_SECTION_LABELS = {
     units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
     territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
+    structures: ["Put new structures on the map", "Bases, shipyards, data centres and ground stations appear where the events built them."],
     timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
     board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
     spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],
@@ -1736,6 +1740,81 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
 
+// How much of each time skip is about the player's own country (AI/playerFocus.js).
+// Kept with the GAME rather than on this device, unlike its neighbours in this
+// section: a Spotlight war campaign should not decide how the next sandbox game
+// reads. Existing games have none stored and start on Balanced.
+const PLAYER_FOCUS_HINTS = {
+    "world-first": "The world comes first. At least a quarter of each skip is about you when you have something going on; the rest of the world gets the room.",
+    balanced: "The default. At least 40% of each skip is about you when you have orders, Projects or open threads.",
+    focused: "Your country leads. At least 60% of each skip is about you, and other powers' plans take up less of what the AI is shown.",
+    spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
+};
+
+const PlayerFocusSetting = () => {
+    // The scenario's default under this game's own choice (server/gameFeatures.js).
+    // Kept with the GAME, not on this device: a Spotlight war campaign should not
+    // decide how the next sandbox game reads. A scenario author sets where new
+    // games start, in the library's Features tab.
+    useActiveFeatures();
+    const library = useLibraryState();
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const gameId = library.activeGameId;
+    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
+    const override = library.activeGame?.features?.playerFocus?.level;
+    const focus = normalizePlayerFocus(getActivePlayerFocus());
+    const following = !override;
+
+    const choose = async (value) => {
+        if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
+        setSaving(true);
+        setError("");
+        try {
+            // undefined clears the override, so the game follows its scenario again.
+            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+        } catch (problem) {
+            setError(problem?.message || "That could not be saved.");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const scenarioLabel = PLAYER_FOCUS_LEVELS.find((level) => level.key === scenarioLevel)?.label ?? scenarioLevel;
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
+        <select
+        data-no-translate
+        disabled={saving || !gameId}
+        value={following ? "" : focus}
+        onChange={(event) => choose(event.target.value || null)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        <option value="" style={{ color: "black" }}>{`Scenario default (${scenarioLabel})`}</option>
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <option key={level.key} value={level.key} style={{ color: "black" }}>
+            {level.label}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {/* Every level, not only the one selected: the choice is between four
+            feels, and a player cannot compare them one at a time. */}
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <div key={level.key} style={{ marginBottom: 4, opacity: level.key === focus ? 1 : 0.65 }}>
+            <strong>{level.label}</strong> — {PLAYER_FOCUS_HINTS[level.key]}
+            </div>
+        ))}
+        <div style={{ marginTop: 6 }}>
+        It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
+        </div>
+        {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
+        </div>
+        </div>
+    );
+};
+
 const SettingsSection = ({ title, description, right, children }) => (
     <section style={{ background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
         <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
@@ -1971,6 +2050,7 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
+                    <PlayerFocusSetting />
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.

@@ -123,6 +123,18 @@ test("a milestone that slipped is flagged separately from an overdue project", (
   assert.equal(flags.overdue, false, "the programme still has years to run");
 });
 
+test("a milestone the engine marked slipped is still next, and still flagged late", () => {
+  const slipped = project({
+    targetDate: "1970-01-01",
+    milestones: [
+      { id: "m1", title: "Sea trials", date: "1963-01-01", status: "slipped", note: "" },
+      { id: "m2", title: "Commissioning", date: "1965-01-01", status: "pending", note: "" },
+    ],
+  });
+  assert.equal(deriveNextMilestone(slipped).title, "Sea trials");
+  assert.equal(deriveProjectFlags(slipped, "1963-02-01").milestoneMissed, true);
+});
+
 test("stale covers both an explicit stall and simple neglect", () => {
   assert.equal(deriveProjectFlags(project({ status: "stalled" }), "1963-01-01").stale, true);
   assert.equal(deriveProjectFlags(project({ updatedRound: 4 }), "1963-01-01", 4 + STALE_ROUNDS).stale, true);
@@ -846,6 +858,25 @@ test("an op with no usable event number rides on the last visible event, and is 
     carriers.map((carrier) => [carrier.eventIndex, carrier.fallback, carrier.ops.length]),
     [[1, false, 1], [1, true, 2]],
     "kept apart from the event's own ops, so it can never be what backs that event",
+  );
+});
+
+// Seen in a live game (2026-09-19): three entries' routine reports named no
+// event, rode on the turn's last one — an agent caught in Argentina — and that
+// event sat in the Activity of an air-defence, a satellite and a drone Project.
+test("only an event's own ops stamp it into an entry's activity, never a fallback", () => {
+  const carriers = boardPassCarriers({
+    ops: [
+      { op: "update", name: "Project Westbird", progress: 45, eventIndex: 1 },
+      { op: "update", name: "Project Kestrel", lastUpdate: "Quiet month." },
+      { op: "update", name: "Project Westbird", progress: 50, eventIndex: 2 },
+    ],
+    visibleEvents: [at("1963-01-05", "a"), at("1963-01-20", "Spy ring rolled up")],
+    hiddenEvents: [at("1963-01-10", "c")],
+  });
+  assert.deepEqual(
+    carriers.map((carrier) => [carrier.onTimeline, carrier.fallback, carrier.stampsActivity]),
+    [[false, false, false], [true, false, true], [true, true, false]],
   );
 });
 

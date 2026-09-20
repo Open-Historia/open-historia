@@ -1,5 +1,6 @@
 import { buildCompactEconomicContext, isCompleteCountryStatSheet } from "../../runtime/countryStats.js";
 import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
+import { trimWorldForFocus } from "./playerFocus.js";
 import {
   buildNativeWorldExplorationSlate,
   deriveWorldTrajectoryValue,
@@ -3355,6 +3356,7 @@ export const buildWorldInitiativeContext = (
   {
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
+    playerFocus = "",
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3570,7 +3572,18 @@ export const buildWorldInitiativeContext = (
   const currentUnitLedger = formatCurrentPersistentUnitLedger(bundle?.world || {});
   const currentUnitCount = normalizeArray(bundle?.world?.units).length;
 
-  const lines = bounded.map((candidate, index) => {
+  // The player's focus decides how much of the world's own attention this
+  // context carries (AI/playerFocus.js): all of it at World first and Balanced,
+  // less at Focused and Spotlight. The world loses its weakest ranked evidence
+  // first; anything naming the player stays, as does every player-sphere
+  // exploration lane and the protected crisis lane below.
+  const playerKey = normalizeString(bundle?.game?.country).toLowerCase();
+  const keptCandidates = trimWorldForFocus(bounded, {
+    focus: playerFocus,
+    isPlayerItem: (candidate) => Boolean(playerKey)
+      && `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`.toLowerCase().includes(playerKey),
+  });
+  const lines = keptCandidates.map((candidate, index) => {
     const meta = [
       candidate.type,
       candidate.date ? candidate.date : "",
@@ -3654,7 +3667,11 @@ export const buildWorldInitiativeContext = (
     return `${index + 1}. [${meta}] ${storyline.title}${detail ? `\n   ${detail}` : ""}`;
   });
 
-  const explorationLines = explorationSlate.map((slot) => {
+  const keptExplorationSlate = trimWorldForFocus(explorationSlate, {
+    focus: playerFocus,
+    isPlayerItem: (slot) => slot?.scope === "player-sphere" || slot?.type === "crisis-discovery",
+  });
+  const explorationLines = keptExplorationSlate.map((slot) => {
     const deferredGuard = slot.deferredTopics.length
       ? ` Avoid routine restatement of deferred process(es): ${slot.deferredTopics.join("; ")}. Deferral does NOT freeze their actors: a genuinely material endogenous development or external trigger may reactivate one.`
       : "";

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import {
   idleDiplomacyChancePerMinute as chancePerMinute,
   isFeatureEnabled,
+  playerFocusOf,
   resolveFeatures,
   worldDirectionOf,
 } from "../../server/gameFeatures.js";
@@ -49,3 +50,7 @@ export const idleDiplomacyChancePerMinute = () => chancePerMinute(activeFeatures
 // The scenario author's settings for how the world is run, or null when world
 // direction is off for this game (src/Game/AI/worldDirection.js).
 export const getActiveWorldDirection = () => worldDirectionOf(activeFeatures);
+
+// How much of a time skip belongs to the player (src/Game/AI/playerFocus.js):
+// the scenario's default under this game's own choice. Always a level.
+export const getActivePlayerFocus = () => playerFocusOf(activeFeatures);

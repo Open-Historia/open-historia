@@ -222,11 +222,21 @@ test("milestone status synonyms mark a checkpoint reached", () => {
     assert.equal(after.nextMilestone, null, `status "${status}" left it outstanding`);
   }
 
-  for (const status of ["missed", "slipped", "late"]) {
+  for (const status of ["missed", "unmet", "failed"]) {
     const after = applyProjectOps([before], [{
       op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
     }], { date: "2034-06-03" })[0];
     assert.equal(after.milestones[0].status, "missed", `status "${status}" did not mark it missed`);
+  }
+
+  // Late is not the same as never: a slipped checkpoint is still outstanding, so
+  // it stays the next milestone and the next skip is asked to answer it.
+  for (const status of ["slipped", "late", "delayed", "overdue"]) {
+    const after = applyProjectOps([before], [{
+      op: "milestone", name: before.name, milestone: { title: "Sea trials", status },
+    }], { date: "2034-06-03" })[0];
+    assert.equal(after.milestones[0].status, "slipped", `status "${status}" did not mark it slipped`);
+    assert.equal(after.nextMilestone?.title, "Sea trials", `status "${status}" left nothing outstanding`);
   }
 });
 

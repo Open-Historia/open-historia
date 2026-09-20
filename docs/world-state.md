@@ -30,6 +30,12 @@ _Avoid_: Effort, item, card
 An ongoing situation no single polity controls, with unresolved stakes, such as a war, a crisis, a rivalry or unrest. Hidden from the player. A Project can cause or feed a Storyline, but the same thing is never both.
 _Avoid_: Process, thread, arc
 
+### The map
+
+**Structure**:
+Anything physical the campaign builds and the map draws in one place: a base, shipyard, data centre, ground station, reactor, embassy. Kept in `world.markers[]` and written by an event's `markerOps`, so **marker** is the field name for the record while Structure is the thing itself. A satellite is not one; the ground station that serves it is. Something that moves is a unit.
+_Avoid_: Feature, facility, building (as the term for the record)
+
 ### Library
 
 **Scenario**:
@@ -45,6 +51,18 @@ _Avoid_: Save, save game, campaign, session (as the term for the record)
 **Canonical event**:
 Something the simulation accepted as having happened during a jump, whether or not the player sees it on the timeline.
 _Avoid_: Accepted card
+
+**Player event**:
+A Canonical event that involves the player's polity in any way: something it does, something done to it or said about it, or something that happens inside its territory. Every other event is a World event.
+_Avoid_: Player-related event, player-sphere event
+
+**World event**:
+A Canonical event that does not involve the player's polity at all, such as a crisis between two other powers in a theatre the player is not in.
+_Avoid_: Wider-world event, background event
+
+**Player focus**:
+How much of each jump belongs to Player events: World first, Balanced, Focused or Spotlight. The Scenario sets the level a new Game starts on and the player changes it for their own Game, like any other feature setting. It is a minimum share that applies only as far as the player has something going on; in a quiet stretch the World fills the jump.
+_Avoid_: Player share, player weighting, attention balance
 
 **Hidden event**:
 A Canonical event kept off the timeline because it was routine, low-value or already covered. It still happened. Distinct from a rejected event, which the simulation judged untrue and which never happened.

@@ -203,6 +203,7 @@ export const AI_TASK_ROUTING = [
     { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
     { key: "unitDirector", label: "Unit director", hint: "Mid-tier: unit movement", group: "Simulation" },
     { key: "territoryDirector", label: "Territory director", hint: "Mid-tier: front outcomes", group: "Simulation" },
+    { key: "structureDirector", label: "Structure director", hint: "Mid-tier: new structures on the map", group: "Simulation" },
     { key: "geographyResolver", label: "Geography resolver", hint: "Small model: place-name matching", group: "Simulation" },
     { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
