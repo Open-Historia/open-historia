@@ -381,7 +381,7 @@ const CountryInfoPanel = () => {
             {tags.map((tag) => (
                 <span
                     key={tag}
-                    style={{ ...pillStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(124,58,237,0.5)" }}
+                    style={{ ...pillStyle, background: "rgba(255,255,255,0.11)", borderColor: "rgba(255,255,255,0.25)" }}
                     title="What this country is — the map-maker set this, and the AI reads it as context"
                 >
                     {tag}
@@ -471,7 +471,7 @@ const CountryInfoPanel = () => {
         <button type="button" onClick={runAdvisorReport} style={footerButtonStyle}>
         Advisor Report
         </button>
-        <button type="button" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(124,58,237,0.3)", border: "1px solid rgba(168,85,247,0.65)" }}>
+        <button type="button" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
         Open Diplomacy
         </button>
         </div>

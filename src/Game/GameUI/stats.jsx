@@ -149,7 +149,7 @@ const sectionTitleStyle = {
 };
 
 const cardStyle = {
-    backgroundColor: "rgba(255,255,255,0.045)",
+    backgroundColor: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: "10px",
     padding: "0.6rem 0.7rem",
@@ -264,7 +264,7 @@ const CustomStatCard = ({ stat, value }) => {
                     </span>
                     <span data-no-translate style={{ flexShrink: 0, fontSize: "0.78rem", fontWeight: 800 }}>{Number.isFinite(numeric) ? `${bounded}/100` : "—"}</span>
                 </div>
-                <Bar value={bounded} color={stat.color || "#8b5cf6"} />
+                <Bar value={bounded} color={stat.color || "#a1a1aa"} />
             </div>
         );
     }
@@ -583,10 +583,10 @@ const DiplomacySection = ({ world, targetCountry }) => {
 
 const statsSubtabStyle = (selected) => ({
     alignItems: "center",
-    backgroundColor: selected ? "rgba(59,130,246,0.13)" : "rgba(255,255,255,0.025)",
-    border: `1px solid ${selected ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.09)"}`,
+    backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.03)",
+    border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.09)"}`,
     borderRadius: "8px",
-    color: selected ? "#bfdbfe" : "rgba(255,255,255,0.58)",
+    color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
     cursor: "pointer",
     display: "flex",
     flex: 1,
@@ -612,7 +612,7 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
                 label: stat.label,
                 unit: customMetricUnit(stat),
                 unitLabel: customMetricUnitLabel(stat),
-                color: stat.color || "#8b5cf6",
+                color: stat.color || "#a1a1aa",
                 format: (value) => formatCustomStatValue(stat, value),
                 bounded01: stat.kind === "index" || (Number(stat.minimum) === 0 && Number(stat.maximum) === 100),
                 nonNegative: Number.isFinite(Number(stat.minimum)) && Number(stat.minimum) >= 0,
@@ -627,7 +627,7 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
             metrics: [
                 { key: "gdp", label: "GDP", unit: "gdp", color: "#34d399", format: formatEuroTotal },
                 { key: "gdpPerCapita", label: "GDP per capita", unit: "gdpPerCapita", color: "#e7e7e9", format: formatEuroPerCapita },
-                { key: "population", label: "Population", unit: "population", color: "#a78bfa", format: formatPopulation },
+                { key: "population", label: "Population", unit: "population", color: "#94a3b8", format: formatPopulation },
             ],
         },
         {
@@ -638,7 +638,7 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
                 { key: "gdpGrowth", label: "GDP growth", unit: "economicPercent", color: "#34d399", format: (value) => formatPercent(value, { signed: true }) },
                 { key: "inflation", label: "Inflation", unit: "economicPercent", color: "#f59e0b", format: formatPercent },
                 { key: "unemployment", label: "Unemployment", unit: "economicPercent", color: "#60a5fa", format: formatPercent },
-                { key: "publicDebt", label: "Public debt", unit: "economicPercent", color: "#c084fc", format: formatPercent },
+                { key: "publicDebt", label: "Public debt", unit: "economicPercent", color: "#94a3b8", format: formatPercent },
                 { key: "budgetBalance", label: "Budget balance", unit: "economicPercent", color: "#f87171", format: (value) => formatPercent(value, { signed: true }) },
             ],
         },
@@ -664,7 +664,7 @@ const advancedMetricGroupsFor = (indexRows = INDEX_ROWS, definition = null) => {
             metrics: [
                 { key: "agriculture", label: "Agriculture", unit: "sector", color: "#22c55e", format: formatPercent },
                 { key: "industry", label: "Industry", unit: "sector", color: "#3b82f6", format: formatPercent },
-                { key: "services", label: "Services", unit: "sector", color: "#8b5cf6", format: formatPercent },
+                { key: "services", label: "Services", unit: "sector", color: "#f59e0b", format: formatPercent },
             ],
         },
     ];
@@ -699,10 +699,10 @@ const historyDateMs = (value) => {
 };
 
 const advancedRangeStyle = (active) => ({
-    backgroundColor: active ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.035)",
-    border: `1px solid ${active ? "rgba(96,165,250,0.55)" : "rgba(255,255,255,0.08)"}`,
+    backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+    border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
     borderRadius: "7px",
-    color: active ? "#dbeafe" : "rgba(255,255,255,0.5)",
+    color: active ? "#f4f4f5" : "rgba(255,255,255,0.5)",
     cursor: "pointer",
     fontSize: "0.68rem",
     fontWeight: 800,
@@ -946,7 +946,7 @@ const AdvancedStatsModal = ({
                         </div>
                         <div data-no-translate style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{sampleSpan} · {visibleSamples.length} snapshot{visibleSamples.length === 1 ? "" : "s"}</div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
 
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(0, 1fr) minmax(285px, 330px)", minHeight: 0 }}>
@@ -961,7 +961,7 @@ const AdvancedStatsModal = ({
                             </div>
                         </div>
 
-                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.028), rgba(255,255,255,0.012))", border: "1px solid rgba(255,255,255,0.065)", borderRadius: "12px", display: "flex", flex: 1, minHeight: "390px", overflow: "hidden", padding: "0.35rem" }}>
+                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: "390px", overflow: "hidden", padding: "0.35rem" }}>
                             {status === "loading" ? (
                                 <div style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center" }}>Loading campaign history…</div>
                             ) : status === "error" ? (
@@ -989,7 +989,7 @@ const AdvancedStatsModal = ({
                                                         ? formatCompactNumber(delta)
                                                         : `${delta > 0 ? "+" : ""}${Math.round(delta * 10) / 10}${metric.unit === "index" ? "" : " pp"}`;
                                     return (
-                                        <div key={metric.key} style={{ backgroundColor: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.065)", borderRadius: "9px", minWidth: 0, padding: "0.55rem 0.65rem" }}>
+                                        <div key={metric.key} style={{ backgroundColor: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "9px", minWidth: 0, padding: "0.55rem 0.65rem" }}>
                                             <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{metric.label}</div>
                                             <div data-no-translate style={{ color: metric.color, fontSize: "0.92rem", fontWeight: 900, marginTop: "0.16rem" }}>{metric.format(end)}</div>
                                             <div data-no-translate style={{ color: delta == null ? "rgba(255,255,255,0.3)" : delta > 0 ? "#86efac" : delta < 0 ? "#fca5a5" : "rgba(255,255,255,0.42)", fontSize: "0.58rem", marginTop: "0.08rem" }}>{deltaText} over range</div>
@@ -1013,7 +1013,7 @@ const AdvancedStatsModal = ({
                         <div style={{ color: "rgba(255,255,255,0.28)", fontSize: "0.58rem", lineHeight: 1.4, marginTop: "0.3rem" }}>Compatible metrics can share a chart. Choosing a different scale switches the graph automatically.</div>
 
                         {metricGroups.map((group) => (
-                            <div key={group.key} style={{ borderTop: "1px solid rgba(255,255,255,0.065)", marginTop: "0.75rem", paddingTop: "0.65rem" }}>
+                            <div key={group.key} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", marginTop: "0.75rem", paddingTop: "0.65rem" }}>
                                 <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.68rem", fontWeight: 850, marginBottom: "0.35rem" }}>{group.icon} {group.label}</div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                                     {group.metrics.map((metric) => {
@@ -1142,10 +1142,10 @@ const HistoricalTrackingModal = ({
                                             type="button"
                                             onClick={() => setIntervalMonths(months)}
                                             style={{
-                                                backgroundColor: active ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.04)",
-                                                border: `1px solid ${active ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.08)"}`,
+                                                backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+                                                border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)"}`,
                                                 borderRadius: "999px",
-                                                color: active ? "#dbeafe" : "rgba(255,255,255,0.68)",
+                                                color: active ? "#f4f4f5" : "rgba(255,255,255,0.68)",
                                                 cursor: "pointer",
                                                 fontSize: "0.72rem",
                                                 fontWeight: active ? 800 : 700,
@@ -1839,7 +1839,7 @@ const StatsPaneBody = ({ active }) => {
         const parts = [
             { key: "agriculture", label: "Agriculture", color: "#22c55e", value: clamp01(raw.agriculture) },
             { key: "industry", label: "Industry", color: "#3b82f6", value: clamp01(raw.industry) },
-            { key: "services", label: "Services", color: "#8b5cf6", value: clamp01(raw.services) },
+            { key: "services", label: "Services", color: "#f59e0b", value: clamp01(raw.services) },
         ];
         const total = parts.reduce((sum, part) => sum + part.value, 0) || 1;
         return parts.map((part) => ({ ...part, share: (part.value / total) * 100 }));
@@ -2008,7 +2008,7 @@ const StatsPaneBody = ({ active }) => {
                 </span>
                 <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>{intelligence}/100</span>
                 </div>
-                <Bar value={intelligence} color="#a78bfa" />
+                <Bar value={intelligence} color="#38bdf8" />
                 </div>
                 )}
 
@@ -2103,7 +2103,7 @@ const StatsPaneBody = ({ active }) => {
                 <button
                 type="button"
                 onClick={() => setAdvancedOpen(true)}
-                style={{ alignItems: "center", background: "linear-gradient(135deg, rgba(37,99,235,0.18), rgba(14,165,233,0.08))", border: "1px solid rgba(96,165,250,0.34)", borderRadius: "11px", color: "#dbeafe", cursor: "pointer", display: "flex", gap: "0.65rem", justifyContent: "space-between", marginTop: "0.9rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "center", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "11px", color: "#e7e7ea", cursor: "pointer", display: "flex", gap: "0.65rem", justifyContent: "space-between", marginTop: "0.9rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
                 >
                     <span style={{ alignItems: "center", display: "flex", gap: "0.6rem", minWidth: 0 }}>
                         <span style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.18)", border: "1px solid rgba(147,197,253,0.2)", borderRadius: "8px", display: "inline-flex", flexShrink: 0, fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>📊</span>
@@ -2118,7 +2118,7 @@ const StatsPaneBody = ({ active }) => {
                 <button
                 type="button"
                 onClick={() => setTrackingOpen(true)}
-                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.035))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
+                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.04))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
                 >
                     <span style={{ alignItems: "center", display: "flex", gap: "0.65rem", minWidth: 0 }}>
                         <span style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "8px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "0.98rem", height: "2rem", justifyContent: "center", width: "2rem" }}>⚙</span>

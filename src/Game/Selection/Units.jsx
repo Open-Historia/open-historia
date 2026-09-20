@@ -376,10 +376,10 @@ const UnitPopup = () => {
               title="No confirmed line of support — assessed to have been operating in the area before it was detected."
               style={{
                 display: "inline-block",
-                background: "rgba(196,181,253,0.18)",
-                border: "1px solid rgba(196,181,253,0.5)",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.25)",
                 borderRadius: "5px",
-                color: "rgba(221,214,254,0.95)",
+                color: "#f4f4f5",
                 fontSize: "9px",
                 fontWeight: 700,
                 letterSpacing: "0.02em",

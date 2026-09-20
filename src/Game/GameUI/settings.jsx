@@ -428,8 +428,8 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
                             padding: "0.7rem 0.75rem",
                             borderRadius: "8px",
                             border: "1px solid",
-                            borderColor: selected ? "rgba(59,130,246,0.8)" : "rgba(255,255,255,0.08)",
-                            backgroundColor: selected ? "rgba(59,130,246,0.18)" : "rgba(0,0,0,0.16)",
+                            borderColor: selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
+                            backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(0,0,0,0.16)",
                             color: "white",
                             cursor: "pointer",
                             textAlign: "left",
@@ -1183,8 +1183,8 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                    background: "rgba(255,255,255,0.035)",
-                    border: "1px solid rgba(255,255,255,0.075)",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
                     borderRadius: "7px",
                     color: "rgba(255,255,255,0.58)",
                     fontSize: "0.68rem",
@@ -1702,8 +1702,8 @@ const diagnosticsButton = {
 
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
-        neutral: { background: "rgba(255,255,255,0.035)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
-        violet: { background: "rgba(124,58,237,0.09)", border: "rgba(167,139,250,0.18)", icon: "rgba(124,58,237,0.18)", color: "#ddd6fe" },
+        neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
+        slate: { background: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "rgba(255,255,255,0.08)", color: "#e4e4e7" },
         blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
     };
@@ -1816,7 +1816,7 @@ const PlayerFocusSetting = () => {
 };
 
 const SettingsSection = ({ title, description, right, children }) => (
-    <section style={{ background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
+    <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
         <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
             <div style={{ minWidth: 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.88rem", fontWeight: 850 }}>{title}</div>
@@ -1938,10 +1938,10 @@ const SettingsWorkspace = ({
                     onClick={() => onSectionChange(section.key)}
                     style={{
                         alignItems: "center",
-                        background: selected ? "rgba(59,130,246,0.12)" : "transparent",
-                        border: `1px solid ${selected ? "rgba(96,165,250,0.22)" : "transparent"}`,
+                        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
+                        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
                         borderRadius: "9px",
-                        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.58)",
+                        color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
                         cursor: "pointer",
                         display: "flex",
                         flex: isMobile ? "0 0 auto" : "none",
@@ -1953,7 +1953,7 @@ const SettingsWorkspace = ({
                         width: isMobile ? "auto" : "100%",
                     }}
                     >
-                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(59,130,246,0.16)" : "rgba(255,255,255,0.045)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
+                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
                         <span>
                             <span style={{ display: "block", fontSize: "0.74rem", fontWeight: 850 }}>{section.label}</span>
                             {!isMobile && <span style={{ color: "rgba(255,255,255,0.3)", display: "block", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
@@ -2132,7 +2132,7 @@ const SettingsWorkspace = ({
             <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
                 <div aria-hidden="true" className="oh-ws-tint" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
-                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
+                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
@@ -2142,7 +2142,7 @@ const SettingsWorkspace = ({
                             {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
                     <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
@@ -2166,10 +2166,10 @@ const QuickMenuTabButton = ({ label, selected, onClick }) => (
     type="button"
     onClick={onClick}
     style={{
-        background: selected ? "rgba(59,130,246,0.16)" : "transparent",
-        border: `1px solid ${selected ? "rgba(96,165,250,0.28)" : "transparent"}`,
+        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
+        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
         borderRadius: "8px",
-        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.56)",
+        color: selected ? "#f4f4f5" : "rgba(255,255,255,0.56)",
         cursor: "pointer",
         fontFamily: "inherit",
         fontSize: "0.72rem",
@@ -2201,7 +2201,7 @@ const ContextSummaryCard = ({ context }) => {
     ];
 
     return (
-        <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
             <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", fontWeight: 800, marginBottom: "0.6rem" }}>Current session</div>
             <div style={{ display: "grid", gap: "0.45rem" }}>
                 {rows.map((row) => (
@@ -2407,7 +2407,7 @@ const SettingsMenu = ({
             <QuickMenuPanel title="Tools" description="High-frequency in-game tools should stay one click away.">
                 <div style={grid}>
                     {typeof onOpenCheats === "function" && (
-                        <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="violet" onClick={() => runAndClose(onOpenCheats)} />
+                        <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="slate" onClick={() => runAndClose(onOpenCheats)} />
                     )}
                     {typeof onOpenEvents === "function" && (
                         <QuickAction title="Events / Timeline" description="Review the current turn and world history" symbol="◷" tone="blue" onClick={() => runAndClose(onOpenEvents)} />
@@ -2461,7 +2461,7 @@ const SettingsMenu = ({
                 <button type="button" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
                 {QUICK_MENU_TABS.map((tab) => (
                     <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} />
                 ))}

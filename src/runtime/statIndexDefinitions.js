@@ -8,7 +8,7 @@ export const STAT_INDEX_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,39}$/;
 export const STAT_KINDS = Object.freeze(["index", "number", "percentage", "currency"]);
 
 export const DEFAULT_STAT_INDEX_ROWS = Object.freeze([
-  Object.freeze({ key: "sovereignty", label: "Sovereignty", kind: "index", icon: "⚑", color: "#8b5cf6", description: "Practical political sovereignty and freedom of action." }),
+  Object.freeze({ key: "sovereignty", label: "Sovereignty", kind: "index", icon: "⚑", color: "#f97316", description: "Practical political sovereignty and freedom of action." }),
   Object.freeze({ key: "foodAutonomy", label: "Food autonomy", kind: "index", icon: "🌾", color: "#22c55e", description: "Ability to meet food needs without vulnerable external supply." }),
   Object.freeze({ key: "energyAutonomy", label: "Energy autonomy", kind: "index", icon: "⚡", color: "#eab308", description: "Ability to meet energy needs without vulnerable external supply." }),
   Object.freeze({ key: "economicIndependence", label: "Economic independence", kind: "index", icon: "🏦", color: "#06b6d4", description: "Economic resilience and freedom from external dependency." }),
@@ -29,7 +29,7 @@ export const DEFAULT_CUSTOM_STAT_SECTIONS = Object.freeze([
     icon: "◈",
     stats: Object.freeze([
       Object.freeze({ key: "nationalStability", label: "National stability", kind: "index", icon: "⚖", color: "#22c55e", description: "Overall political and social stability." }),
-      Object.freeze({ key: "intelligenceService", label: "Intelligence service", kind: "index", icon: "♟", color: "#a78bfa", description: "Capability of the polity's intelligence and counter-intelligence apparatus." }),
+      Object.freeze({ key: "intelligenceService", label: "Intelligence service", kind: "index", icon: "♟", color: "#38bdf8", description: "Capability of the polity's intelligence and counter-intelligence apparatus." }),
     ]),
   }),
   Object.freeze({ key: "strategic", label: "Strategic indices", icon: "⚑", stats: DEFAULT_STAT_INDEX_ROWS }),
@@ -54,13 +54,13 @@ export const DEFAULT_CUSTOM_STAT_SECTIONS = Object.freeze([
       Object.freeze({ key: "budgetBalance", label: "Budget balance", kind: "percentage", icon: "±", color: "#34d399", suffix: "%", decimals: 1, minimum: -1000, maximum: 1000, description: "Budget balance in percent; negative values represent deficits." }),
       Object.freeze({ key: "agricultureShare", label: "Agriculture", kind: "percentage", icon: "🌾", color: "#22c55e", suffix: "%", decimals: 0, minimum: 0, maximum: 100, description: "Agriculture share of output." }),
       Object.freeze({ key: "industryShare", label: "Industry", kind: "percentage", icon: "🏭", color: "#3b82f6", suffix: "%", decimals: 0, minimum: 0, maximum: 100, description: "Industry share of output." }),
-      Object.freeze({ key: "servicesShare", label: "Services", kind: "percentage", icon: "◆", color: "#8b5cf6", suffix: "%", decimals: 0, minimum: 0, maximum: 100, description: "Services share of output." }),
+      Object.freeze({ key: "servicesShare", label: "Services", kind: "percentage", icon: "◆", color: "#f59e0b", suffix: "%", decimals: 0, minimum: 0, maximum: 100, description: "Services share of output." }),
     ]),
   }),
 ]);
 
 const clean = (value) => String(value ?? "").trim();
-const DEFAULT_COLOR = "#8b5cf6";
+const DEFAULT_COLOR = "#a1a1aa";
 const validColor = (value) => /^#[0-9a-f]{6}$/i.test(clean(value));
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 

@@ -3,17 +3,18 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-// Shared dark-glass UI constants for the map editor, matching the game's GameUI
-// look (rgba(24,24,27,.9) surfaces, blur, white text, blue accent #3b82f6).
+// Shared UI constants for the map editor: flat dark grey, no glass. Glass is
+// for the HUD, where there is a map behind it to see; the Workshop's panels sit
+// over the map the player is DRAWING, and a translucent panel over that is just
+// harder to read. A selected control reads darker than its neighbours rather
+// than brighter — nothing here glows to say it is chosen.
 
-export const ACCENT = "#3b82f6";
-export const ACCENT_RGB = [59, 130, 246];
+export const ACCENT = "#e7e7ea";
+export const ACCENT_RGB = [231, 231, 234];
 
 export const panelSurface = {
-  backgroundColor: "rgba(24, 24, 27, 0.92)",
-  backdropFilter: "blur(8px)",
-  WebkitBackdropFilter: "blur(8px)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  backgroundColor: "#1b1b1e",
+  border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: "12px",
   color: "white",
   fontFamily: "sans-serif",
@@ -28,8 +29,8 @@ export const toolButton = (active, disabled) => ({
   minWidth: "34px",
   height: "34px",
   padding: "0 8px",
-  background: active ? "rgba(59,130,246,0.55)" : "rgba(255,255,255,0.06)",
-  border: active ? "1px solid rgba(59,130,246,0.9)" : "1px solid rgba(255,255,255,0.12)",
+  background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.06)",
+  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
   borderRadius: "8px",
   color: disabled ? "rgba(255,255,255,0.3)" : "white",
   cursor: disabled ? "not-allowed" : "pointer",
@@ -39,8 +40,8 @@ export const toolButton = (active, disabled) => ({
 });
 
 export const pillButton = (active) => ({
-  background: active ? "rgba(59,130,246,0.5)" : "rgba(255,255,255,0.08)",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.08)",
+  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.15)",
   borderRadius: "7px",
   color: "white",
   cursor: "pointer",

@@ -87,8 +87,17 @@ export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([
   "image/avif", "image/gif", "image/jpeg", "image/png", "image/webp",
 ]);
 
+// The app's old default accent was a purple. It is retired: anything still
+// carrying it reads as the current default, so a library made before the change
+// does not keep a colour the app no longer uses. Mirrors server/libraryStore.js.
+export const RETIRED_ACCENT_COLOR = "#7c3aed";
+export const accentOrDefault = (raw, fallback) => {
+  const value = String(raw ?? "").trim();
+  return !value || value.toLowerCase() === RETIRED_ACCENT_COLOR ? fallback : value;
+};
+
 export const DEFAULT_SCENARIO_META = {
-  accentColor: "#7c3aed",
+  accentColor: "#2bc1f3",
   description: "Server-backed base scenario",
   eyebrow: "Scenario",
   heroSubtitle: "Editable server-backed scenario template.",
@@ -98,7 +107,7 @@ export const DEFAULT_SCENARIO_META = {
 };
 
 export const DEFAULT_GAME_META = {
-  accentColor: "#7c3aed",
+  accentColor: "#2bc1f3",
   description: "Active playable game",
   eyebrow: "Game",
   heroSubtitle: "Playable campaign session",

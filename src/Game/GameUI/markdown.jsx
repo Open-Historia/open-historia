@@ -59,7 +59,7 @@ const markdownStyles = `
     overflow-wrap: break-word;
 }
 .advisor-markdown { --oh-md-accent: #60a5fa; }
-.chat-markdown { --oh-md-accent: #a78bfa; }
+.chat-markdown { --oh-md-accent: #d4d4d8; }
 
 .oh-md > *:first-child { margin-top: 0; }
 .oh-md > *:last-child { margin-bottom: 0; }
@@ -173,7 +173,7 @@ const markdownStyles = `
     font-weight: 700;
     letter-spacing: 0.02em;
 }
-.oh-md-table-wrap tbody tr:nth-child(even) { background: rgba(255,255,255,0.035); }
+.oh-md-table-wrap tbody tr:nth-child(even) { background: rgba(255,255,255,0.04); }
 .oh-md-table-wrap td:first-child { color: rgba(255,255,255,0.9); font-weight: 600; }
 
 .oh-md .footnotes { border-top: 1px solid var(--oh-md-rule); color: var(--oh-md-dim); font-size: 0.78rem; margin-top: 0.8rem; padding-top: 0.4rem; }

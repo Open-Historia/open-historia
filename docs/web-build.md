@@ -157,7 +157,7 @@ Rewrites a record whose owners are GADM codes into one keyed by country **names*
 
 ### Export / import bundles
 
-- `exportScenarioBundle(id, mode)` (`:858`) — `mode:"light"` drops pmtiles overrides; `"full"` embeds them base64. Schema `pax-historia-scenario-bundle/2`.
+- `exportScenarioBundle(id, mode)` (`:858`) — `mode:"light"` drops pmtiles overrides; `"full"` embeds them base64. Geometry is embedded as JSON, not base64, matching the desktop store (see `docs/server.md`). Schema `pax-historia-scenario-bundle/2`.
 - `importScenarioBundle` / `updateScenarioFromBundle` accept any schema in `ACCEPTED_BUNDLE_SCHEMAS` (v1 + v2). Note the **JSON-descriptor gotcha** (`:915`): `colors`/`flags`/`tags` descriptors carry the **object itself** in `descriptor.data`, not base64 — passing them through `base64ToBytes` (as geojson/pmtiles do) made `atob` throw and broke import of every flag/tag-carrying preset (e.g. WWII).
 - Hub provenance (`hubOrigin = { postId, bundleUrl, syncedAt }`) is stamped **last** and survives only when a write explicitly carries it — any other meta write forks the copy and stops offering hub updates.
 

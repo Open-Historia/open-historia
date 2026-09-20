@@ -97,7 +97,7 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySe
       )}
 
       {result?.kind === "pasted" && (
-        <div style={{ fontSize: 11.5, color: "#c4b5fd" }}>
+        <div style={{ fontSize: 11.5, color: "#e4e4e7" }}>
           Pasted {plural(result.added.length, "region")}
           {result.trimmed ? ` · ${plural(result.trimmed, "region")} underneath trimmed` : ""}
           {result.removed ? ` · ${plural(result.removed, "region")} underneath replaced entirely` : ""}
@@ -105,7 +105,7 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySe
         </div>
       )}
       {result?.kind === "copied" && (
-        <div style={{ fontSize: 11.5, color: "#c4b5fd" }}>Copied {plural(result.count, "region")}. Open the map you are building and paste.</div>
+        <div style={{ fontSize: 11.5, color: "#e4e4e7" }}>Copied {plural(result.count, "region")}. Open the map you are building and paste.</div>
       )}
     </Panel>
   );

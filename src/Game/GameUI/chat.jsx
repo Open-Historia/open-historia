@@ -287,7 +287,7 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
 
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
 const countryAccentColor = (name) => {
-    const colors = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+    const colors = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#94a3b8","#ec4899"];
     let h = 0;
     for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
     return colors[h % colors.length];
@@ -436,7 +436,7 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                         title={voters.length ? voters.join(", ") : "No vote yet"}
                         style={{
                             background: `linear-gradient(to right, rgba(96,165,250,0.28) ${share}%, rgba(255,255,255,0.05) ${share}%)`,
-                            border: chosen ? "1px solid rgba(96,165,250,0.85)" : "1px solid rgba(255,255,255,0.12)",
+                            border: chosen ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
                             borderRadius: "8px",
                             color: "white",
                             cursor: mine ? "default" : "pointer",
@@ -869,7 +869,7 @@ const CountrySelectorModal = ({
         <span style={{ position: "absolute", left: "0.75rem", color: "rgba(255,255,255,0.35)", display: "flex", pointerEvents: "none" }}><SearchIcon /></span>
         <input type="text" placeholder="Search countries..." value={search} onChange={e => setSearch(e.target.value)}
         style={{ width: "100%", padding: "0.55rem 0.85rem 0.55rem 2.2rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "white", fontSize: "0.82rem", outline: "none", boxSizing: "border-box", fontFamily: "sans-serif" }}
-        onFocus={e => e.target.style.borderColor = "rgba(139,92,246,0.5)"}
+        onFocus={e => e.target.style.borderColor = "rgba(255,255,255,0.25)"}
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.12)"} />
         </div>
         </div>
@@ -884,7 +884,7 @@ const CountrySelectorModal = ({
         onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
         onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
         <button onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
-        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "#3b82f6" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
+        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
         {confirmLabel(selected.length)}
@@ -1651,9 +1651,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 >Speak</button>
                 <button
                 onClick={handleLetSpeak}
-                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(139,92,246,0.3)", background: "rgba(139,92,246,0.12)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(139,92,246,0.24)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.55)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(139,92,246,0.12)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.3)"; }}
+                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
                 >Let {pendingCountry.name} speak →</button>
                 </div>
                 </div>
@@ -2043,9 +2043,9 @@ const ChatGroupHeader = ({ label }) => (
 // those merely COULD produce a chat, and saying so for the length of every jump
 // made the indicator meaningless.
 const GeneratingBanner = () => (
-    <div style={{ alignItems: "center", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
+    <div style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
     <span style={{ flexShrink: 0, fontSize: "1rem" }}>🖊</span>
-    <span style={{ color: "rgba(216,196,255,0.9)", fontSize: "0.78rem", fontWeight: 600 }}>
+    <span style={{ color: "#f4f4f5", fontSize: "0.78rem", fontWeight: 600 }}>
     Diplomacy in progress<PulsingDots /><span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}> — a country may be reaching out</span>
     </span>
     </div>
@@ -2175,8 +2175,8 @@ export const requestDiplomaticChat = (country, { draft = "" } = {}) => {
 
 const spyBtn = (accent) => ({
     padding: "0.35rem 0.6rem", borderRadius: "8px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif",
-    border: "1px solid " + (accent ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,0.12)"),
-    background: accent ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)", color: accent ? "#e9d5ff" : "rgba(255,255,255,0.8)",
+    border: "1px solid " + (accent ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.12)"),
+    background: accent ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.06)", color: accent ? "#f4f4f5" : "rgba(255,255,255,0.8)",
 });
 
 const ClarityMeter = ({ clarity }) => {
@@ -2184,10 +2184,10 @@ const ClarityMeter = ({ clarity }) => {
     return (
         <div title="How much of the intercept your service could decode">
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem" }}>
-        <span>Signal clarity</span><span data-no-translate style={{ color: "#c4b5fd", fontWeight: 700 }}>{pct}%</span>
+        <span>Signal clarity</span><span data-no-translate style={{ color: "#e4e4e7", fontWeight: 700 }}>{pct}%</span>
         </div>
         <div style={{ height: "0.3rem", borderRadius: "999px", background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-        <div style={{ width: pct + "%", height: "100%", background: "linear-gradient(90deg,#7c3aed,#c4b5fd)" }} />
+        <div style={{ width: pct + "%", height: "100%", background: "rgba(231,231,234,0.7)" }} />
         </div>
         </div>
     );
@@ -2223,7 +2223,7 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
                 <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
                 <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
                 <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none",
-                    background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    background: mine ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {message.text}
                 </div>
                 </div>
@@ -2353,9 +2353,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             />
         </Presence>
         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: "0.75rem 1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(167,139,250,0.25)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.55rem 0.75rem", borderRadius: "10px", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.13)" }}>
         <span style={{ fontSize: "0.72rem", color: "rgba(255,255,255,0.7)" }}>🕵 Your intelligence service</span>
-        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#e9d5ff" }}>{myIntel}/100</span>
+        <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800, color: "#f4f4f5" }}>{myIntel}/100</span>
         </div>
 
         <div style={{ fontSize: "0.66rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>Deployed spies · {spies.length}/{MAX_ACTIVE_SPIES}</div>
@@ -2445,7 +2445,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
         <button onClick={() => setChoosing(true)} disabled={full}
-            style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(167,139,250,0.35)", background: "rgba(139,92,246,0.18)", color: "#e9d5ff", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
+            style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.09)", color: "#f4f4f5", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
         🕵 Deploy a spy
         </button>
         </div>
@@ -2843,7 +2843,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 <div style={{ display: "flex", gap: "0.35rem" }}>
                 {[["chats", "Diplomacy"], ...(espionageOn ? [["spy", "Spy"]] : [])].map(([key, label]) => (
                     <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
-                        border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "transparent"), background: currentView === key ? "rgba(139,92,246,0.22)" : "transparent", color: currentView === key ? "white" : "rgba(255,255,255,0.5)" }}>
+                        border: "1px solid " + (currentView === key ? "rgba(255,255,255,0.23)" : "transparent"), background: currentView === key ? "rgba(255,255,255,0.11)" : "transparent", color: currentView === key ? "white" : "rgba(255,255,255,0.5)" }}>
                     {label}
                     </button>
                 ))}
@@ -3694,8 +3694,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                 background: isOpen
                 ? "rgba(59,130,246,0.16)"
                 : hovered
-                ? "rgba(255,255,255,0.075)"
-                : "rgba(255,255,255,0.035)",
+                ? "rgba(255,255,255,0.08)"
+                : "rgba(255,255,255,0.04)",
                 border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
                 borderRadius: "10px",
                 boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
@@ -3720,7 +3720,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     // Replaces the numeric badge (rather than sitting beside it) so
                     // the icon says one thing at a time; the count returns on its
                     // own once generation ends and the next 15s poll catches it.
-                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.3rem", borderRadius: "999px", background: "#7c3aed", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.68rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
+                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.3rem", borderRadius: "999px", background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.68rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
                         <PulsingDots />
                     </span>
                 ) : unseenCount > 0 && (

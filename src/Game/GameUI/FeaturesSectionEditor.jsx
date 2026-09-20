@@ -36,8 +36,8 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
 
   const choice = (active) => ({
     ...styles.actionButtonStyle,
-    background: active ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.04)",
-    borderColor: active ? "rgba(124,58,237,0.5)" : "rgba(255,255,255,0.1)",
+    background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+    borderColor: active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
     minHeight: "2rem",
     padding: "0 0.7rem",
   });

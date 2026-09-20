@@ -15,8 +15,8 @@ const clean = (value) => String(value ?? "").trim();
 
 const buttonStyle = (accent = false) => ({
   alignItems: "center",
-  background: accent ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.055)",
-  border: `1px solid ${accent ? "rgba(139,92,246,0.42)" : "rgba(255,255,255,0.09)"}`,
+  background: accent ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.06)",
+  border: `1px solid ${accent ? "rgba(255,255,255,0.21)" : "rgba(255,255,255,0.09)"}`,
   borderRadius: "9px",
   color: "rgba(255,255,255,0.88)",
   cursor: "pointer",
@@ -85,8 +85,8 @@ const statsEditorControlCss = `
   .oh-stats-sheet-editor input:focus,
   .oh-stats-sheet-editor select:focus,
   .oh-stats-sheet-editor textarea:focus {
-    border-color: rgba(139,92,246,0.78) !important;
-    box-shadow: 0 0 0 2px rgba(139,92,246,0.16);
+    border-color: rgba(255,255,255,0.28) !important;
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.1);
   }
 
   .oh-stats-sheet-editor input:disabled,
@@ -101,7 +101,7 @@ const statsEditorControlCss = `
   }
 
   .oh-stats-sheet-editor input[type="checkbox"] {
-    accent-color: #8b5cf6;
+    accent-color: #d4d4d8;
     color-scheme: dark;
   }
 
@@ -170,7 +170,7 @@ const StatPreview = ({ stat }) => (
     </div>
     {stat.kind === "index" && (
       <div style={{ background: "rgba(255,255,255,0.09)", borderRadius: "999px", height: "5px", marginTop: "0.4rem", overflow: "hidden" }}>
-        <div style={{ background: stat.color || "#8b5cf6", borderRadius: "999px", height: "100%", width: "67%" }} />
+        <div style={{ background: stat.color || "rgba(255,255,255,0.22)", borderRadius: "999px", height: "100%", width: "67%" }} />
       </div>
     )}
     {stat.description && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.34rem" }}>{stat.description}</div>}
@@ -198,7 +198,7 @@ const StatEditor = ({ stat, onPatch }) => (
     </div>
     <div>
       <label style={labelStyle}>Colour</label>
-      <input type="color" value={stat.color || "#8b5cf6"} onChange={(event) => onPatch({ color: event.target.value })} style={{ ...inputStyle, height: "2.25rem", padding: "0.16rem" }} />
+      <input type="color" value={stat.color || "#94a3b8"} onChange={(event) => onPatch({ color: event.target.value })} style={{ ...inputStyle, height: "2.25rem", padding: "0.16rem" }} />
     </div>
 
     {stat.kind !== "index" && (
@@ -313,7 +313,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
     const label = "New statistic";
     const key = uniqueKeyFor(label, sections);
     const draftId = `stat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const stat = { key, label, kind: "index", icon: "◆", color: "#8b5cf6", description: "", decimals: 0, isNew: true, draftId };
+    const stat = { key, label, kind: "index", icon: "◆", color: "#94a3b8", description: "", decimals: 0, isNew: true, draftId };
     emitSections(sections.map((entry) => entry.key === sectionKey ? { ...entry, stats: [...entry.stats, stat] } : entry));
     setEditingStatKey(key);
   };
@@ -416,7 +416,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
       </div>
 
       {!custom && (
-        <div style={{ alignItems: "center", background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.75rem" }}>
+        <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.75rem" }}>
           <div>
             <div style={{ fontSize: "0.78rem", fontWeight: 820 }}>Standard National Stats sheet</div>
             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.4, marginTop: "0.18rem" }}>Uses the current audited population/GDP engine, strategic indices, and modern economy fields.</div>
@@ -443,9 +443,9 @@ const StatsSheetEditor = ({ value, onChange }) => {
               }
               setDragItem(null);
             }}
-            style={{ background: "rgba(255,255,255,0.025)", border: `1px solid ${dragItem?.sectionKey === section.key ? "rgba(139,92,246,0.45)" : "rgba(255,255,255,0.08)"}`, borderRadius: "13px", overflow: "hidden" }}
+            style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${dragItem?.sectionKey === section.key ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.08)"}`, borderRadius: "13px", overflow: "hidden" }}
           >
-            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.025)", display: "flex", gap: "0.5rem", padding: "0.62rem 0.65rem" }}>
+            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", display: "flex", gap: "0.5rem", padding: "0.62rem 0.65rem" }}>
               <button
                 type="button"
                 draggable
@@ -503,7 +503,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
                       }
                       setDragItem(null);
                     }}
-                    style={{ background: "rgba(255,255,255,0.035)", border: `1px solid ${dragItem?.statKey === stat.key ? "rgba(139,92,246,0.48)" : "rgba(255,255,255,0.07)"}`, borderRadius: "11px", padding: "0.6rem" }}
+                    style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${dragItem?.statKey === stat.key ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.07)"}`, borderRadius: "11px", padding: "0.6rem" }}
                   >
                     <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem" }}>
                       <button

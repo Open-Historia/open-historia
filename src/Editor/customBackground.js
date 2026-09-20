@@ -31,8 +31,8 @@ const extOf = (name) => (name.split(".").pop() || "").toLowerCase();
 // colour (the generated biome basemap) is painted with it, so the terrain backdrop
 // actually shows — matching how the game renders the same background.
 const referenceStyle = new Style({
-  stroke: new Stroke({ color: "rgba(96,165,250,0.9)", width: 1.2 }),
-  fill: new Fill({ color: "rgba(96,165,250,0.10)" }),
+  stroke: new Stroke({ color: "#e4e4e7", width: 1.2 }),
+  fill: new Fill({ color: "#e4e4e7" }),
 });
 const biomeStyleCache = new Map();
 const vectorStyle = (feature) => {

@@ -181,7 +181,7 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
       height: "4rem", width: "4rem",
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen
-        ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
+        ? "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.05))"
         : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}

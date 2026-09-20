@@ -403,7 +403,7 @@ const createSetupWindow = () =>
     resizable: false,
     // No menu bar, no dev chrome — this is a setup dialog, not a browser.
     autoHideMenuBar: true,
-    backgroundColor: "#0d1122",
+    backgroundColor: "#131315",
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
   });
@@ -465,7 +465,7 @@ const createMainWindow = () => {
     minWidth: 1024,
     minHeight: 640,
     autoHideMenuBar: true,
-    backgroundColor: "#0d1122",
+    backgroundColor: "#131315",
     show: false,
     title: IS_BETA ? BETA_APP_NAME : "Open Historia",
     // Explicit even though it's already Electron's default — the whole reason

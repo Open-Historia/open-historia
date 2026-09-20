@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import url from "url";
 import { resolveChildPath } from "./security.js";
+import { applyRegionDelta, isRegionDelta } from "./regionDelta.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -168,12 +169,25 @@ export const createMapEditorDocument = (body = {}) => {
 
 export const updateMapEditorDocument = (id, updates = {}) => {
   const existing = getMapEditorDocument(id);
+  // A save may carry only the regions that moved (server/regionDelta.js). It is
+  // applied against what is on disk and refused whole when the two do not agree
+  // about the map, in which case the stored geometry is left exactly as it was
+  // and the editor is told to send the lot.
+  const { regionsDelta, ...fields } = updates;
+  let mergedRegions = null;
+  let needsFullRegions = "";
+  if (isRegionDelta(regionsDelta)) {
+    const merged = applyRegionDelta(existing.regions, regionsDelta);
+    if (merged.applied) mergedRegions = merged.regions;
+    else needsFullRegions = merged.reason;
+  }
   const doc = {
     ...existing,
-    ...updates,
+    ...fields,
+    ...(mergedRegions ? { regions: mergedRegions } : {}),
     id,
-    name: String(updates.name || updates.metadata?.name || existing.name).trim() || existing.name,
-    metadata: { ...existing.metadata, ...(updates.metadata || {}) },
+    name: String(fields.name || fields.metadata?.name || existing.name).trim() || existing.name,
+    metadata: { ...existing.metadata, ...(fields.metadata || {}) },
     updatedAt: new Date().toISOString(),
   };
   writeJson(docPath(id), doc);
@@ -183,7 +197,7 @@ export const updateMapEditorDocument = (id, updates = {}) => {
     manifest.order = [id, ...manifest.order];
     saveManifest(manifest);
   }
-  return summarize(doc);
+  return needsFullRegions ? { ...summarize(doc), needsFullRegions } : summarize(doc);
 };
 
 export const deleteMapEditorDocument = (id) => {

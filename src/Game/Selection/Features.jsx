@@ -71,7 +71,7 @@ const titleCase = (value) =>
 const TIER_LABEL = { 1: "Town", 2: "City", 3: "Major city", 4: "Capital" };
 
 const MARKER_STATUS_META = {
-  planned: { label: "Planned", color: "#c4b5fd" },
+  planned: { label: "Planned", color: "#e4e4e7" },
   under_construction: { label: "Under construction", color: "#fcd34d" },
   active: { label: "Active", color: "#86efac" },
   damaged: { label: "Damaged", color: "#fca5a5" },

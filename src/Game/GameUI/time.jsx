@@ -676,10 +676,10 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
             border: "1px solid rgba(96,165,250,0.22)",
             color: "#bfdbfe",
         },
-        violet: {
-            background: "rgba(168,85,247,0.12)",
-            border: "1px solid rgba(192,132,252,0.2)",
-            color: "#e9d5ff",
+        slate: {
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "#f4f4f5",
         },
     };
 
@@ -693,7 +693,7 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
         onClick={onClick ?? undefined}
         style={{
             alignItems: "center",
-            background: active ? "rgba(96,165,250,0.24)" : resolved.background,
+            background: active ? "rgba(0,0,0,0.42)" : resolved.background,
             border: resolved.border,
             borderRadius: "999px",
             color: resolved.color,
@@ -732,7 +732,7 @@ const TagPill = ({ children }) => (
 
 const ghostButtonStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.035)",
+    background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: "10px",
     color: "rgba(255,255,255,0.84)",
@@ -834,7 +834,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     return (
         <div
         style={{
-            background: "linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03))",
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
             border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
@@ -1114,8 +1114,8 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
             onJump(opt.days);
         }}
         style={{
-            background: hovered ? "rgba(109,40,217,0.35)" : "rgba(109,40,217,0.15)",
-            border: hovered ? "1px solid rgba(139,92,246,0.7)" : "1px solid rgba(139,92,246,0.35)",
+            background: hovered ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+            border: hovered ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.18)",
             borderRadius: "10px",
             color: "white",
             cursor: "pointer",
@@ -1128,7 +1128,7 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
         }}
         >
         <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{opt.sublabel}</div>
-        <div style={{ color: "rgba(196,165,255,0.7)", fontSize: "0.7rem" }}>
+        <div style={{ color: "#e4e4e7", fontSize: "0.7rem" }}>
         {opt.label}
         </div>
         </button>
@@ -1301,15 +1301,15 @@ const TimelineSkipPanel = ({
             {undoCount} turn{undoCount === 1 ? "" : "s"} can be undone
             </div>
             </button>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+            <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
             </>
         )}
         <div
         style={{
-            background: "rgba(109,40,217,0.2)",
-            border: "2px solid rgba(139,92,246,0.8)",
+            background: "rgba(255,255,255,0.07)",
+            border: "2px solid rgba(255,255,255,0.28)",
             borderRadius: "999px",
-            color: "rgba(196,165,255,0.95)",
+            color: "#e4e4e7",
             fontSize: "0.7rem",
             fontWeight: 700,
             letterSpacing: "0.04em",
@@ -1323,12 +1323,12 @@ const TimelineSkipPanel = ({
 
         {jumpOptions.map((opt) => (
             <React.Fragment key={opt.label}>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+            <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
             <JumpNode isLoading={blocked} opt={opt} onJump={onJump} />
             </React.Fragment>
         ))}
 
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+        <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
         <button
         type="button"
         onClick={() => {
@@ -1353,7 +1353,7 @@ const TimelineSkipPanel = ({
         <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>Auto-jump</div>
         </button>
 
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+        <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
         <div
         style={{
             alignItems: "center",
@@ -1416,8 +1416,8 @@ const TimelineSkipPanel = ({
         onClick={runCustomJump}
         disabled={blocked || !customValue}
         style={{
-            background: "rgba(109,40,217,0.4)",
-            border: "1px solid rgba(139,92,246,0.6)",
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.28)",
             borderRadius: "8px",
             color: "#fff",
             cursor: blocked || !customValue ? "default" : "pointer",
@@ -1876,8 +1876,8 @@ const TimelineHistoryPanel = ({
                         style={{
                             padding: "0.2rem 0.6rem",
                             borderRadius: "999px",
-                            border: active ? "1px solid rgba(96,165,250,0.8)" : "1px solid rgba(255,255,255,0.16)",
-                            background: active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.06)",
+                            border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.16)",
+                            background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.06)",
                             color: "white",
                             fontSize: "0.68rem",
                             fontWeight: 700,
@@ -3223,7 +3223,7 @@ const DateWidget = ({
         type="button"
         style={{
             ...buttonStyle,
-            color: openPanel === "skip" ? "rgba(196,165,255,0.9)" : buttonStyle.color,
+            color: openPanel === "skip" ? "#e4e4e7" : buttonStyle.color,
         }}
         onClick={() => {
             if (isLoading) {
@@ -3244,7 +3244,7 @@ const DateWidget = ({
             }
         }}
         >
-        {isLoading ? <SpinnerRing size={15} tone="rgba(196,165,255,0.95)" /> : "\u00BB"}
+        {isLoading ? <SpinnerRing size={15} tone="rgba(255,255,255,0.28)" /> : "\u00BB"}
         </button>
         </div>
         </>

@@ -110,7 +110,7 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
             {docs.map((doc) => (
               <div key={doc.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 4px" }}>
                 <button
-                  style={{ ...menuItem, padding: "6px 8px", flex: 1, background: doc.id === currentId ? "rgba(59,130,246,0.2)" : "transparent" }}
+                  style={{ ...menuItem, padding: "6px 8px", flex: 1, background: doc.id === currentId ? "rgba(255,255,255,0.08)" : "transparent" }}
                   onClick={() => { onOpen(doc.id); close(); }}
                 >
                   <span style={{ flex: 1 }}>

@@ -18,8 +18,7 @@ const overlay = {
   position: "fixed",
   inset: 0,
   zIndex: 120,
-  background: "rgba(8,8,9,0.74)",
-  backdropFilter: "blur(4px)",
+  background: "rgba(8,8,9,0.82)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -65,8 +64,8 @@ const rowScroll = { display: "flex", gap: "0.8rem", overflowX: "auto", paddingBo
 const dim = { color: "rgba(255,255,255,0.4)", fontSize: "0.82rem", padding: "0.3rem 0 0.7rem" };
 
 const tabBtn = (active) => ({
-  background: active ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.06)",
-  border: active ? "1px solid rgba(124,58,237,0.6)" : "1px solid rgba(255,255,255,0.1)",
+  background: active ? "rgba(0,0,0,0.49)" : "rgba(255,255,255,0.06)",
+  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.1)",
   borderRadius: "999px",
   color: "#fff",
   cursor: "pointer",
@@ -77,8 +76,8 @@ const tabBtn = (active) => ({
 
 const uploadBtn = {
   alignItems: "center",
-  background: "rgba(59,130,246,0.85)",
-  border: "1px solid rgba(147,197,253,0.5)",
+  background: "rgba(255,255,255,0.14)",
+  border: "1px solid rgba(255,255,255,0.23)",
   borderRadius: "999px",
   color: "#fff",
   cursor: "pointer",
@@ -103,7 +102,7 @@ const closeBtn = {
 
 const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish }) => (
   <div
-    style={{ ...cardSurface, outline: active ? "2px solid #7c3aed" : "none", outlineOffset: "-2px" }}
+    style={{ ...cardSurface, outline: active ? "2px solid rgba(255,255,255,0.22)" : "none", outlineOffset: "-2px" }}
     onClick={onClick}
     title={title}
   >
@@ -127,7 +126,7 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
         </span>
       )}
       {active && (
-        <span style={{ position: "absolute", right: 6, top: 6, background: "rgba(124,58,237,0.9)", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 700, padding: "0.1rem 0.4rem" }}>
+        <span style={{ position: "absolute", right: 6, top: 6, background: "rgba(255,255,255,0.28)", borderRadius: "999px", fontSize: "0.62rem", fontWeight: 700, padding: "0.1rem 0.4rem" }}>
           ✓ In use
         </span>
       )}
@@ -136,7 +135,7 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
           type="button"
           title="Share this basemap to the community"
           onClick={(e) => { e.stopPropagation(); onPublish(); }}
-          style={{ position: "absolute", left: 6, bottom: 6, background: "rgba(124,58,237,0.85)", border: "1px solid rgba(167,139,250,0.5)", borderRadius: "999px", color: "#fff", cursor: "pointer", fontSize: "0.7rem", height: "1.5rem", width: "1.5rem", lineHeight: 1 }}
+          style={{ position: "absolute", left: 6, bottom: 6, background: "rgba(255,255,255,0.28)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: "999px", color: "#fff", cursor: "pointer", fontSize: "0.7rem", height: "1.5rem", width: "1.5rem", lineHeight: 1 }}
         >
           ⤴
         </button>
@@ -369,7 +368,7 @@ const BasemapPicker = ({
                           title={canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
                           style={{
                             ...tabBtn(false),
-                            background: canInstall ? "rgba(124,58,237,0.35)" : "rgba(255,255,255,0.04)",
+                            background: canInstall ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
                             cursor: canInstall && busyId !== post.id ? "pointer" : "default",
                             opacity: canInstall ? 1 : 0.5,
                           }}

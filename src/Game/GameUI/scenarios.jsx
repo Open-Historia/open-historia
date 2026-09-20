@@ -14,16 +14,17 @@ import {
 } from "../../runtime/scenarios.js";
 import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 
+// The accent a scenario or game falls back to when it carries none: the same
+// default the stores hand out (server/libraryStore.js, web/storeConstants.js).
+const DEFAULT_ACCENT_COLOR = "#2bc1f3";
+
 const BAR_HEIGHT = 64;
 const TOP_BAR_OFFSET = "4.75rem";
 
 const surfaceStyle = {
-  background:
-  "linear-gradient(180deg, rgba(13, 13, 15, 0.97) 0%, rgba(8, 10, 15, 0.94) 100%)",
+  background: "#131315",
   border: "1px solid rgba(255,255,255,0.08)",
   boxShadow: "0 20px 50px rgba(0,0,0,0.35)",
-  backdropFilter: "blur(18px)",
-  WebkitBackdropFilter: "blur(18px)",
 };
 
 const actionButtonStyle = {
@@ -120,7 +121,7 @@ const buildEditorState = (details) => {
   };
 
   return {
-    accentColor: scenario.accentColor ?? "#7c3aed",
+    accentColor: scenario.accentColor ?? DEFAULT_ACCENT_COLOR,
     advancedPromptsText: JSON.stringify(advancedPrompts, null, 2),
     country: game.country ?? "",
     description: scenario.description ?? "",
@@ -286,7 +287,7 @@ const ScenarioCard = ({
     onClick={() => onActivate(scenario.id)}
     style={{
       ...actionButtonStyle,
-      background: active ? "rgba(255,255,255,0.16)" : `${scenario.accentColor}cc`,
+      background: active ? "rgba(0,0,0,0.42)" : `${scenario.accentColor}cc`,
           borderColor: active ? "rgba(255,255,255,0.22)" : `${scenario.accentColor}dd`,
           color: "#fff",
           flex: 1,
@@ -979,8 +980,8 @@ const ScenarioTopBar = () => {
     onClick={handleCreateScenario}
     style={{
       ...actionButtonStyle,
-      background: `${activeScenario?.accentColor ?? "#7c3aed"}cc`,
-      borderColor: `${activeScenario?.accentColor ?? "#7c3aed"}dd`,
+      background: `${activeScenario?.accentColor ?? DEFAULT_ACCENT_COLOR}cc`,
+      borderColor: `${activeScenario?.accentColor ?? DEFAULT_ACCENT_COLOR}dd`,
       color: "#fff",
     }}
     >

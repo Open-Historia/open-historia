@@ -29,8 +29,8 @@ const field = {
   boxSizing: "border-box",
 };
 const pill = (active) => ({
-  background: active ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.06)",
-  border: `1px solid ${active ? "rgba(124,58,237,0.7)" : "rgba(255,255,255,0.1)"}`,
+  background: active ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.06)",
+  border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)"}`,
   borderRadius: 999,
   color: "#fff",
   cursor: "pointer",
@@ -41,7 +41,7 @@ const pill = (active) => ({
 
 const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
   const [name, setName] = useState("");
-  const [color, setColor] = useState("#7c3aed");
+  const [color, setColor] = useState("#a1a1aa");
   const [flag, setFlag] = useState(null); // string (URL / data URL) or null
   const [lore, setLore] = useState("");
   const [landless, setLandless] = useState(true);

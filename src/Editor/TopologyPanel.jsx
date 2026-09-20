@@ -74,7 +74,7 @@ const TopologyPanel = ({ api, selection = [], regionEpoch = 0, onClose }) => {
         Repair the <b>relationship between selected regions</b>, not one polygon at a time. The automatic pass is deliberately conservative: it only considers fully enclosed narrow gaps and narrow pairwise overlaps inside the selection.
       </div>
 
-      <div style={{ padding: "9px 10px", borderRadius: 9, border: "1px solid rgba(96,165,250,0.25)", background: "rgba(59,130,246,0.08)", fontSize: 11.5, lineHeight: 1.45 }}>
+      <div style={{ padding: "9px 10px", borderRadius: 9, border: "1px solid rgba(255,255,255,0.11)", background: "rgba(255,255,255,0.1)", fontSize: 11.5, lineHeight: 1.45 }}>
         <b>{selection.length} regions selected.</b>{" "}
         {selection.length <= LARGE_AREA_THRESHOLD
           ? "Local mode. Province clusters, border sections and whole polities are fine."
