@@ -34,7 +34,6 @@ import {
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { livePuppetsFor } from "../../runtime/puppets.js";
 import { useWorldState } from "./useWorldState.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
@@ -498,22 +497,8 @@ const WorldMap = ({ isGlobe = false }) => {
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
     disableCurvedCountryLabels: useMapSetting(MAP_SETTING_KEYS.disableCurvedCountryLabels),
-    showPuppetOverlay: useMapSetting(MAP_SETTING_KEYS.showPuppetOverlay),
   };
 
-  // Who is playing, for the puppet overlay below. Read fresh whenever the
-  // world changes, not once: the map mounts before a save is opened,
-  // so a single read at mount could hold no player (or another game's) for the
-  // whole session, and the overlay then showed nothing. A rename changes the
-  // player's name mid-game too.
-  const [playerCountryName, setPlayerCountryName] = useState("");
-  useEffect(() => {
-    let cancelled = false;
-    readJson(JSON_URLS.game, { defaultValue: {}, force: true })
-      .then((game) => { if (!cancelled) setPlayerCountryName(String(game?.country ?? "").trim()); })
-      .catch(() => { /* no player yet is not an error; the overlay simply stays off */ });
-    return () => { cancelled = true; };
-  }, [worldState]);
   // A player's own choice from Settings > Map. Empty means "whatever the
   // scenario author set", so it changes nothing until it is filled in.
   const labelFontOverride = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
@@ -997,47 +982,6 @@ const WorldMap = ({ isGlobe = false }) => {
   const visibleDerivedOwnerFilter = useMemo(() => dirtyPoliticalOwners.length
     ? ["!", ["in", ["coalesce", ["get", "sourceOwner"], ["get", "owner"], ""], dirtyOwnersLiteral]]
     : ["all"], [dirtyOwnersLiteral, dirtyPoliticalOwners.length]);
-  // THE PUPPET OVERLAY. Off by default; when on, a boundary touching one of the
-  // player's own Puppets is traced in its Overlord's colour, so a sphere of
-  // influence reads at a glance without touching the political map underneath.
-  //
-  // A LINE, never a fill and never a stripe. Striping already carries two
-  // meanings on this map - DISPUTED from regionClaimants and OCCUPIED from
-  // regionSovereigntyOverrides - and a third would make a contested satellite
-  // border unreadable at exactly the moment the player most needs to read it.
-  //
-  // Which Puppets the player may see is not decided here: livePuppetsFor is the
-  // same answer the country panel and the diplomacy markers get, so the three
-  // cannot disagree about the player's own empire.
-  const puppetOverlayRows = useMemo(
-    () => (mapDisplaySettings.showPuppetOverlay && worldKnown
-      ? livePuppetsFor(worldState, playerCountryName).filter((row) => row.role === "overlord")
-      : []),
-    [mapDisplaySettings.showPuppetOverlay, worldKnown, worldState, playerCountryName],
-  );
-
-  // Each Puppet's whole outline, coast included, from the cartography worker
-  // (deriveOwnerOutlines). Tracing the shared frontier lines instead left an
-  // island Puppet with no line at all and a continental one without its coast.
-  // Asked again when the Puppets, the map's owners or the worker's topology
-  // change; derivedSourceEpoch moves once the topology exists.
-  const [puppetOutlineData, setPuppetOutlineData] = useState(EMPTY_FEATURE_COLLECTION);
-  const puppetOutlineRequestRef = useRef(0);
-  const puppetOutlineOwnersKey = puppetOverlayRows.map((row) => row.puppet).sort().join("");
-  useEffect(() => {
-    const worker = polityBoundaryWorkerRef.current;
-    if (!puppetOutlineOwnersKey || !worker) {
-      setPuppetOutlineData(EMPTY_FEATURE_COLLECTION);
-      return;
-    }
-    puppetOutlineRequestRef.current += 1;
-    worker.postMessage({
-      type: "outline-owners",
-      requestId: `puppet-outline-${puppetOutlineRequestRef.current}`,
-      owners: puppetOutlineOwnersKey.split(""),
-      ownershipOverrides: regionOwnershipOverrides ?? {},
-    });
-  }, [puppetOutlineOwnersKey, regionOwnershipOverrides, derivedSourceEpoch]);
 
   const visibleBoundaryFilter = useMemo(() => dirtyPoliticalOwners.length
     ? ["!", ["any", ...dirtyPoliticalOwners.map((owner) => ["in", owner, ["get", "ownerList"]])]]
@@ -1369,19 +1313,6 @@ const WorldMap = ({ isGlobe = false }) => {
     [resolveOwnerRgb],
   );
 
-  // One case branch per Puppet, so each sphere traces in the colour of whoever
-  // holds it rather than a single generic accent. Declared after ownerColorCss:
-  // its dependency array reads that binding on every render, and above it the
-  // map threw "Cannot access before initialization" on load.
-  const puppetOverlayColor = useMemo(() => {
-    if (!puppetOverlayRows.length) return "rgba(0,0,0,0)";
-    const branches = puppetOverlayRows.flatMap((row) => [
-      ["==", ["get", "owner"], row.puppet],
-      ownerColorCss(row.overlord),
-    ]);
-    return ["case", ...branches, "rgba(0,0,0,0)"];
-  }, [puppetOverlayRows, ownerColorCss]);
-
   const workerLabelNames = useMemo(() => {
     // Worker geometry is keyed by canonical political owner, so label metadata
     // must use that exact namespace too. Raw codes/aliases here would recreate
@@ -1704,12 +1635,6 @@ const WorldMap = ({ isGlobe = false }) => {
 
     worker.onmessage = ({ data: result }) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
-
-      if (result?.messageType === "owner-outlines") {
-        if (result.requestId !== `puppet-outline-${puppetOutlineRequestRef.current}`) return;
-        setPuppetOutlineData(result.data?.type === "FeatureCollection" ? result.data : EMPTY_FEATURE_COLLECTION);
-        return;
-      }
 
       if (result?.messageType === "render-repair-ready") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
@@ -3443,22 +3368,6 @@ const WorldMap = ({ isGlobe = false }) => {
               12, 2.08,
             ],
             "line-opacity": customActive && worldKnown ? 0.94 : 0,
-          }}
-        />
-      </Source>
-
-      {/* The puppet overlay. A dashed LINE, never a fill or a stripe: striping
-          already means DISPUTED and OCCUPIED on this map. */}
-      <Source id="puppet-outline-source" type="geojson" data={puppetOutlineData} tolerance={0.25}>
-        <Layer
-          id="polity-puppet-overlay"
-          type="line"
-          layout={{ "line-cap": "round", "line-join": "round" }}
-          paint={{
-            "line-color": puppetOverlayColor,
-            "line-width": ["interpolate", ["linear"], ["zoom"], 1, 1.6, 3, 2.4, 6, 3.2, 9, 4, 12, 4.6],
-            "line-dasharray": [2, 1.6],
-            "line-opacity": puppetOverlayRows.length ? 0.9 : 0,
           }}
         />
       </Source>

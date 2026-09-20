@@ -4,7 +4,6 @@ import {
   affectedOwnersForRegionChanges,
   buildPoliticalBoundaryTopology,
   createPoliticalBoundaryState,
-  deriveOwnerOutlines,
   politicalBoundaryStateCollection,
   updatePoliticalBoundaryState,
 } from "./politicalBoundaryTopology.js";
@@ -928,22 +927,6 @@ self.onmessage = async ({ data: message }) => {
   if (!requestId) return;
 
   try {
-    // The puppet overlay's outlines: read-only against the topology, so it
-    // neither waits on nor disturbs the cartography revisions below.
-    if (type === "outline-owners") {
-      if (cachedRegions?.features?.length) ensureTopology();
-      self.postMessage({
-        messageType: "owner-outlines",
-        requestId,
-        geometryEpoch,
-        data: cachedTopology
-          ? deriveOwnerOutlines(cachedTopology, ownershipOverrides, message.owners ?? []).data
-          : EMPTY_FC,
-        ready: Boolean(cachedTopology),
-      });
-      return;
-    }
-
     let loadStats = null;
     if (type === "initialize") {
       cancelRenderRepairBuild();

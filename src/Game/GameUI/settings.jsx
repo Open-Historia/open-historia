@@ -2030,7 +2030,6 @@ const SettingsWorkspace = ({
                         <div style={helperStyle}>Empty uses the font the scenario author chose. Any font installed on this computer works; overrides apply immediately.</div>
                     </div>
                     <Toggle label="Hide country labels" enabled={mapSettings.hideCountryLabels} onToggle={() => updateMapSetting("hideCountryLabels", MAP_SETTING_KEYS.hideCountryLabels, !mapSettings.hideCountryLabels)} />
-                    <Toggle label="Show puppet states" enabled={mapSettings.showPuppetOverlay} onToggle={() => updateMapSetting("showPuppetOverlay", MAP_SETTING_KEYS.showPuppetOverlay, !mapSettings.showPuppetOverlay)} />
                 </SettingsSection>
                 <SettingsSection title="3D map" description="Globe and terrain rendering are presentation features; they do not change world state.">
                     <ExperimentalPill />
@@ -2267,7 +2266,6 @@ const SettingsMenu = ({
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
-        showPuppetOverlay: getMapSetting(MAP_SETTING_KEYS.showPuppetOverlay),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
         // Not getMapSetting: this one ships ON, and an absent key must read as
