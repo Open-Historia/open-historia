@@ -27,8 +27,20 @@ export const setRegionClickInterceptor = (fn) => {
 // Passive tap on every normal region click (the Stats tab watches which country
 // the player is inspecting). Never consumes the click — popups still open.
 let _clickObserver = null;
-// Who is playing, remembered for the life of the session: see the popup below.
+
+// WHO IS PLAYING, and why it is read here rather than per click. What the card
+// may say about a subordination depends on the viewer, and a COVERT one is
+// invisible to a viewer it does not know — so a popup that had not yet learned
+// the player's country showed no puppet panel at all, and an open one in a
+// stranger's words. It is read once, kept for the session, and refreshed in the
+// background; the first click of a session no longer races a request.
 let _playerCountry = "";
+const rememberPlayerCountry = (readGame) => readGame()
+    .then((game) => {
+        _playerCountry = String(game?.country ?? "").trim() || _playerCountry;
+        return _playerCountry;
+    })
+    .catch(() => _playerCountry);
 
 export const setRegionClickObserver = (fn) => {
     _clickObserver = typeof fn === "function" ? fn : null;
@@ -121,13 +133,13 @@ const commitRegionSelection = (props) => {
     _currentSelection.COUNTRY === COUNTRY &&
     _currentSelection.NAME_1 === NAME_1;
 
-    if (isSame) {
-        _dismiss?.();
-    } else if (_currentSelection !== null) {
-        _dismiss?.();
-    } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
-    }
+    // Clicking the region already shown closes its card. Clicking a DIFFERENT
+    // one shows that region: it used to only close the open card, so every
+    // other click round the map appeared to do nothing and the card had to be
+    // asked for twice. _setSelection replays the card's entrance on the new
+    // region, which discards the outgoing one.
+    if (isSame) _dismiss?.();
+    else _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
 };
 
 export const onRegionSelected = (props) => {
@@ -235,14 +247,11 @@ const RegionPopup = () => {
     // stranger's business. The panel is suppressed until this is known.
     const [playerCountry, setPlayerCountry] = useState(_playerCountry);
     useEffect(() => {
-        if (!selection) return undefined;
         let cancelled = false;
-        readGameData({ force: true })
-            .then((game) => {
-                _playerCountry = String(game?.country ?? "").trim() || _playerCountry;
-                if (!cancelled) setPlayerCountry(_playerCountry);
-            })
-            .catch(() => {});
+        // The cached read, not a forced one: this is the same game.json every
+        // other panel holds, and a failed round trip used to leave the card
+        // with no viewer and so no puppet panel.
+        rememberPlayerCountry(readGameData).then((country) => { if (!cancelled) setPlayerCountry(country); });
         return () => { cancelled = true; };
     }, [selection]);
     // sparse control metadata. ownership is the de-facto controller; sovereignty is
