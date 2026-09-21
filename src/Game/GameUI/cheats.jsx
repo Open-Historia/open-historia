@@ -26,6 +26,7 @@ import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { isOfferableEvent } from "../../runtime/interactiveOffer.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import {
@@ -1105,6 +1106,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
 
 const cleanEventText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+// A description is multi-paragraph prose, so it cannot go through the one above:
+// collapsing every run of whitespace turned an edited event into a single block
+// and threw the paragraphs away.
+const cleanEventBody = tidyProse;
 
 const eventImpactSummary = (event) => {
     const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
@@ -2020,7 +2025,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                             disabled={busy}
                             onClick={() => runBusy(async () => {
                                 const title = cleanEventText(createForm.title);
-                                const description = cleanEventText(createForm.description);
+                                const description = cleanEventBody(createForm.description);
                                 const date = cleanEventText(createForm.date);
                                 const quote = eventQuoteFromForm(createForm);
                                 if (!date) throw new Error("Exact events need a date.");
@@ -2240,7 +2245,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                             disabled={busy}
                                             onClick={() => runBusy(async () => {
                                                 const title = cleanEventText(editForm.title);
-                                                const description = cleanEventText(editForm.description);
+                                                const description = cleanEventBody(editForm.description);
                                                 const date = cleanEventText(editForm.date);
                                                 const quote = eventQuoteFromForm(editForm);
                                                 if (!date) throw new Error("Events need a date.");
@@ -2277,7 +2282,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                 const rewritten = [
                                                     cleanEventText(event.title) !== title ? `retitled it "${title}"` : "",
                                                     cleanEventText(event.date) !== date ? `redated it to ${date}` : "",
-                                                    cleanEventText(event.description) !== description ? "rewrote what it says" : "",
+                                                    cleanEventBody(event.description) !== description ? "rewrote what it says" : "",
                                                 ].filter(Boolean);
                                                 if (rewritten.length) {
                                                     await noteGmChange("timeline", `Edited the event "${cleanEventText(event.title) || title}" by hand: ${rewritten.join(", ")}.`);
