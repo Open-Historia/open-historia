@@ -8,23 +8,28 @@
 // changing anything about the order.
 //
 // And every call starts at the top again (2026-09-19): an entry that failed a
-// moment ago is still tried first next time, because a rate limit or a busy
-// spell is usually over by then, and a call that skipped it would run on a
-// weaker model for nothing.
+// moment ago is still tried first next time, because a rate limit is usually
+// over by then, and a call that skipped it would run on a weaker model for
+// nothing.
 //
-// Except where the provider has SAID the entry is out for now (2026-09-20): a
-// Spent one, whose allowance it told us is gone until a reset hours away.
-// Guessing that a busy minute is over costs one fast refusal; guessing that a
-// daily quota came back early costs one on every call of every turn — a real
-// log shows four refusals before each answer, forty across one session. So a
-// Spent entry sinks to the BACK of the order rather than out of it: nothing
-// above it answering means the guess is worth making after all, and a mark that
-// has quietly expired must never be the thing that fails a turn.
+// Except where the provider has SAID the entry is out for now: a Spent one
+// (2026-09-20), whose allowance it told us is gone until a reset hours away,
+// and a BUSY one (2026-09-21). The busy rule used to be the other way — "a busy
+// spell is usually over in seconds, and guessing wrong costs one fast
+// refusal" — until a night on which the refusals were not fast: a 503 that
+// took 68 seconds to arrive, three of them in a row before a model answered,
+// 101 of a jump's 114 seconds spent being told no, and a retry that a busy
+// model did not refuse but served in 191 seconds. So a busy entry sits out for
+// ten minutes, at the owner's word, and a Spent one until its reset; both sink
+// to the BACK of the order rather than out of it: nothing above them answering
+// means the guess is worth making after all, and a mark that has quietly
+// expired must never be the thing that fails a turn.
 //
-// Only Spent. Unusable keeps its place, because its mark has no reset to wait
-// for — it is cleared by the player fixing the entry (providerConfig.js) or by
-// a later call simply working, and a provider that returned one 401 in a bad
-// moment must be able to heal itself that way.
+// Unusable keeps its place, because its mark has no reset to wait for — it is
+// cleared by the player fixing the entry (providerConfig.js) or by a later call
+// simply working, and a provider that returned one 401 in a bad moment must be
+// able to heal itself that way. So does Rate limited: a per-minute limit is
+// over within the minute, and the mark is what a Settings row shows.
 //
 // DELIBERATELY IMPORT-FREE, like providerErrors.js: main.jsx makes the calls and
 // cannot be unit-tested, and these rules are exactly what needs to be. The
@@ -78,14 +83,19 @@ export const nextPacificMidnight = (at) => {
 // reset, so an hour on, one request finds out.
 const spentUntil = (entry, at) => (entry.provider === "gemini" ? nextPacificMidnight(at) : at + HOUR_MS);
 
-// A busy or Rate limited entry sits out this long unless the provider said.
+// A Rate limited entry sits out this long unless the provider said.
 export const SHORT_SKIP_MS = 60 * 1000;
+// A busy one sits out this long: a 503 is the provider saying it is overloaded,
+// and tonight's log showed that asking again in a minute gets the same answer,
+// slowly (see the note at the top).
+export const BUSY_SKIP_MS = 10 * 60 * 1000;
 
 // Spent and Unusable are hard: the entry cannot answer. Spent also carries a
-// reset, which is why orderToTry waits it out; a short skip is only advice, and
-// says nothing about where a call starts.
+// reset, which is why orderToTry waits it out, and so does busy; a rate-limit
+// skip is only advice, and says nothing about where a call starts.
 const isAvailable = (state, at) => !state || (!state.unusable && !(state.spentUntil > at));
 const isSkipped = (state, at) => Boolean(state && state.skipUntil > at);
+const isBusy = (state, at) => Boolean(state && state.skipReason === "busy" && state.skipUntil > at);
 
 // The mark a failure leaves on its entry, or null when the failure says nothing
 // about the entry and the call should fail as it always did.
@@ -93,7 +103,7 @@ const markFor = (entry, failure, at, rateLimitPolicy) => {
     switch (failure?.kind) {
     case "spent": return { spentUntil: spentUntil(entry, at) };
     case "unusable": return { unusable: failure.reason || "failed" };
-    case "busy": return { skipUntil: at + SHORT_SKIP_MS, skipReason: "busy" };
+    case "busy": return { skipUntil: at + BUSY_SKIP_MS, skipReason: "busy" };
     // On "wait" the provider has already waited as long as it was going to;
     // moving on would spend the backups' allowance on a minute's pause.
     case "rateLimited": return rateLimitPolicy === "next"
@@ -104,18 +114,24 @@ const markFor = (entry, failure, at, rateLimitPolicy) => {
 };
 
 // Every entry, in list order — a task's own pick first, the rest from the top —
-// except that a Spent one waits at the back until its reset. A busy, rate
-// limited or Unusable entry does not move.
+// except that a busy one waits at the back for its ten minutes, and a Spent one
+// behind that until its reset. A rate limited or Unusable entry does not move.
 //
 // Nothing is ever dropped. When everything else has failed, the call goes on to
-// the Spent entries in the order they would otherwise have had.
+// the busy entries, then the Spent ones, in the order they would otherwise have
+// had.
 const orderToTry = (entries, preferredEntryId, store, at) => {
     const pick = entries.find((candidate) => candidate.id === preferredEntryId);
     const ordered = pick ? [pick, ...entries.filter((candidate) => candidate !== pick)] : [...entries];
-    const spent = (candidate) => (store.get(candidate.id)?.spentUntil > at ? 1 : 0);
-    // Array sort is stable, so two entries that are equally spent — or equally
-    // not — keep the list order the player put them in.
-    return ordered.sort((left, right) => spent(left) - spent(right));
+    const rank = (candidate) => {
+        const state = store.get(candidate.id);
+        if (state?.spentUntil > at) return 2;
+        if (isBusy(state, at)) return 1;
+        return 0;
+    };
+    // Array sort is stable, so two entries of the same rank keep the list order
+    // the player put them in.
+    return ordered.sort((left, right) => rank(left) - rank(right));
 };
 
 // What a Settings row says about its entry: ready, Spent (until when),
