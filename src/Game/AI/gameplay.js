@@ -233,6 +233,7 @@ import {
   decodeAgreementUpdates,
   decodeRelationUpdates,
   migrateLegacyDiplomaticState,
+  salvageDiplomaticLedgerPayload,
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
 import {
@@ -913,6 +914,15 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
   }
   if (warError) return warError;
 
+  // On the salvage pass a malformed ledger row - an agreement with one
+  // resolvable party, a relation with a name the map does not know - is dropped
+  // and said (salvageDiplomaticLedgerPayload), never re-asked: the answer it
+  // came with is twenty events the player would otherwise wait for twice. The
+  // strict pass still rejects, with the exact row named, for the one retry
+  // legacy mode allows.
+  if (!strict) {
+    for (const note of salvageDiplomaticLedgerPayload(candidate, { world })) noteReceipt(receipt, "dropped", note);
+  }
   const diplomaticError = validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true });
   if (diplomaticError) return diplomaticError;
 

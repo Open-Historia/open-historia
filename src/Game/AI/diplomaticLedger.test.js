@@ -9,6 +9,7 @@ import {
   decodeAgreementUpdates,
   decodeRelationUpdates,
   migrateLegacyDiplomaticState,
+  salvageDiplomaticLedgerPayload,
   validateDiplomaticLedgerPayload,
 } from "./nativeDiplomaticDirector.js";
 
@@ -303,4 +304,43 @@ test("a declared status that contradicts the absolute score is reconciled in sim
   assert.equal(validateDiplomaticLedgerPayload(midpoint, { world, allowNativeBinding: true }), "");
   assert.equal(midpoint.relationUpdates[0].score, -75, "when a sign flip does not explain it, the declared band's midpoint does");
   assert.equal(midpoint.relationUpdates[0].status, "hostile");
+});
+
+// The salvage pass, from a beta jump on 2026-09-21: twenty events and one
+// agreement start whose second party was not on the map. The strict validator
+// rejects the whole answer (and legacy mode's one retry earns its keep there);
+// under salvage-first the row goes, the month stays, and the receipt says so.
+test("on the salvage pass a malformed ledger row is dropped and said, not fatal", () => {
+  const events = alliance();
+  const candidate = {
+    events,
+    relationUpdates: "France~Russia~70~friendly~1~Alliance concluded\nFrance~Atlantis~-40~hostile~1~A quarrel with nobody",
+    agreementUpdates: "franco-russian-alliance~start~alliance~France,Russia~1~Franco-Russian Alliance~Mutual assistance\n"
+      + "eu-turkey-statement~start~treaty~Turkey,European Union~1~EU-Turkey Statement~Migration\n"
+      + "phantom-pact~end~treaty~France,Germany~1~Phantom Pact~",
+  };
+  const strict = JSON.parse(JSON.stringify(candidate));
+  assert.match(validateDiplomaticLedgerPayload(strict, { world, allowNativeBinding: true }), /could not resolve both polities/, "strict: still fatal, naming the row");
+
+  const notes = salvageDiplomaticLedgerPayload(candidate, { world });
+  assert.deepEqual(notes, [
+    "Relation update France ↔ Atlantis was dropped: \"Atlantis\" is not a polity on this map.",
+    "Agreement eu-turkey-statement start was dropped: fewer than two of its parties are polities on this map.",
+    "Agreement phantom-pact end was dropped: no agreement \"phantom-pact\" exists to end.",
+  ]);
+  assert.equal(typeof candidate.relationUpdates, "string", "rewritten in the form it arrived");
+  assert.equal(candidate.relationUpdates.split("\n").length, 1, "the good relation stays");
+  assert.equal(candidate.agreementUpdates.split("\n").length, 1, "the good agreement stays");
+  assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "", "and what is left validates without a retry");
+});
+
+test("the salvage pass leaves a clean answer exactly as it was", () => {
+  const candidate = {
+    events: alliance(),
+    relationUpdates: [{ a: "France", b: "Russia", score: 70, status: "friendly", eventIndexes: [0], summary: "Alliance" }],
+    agreementUpdates: [{ id: "franco-russian-alliance", op: "start", type: "alliance", parties: ["France", "Russia"], eventIndexes: [0], title: "Franco-Russian Alliance", terms: "" }],
+  };
+  const before = JSON.stringify(candidate);
+  assert.deepEqual(salvageDiplomaticLedgerPayload(candidate, { world }), []);
+  assert.equal(JSON.stringify(candidate), before, "objects stay objects, untouched");
 });
