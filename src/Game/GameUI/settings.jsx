@@ -63,6 +63,7 @@ import {
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
+import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildLoggingFile,
@@ -1707,8 +1708,6 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         slate: { background: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "rgba(255,255,255,0.08)", color: "#e4e4e7" },
         blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
-        // Discord's own blue, for the one door that is allowed a colour.
-        discord: { background: "rgba(88,101,242,0.18)", border: "rgba(88,101,242,0.55)", icon: "rgba(88,101,242,0.42)", color: "#e6e8ff" },
     };
     const palette = tones[tone] ?? tones.neutral;
     const common = {
@@ -2421,10 +2420,11 @@ const SettingsMenu = ({
                         <QuickAction title="AI debug console" description="Every AI call, its prompt, answer and cost" symbol="◈" onClick={() => runAndClose(onOpenDebugConsole)} />
                     )}
                     {/* The last slot of the row is the community's: two half-width
-                        doors, Discord in its own blue, Reddit in the panel's grey. */}
+                        tiles, each nothing but the brand's own mark on the brand's own
+                        colour. No words - the logos say where they go. */}
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-                        <QuickAction title="Discord" description="Join the server" symbol="◉" tone="discord" href={DISCORD_URL} />
-                        <QuickAction title="Reddit" description="r/OpenHistoria" symbol="◍" tone="slate" href={REDDIT_URL} />
+                        <CommunityTile href={DISCORD_URL} label="Join the Discord" color={DISCORD_BLURPLE}><DiscordMark /></CommunityTile>
+                        <CommunityTile href={REDDIT_URL} label="Open r/OpenHistoria on Reddit" color={REDDIT_ORANGERED}><RedditMark /></CommunityTile>
                     </div>
                 </div>
             </QuickMenuPanel>
