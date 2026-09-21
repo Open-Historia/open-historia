@@ -24,31 +24,50 @@ const DROPPED_KEYS = new Set(["additionalProperties", "$schema"]);
 
 const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-// Array-length bounds on an array of OBJECTS inside an `anyOf` branch: another
-// shape Gemini refuses outright, found the same way as the `type: "null"` one —
-// every request carrying the chat action batch came back 400 until they were
-// gone (bisected against the live API, 2026-09-17). The same keywords are fine
-// on an array of strings, and fine outside a union, which is why the scene's
-// `choices` in the jump's answer always worked.
+// Array-length bounds on an array of OBJECTS: a shape Gemini refuses, found the
+// same way as the `type: "null"` one. First (2026-09-17) inside an `anyOf`
+// branch — every request carrying the chat action batch came back 400 until
+// they were gone — and the bounds outside a union were thought fine, since the
+// scene's `choices` in the jump's answer always worked. Then (2026-09-21) the
+// pregame declaration came back 400 on every model in the list, with no union
+// in it at all: `events` (objects, 1-12) and `canonicalUpdates` (objects, up to
+// 32). Bisected live, removing ANY ONE of those bounds made the identical
+// request pass, and the same declaration had been accepted a week earlier. It
+// is not a per-field rule, then, but a ceiling on how large the constrained
+// grammar gets once an object array is unrolled N times — and one that moves.
 //
 // They are a hint to the model either way: `validateGameplayPayload` is what
 // actually enforces a count, and it runs on the answer whatever the provider
-// was told. So inside a union they are dropped, and the field's own description
-// carries the requirement in words.
-const BOUND_KEYS = new Set(["minItems", "maxItems"]);
+// was told. So on every array of objects, at any depth, they are dropped and
+// the field's own description carries the requirement in words. An array of
+// strings keeps its bounds: those Gemini takes, and they unroll to nothing.
 // An array whose ITEMS are objects — `items.type === "object"`, or items with
-// properties of their own. An array of strings keeps its bounds: those Gemini
-// takes.
+// properties of their own.
 const holdsObjects = (items) => isObject(items) && (items.type === "object" || isObject(items.properties));
+const boundsInWords = (min, max) => {
+    const entries = (count) => `${count} entr${count === 1 ? "y" : "ies"}`;
+    if (min !== undefined && max !== undefined) return min === max ? `Exactly ${entries(min)}.` : `Between ${min} and ${entries(max)}.`;
+    if (min !== undefined) return `At least ${entries(min)}.`;
+    return `At most ${entries(max)}.`;
+};
+// The node with its bounds moved from keywords into its description. Only for
+// an array of objects; anything else comes back as it was.
+const dropObjectArrayBounds = (node) => {
+    if (!isObject(node) || !holdsObjects(node.items)) return node;
+    const min = Number.isFinite(node.minItems) ? node.minItems : undefined;
+    const max = Number.isFinite(node.maxItems) ? node.maxItems : undefined;
+    if (min === undefined && max === undefined) return node;
+    const { minItems: _min, maxItems: _max, ...rest } = node;
+    const words = boundsInWords(min, max);
+    const description = describe(rest);
+    return { ...rest, description: description ? (description.includes(words) ? description : `${description} ${words}`) : words };
+};
 const stripArrayBounds = (value) => {
     if (Array.isArray(value)) return value.map(stripArrayBounds);
     if (!isObject(value)) return value;
     const next = {};
-    for (const [key, entry] of Object.entries(value)) {
-        if (BOUND_KEYS.has(key) && holdsObjects(value.items)) continue;
-        next[key] = stripArrayBounds(entry);
-    }
-    return next;
+    for (const [key, entry] of Object.entries(value)) next[key] = stripArrayBounds(entry);
+    return dropObjectArrayBounds(next);
 };
 
 // A branch that exists only to say "or null". It may carry a description as well
@@ -57,7 +76,7 @@ const stripArrayBounds = (value) => {
 // folded into the surviving branch below rather than dropped.
 const isNullBranch = (value) => isObject(value) && value.type === "null";
 
-const describe = (value) => (typeof value?.description === "string" ? value.description.trim() : "");
+function describe(value) { return typeof value?.description === "string" ? value.description.trim() : ""; }
 
 // Fold "or null" back into the one branch that survives, keeping both
 // descriptions: with the null branch gone, the note explaining WHEN to answer
@@ -88,6 +107,16 @@ export function toGeminiSchema(value) {
         // Gemini takes ONE type; a genuine multi-type union would need anyOf, which
         // no schema here uses. Keep the first so the field still declares something.
         converted.type = types[0] ?? "string";
+    }
+
+    // An array of objects carries its length bounds in words (see above), at
+    // every depth: this runs on the way back up, so a nested array has already
+    // been converted by the time its parent is looked at.
+    if (converted.type === "array" && holdsObjects(converted.items)) {
+        const worded = dropObjectArrayBounds(converted);
+        delete converted.minItems;
+        delete converted.maxItems;
+        if (worded.description) converted.description = worded.description;
     }
 
     if (Array.isArray(converted.anyOf)) {

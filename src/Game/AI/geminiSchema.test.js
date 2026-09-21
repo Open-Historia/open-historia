@@ -150,15 +150,18 @@ test("supported keywords are preserved", () => {
   });
 });
 
-// Bisected against the live API (2026-09-17) when every chat action batch came
-// back 400: Gemini refuses array-length bounds on an array of OBJECTS inside an
-// anyOf branch. The same keywords are fine on an array of strings and fine
-// outside a union, which is why the scene's choices in the jump's answer always worked.
-test("array-length bounds are stripped inside a union, kept outside one", () => {
+// The shape that broke every jump on 2026-09-17 (bounds on an object array
+// inside a union), and then every new game on 2026-09-21 (the pregame
+// declaration's `events` and `canonicalUpdates`, no union anywhere): an array of
+// objects loses its length bounds wherever it sits, and says them in words.
+test("array-length bounds on an array of objects become words, everywhere; an array of strings keeps them", () => {
   const converted = toGeminiSchema({
     type: "object",
     properties: {
-      plain: { type: "array", minItems: 2, maxItems: 5, items: { type: "object", properties: { a: { type: "string" } } } },
+      plain: { type: "array", description: "The rows.", minItems: 2, maxItems: 5, items: { type: "object", properties: { a: { type: "string" } } } },
+      bare: { type: "array", maxItems: 32, items: { type: "object", properties: { a: { type: "string" } } } },
+      one: { type: "array", minItems: 1, items: { type: "object", properties: { a: { type: "string" } } } },
+      tags: { type: "array", description: "Up to three.", maxItems: 3, items: { type: "string" } },
       union: {
         anyOf: [
           { type: "object", properties: { rows: { type: "array", minItems: 2, maxItems: 10, items: { type: "object", properties: { b: { type: "string" } } } } } },
@@ -167,10 +170,36 @@ test("array-length bounds are stripped inside a union, kept outside one", () => 
       },
     },
   });
-  assert.equal(converted.properties.plain.minItems, 2, "outside a union the bound is a useful hint and stays");
-  assert.equal(converted.properties.plain.maxItems, 5);
+  const { plain, bare, one, tags } = converted.properties;
+  assert.equal(plain.minItems, undefined, "an array of objects loses its bounds outside a union too");
+  assert.equal(plain.maxItems, undefined);
+  assert.equal(plain.description, "The rows. Between 2 and 5 entries.", "and says them, after its own description");
+  assert.equal(bare.maxItems, undefined);
+  assert.equal(bare.description, "At most 32 entries.", "a bare array gets the words as its description");
+  assert.equal(one.description, "At least 1 entry.");
+  assert.equal(tags.maxItems, 3, "an array of strings keeps them: Gemini accepts those");
+  assert.equal(tags.description, "Up to three.");
   const [objects, strings] = converted.properties.union.anyOf;
-  assert.equal(objects.properties.rows.minItems, undefined, "inside a union, an array of objects loses its bounds");
+  assert.equal(objects.properties.rows.minItems, undefined, "inside a union, the same");
   assert.equal(objects.properties.rows.maxItems, undefined);
-  assert.equal(strings.properties.words.minItems, 2, "an array of strings keeps them: Gemini accepts those");
+  assert.equal(objects.properties.rows.description, "Between 2 and 10 entries.");
+  assert.equal(strings.properties.words.minItems, 2);
 });
+
+// And the guard on the live schemas, so the next bound on an object array is
+// caught here rather than by a player's new game.
+test("no live gameplay schema sends Gemini a bound on an array of objects", () => {
+  for (const [name, schema] of Object.entries(GAMEPLAY_SCHEMAS)) {
+    const check = (node, path) => {
+      if (!node || typeof node !== "object") return;
+      if (Array.isArray(node)) { node.forEach((entry, index) => check(entry, `${path}[${index}]`)); return; }
+      if (node.type === "array" && node.items && (node.items.type === "object" || node.items.properties)) {
+        assert.equal(node.minItems, undefined, `${name}: minItems on an array of objects at ${path}`);
+        assert.equal(node.maxItems, undefined, `${name}: maxItems on an array of objects at ${path}`);
+      }
+      for (const [key, value] of Object.entries(node)) check(value, `${path}.${key}`);
+    };
+    check(toGeminiSchema(schema), "$");
+  }
+});
+
