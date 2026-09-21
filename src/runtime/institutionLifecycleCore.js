@@ -11,6 +11,7 @@ import {
   applyInstitutionMembershipResolution,
   applyInstitutionStatusResolution,
   canonicalInstitutionIdentity,
+  institutionFoundingThresholdReached,
   institutionPendingLifecycleCases,
   normalizeInstitutionLifecycleCase,
   normalizeInstitutionRecord,
@@ -62,8 +63,6 @@ const canonicalPolity = (value, world = {}) => {
 };
 
 const samePolity = (a, b) => lower(a) === lower(b);
-const activeMember = (member) => member && !["observer", "candidate", "suspended"].includes(lower(member.status));
-const fullMemberCount = (institution) => list(institution?.members).filter(activeMember).length;
 const memberByPolity = (institution, polity) => list(institution?.members).find((member) => samePolity(member?.polity, polity)) || null;
 const caseMap = (institution) => institution?.lifecycleCases && typeof institution.lifecycleCases === "object" ? institution.lifecycleCases : {};
 
@@ -751,10 +750,12 @@ export const applyInstitutionLifecycleCommandCore = ({
         Object.assign(institution, clone(joined));
         lifecycleCase = { ...lifecycleCase, requestedStatus, status: "accepted", resolvedDate: clean(date) };
         setCase(institution, lifecycleCase, membership.world);
-        const minimum = Number(institution.charter?.lifecycle?.minimumFoundingMembers) || 1;
-        if (lower(institution.status) === "provisional" && fullMemberCount(institution) >= minimum) {
-          institution.status = "active";
-          upsertHistory(institution, { action: "activated", actor, date: clean(date), reason: `Founding threshold of ${minimum} reached.` });
+        // applyInstitutionMembershipResolution owns the founding-threshold
+        // transition so direct founding joins and later approved accessions share
+        // one canonical activation rule. Keep this assertion local to catch any
+        // future regression in that ownership boundary.
+        if (lower(institution.status) === "provisional" && institutionFoundingThresholdReached(institution)) {
+          return { error: `${institution.name} reached its founding threshold but remained provisional.` };
         }
         return { lifecycleCase, resolutionAction: requestedStatus === "observer" ? "observer" : "joined", directMembership: true };
       }

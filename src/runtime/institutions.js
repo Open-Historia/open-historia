@@ -249,6 +249,21 @@ export const INSTITUTION_STATUSES = Object.freeze([
 ]);
 const INSTITUTION_STATUS_SET = new Set(INSTITUTION_STATUSES);
 
+const NON_FOUNDING_MEMBER_STATUSES = new Set(["observer", "candidate", "suspended"]);
+
+export const institutionFoundingMemberCount = (institution = {}) => array(institution?.members)
+  .filter((member) => member && !NON_FOUNDING_MEMBER_STATUSES.has(lower(member?.status || "member")))
+  .length;
+
+export const institutionFoundingThreshold = (institution = {}) => {
+  const raw = Number(institution?.charter?.lifecycle?.minimumFoundingMembers);
+  return Number.isFinite(raw) ? Math.max(1, Math.min(64, Math.trunc(raw))) : 1;
+};
+
+export const institutionFoundingThresholdReached = (institution = {}) => (
+  institutionFoundingMemberCount(institution) >= institutionFoundingThreshold(institution)
+);
+
 export const INSTITUTION_KINDS = Object.freeze([
   "security_alliance",
   "defense_pact",
@@ -881,7 +896,7 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
   const name = identity.name;
   if (!id || !name) return null;
   const kindRaw = lower(value.kind || identity.kind || value.type || "other").replace(/[\s-]+/g, "_");
-  const status = lower(value.status || "active");
+  const rawStatus = lower(value.status || "active");
   const memberMap = new Map();
   for (const rawMember of array(value.members)) {
     const member = normalizeMember(rawMember, world, identityIndex);
@@ -896,6 +911,17 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
   for (const member of memberMap.values()) {
     if (leaderKeys.has(lower(member.polity)) && member.role === "member") member.role = "leading-member";
   }
+  const charter = normalizeInstitutionCharter(value.charter || value.governance || {}, world, identityIndex);
+  const normalizedStatus = INSTITUTION_STATUS_SET.has(rawStatus) ? rawStatus : "active";
+  // "provisional" is specifically the pre-founding-threshold state. Older saves
+  // and non-lifecycle membership application paths could leave that flag stale
+  // after enough full members had already joined, permanently locking formal
+  // governance behind the active-only authority guard. Repair that deterministic
+  // invariant during normalization so legacy/current saves recover immediately.
+  const status = normalizedStatus === "provisional" && institutionFoundingThresholdReached({
+    members: [...memberMap.values()],
+    charter,
+  }) ? "active" : normalizedStatus;
   return {
     id,
     name,
@@ -909,13 +935,13 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
     // institution-owned; the channel materializes that membership for UI/history.
     channelId: clean(value.channelId || value.institutionalChannelId).slice(0, 160),
     kind: INSTITUTION_KIND_SET.has(kindRaw) ? kindRaw : "other",
-    status: INSTITUTION_STATUS_SET.has(status) ? status : "active",
+    status,
     members: [...memberMap.values()].sort((a, b) => a.polity.localeCompare(b.polity)),
     leaders,
     foundedDate: clean(value.foundedDate || identity.foundedDate),
     dissolvedDate: clean(value.dissolvedDate || identity.dissolvedDate),
     predecessors: normalizeInstitutionPredecessors(value?.predecessors?.length ? value.predecessors : identity.predecessors),
-    charter: normalizeInstitutionCharter(value.charter || value.governance || {}, world, identityIndex),
+    charter,
     proposals: normalizeInstitutionProposals(value.proposals || value.resolutions || {}, world, identityIndex),
     lifecycleCases: normalizeInstitutionLifecycleCases(value.lifecycleCases || value.membershipCases || {}, world, identityIndex),
     membershipHistory: normalizeInstitutionMembershipHistory(value.membershipHistory || value.lifecycleHistory || [], world, identityIndex),
@@ -1373,6 +1399,22 @@ export const applyInstitutionMembershipResolution = ({
     const historyAction = matchingLifecycleCase?.kind === "expulsion" ? "expelled" : matchingLifecycleCase?.kind === "withdrawal" ? "withdrawn" : "left";
     appendInstitutionMembershipHistory(institution, { action: historyAction, polity, actor: matchingLifecycleCase?.initiatedBy || polity, date: clean(date), sourceCaseId: matchingLifecycleCase?.id || "", sourceProposalId, reason: clean(note) }, world);
     if (matchingLifecycleCase) institution.lifecycleCases = { ...(institution.lifecycleCases || {}), [matchingLifecycleCase.id]: { ...matchingLifecycleCase, status: "resolved", resolvedDate: clean(date), updatedDate: clean(date) } };
+  }
+
+  if (
+    ["join", "restore"].includes(operation)
+    && lower(institution.status) === "provisional"
+    && institutionFoundingThresholdReached(institution)
+  ) {
+    const threshold = institutionFoundingThreshold(institution);
+    institution.status = "active";
+    appendInstitutionMembershipHistory(institution, {
+      action: "activated",
+      actor: polity,
+      date: clean(date),
+      sourceProposalId,
+      reason: `Founding threshold of ${threshold} reached.`,
+    }, world);
   }
 
   institution.lastUpdatedDate = clean(date) || institution.lastUpdatedDate || "";

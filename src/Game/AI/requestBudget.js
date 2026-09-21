@@ -275,20 +275,46 @@ export const jumpRequestCap = ({ segments = 1 } = {}) => JUMP_REQUEST_CAP + Math
 
 export const createJumpBudget = ({ cap = JUMP_REQUEST_CAP, unlimited = false } = {}) => {
     const spends = [];
+    const reservations = new Map();
     const limit = Math.max(1, Math.round(Number(cap) || JUMP_REQUEST_CAP));
     const spent = () => spends.filter((entry) => entry.granted).length;
+    const reserved = () => [...reservations.values()].reduce((sum, value) => sum + value, 0);
     return {
         cap: limit,
         unlimited,
+        // Reserve a bounded slot for correctness work that happens late in the
+        // turn. Optional work asked earlier cannot consume that slot, but the
+        // total request cap never increases.
+        reserve: (spender, count = 1) => {
+            if (unlimited) return 0;
+            const key = String(spender || "other");
+            const wanted = Math.max(0, Math.round(Number(count) || 0));
+            if (!wanted) return reservations.get(key) || 0;
+            const capacity = Math.max(0, limit - spent() - reserved());
+            const added = Math.min(wanted, capacity);
+            if (added) reservations.set(key, (reservations.get(key) || 0) + added);
+            return reservations.get(key) || 0;
+        },
         // May this spender make one request? Recorded either way, so the turn's
         // log can say what was skipped to stay inside the cap.
         take: (spender) => {
-            const granted = unlimited || spent() < limit;
-            spends.push({ spender: String(spender || "other"), granted });
+            const key = String(spender || "other");
+            const ownReservation = reservations.get(key) || 0;
+            const granted = unlimited || (
+                ownReservation > 0
+                    ? spent() < limit
+                    : spent() < Math.max(0, limit - reserved())
+            );
+            if (granted && ownReservation > 0) {
+                if (ownReservation === 1) reservations.delete(key);
+                else reservations.set(key, ownReservation - 1);
+            }
+            spends.push({ spender: key, granted });
             return granted;
         },
         get spent() { return spent(); },
         get remaining() { return unlimited ? Infinity : Math.max(0, limit - spent()); },
+        get reserved() { return unlimited ? 0 : reserved(); },
         get skipped() { return spends.filter((entry) => !entry.granted).map((entry) => entry.spender); },
         get log() { return spends.map((entry) => ({ ...entry })); },
     };

@@ -2625,6 +2625,26 @@ Example:
 [{"targetType":"private","country":"France"}]
 \`\`\``;
 
+// Formal institution business is separate from diplomatic prose. The Advisor
+// may prepare an exact action, but it never executes merely because the model
+// recommends it: advisor.jsx renders a confirmation button and the native
+// institution runtime revalidates the player's authority on click.
+const ADVISOR_INSTITUTION_DRAFT_DIRECTIVE = `[Drafting Formal Institution Actions]
+When you recommend a concrete formal institutional step that the player can legally take RIGHT NOW, normally append one fenced \`\`\`institutiondraft block containing a JSON array in the SAME reply instead of stopping at "formal execution is your prerogative". This is a DRAFT ONLY: the game shows the player a confirmation button and native governance revalidates everything before execution. Never say the act has happened merely because you drafted it.
+
+Allowed draft shapes:
+- Table a new agenda resolution: {"type":"table-proposal","institutionId":"<exact id>","proposalType":"resolution","title":"<short title>","summary":"<what the institution should decide>"}
+- Submit an EXISTING player-sponsored proposal for formal voting: {"type":"submit-proposal","institutionId":"<exact id>","proposalId":"<exact existing proposal id>"}
+- Cast the player's ballot on an EXISTING open proposal: {"type":"vote","institutionId":"<exact id>","proposalId":"<exact existing proposal id>","choice":"yes|no|abstain|veto","reason":"<optional rationale>"}
+- Send a membership invitation through the institution lifecycle: {"type":"invite","institutionId":"<exact id>","polity":"<exact target polity name>","requestedStatus":"member|observer|associate|participant","reason":"<optional rationale>"}
+
+Use ONLY exact institution/proposal ids and current affordances exposed in [Current Diplomatic & Institutional Options]. Do not invent an id or a ballot that is not open. Do not use this block for ordinary Council speech; that uses senddraft. Do not silently combine multiple legal stages: if a proposal must first be tabled and only later submitted for voting, draft the currently legal next step. For accession, follow the charter's lifecycle rather than inventing a pre-vote when the actual next step is an invitation. Omit the block when there is no formal player action to prepare.
+
+Example:
+\`\`\`institutiondraft
+[{"type":"table-proposal","institutionId":"mitteleuropa","proposalType":"resolution","title":"Danube Transport Coordination","summary":"Adopt a common Mitteleuropa framework for cross-border rail scheduling and customs clearance."}]
+\`\`\``;
+
 // The advisor has always been handed the whole world's unit list, but under a
 // heading reading "Player polity, X, details: ... Military Units:" — so it read
 // them as the player's own army and never used them to answer a question about
@@ -2813,6 +2833,7 @@ async function buildAdvisorSystemPrompt() {
         advisorPoliticalDiplomacy.text,
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         ADVISOR_DEPLOY_DIRECTIVE,
         buildAdvisorProjectsDirective(variables.projectsSummary),
         buildAdvisorForcesDirective(variables.forcePosture),

@@ -963,10 +963,41 @@ const impactsSchema = {
 // which is exactly how the attached ops get applied. The game master keeps the
 // full impacts object, since a direct "make this happen" command is one call
 // with no separate pass to hand the work to.
+// A few impact families have detailed field semantics duplicated verbatim in
+// ACTIONS_REFERENCE, which is present on every normal jump. Keep the jump tool
+// schema focused on shape while preserving each family's root description.
+// This compaction is jump-only: the authoritative/internal schemas (including
+// Game Master) retain their full descriptions. Validation is unchanged because
+// descriptions are annotations, not constraints.
+const stripNestedSchemaDescriptions = (schema) => {
+  if (Array.isArray(schema)) return schema.map(stripNestedSchemaDescriptions);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => key !== "description")
+      .map(([key, value]) => [key, stripNestedSchemaDescriptions(value)]),
+  );
+};
+
+const compactJumpImpactSchema = (schema) => ({
+  ...stripNestedSchemaDescriptions(schema),
+  ...(schema?.description ? { description: schema.description } : {}),
+});
+
+const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
+  "markerOps",
+  "institutionLifecycleOps",
+]);
+
 const jumpImpactsSchema = {
   ...impactsSchema,
   properties: Object.fromEntries(
-    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
+    Object.entries(impactsSchema.properties)
+      .filter(([key]) => key !== "projectOps")
+      .map(([key, schema]) => [
+        key,
+        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
+      ]),
   ),
 };
 
@@ -3464,24 +3495,44 @@ const normalizeProjectsShape = (value) => {
 // Normalize those transport aliases before CHAT_ACTIONS_SCHEMA validation. The
 // canonical task schema stays unchanged for function-calling providers.
 const normalizeChatActionsShape = (value) => {
-  if (!isPlainRecord(value)) return value;
-  const candidate = { ...value };
+  // Institution Council turns use raw JSON transport for Gemini. In live play it
+  // has returned the action array directly and used conversational aliases such
+  // as `speak`, `polity` and `vote`. Canonicalize those transport spellings
+  // before CHAT_ACTIONS_SCHEMA sees them; native chat/institution validators still
+  // decide whether the resulting action is legal.
+  const source = Array.isArray(value) ? { actions: value } : value;
+  if (!isPlainRecord(source)) return value;
+  const candidate = { ...source };
 
   const normalizeAction = (entry) => {
     if (!isPlainRecord(entry)) return entry;
     const action = { ...entry };
-    const speaker = action.actorName ?? action.actor ?? action.speaker;
+    const rawType = action.type ?? action.action ?? action.op;
+    const foldedType = String(rawType ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const type = ({ speak: "send_message", say: "send_message", message: "send_message" })[foldedType] || foldedType;
+    const speaker = action.actorName ?? action.actor ?? action.speaker ?? action.polity;
     const text = action.content ?? action.text ?? action.message;
     if (action.actorName === undefined && speaker !== undefined) action.actorName = speaker;
-    if (action.type === undefined && speaker !== undefined && text !== undefined) action.type = "send_message";
-    if (action.content === undefined && text !== undefined && String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_") === "send_message") {
-      action.content = text;
+    if (type) action.type = type;
+    if (!action.type && speaker !== undefined && text !== undefined) action.type = "send_message";
+    const canonicalType = String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (action.content === undefined && text !== undefined && canonicalType === "send_message") action.content = text;
+    if (canonicalType === "institution_vote" && action.voteChoice === undefined) {
+      action.voteChoice = action.vote ?? action.choice ?? action.optionRef;
     }
+    delete action.action;
+    delete action.op;
     delete action.actor;
     delete action.speaker;
+    delete action.polity;
     delete action.text;
     delete action.message;
     delete action.recipient;
+    delete action.vote;
+    delete action.choice;
+    // Institution identity comes from the canonical Council thread. A model may
+    // echo it in raw JSON, but it must not be able to redirect formal authority.
+    if (canonicalType.startsWith("institution_")) delete action.institutionId;
     return action;
   };
 

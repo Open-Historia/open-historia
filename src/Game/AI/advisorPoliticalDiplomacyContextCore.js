@@ -74,9 +74,10 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
   const lines = [
     "[Current Diplomatic & Institutional Options — canonical UI/legal affordances]",
     "INSTITUTION CAPABILITY MANIFEST: Institutions are first-class canonical game objects. The player can found custom institutions with structured identity/charter fields including name, short name, type, purpose, political character, geographic scope, threat/adversary model, decision rule, minimum founding members, accession, observer, withdrawal, expulsion and dissolution rules. Institutions have persistent Council channels, formal agenda/proposals, ballots, amendments, decisions/history, documents and lifecycle cases. NEVER tell the player that custom institutions are only simulated through treaties/projects/bilateral narrative.",
-    "Use this to tell the player what diplomatic levers actually exist right now. Conversation is not a vote, membership is not consent, and you must never cast a formal ballot or table binding business on the player's behalf merely because you recommend it.",
+    "Use this to tell the player what diplomatic levers actually exist right now. Conversation is not a vote, membership is not consent, and you must never cast a formal ballot or table binding business on the player's behalf merely because you recommend it. You MAY prepare a formal institution action draft for explicit player confirmation when the canonical affordance exists.",
     "Distinguish PRIVATE BILATERAL threads, INSTITUTION COUNCIL threads and INSTITUTION LIFECYCLE/accession hearings. A message in one thread is not automatically known or addressed in another.",
     "You may draft bilateral or institutional messages for the player. Every draft must identify its exact destination type and canonical target; never rely on whichever chat happened to be opened most recently.",
+    "You may also prepare a formal institution-action draft (proposal, submit-for-vote, ballot, or membership invitation) when the current canonical state makes that exact step available. A draft is not execution: the player must explicitly confirm it in the Advisor UI, and native governance validates it again.",
   ];
 
   if (!views.length) {
@@ -89,6 +90,7 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
       const options = [];
       if (entry.canParticipate) options.push("Council access");
       if (entry.canTableProposal) options.push("may table a resolution");
+      if (entry.canParticipate && clean(institution?.charter?.lifecycle?.accession?.mode || "approval") !== "not-permitted") options.push("may invite eligible governments");
       if (entry.playerPendingBallotCount) options.push(`${entry.playerPendingBallotCount} player ballot${entry.playerPendingBallotCount === 1 ? "" : "s"} pending`);
       if (entry.playerPendingAmendmentReviewCount) options.push(`${entry.playerPendingAmendmentReviewCount} amendment review${entry.playerPendingAmendmentReviewCount === 1 ? "" : "s"} pending`);
       const lifecycle = institution?.charter?.lifecycle || {};
@@ -152,6 +154,8 @@ export const formatAdvisorPoliticalDiplomacyContext = ({
     "Advisor authority boundary:",
     "- You may recommend, explain, compare, draft language and point out pending institutional obligations.",
     "- You may NOT silently cast the player's vote, accept an amendment, found/join/leave an institution, accept an invitation, sign an agreement, or infer sovereign authorization from PWv2. Those remain explicit player/native actions.",
+    "- When you recommend a concrete formal institution step the player can legally take now, normally prepare the typed institution-action draft in the same reply so the player gets a confirmation button. Do not stop at a generic 'formal execution remains your prerogative'. Phrase it as a recommendation/offer, and never claim the act occurred until the player confirms it.",
+    "- For membership, follow the charter's actual lifecycle. If the legal next step is an invitation whose acceptance later triggers an approval ballot, offer the invitation; do not fabricate an immediate accession vote just because it sounds more formal.",
     "- You MAY explain pending invitations/applications, charter accession/withdrawal rules, likely consequences, and where the player can exercise the corresponding explicit lifecycle control in the Institutions workspace.",
     "- When the player asks what is possible, distinguish ordinary diplomatic speech from formal institutional acts and identify any pending player decision clearly.",
   );

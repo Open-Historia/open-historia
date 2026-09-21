@@ -50,6 +50,10 @@ test("advisor context exposes the player's own bounded PWv2 plus current institu
   assert.match(built.diplomacyText, /PLAYER VOTE PENDING/);
   assert.match(built.diplomacyText, /veto available/);
   assert.match(built.diplomacyText, /may NOT silently cast the player's vote/);
+  assert.match(built.diplomacyText, /MAY prepare a formal institution action draft/);
+  assert.match(built.diplomacyText, /may invite eligible governments/);
+  assert.match(built.diplomacyText, /normally prepare the typed institution-action draft in the same reply/);
+  assert.match(built.diplomacyText, /never claim the act occurred until the player confirms it/i);
   assert.deepEqual(built.institutionIds, ["nato"]);
 });
 

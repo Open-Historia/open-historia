@@ -11628,7 +11628,7 @@ const institutionGovernancePrompt = (world, institutionId, playerCountry = "") =
     + `Speech, reactions and create_poll/poll_vote are conversation only. They DO NOT create proposals, amendments, legal ballots, membership changes or binding institutional outcomes.\n`
     + `Do not use add_member/remove_member in this channel: membership belongs to the institution ledger.\n`
     + `Use institution_lodge_proposal only when an AI member genuinely tables new formal business. When an eligible AI member has clearly advanced a concrete, actionable institutional proposal in Council, especially when another member or the player endorses it or asks to make it official, table it NOW in this same turn with institution_lodge_proposal instead of merely promising to draft it later. Example pattern: an AI member says "we propose X", the Council engages with X, and the player says "make it official"; that same AI sponsor should lodge X alongside any conversational reply. Keep sponsorship with the AI polity that actually originated the proposal; player endorsement does not transfer authorship to the player. Vague commentary, repetition, or an idea already represented on the formal agenda stays speech only. Lodging puts business on the agenda for debate; do NOT jump straight to a ballot unless the exact sponsor also genuinely submits the existing proposal and native rules permit it.\n`
-    + `Use institution_submit_proposal only for an exact existing proposal id when its sponsor is ready to open the charter-defined vote. Use institution_amendment / institution_resolve_amendment only for exact proposal/amendment ids below. Use institution_vote only for an AI polity's formal legal ballot, never for the player. Native code checks every action and the charter; prose cannot override it.\n`
+    + `Use institution_submit_proposal only for an exact existing proposal id when its sponsor is ready to open the charter-defined vote. Use institution_amendment / institution_resolve_amendment only for exact proposal/amendment ids below. Use institution_vote only for an AI polity's formal legal ballot, never for the player. Exact raw-JSON vote shape: {"type":"institution_vote","actorName":"<exact AI polity>","proposalId":"<exact proposal id>","voteChoice":"yes|no|abstain|veto","reason":"<concise rationale>"}. Use actorName and voteChoice exactly; do not substitute polity/vote/choice or repeat institutionId. Native code checks every action and the charter; prose cannot override it.\n`
     + `For accession votes, evaluate the applicant against the institution's actual identity, scope, obligations and threat model as well as that government's PWv2 and relations. Friendly relations alone are not a reason to vote yes; do not hardcode real-world countries either, because campaign politics may have diverged.\n`
     + `[Formal agenda]\n${proposalLines}`;
 };
@@ -11943,9 +11943,14 @@ export const runPostTurnInstitutionBallots = async ({
   const player = normalizeString(playerCountry) || normalizeString(snapshot.game?.country);
   if (!player) return { attempted: 0, applied: 0, results: [] };
   const work = collectAutonomousInstitutionBallotWork(snapshot.world, player, { maxInstitutions: 4, maxVotersPerInstitution: 32 });
+  // In request-saving mode one provider slot is reserved for institutional
+  // governance. Resolve the oldest affected institution this turn; additional
+  // institutions remain open and take the reserved slot on later turns. With
+  // request saving off, preserve the existing all-institutions behavior.
+  const scheduledWork = requests?.saving ? work.slice(0, 1) : work;
   const results = [];
   let applied = 0;
-  for (const item of work) {
+  for (const item of scheduledWork) {
     if (signal?.aborted) break;
     try {
       const materialized = await ensureInstitutionalChannel({
@@ -11973,9 +11978,10 @@ export const runPostTurnInstitutionBallots = async ({
     }
   }
   if (work.length) {
-    logDebugEvent("turn", `Institution autonomy: ${work.length} open ballot(s) checked after the turn; ${applied} NPC ballot action(s) accepted.`, results, { verbose: true });
+    const deferred = Math.max(0, work.length - scheduledWork.length);
+    logDebugEvent("turn", `Institution autonomy: ${scheduledWork.length}/${work.length} open ballot(s) checked after the turn; ${applied} NPC ballot action(s) accepted${deferred ? `; ${deferred} institution(s) deferred by request-saving mode` : ""}.`, results, { verbose: true });
   }
-  return { attempted: work.length, applied, results };
+  return { attempted: scheduledWork.length, deferred: Math.max(0, work.length - scheduledWork.length), applied, results };
 };
 
 export const chooseNextDiplomaticSpeaker = async ({
@@ -12711,11 +12717,13 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 // real — one request where it can be, never more than the cap — and the checks
 // after the skip go out together as the turn review below. With saving switched
 // off the budget grants everything, and the skip runs exactly as it always did.
-const createJumpRequests = ({ segments = 1 } = {}) => {
+const createJumpRequests = ({ segments = 1, reserveInstitutionBallot = false } = {}) => {
   const saving = savingRequests();
+  const budget = createJumpBudget({ cap: jumpRequestCap({ segments }), unlimited: !saving });
+  if (saving && reserveInstitutionBallot) budget.reserve("institutionBallots", 1);
   return {
     saving,
-    budget: createJumpBudget({ cap: jumpRequestCap({ segments }), unlimited: !saving }),
+    budget,
     used: 0,
     refused: 0,
   };
@@ -13387,7 +13395,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // What this skip may spend and what it has spent (requestBudget.js): one
     // request where it can be, never more than the cap, while requests are
     // being saved.
-    requests: createJumpRequests({ segments: segmentCount }),
+    requests: createJumpRequests({
+      segments: segmentCount,
+      reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(bundle.world, bundle.game?.country || "", { maxInstitutions: 1 }).length > 0,
+    }),
     phases,
   };
   budgetForPhases = jumpState.requests;
@@ -13415,7 +13426,10 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
     // What the held attempt already spent stays on the count.
     const spentSoFar = state.requests ?? { used: 0, refused: 0 };
     state.requests = {
-      ...createJumpRequests({ segments: Math.max(1, context.segmentDays.length - state.nextSegment) }),
+      ...createJumpRequests({
+        segments: Math.max(1, context.segmentDays.length - state.nextSegment),
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      }),
       used: spentSoFar.used,
       refused: spentSoFar.refused,
     };

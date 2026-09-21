@@ -11,6 +11,7 @@ import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from ".
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
+import { buildInstitutionDrafts, institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
@@ -18,6 +19,9 @@ import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
+import { commitInstitutionGovernanceCommand, commitInstitutionalPlayerProposal, commitInstitutionalPlayerVoteRequest } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLifecycle.js";
+import { getLibraryState } from "../../runtime/library.js";
 
 Chart.register(...registerables);
 
@@ -69,9 +73,11 @@ const parseMessage = (rawText) => {
     const chartConfig = chart.config;
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
-    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
+    const { rest: afterInstitutionDrafts, json: institutionDraftsRaw } = extractFencedJson(afterDrafts, "institutiondraft");
+    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterInstitutionDrafts, "deploy");
     const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
     const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
+    const institutionDrafts = buildInstitutionDrafts(institutionDraftsRaw);
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
     // than no button, so anything missing a real type or real coordinates goes.
@@ -88,6 +94,7 @@ const parseMessage = (rawText) => {
         chartProblem: chart.problem,
         actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
         messageDrafts,
+        institutionDrafts: institutionDrafts.length ? institutionDrafts : null,
         deployments: deployments && deployments.length ? deployments : null,
         projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
         projectsTruncated,
@@ -529,6 +536,61 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
     );
 };
 
+
+// A formal institution action the Advisor recommends. The model only prepares
+// this typed draft; nothing canonical happens until the human clicks here. The
+// click then goes through the same native commit functions as Institutions UI,
+// so current membership, lifecycle, proposal and ballot rules are revalidated.
+const AdvisorInstitutionDraftAction = ({ draft, completed, onExecute }) => {
+    const [status, setStatus] = useState(completed ? "completed" : "idle");
+    const [error, setError] = useState("");
+
+    useEffect(() => { if (completed) setStatus("completed"); }, [completed]);
+
+    const handleClick = async () => {
+        if (status !== "idle") return;
+        setStatus("working");
+        setError("");
+        const result = await onExecute();
+        if (result?.ok) setStatus("completed");
+        else {
+            setStatus("idle");
+            setError(result?.error || "The institution action could not be completed.");
+        }
+    };
+
+    const detail = draft.type === "table-proposal"
+        ? draft.title
+        : draft.type === "vote"
+            ? `${draft.proposalId} · ${String(draft.choice || "").toUpperCase()}`
+            : draft.type === "submit-proposal"
+                ? draft.proposalId
+                : `${draft.polity} · ${draft.requestedStatus}`;
+    const busy = status !== "idle";
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+        <button type="button" onClick={handleClick} disabled={busy} title={detail} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "completed" ? "rgba(52,211,153,0.12)" : "rgba(245,158,11,0.13)",
+            border: `1px solid ${status === "completed" ? "rgba(52,211,153,0.4)" : "rgba(245,158,11,0.42)"}`,
+            borderRadius: "8px",
+            color: status === "completed" ? "rgba(167,243,208,0.95)" : "rgba(253,230,138,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+            textAlign: "left",
+        }}>
+        {status === "completed"
+            ? `✓ ${institutionDraftButtonLabel(draft)}`
+            : status === "working"
+                ? "Applying institution action…"
+                : `🏛️ ${institutionDraftButtonLabel(draft)}`}
+        </button>
+        {error && <span style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
+    );
+};
+
 const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#a78bfa","#f87171","#38bdf8"];
 
 const AdvisorChart = ({ config }) => {
@@ -775,10 +837,10 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, deployments } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text)
-        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, deployments: null };
+        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -823,6 +885,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
+        {institutionDrafts && institutionDrafts.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {institutionDrafts.map((draft, draftIndex) => (
+                <AdvisorInstitutionDraftAction
+                key={`${draft.type}:${draft.institutionId}:${draft.proposalId || draft.polity || draft.title || draftIndex}`}
+                draft={draft}
+                completed={!!msg.completedInstitutionDrafts?.includes(draftIndex)}
+                onExecute={() => onExecuteInstitutionDraft(msgIndex, draftIndex, draft)}
+                />
+            ))}
+            </div>
+        )}
         {deployments && deployments.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {deployments.map((deployment, deployIndex) => (
@@ -904,7 +978,7 @@ const mergeNotices = (current, stored) => {
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -918,7 +992,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     {messages.map((msg, i) => (msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -1296,6 +1370,95 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         requestDiplomaticChat(target, { draft: draft.text });
     }, []);
 
+    // Executes one typed formal institution draft ONLY after the human clicks
+    // its button. This is the player-authority boundary: the Advisor may prepare
+    // the operation, but these native commit seams re-read and revalidate the
+    // current institution before any canonical mutation is published.
+    const handleExecuteInstitutionDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
+        try {
+            const game = await readJson(JSON_URLS.game, {
+                defaultValue: { gameDate: "", country: "" },
+                force: true,
+            });
+            const playerCountry = String(game?.country || "").trim();
+            const date = String(game?.gameDate || "").trim();
+            const expectedGameId = String(getLibraryState()?.activeGameId || "").trim();
+            if (!playerCountry) throw new Error("No player polity is active.");
+
+            if (draft.type === "table-proposal") {
+                await commitInstitutionalPlayerProposal({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    proposal: {
+                        type: draft.proposalType || "resolution",
+                        title: draft.title,
+                        summary: draft.summary || "",
+                    },
+                });
+            } else if (draft.type === "submit-proposal") {
+                await commitInstitutionalPlayerVoteRequest({
+                    institutionId: draft.institutionId,
+                    proposalId: draft.proposalId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                });
+            } else if (draft.type === "vote") {
+                await commitInstitutionGovernanceCommand({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "vote",
+                        proposalId: draft.proposalId,
+                        polity: playerCountry,
+                        choice: draft.choice,
+                        reason: draft.reason || "",
+                        authority: "player",
+                        finalizeWhenComplete: true,
+                        implementWhenPassed: true,
+                    },
+                });
+            } else if (draft.type === "invite") {
+                await commitInstitutionLifecycleCommand({
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "invite",
+                        institutionId: draft.institutionId,
+                        initiatedBy: playerCountry,
+                        polity: draft.polity,
+                        requestedStatus: draft.requestedStatus || "member",
+                        reason: draft.reason || "",
+                        authority: "player",
+                    },
+                });
+            } else {
+                throw new Error(`Unsupported Advisor institution draft ${draft.type || "<blank>"}.`);
+            }
+
+            logDebugEvent("advisor", `Player confirmed Advisor institution action: ${draft.type}.`, JSON.stringify(draft), { verbose: true });
+            setMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                const completed = new Set(target.completedInstitutionDrafts || []);
+                completed.add(draftIndex);
+                next[msgIndex] = { ...target, completedInstitutionDrafts: [...completed] };
+                saveMessages(next);
+                return next;
+            });
+            return { ok: true };
+        } catch (err) {
+            console.warn("[advisor] could not execute the recommended institution action:", err);
+            return { ok: false, error: err?.message || String(err) };
+        }
+    }, []);
+
     // Places one deployment the advisor recommended, through the very same
     // deployUnit the Forces panel uses — so it lands as a pending unit with a
     // queued order for the AI to adjudicate, exactly like a hand-placed one, and
@@ -1423,6 +1586,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onExecuteInstitutionDraft={handleExecuteInstitutionDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}

@@ -67,7 +67,8 @@ export const autonomousInstitutionBallotDirective = (work) => {
     `Proposal: ${work.proposalId} - ${work.proposalTitle || "formal business"}.`,
     `The following AI-controlled eligible governments have not yet recorded a ballot: ${work.actors.join(", ")}.`,
     "For THIS pass, each listed government MUST cast exactly one institution_vote on that exact proposal using its own PWv2 political context, relations, the institution's identity/obligations, and the proposal itself.",
+    'Exact raw-JSON vote shape: {"type":"institution_vote","actorName":"<exact AI polity>","proposalId":"<exact proposal id>","voteChoice":"yes|no|abstain|veto","reason":"<concise rationale>"}. Use actorName and voteChoice exactly; do not use polity, vote, choice, or institutionId aliases.',
     "Choose yes, no, abstain, or veto only where the charter permits it. Do not act for the human player. Do not lodge unrelated proposals, amendments, polls, or ordinary chat messages in this maintenance pass.",
-    "Return only the formal institution_vote actions needed to record those ballots. Native governance independently validates every ballot and prevents duplicates.",
+    "Return an object with an actions array containing only the formal institution_vote actions needed to record those ballots. Native governance independently validates every ballot and prevents duplicates.",
   ].join("\n");
 };

@@ -223,6 +223,21 @@ test("a skip spends at most its cap, in the order it is asked", () => {
     assert.deepEqual(budget.log.map((entry) => entry.granted), [true, true, true, false, false]);
 });
 
+
+test("a reserved institutional ballot slot cannot be consumed by earlier optional work", () => {
+    const budget = createJumpBudget();
+    budget.reserve("institutionBallots", 1);
+    assert.equal(budget.reserved, 1);
+    assert.equal(budget.take("jump"), true);
+    assert.equal(budget.take("review"), true);
+    assert.equal(budget.take("history"), false, "history yields to already-open formal governance");
+    assert.equal(budget.take("stats"), false, "tracked stats cannot consume the reserved legal-governance slot");
+    assert.equal(budget.take("institutionBallots"), true);
+    assert.equal(budget.spent, 3);
+    assert.equal(budget.reserved, 0);
+    assert.deepEqual(budget.skipped, ["history", "stats"]);
+});
+
 test("a skip that is not saving requests is never refused, and still keeps its log", () => {
     const budget = createJumpBudget({ unlimited: true });
     for (let request = 0; request < 12; request += 1) assert.equal(budget.take("jump"), true);
