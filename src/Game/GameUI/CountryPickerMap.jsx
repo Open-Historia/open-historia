@@ -3,13 +3,15 @@ import Map from "ol/Map";
 import View from "ol/View";
 import TileLayer from "ol/layer/Tile";
 import XYZ from "ol/source/XYZ";
+import ImageLayer from "ol/layer/Image";
+import ImageStatic from "ol/source/ImageStatic";
 import VectorImageLayer from "ol/layer/VectorImage";
 import VectorSource from "ol/source/Vector";
 import Style from "ol/style/Style";
 import Fill from "ol/style/Fill";
 import Stroke from "ol/style/Stroke";
 import GeoJSON from "ol/format/GeoJSON";
-import { fromLonLat } from "ol/proj";
+import { fromLonLat, transformExtent } from "ol/proj";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
@@ -76,6 +78,39 @@ const parseGeoJSONFeatures = (geojson, { stock = false } = {}) => {
   return features;
 };
 
+// The ESRI dark canvas the picker has always drawn on.
+const ESRI_DARK_GRAY_TILES = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}";
+// The whole Web Mercator world - where World.jsx pins an uploaded image
+// (WORLD_IMAGE_COORDS_FLAT) - in this map's projection.
+const WORLD_IMAGE_EXTENT = transformExtent([-180, -85.0511, 180, 85.0511], "EPSG:4326", "EPSG:3857");
+// The sea under a custom map, the same as the game's (buildWorldStyle).
+const CUSTOM_SEA = "#0b1a2b";
+
+// What the regions are drawn over. A scenario with its own basemap gets that
+// basemap, placed and coloured as the game map places it (World.jsx
+// buildWorldStyle): an uploaded image stretched across the whole world, or the
+// vector biomes each carrying its own `fill`. Every other scenario keeps the
+// ESRI canvas, exactly as before.
+const buildBaseLayer = (customBackground) => {
+  if (customBackground?.kind === "image" && customBackground.imageUrl) {
+    return new ImageLayer({
+      source: new ImageStatic({ url: customBackground.imageUrl, imageExtent: WORLD_IMAGE_EXTENT, projection: "EPSG:3857" }),
+    });
+  }
+  if (customBackground?.kind === "vector" && customBackground.geojson) {
+    const features = new GeoJSON().readFeatures(customBackground.geojson, { featureProjection: "EPSG:3857" });
+    return new VectorImageLayer({
+      source: new VectorSource({ features, wrapX: false }),
+      imageRatio: 2,
+      style: (feature) => new Style({
+        fill: new Fill({ color: feature.get("fill") || "#33435c" }),
+        stroke: new Stroke({ color: "rgba(0,0,0,0.18)", width: 0.4 }),
+      }),
+    });
+  }
+  return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
+};
+
 const CountryPickerMap = ({
   countryOptions,
   onPickCountry,
@@ -94,8 +129,17 @@ const CountryPickerMap = ({
   selectedRegionIds = null,
   onToggleRegion = null,
   selectionColor = "#a1a1aa",
+  // The scenario's own basemap, when it has one: { kind: "image", imageUrl } or
+  // { kind: "vector", geojson } - world.background plus the background.json
+  // payload, the same pair the game map reads through useCustomBackground.
+  // Null means the scenario draws on ESRI, and so does this map.
+  customBackground = null,
 }) => {
   const containerRef = useRef(null);
+  const mapObjectRef = useRef(null);
+  const baseLayerRef = useRef(null);
+  const customBackgroundRef = useRef(customBackground);
+  customBackgroundRef.current = customBackground;
   const layerRef = useRef(null);
   const sourceRef = useRef(null);
   const hoveredCodeRef = useRef(null);
@@ -131,6 +175,19 @@ const CountryPickerMap = ({
       : countryOptions;
   }, [countryOptions, query]);
 
+  // The scenario's basemap arrives after the map does (it is fetched once the
+  // scenario's details are in), so the base layer is swapped in place rather
+  // than the map rebuilt: same view, same regions, same hover state.
+  useEffect(() => {
+    const olMap = mapObjectRef.current;
+    if (!olMap) return;
+    const next = buildBaseLayer(customBackground);
+    const layers = olMap.getLayers();
+    if (baseLayerRef.current) layers.remove(baseLayerRef.current);
+    layers.insertAt(0, next);
+    baseLayerRef.current = next;
+  }, [customBackground]);
+
   // One-time map + layer creation
   useEffect(() => {
     // wrapX:false, as the editor found the hard way (OlMap.jsx): the canvas
@@ -150,19 +207,12 @@ const CountryPickerMap = ({
     layerRef.current = layer;
     sourceRef.current = source;
 
+    const baseLayer = buildBaseLayer(customBackgroundRef.current);
+    baseLayerRef.current = baseLayer;
     const olMap = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false, zoom: true }),
-      layers: [
-        new TileLayer({
-          source: new XYZ({
-            url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
-            maxZoom: 16,
-            wrapX: false,
-          }),
-        }),
-        layer,
-      ],
+      layers: [baseLayer, layer],
       view: new View({
         center: fromLonLat([0, 20]),
         zoom: 2,
@@ -170,6 +220,8 @@ const CountryPickerMap = ({
         maxZoom: 8,
       }),
     });
+
+    mapObjectRef.current = olMap;
 
     const regionIdOf = (feature) =>
       (feature.getId?.() ?? feature.get("id") ?? feature.get("GID_1") ?? null);
@@ -349,7 +401,7 @@ const CountryPickerMap = ({
           borderRadius: 12,
           overflow: "hidden",
           border: "1px solid rgba(255,255,255,0.1)",
-          background: "#0f0f11",
+          background: customBackground ? CUSTOM_SEA : "#0f0f11",
         }}
       />
       <div

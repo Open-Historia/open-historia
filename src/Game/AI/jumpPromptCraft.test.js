@@ -149,25 +149,21 @@ test("the ban is on inventing a rivalry, not on hostility", () => {
   }
 });
 
-// Events used to be written to a word budget — 25-30 words for most of them,
-// "stick to these lengths strictly" — so a battle, a treaty and a cabinet
-// reshuffle all came out the same size and none of them said who, where or with
-// what. The budget is now in sentences, and it has to be filled with facts.
-test("event descriptions are sized by what happened, not by a word count", () => {
+// The description's budget came back, at 25-50 words instead of 25-30, and with
+// the job the body is for written into it: the owner's call, after a spell with
+// no number at all left the model as terse as ever. What must not come back is
+// the old floor of twenty and the instruction to keep them short.
+test("event descriptions run 25-50 words, sized by importance, and describe what happens", () => {
   for (const task of JUMP_TASKS) {
     const text = template(task);
-    assert.ok(!text.includes("25–30 words"), `${task}: the old word budget is gone`);
-    assert.ok(!text.includes("keep descriptions short and concise"), `${task}: and so is the instruction to keep them short`);
-    assert.ok(text.includes("who did it, where, with what, against whom"), `${task}: says what a description must answer`);
-    // A description that long has to be readable: bold on the names and points
-    // that matter, and paragraphs that stop before they become a wall.
-    assert.ok(text.includes("Use formatting like bold to highlight important parts"), `${task}: formatting`);
-    assert.ok(text.includes("never be more than 4 lines max"), `${task}: paragraph ceiling`);
-    assert.ok(text.includes("Length comes from FACTS, never from commentary"), `${task}: detail is facts, not padding`);
-    // The map and the prose are one record: an impact that moves the map has to
-    // be in the words too, or the timeline and the map disagree.
-    assert.ok(text.includes("so the timeline and the map never tell different stories"), `${task}: impacts are narrated`);
-    // And the test an author can apply without counting anything.
-    assert.ok(text.includes("swapping in other countries would leave it true"), `${task}: the generic-description test`);
+    assert.ok(!text.includes("25–30 words"), `${task}: the old 25-30 budget is gone`);
+    assert.ok(!text.includes("never under 20 words"), `${task}: and its floor of twenty`);
+    assert.ok(!text.includes("keep descriptions short and concise"), `${task}: and the instruction to keep them short`);
+    assert.ok(text.includes("25–50"), `${task}: the 25-50 budget`);
+    assert.ok(text.includes("who did what, where, with what, against whom"), `${task}: the description describes what happens`);
   }
+  const jump = template("jumpForward");
+  assert.ok(jump.includes("Stick to these lengths strictly"), "jumpForward keeps its strict lengths");
+  assert.ok(jump.includes("No description may be under 25 words"), "with the floor raised to 25");
+  assert.ok(jump.includes("varies with how noteworthy the event is"), "and the length tied to importance");
 });
