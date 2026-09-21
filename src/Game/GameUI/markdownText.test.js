@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { normalizeMarkdown } from "./markdownText.js";
+import { normalizeMarkdown, tidyProse } from "./markdownText.js";
 
 // The bug this module was written for: the advisor wanted a line break, reached
 // for HTML, and the player saw the tag.
@@ -141,4 +141,20 @@ test("empty and nullish input are safe", () => {
   assert.equal(normalizeMarkdown(""), "");
   assert.equal(normalizeMarkdown(null), "");
   assert.equal(normalizeMarkdown(undefined), "");
+});
+
+// Event descriptions are written in paragraphs now. The Cheats timeline editor
+// cleaned an edited one with a plain /\s+/g squeeze — fine for a title, fatal
+// for a body: every break went, and the event came back as one block.
+test("tidyProse squeezes spaces without flattening paragraphs", () => {
+    const written = "  The 93rd  Brigade crossed at Shyrokyne.\r\n\r\n\r\nKyiv called it a   probe.  \r\n";
+    assert.equal(tidyProse(written), "The 93rd Brigade crossed at Shyrokyne.\n\nKyiv called it a probe.");
+});
+
+test("tidyProse keeps a single line break as a line break", () => {
+    assert.equal(tidyProse("First line.\nSecond line."), "First line.\nSecond line.");
+});
+
+test("tidyProse is safe on the empty cases", () => {
+    for (const value of [undefined, null, "", "   ", "\n\n\n"]) assert.equal(tidyProse(value), "");
 });

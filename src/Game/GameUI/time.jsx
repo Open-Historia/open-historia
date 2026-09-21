@@ -1,6 +1,8 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import {
@@ -25,6 +27,7 @@ import { documentsForEvent } from "../../runtime/reportDelivery.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
+import { normalizeMarkdown } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
@@ -108,6 +111,16 @@ const ensureTimelineStyles = () => {
     `;
     document.head.appendChild(style);
 };
+
+// An event description is written in paragraphs now, and a model that separates
+// them with a single newline used to have them glued back into one block:
+// CommonMark treats a lone newline as a space. remark-breaks makes it a real
+// break, remark-gfm gets the rest of the vocabulary a model reaches for, and
+// normalizeMarkdown repairs the <br>/<b> tags it writes instead of markdown -
+// the same three the advisor and the chat have always had (markdown.jsx). The
+// card keeps its own stylesheet rather than borrowing .oh-md, which is sized for
+// a side panel.
+const EVENT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
 
 const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     useEffect(() => {
@@ -895,7 +908,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
 
         {event.description && (
             <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
-            <ReactMarkdown>{event.description}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
             </div>
         )}
 

@@ -131,3 +131,43 @@ test("the world is told it may move first, and that both sides of a fight fight"
     if (task === "jumpForward") assert.ok(text.includes("of their own accord where their interests point that way"), "jumpForward: divergence is not reaction-only");
   }
 });
+
+// "Do not manufacture aggression" was meant to forbid a rivalry nobody in the
+// campaign had a reason for. Sitting in a prompt this long, beside the player's
+// name, it read instead as "do not attack the player" — so the rule now names
+// what it is actually about, and says the player is one polity in the pair like
+// any other.
+test("the ban is on inventing a rivalry, not on hostility", () => {
+  for (const task of JUMP_TASKS) {
+    const text = template(task);
+    assert.ok(once(text, "What is forbidden is INVENTING A RIVALRY"), `${task}: the ban names itself`);
+    assert.ok(text.includes("covers every pair of polities on the map"), `${task}: it is not about the player`);
+    assert.ok(
+      text.includes("never was, a ban") || text.includes("never been a rule against writing the hostility"),
+      `${task}: and says what it is not`,
+    );
+  }
+});
+
+// Events used to be written to a word budget — 25-30 words for most of them,
+// "stick to these lengths strictly" — so a battle, a treaty and a cabinet
+// reshuffle all came out the same size and none of them said who, where or with
+// what. The budget is now in sentences, and it has to be filled with facts.
+test("event descriptions are sized by what happened, not by a word count", () => {
+  for (const task of JUMP_TASKS) {
+    const text = template(task);
+    assert.ok(!text.includes("25–30 words"), `${task}: the old word budget is gone`);
+    assert.ok(!text.includes("keep descriptions short and concise"), `${task}: and so is the instruction to keep them short`);
+    assert.ok(text.includes("who did it, where, with what, against whom"), `${task}: says what a description must answer`);
+    // A description that long has to be readable: bold on the names and points
+    // that matter, and paragraphs that stop before they become a wall.
+    assert.ok(text.includes("Use formatting like bold to highlight important parts"), `${task}: formatting`);
+    assert.ok(text.includes("never be more than 4 lines max"), `${task}: paragraph ceiling`);
+    assert.ok(text.includes("Length comes from FACTS, never from commentary"), `${task}: detail is facts, not padding`);
+    // The map and the prose are one record: an impact that moves the map has to
+    // be in the words too, or the timeline and the map disagree.
+    assert.ok(text.includes("so the timeline and the map never tell different stories"), `${task}: impacts are narrated`);
+    // And the test an author can apply without counting anything.
+    assert.ok(text.includes("swapping in other countries would leave it true"), `${task}: the generic-description test`);
+  }
+});
