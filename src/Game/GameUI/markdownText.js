@@ -237,6 +237,20 @@ const normalizeSegment = (segment) => {
     return lines.join("\n").replace(/\u0000(\d+)\u0000/g, (whole, index) => spans[Number(index)] ?? whole);
 };
 
+// Tidying a body of prose WITHOUT flattening it. The Cheats timeline editor used
+// to run an edited event description through a plain /\s+/g squeeze, which is
+// right for a title or a date and wrong for a description: it glued every
+// paragraph into one block and threw the breaks away. This squeezes runs of
+// spaces and tabs inside each line, drops trailing spaces, collapses a run of
+// blank lines to one, and leaves the line structure alone.
+export const tidyProse = (value) => String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[^\S\n]+/g, " ").trim())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 // The public entry point. Fenced code blocks pass through untouched — whatever
 // is inside one is being shown to the player as literal text, and rewriting it
 // would be rewriting the example.
