@@ -469,10 +469,46 @@ function upgradeFormerGeminiDefault() {
     logDebugEvent("setting", `Fallback list: the untouched Gemini default became the default list — ${GEMINI_DEFAULT_CHAIN.join(" → ")}.`);
 }
 
+// One update, every Gemini player: the list becomes the default Gemini list,
+// whatever it was. Asked for outright by the owner for the release in which
+// every call starts at the top of the list and falls through when a model's
+// allowance is spent - a list shaped in the days when the marks decided the
+// order never gets that behaviour, and most of the player base is on the free
+// tier, where it matters most. The old list is kept under a backup key, the
+// per-task picks are cleared so every task starts at the top, and a player with
+// no Gemini Connection is left exactly as they were.
+const GEMINI_RESET_KEY = "ai_gemini_default_chain_v2";
+const GEMINI_RESET_BACKUP_KEY = "ai_fallback_list_before_gemini_reset";
+
+function resetToGeminiDefaultChain() {
+    if (localStorage.getItem(GEMINI_RESET_KEY) !== null) return;
+    localStorage.setItem(GEMINI_RESET_KEY, "1");
+    const connections = readJsonSetting(CONNECTIONS_KEY, []);
+    const gemini = (Array.isArray(connections) ? connections : []).map(normalizeConnection)
+        .find((connection) => connection.provider === "gemini");
+    if (!gemini) return;
+    const stored = readJsonSetting(FALLBACK_LIST_KEY, []);
+    const list = (Array.isArray(stored) ? stored : []).map(normalizeEntry);
+    const isDefault = list.length === GEMINI_DEFAULT_CHAIN.length
+        && list.every((entry, index) => entry.connectionId === gemini.id && entry.model.trim() === GEMINI_DEFAULT_CHAIN[index]);
+    if (isDefault) return;
+    // An entry already on one of the chain's models keeps its id, so a mark that
+    // pointed at it still does; the rest are new.
+    const byModel = new Map(list.filter((entry) => entry.connectionId === gemini.id).map((entry) => [entry.model.trim(), entry]));
+    const next = GEMINI_DEFAULT_CHAIN.map((name) => (byModel.has(name)
+        ? { ...byModel.get(name), model: name }
+        : normalizeEntry({ connectionId: gemini.id, model: name, structuredMode: "auto" })));
+    writeJsonSetting(GEMINI_RESET_BACKUP_KEY, list);
+    writeJsonSetting(FALLBACK_LIST_KEY, next);
+    writeJsonSetting(TASK_PICKS_KEY, {});
+    logDebugEvent("setting", `Fallback list reset to the default Gemini list with this update - ${GEMINI_DEFAULT_CHAIN.join(" -> ")}; the previous ${list.length}-entry list is kept in storage under ${GEMINI_RESET_BACKUP_KEY}, and every task starts at the top of the list again.`);
+}
+
 const ensureMigrated = () => {
     if (typeof localStorage === "undefined") return;
     if (localStorage.getItem(FALLBACK_LIST_KEY) === null) migrateFromProviderSettings();
     upgradeFormerGeminiDefault();
+    resetToGeminiDefaultChain();
 };
 
 export function getConnections() {

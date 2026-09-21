@@ -16,6 +16,7 @@ import {
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
+import { DISCORD_URL } from "../../runtime/communityLinks.js";
 import {
   dedupeScenarioBundleBackground,
   embedScenarioBundleImage,
@@ -787,6 +788,11 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             <a href={HUB_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
               Open Hub ↗
             </a>
+            {/* The one coloured control on this page, on purpose: it is the brand's
+                own blue, and the corner is where a newcomer looks for the door. */}
+            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, background: "#5865f2", borderColor: "#6d78f5", color: "#fff", fontWeight: 700, textDecoration: "none" }}>
+              Join the Discord
+            </a>
           </div>
 
           {publishPickerOpen && (
@@ -826,14 +832,17 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
               />
             ) : (
               <>
-                <ScenarioRow
-                  title="📌 Pinned"
-                  posts={rows.pinned}
-                  busyId={busyId}
-                  onImport={handleImport}
-                  onSelect={selectPost}
-                  emptyText="No pinned scenarios right now."
-                />
+                {/* A shelf with nothing on it is not a shelf: with no pinned posts the
+                    page starts at Most Installed. */}
+                {rows.pinned.length > 0 && (
+                  <ScenarioRow
+                    title="📌 Pinned"
+                    posts={rows.pinned}
+                    busyId={busyId}
+                    onImport={handleImport}
+                    onSelect={selectPost}
+                  />
+                )}
                 <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
                 <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
                 <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
