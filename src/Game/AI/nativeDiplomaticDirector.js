@@ -1008,6 +1008,68 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
   return { rewritten, dropped };
 };
 
+// A malformed ledger row on the SALVAGE pass: dropped, and said, instead of
+// costing the whole answer. Field report (beta, 2026-09-21): a three-month
+// jump's first answer - 34 s on 3.7-flash, twenty events - was rejected over
+// ONE agreement start whose second party was not a polity on the map
+// ("requires at least two resolvable parties"), and the retry landed on an
+// overloaded 3.8-flash for 191 s; the turn took 272 s and a request it did not
+// need. The row is a bookkeeping mistake; the month it came with is not.
+// Under salvage-first (gameplay.js runJsonTask) there is no strict retry to
+// correct it, so everything validateDiplomaticLedgerPayload would reject as
+// fatal is removed here first and the application receipt tells the model at
+// the top of the next turn. The strict pass, and the GM preview, still reject.
+//
+// Returns one line per dropped row, for the receipt. The candidate is rewritten
+// in place, in whichever form it arrived (compact lines or objects).
+export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
+  const notes = [];
+  if (!candidate || typeof candidate !== "object") return notes;
+
+  const relationsWereString = typeof candidate.relationUpdates === "string";
+  const relations = decodeRelationUpdates(candidate.relationUpdates);
+  const keptRelations = [];
+  for (const update of relations) {
+    const a = canonicalDiplomaticPolity(update.a, world);
+    const b = canonicalDiplomaticPolity(update.b, world);
+    let why = "";
+    if (!a || !b) why = `"${!a ? update.a : update.b}" is not a polity on this map`;
+    else if (lower(a) === lower(b)) why = "both sides are the same polity";
+    else if (!Number.isFinite(update.score)) why = "it carries no score from -100 to 100";
+    else if (!RELATION_STATUS_SET.has(update.status)) why = `"${update.status}" is not a relation status`;
+    if (why) { notes.push(`Relation update ${update.a || "?"} ↔ ${update.b || "?"} was dropped: ${why}.`); continue; }
+    keptRelations.push(update);
+  }
+  if (keptRelations.length !== relations.length) {
+    candidate.relationUpdates = relationsWereString ? encodeRelationUpdates(keptRelations) : keptRelations;
+  }
+
+  const agreementsWereString = typeof candidate.agreementUpdates === "string";
+  const existing = agreementMapFromWorld(world);
+  const agreements = decodeAgreementUpdates(candidate.agreementUpdates);
+  const keptAgreements = [];
+  for (const update of agreements) {
+    const id = clean(update?.id);
+    const op = clean(update?.op);
+    let why = "";
+    if (!id) why = "it names no agreement";
+    else if (!["start", "update", "suspend", "resume", "end", "expire"].includes(op)) why = `"${op}" is not an agreement operation`;
+    else if (op === "start") {
+      const prior = existing.get(id);
+      if (prior && !["ended", "expired"].includes(prior.status)) why = "it already exists - update, suspend, resume or end it instead";
+      else if (canonicalizeParties(update.parties, world).length < 2) why = "fewer than two of its parties are polities on this map";
+      else if (!clean(update.title)) why = "it has no title";
+    } else if (!existing.has(id)) why = `no agreement "${id}" exists to ${op}`;
+    if (why) { notes.push(`Agreement ${id || "(no id)"} ${op || ""} was dropped: ${why}.`.replace(/\s+/g, " ")); continue; }
+    keptAgreements.push(update);
+  }
+  if (keptAgreements.length !== agreements.length) {
+    candidate.agreementUpdates = agreementsWereString ? encodeAgreementUpdates(keptAgreements) : keptAgreements;
+  }
+
+  return notes;
+};
+
 export const validateDiplomaticLedgerPayload = (
   candidate,
   {
