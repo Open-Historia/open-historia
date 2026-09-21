@@ -99,12 +99,35 @@ test("none of the passages costs the prompt cache anything", () => {
   }
 });
 
-test("the voice passage states its five rules, and the orders passage its five", () => {
+test("the voice passage states its five rules, the orders passage five, the reactions six", () => {
   for (const task of JUMP_TASKS) {
     const text = template(task);
     const section = (header) => { const at = text.indexOf(header); return text.slice(at, text.indexOf("\n[", at + 1)); };
     assert.equal((section(EDITABLE.voice).match(/^ {2}• /gm) ?? []).length, 5, `${task} voice`);
     assert.equal((section(EDITABLE.orders).match(/^ {2}• /gm) ?? []).length, 5, `${task} orders`);
-    assert.equal((section(EDITABLE.reactions).match(/^ {2}• /gm) ?? []).length, 4, `${task} reactions`);
+    // Six since the world was told to act first: the two rules that make a
+    // rival move on its own, and make both sides of a fight fight.
+    assert.equal((section(EDITABLE.reactions).match(/^ {2}• /gm) ?? []).length, 6, `${task} reactions`);
+  }
+});
+
+// The world used to answer and never ask. Every rule about conflict was framed
+// as a reply to something the player had already done, so a campaign could run
+// for years with nobody ever wanting anything from the player — which is what a
+// player reported, and what two of their saves showed: 42 events, no wars, no
+// territory changes, no relation changes. These two rules are the other half.
+test("the world is told it may move first, and that both sides of a fight fight", () => {
+  for (const task of JUMP_TASKS) {
+    const text = template(task);
+    assert.ok(once(text, "THE PRESSURE DOES NOT HAVE TO START WITH THE PLAYER"), `${task}: initiative`);
+    assert.ok(once(text, "WHEN THERE IS A FIGHT, BOTH SIDES FIGHT"), `${task}: both sides`);
+    // Both rules sit inside the passage about how the world answers, which is
+    // the one an author may rewrite — deliberately, so a scenario CAN choose a
+    // gentler world.
+    const section = text.slice(text.indexOf(EDITABLE.reactions), text.indexOf("\n[", text.indexOf(EDITABLE.reactions) + 1));
+    assert.ok(section.includes("THE PRESSURE DOES NOT HAVE TO START WITH THE PLAYER"), `${task}: initiative is part of the editable passage`);
+    assert.ok(section.includes("WHEN THERE IS A FIGHT, BOTH SIDES FIGHT"), `${task}: both sides is part of the editable passage`);
+    // And the licence to diverge is no longer reaction-only.
+    if (task === "jumpForward") assert.ok(text.includes("of their own accord where their interests point that way"), "jumpForward: divergence is not reaction-only");
   }
 });
