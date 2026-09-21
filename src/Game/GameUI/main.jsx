@@ -7,6 +7,7 @@ import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
 import { GameLoadingScreen, useGameLoading } from "./gameLoadingScreen.jsx";
 import { useLibraryState } from "../../runtime/library.js";
+import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
 import { Other } from "./other";
@@ -555,9 +556,9 @@ const Main = ({
       />
       <Presence open={isSettingsOpen} leaveMs={260}>
         <SettingsMenu
-          discordUrl="https://discord.gg/QaqAK7fQAg"
-          redditUrl="https://www.reddit.com/r/OpenHistoria"
-          githubUrl="https://github.com/Open-Historia/open-historia"
+          discordUrl={DISCORD_URL}
+          redditUrl={REDDIT_URL}
+          githubUrl={GITHUB_URL}
           reportBugUrl="https://github.com/Open-Historia/open-historia/issues/new"
           context={{
             gameName: activeGame?.name || "",

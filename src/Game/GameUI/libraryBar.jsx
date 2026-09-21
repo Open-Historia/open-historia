@@ -1627,7 +1627,7 @@ const LibraryTopBar = () => {
   // the player chose in the two-step picker, then open its editor.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
-    setCustomRegionData(null); setPickerOwnerOverrides(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setEditorError(null);
     setIsBusy(true);
     // Before the await: createGame({setActive}) remounts the UI mid-flight and
@@ -1659,7 +1659,7 @@ const LibraryTopBar = () => {
   // scenario only for what it doesn't set, so the scenario is never touched.
   const startGameForFaction = async (scenario, faction, difficulty) => {
     setCountryPicker(null);
-    setCustomRegionData(null); setPickerOwnerOverrides(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setEditorError(null);
     setIsBusy(true);
     setMenuOpen(false);
@@ -1769,10 +1769,24 @@ const LibraryTopBar = () => {
     Object.entries(countryNames ?? {}).map(([code, name]) => ({ code, name }));
 
   // "New Game" now opens a country picker first (the player chooses who to play).
+  // The scenario's own basemap for the picker: the descriptor says whether
+  // there is one, background.json carries it - the same two the game map reads
+  // (useCustomBackground). Nothing to load means ESRI, as before.
+  const loadPickerBackground = (scenarioId, descriptor) => {
+    const kind = descriptor?.kind;
+    if (kind !== "image" && kind !== "vector") return;
+    downloadScenarioJsonAsset(scenarioId, "backgroundData")
+      .then((data) => {
+        if (kind === "image" && data?.dataUrl) setPickerBackground({ kind, imageUrl: data.dataUrl });
+        else if (kind === "vector" && data?.geojson) setPickerBackground({ kind, geojson: data.geojson });
+      })
+      .catch(() => {});
+  };
+
   const handleScenarioPlay = (scenario) => {
     setCountryQuery("");
     setCountryOptions([]);
-    setCustomRegionData(null); setPickerOwnerOverrides(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setPlayGameId(null);
     setPickerTab("country");
     setCountryPicker(scenario);
@@ -1794,6 +1808,9 @@ const LibraryTopBar = () => {
             .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
             .catch(() => {});
         }
+        // And the scenario's own basemap, when it has one, so the picker shows
+        // the map the player is about to play on rather than the ESRI canvas.
+        loadPickerBackground(scenario.id, details?.data?.world?.background);
       })
       .catch(() => setCountryOptions([]));
   };
@@ -2403,6 +2420,9 @@ const LibraryTopBar = () => {
   // world seed with its GADM owners — present-day Europe inside a scenario that
   // has none of it. See applyOwnerOverrides in CountryPickerMap.
   const [pickerOwnerOverrides, setPickerOwnerOverrides] = useState(null);
+  // The scenario's own basemap for the picker, when it has one (CountryPickerMap
+  // customBackground); null draws the picker on ESRI as it always has.
+  const [pickerBackground, setPickerBackground] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // Which tab of the new-game dialog: pick an existing country, or invent one.
   const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction"
@@ -2567,7 +2587,7 @@ const LibraryTopBar = () => {
     setPlayGameId(newGameId);
     setCountryQuery("");
     setCountryOptions([]);
-    setCustomRegionData(null); setPickerOwnerOverrides(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setCountryPicker(scenario);
     loadCountryNames().catch(() => [])
       .then((allCountries) => {
@@ -2582,6 +2602,7 @@ const LibraryTopBar = () => {
         downloadScenarioJsonAsset(scenario.id, "regionsGeojson", { coarse: true })
           .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
           .catch(() => {});
+        loadPickerBackground(scenario.id, seed.world?.background);
       })
       // Falling back to every real-world country here was the same bug by another
       // route: a scenario picker listing Germany and France because a name lookup
@@ -2597,7 +2618,7 @@ const LibraryTopBar = () => {
   const choosePlayCountry = async (countryCode, difficulty) => {
     const gid = playGameId;
     setCountryPicker(null);
-    setCustomRegionData(null); setPickerOwnerOverrides(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setPlayGameId(null);
     if (!gid) return;
     setMenuOpen(false);
@@ -2803,7 +2824,7 @@ const LibraryTopBar = () => {
       <Presence open={Boolean(countryPicker)} value={countryPicker}>
         {(countryPicker) => (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); setPickerOwnerOverrides(null); }}
+          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }}
           style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
         >
           <div
@@ -2896,7 +2917,7 @@ const LibraryTopBar = () => {
                     regionsGeojson={customRegionData}
                     busy={isBusy}
                     onCreate={(faction) => pickFaction(faction)}
-                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); setPickerOwnerOverrides(null); }}
+                    onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }}
                   />
                 ) : (
                   <>
@@ -2918,10 +2939,11 @@ const LibraryTopBar = () => {
                         countryOptions={countryOptions}
                         regionsGeojson={customRegionData}
                         ownerOverrides={pickerOwnerOverrides}
+                        customBackground={pickerBackground}
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
                       {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
