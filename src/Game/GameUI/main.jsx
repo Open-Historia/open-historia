@@ -531,6 +531,9 @@ const Main = ({
           gameName={activeGame?.name || ""}
           scenarioName={runtimeScenario?.name || ""}
           countryName={activeCountryName || activeGame?.country || ""}
+          // The game's own cover when it uploaded one, else its scenario's
+          // (the server already folds the two into the game's coverImageUrl).
+          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}
           phase={gameLoading.phase}
         />
       </Presence>

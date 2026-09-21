@@ -89,38 +89,70 @@ export const useGameLoading = () => {
   return { active: phase !== "done", phase };
 };
 
-export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryName = "", phase = "world" }) => (
+// The card image the library shows for a scenario with no cover of its own
+// (libraryBar.jsx DEFAULT_SCENARIO_COVER): the screen keeps the same shape
+// whether or not the scenario brought a picture.
+const DEFAULT_COVER = "/scenario-placeholder.png";
+const textShadow = "0 2px 14px rgba(0,0,0,0.7)";
+
+// The scenario's cover, full bleed, with the logo turning in the bottom corner
+// and the name and status beside it. The gradient darkens only the bottom, so
+// the picture is the screen and the strip under it stays legible whatever the
+// picture is.
+export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryName = "", coverUrl = "", phase = "world" }) => (
   <div
     className="oh-loading-screen"
     role="status"
     aria-live="polite"
     style={{
-      alignItems: "center",
-      background: "radial-gradient(circle at 50% 42%, #1d1d20 0%, #0c0c0e 68%)",
+      background: "#0c0c0e",
       color: "white",
-      display: "flex",
       fontFamily: "sans-serif",
       inset: 0,
-      justifyContent: "center",
+      overflow: "hidden",
       position: "fixed",
       // Above the settings workspace portal (2147483000): the globe is switched
       // from Settings → Map, and the redraw screen has to cover that too.
       zIndex: 2147483200,
     }}
   >
-    <div style={{ padding: "1rem", textAlign: "center" }}>
-      <img className="oh-loading-logo" src="/logo.png" alt="" style={{ height: "6.5rem", width: "6.5rem" }} />
-      <div style={{ fontSize: "1.15rem", fontWeight: 900, letterSpacing: "0.02em", marginTop: "1.15rem" }}>
-        {gameName || scenarioName || "Open Historia"}
-      </div>
-      {(scenarioName || countryName) && (
-        <div data-no-translate style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.8rem", marginTop: "0.3rem" }}>
-          {[scenarioName, countryName].filter(Boolean).join(" · ")}
+    <div
+      aria-hidden="true"
+      style={{
+        background: "linear-gradient(180deg, rgba(8,8,10,0.22) 0%, rgba(8,8,10,0.08) 40%, rgba(8,8,10,0.86) 100%), "
+          + `url("${String(coverUrl || DEFAULT_COVER).replaceAll('"', "%22")}") center/cover no-repeat, `
+          + `url("${DEFAULT_COVER}") center/cover no-repeat #0c0c0e`,
+        inset: 0,
+        position: "absolute",
+      }}
+    />
+    <div
+      style={{
+        alignItems: "flex-end",
+        bottom: 0,
+        display: "flex",
+        gap: "1.5rem",
+        justifyContent: "space-between",
+        left: 0,
+        padding: "1.75rem 2rem",
+        position: "absolute",
+        right: 0,
+      }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: "1.35rem", fontWeight: 900, letterSpacing: "0.02em", textShadow }}>
+          {gameName || scenarioName || "Open Historia"}
         </div>
-      )}
-      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", letterSpacing: "0.1em", marginTop: "1.25rem", textTransform: "uppercase" }}>
-        {PHASES[phase] ?? PHASES.world}
+        {(scenarioName || countryName) && (
+          <div data-no-translate style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.85rem", marginTop: "0.3rem", textShadow }}>
+            {[scenarioName, countryName].filter(Boolean).join(" · ")}
+          </div>
+        )}
+        <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.7rem", letterSpacing: "0.1em", marginTop: "0.9rem", textShadow, textTransform: "uppercase" }}>
+          {PHASES[phase] ?? PHASES.world}
+        </div>
       </div>
+      <img className="oh-loading-logo" src="/logo.png" alt="" style={{ flexShrink: 0, height: "4rem", width: "4rem" }} />
     </div>
   </div>
 );
