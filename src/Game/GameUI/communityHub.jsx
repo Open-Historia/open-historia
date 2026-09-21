@@ -17,6 +17,7 @@ import {
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
 import { DISCORD_URL } from "../../runtime/communityLinks.js";
+import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
   embedScenarioBundleImage,
@@ -790,7 +791,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             </a>
             {/* The one coloured control on this page, on purpose: it is the brand's
                 own blue, and the corner is where a newcomer looks for the door. */}
-            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, background: "#5865f2", borderColor: "#6d78f5", color: "#fff", fontWeight: 700, textDecoration: "none" }}>
+            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, background: DISCORD_BLURPLE, borderColor: "#6d78f5", color: "#fff", fontWeight: 700, gap: "0.45rem", textDecoration: "none" }}>
+              <DiscordMark size="1.05rem" />
               Join the Discord
             </a>
           </div>
