@@ -62,8 +62,8 @@ export const RATING_ELIGIBLE_TASKS = Object.freeze(new Set([
   "jumpForward",
   "autoJumpForward",
   "gameMaster",
-  "catalystExecutor",
-  "catalystSummary",
+  "interactiveExecutor",
+  "interactiveSummary",
 ]));
 
 export const GENERATION_COMPLETE_EVENT = "oh:ai-generation-complete";

@@ -185,7 +185,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
                 minWidth: 0,
                 padding: "0.45rem 0.5rem",
                 borderRadius: 8,
-                border: `1px solid ${draftIsNew ? "rgba(120,200,255,0.55)" : "rgba(255,255,255,0.16)"}`,
+                border: `1px solid ${draftIsNew ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.16)"}`,
                 background: "rgba(0,0,0,0.28)",
                 color: "white",
               }}

@@ -40,18 +40,18 @@ test("no live gameplay schema converts to anything Gemini rejects", () => {
   }
 });
 
-// The exact shape that broke every jump: nullableCatalystSchema.
+// The exact shape that broke every jump: the nullable scene the jump schema carried then.
 test("a two-branch null union becomes one nullable schema", () => {
   const converted = toGeminiSchema({
     anyOf: [
-      { type: "object", description: "A catalyst.", properties: { title: { type: "string" } } },
+      { type: "object", description: "A scene.", properties: { title: { type: "string" } } },
       { type: "null" },
     ],
   });
 
   assert.equal(converted.type, "object");
   assert.equal(converted.nullable, true);
-  assert.equal(converted.description, "A catalyst.");
+  assert.equal(converted.description, "A scene.");
   assert.deepEqual(converted.properties, { title: { type: "string" } });
   assert.ok(!("anyOf" in converted), "the one-member union should be lifted, not kept");
 });
@@ -153,7 +153,7 @@ test("supported keywords are preserved", () => {
 // Bisected against the live API (2026-09-17) when every chat action batch came
 // back 400: Gemini refuses array-length bounds on an array of OBJECTS inside an
 // anyOf branch. The same keywords are fine on an array of strings and fine
-// outside a union, which is why the jump's catalyst.choices always worked.
+// outside a union, which is why the scene's choices in the jump's answer always worked.
 test("array-length bounds are stripped inside a union, kept outside one", () => {
   const converted = toGeminiSchema({
     type: "object",

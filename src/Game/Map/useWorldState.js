@@ -116,6 +116,24 @@ export const foldOwnerTokens = (state) => {
   return { overrides: foldedOverrides, claimants: foldedClaimants };
 };
 
+// The map's view of the claimant list: a region whose dispute the world has
+// ended (gameState.js settledRegionClaims) is present with no claimants, so the
+// map does not fall back to the claimants its geojson feature bakes in — the
+// world's list is authoritative wherever it has a say. A region disputed again
+// has a live list, which wins; one the world never recorded stays absent and
+// still shows what the scenario's map declares.
+const NO_CLAIMANTS = Object.freeze([]);
+export const withSettledClaims = (claimants, settled) => {
+  const live = claimants ?? EMPTY_OBJECT;
+  const ids = Array.isArray(settled)
+    ? settled.filter((id) => typeof id === "string" && id && !Object.prototype.hasOwnProperty.call(live, id))
+    : [];
+  if (!ids.length) return live;
+  const next = { ...live };
+  for (const id of ids) next[id] = NO_CLAIMANTS;
+  return next;
+};
+
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
@@ -129,7 +147,10 @@ const deriveMapState = (state) => ({
   background: state?.background ?? null,
   ...(() => {
     const folded = foldOwnerTokens(state);
-    return { regionOwnershipOverrides: folded.overrides, regionClaimants: folded.claimants };
+    return {
+      regionOwnershipOverrides: folded.overrides,
+      regionClaimants: withSettledClaims(folded.claimants, state?.settledRegionClaims),
+    };
   })(),
   polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,

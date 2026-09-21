@@ -68,8 +68,8 @@ const FlagCard = ({ imageUrl, label, meta, onClick, selected = false }) => (
         type="button"
         onClick={onClick}
         style={{
-            background: selected ? "rgba(124,58,237,0.2)" : "rgba(255,255,255,0.04)",
-            border: selected ? "1px solid rgba(167,139,250,0.7)" : "1px solid rgba(255,255,255,0.1)",
+            background: selected ? "rgba(0,0,0,0.28)" : "rgba(255,255,255,0.04)",
+            border: selected ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.1)",
             borderRadius: 10,
             color: "white",
             cursor: "pointer",
@@ -112,7 +112,7 @@ const PackCard = ({ post, onClick }) => {
                 textAlign: "left",
             }}
         >
-            <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "linear-gradient(135deg, rgba(124,58,237,0.2), rgba(30,41,59,0.9))", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ position: "relative", width: "100%", aspectRatio: "3 / 2", borderRadius: 7, overflow: "hidden", background: "rgba(38,38,42,0.9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {post?.imageUrl ? (
                     <img src={post.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block", opacity: 0.78 }} />
                 ) : (
@@ -121,7 +121,7 @@ const PackCard = ({ post, onClick }) => {
                         <span style={{ fontSize: "0.62rem", fontWeight: 800, letterSpacing: "0.08em" }}>FLAG PACK</span>
                     </div>
                 )}
-                <span style={{ position: "absolute", top: 7, right: 7, padding: "0.2rem 0.38rem", borderRadius: 999, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(196,181,253,0.45)", color: "#ddd6fe", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.06em" }}>PACK</span>
+                <span style={{ position: "absolute", top: 7, right: 7, padding: "0.2rem 0.38rem", borderRadius: 999, background: "rgba(15,23,42,0.9)", border: "1px solid rgba(255,255,255,0.23)", color: "#f4f4f5", fontSize: "0.58rem", fontWeight: 800, letterSpacing: "0.06em" }}>PACK</span>
             </div>
             <div style={{ fontSize: "0.75rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>{post?.title || "Scenario flag pack"}</div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -360,7 +360,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
 
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.75rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     {[{ id: "game", label: "In this game" }, { id: "community", label: "Community" }].map((entry) => (
-                        <button key={entry.id} type="button" onClick={() => { setTab(entry.id); setQuery(""); if (entry.id !== "community") closeCommunityPack(); }} style={{ ...buttonStyle, background: tab === entry.id ? "rgba(124,58,237,0.28)" : buttonStyle.background, borderColor: tab === entry.id ? "rgba(167,139,250,0.62)" : buttonStyle.border.split(" ").at(-1) }}>
+                        <button key={entry.id} type="button" onClick={() => { setTab(entry.id); setQuery(""); if (entry.id !== "community") closeCommunityPack(); }} style={{ ...buttonStyle, background: tab === entry.id ? "rgba(255,255,255,0.14)" : buttonStyle.background, borderColor: tab === entry.id ? "rgba(255,255,255,0.28)" : buttonStyle.border.split(" ").at(-1) }}>
                             {entry.label}
                         </button>
                     ))}

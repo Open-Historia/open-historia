@@ -158,9 +158,11 @@ export const classifyProviderFailure = ({ status, payload } = {}) => {
 // Fallback list move on. Shared by every provider path so they agree:
 //
 //   Spent, Unusable, other — never; waiting fixes none of them.
-//   Busy — one retry, then the next entry.
-//   Rate limited — the player's setting: "wait" retries as it always did,
-//                  "next" gives up at once.
+//   Busy — never while there is a backup: the next entry answers at once, and
+//          the next call starts at the top again, by when the spell is usually
+//          over (fallbackRunner.js).
+//   Rate limited — the same, unless the player chose to wait (Settings → AI,
+//                  "wait"; the default is "next").
 //
 // With no entry left to fall back to, busy and Rate limited keep the full retry
 // count they had before the list existed: giving up early then would only lose
@@ -170,8 +172,7 @@ export const shouldRetryProviderFailure = ({ failure, attempt, retries, canFallB
     if (kind !== "busy" && kind !== "rateLimited") return false;
     if (attempt >= retries) return false;
     if (!canFallBack) return true;
-    if (kind === "busy") return attempt < 2;
-    return rateLimitPolicy !== "next";
+    return kind === "rateLimited" && rateLimitPolicy === "wait";
 };
 
 // 529 is Anthropic's own status for overloaded_error.
@@ -383,6 +384,16 @@ export const isStreamingRequired = (message) => {
     const text = errorPayloadText(message);
     if (!text || !/stream/i.test(text)) return false;
     return STREAM_REQUIRED_TEXT.test(text);
+};
+
+// Did the provider reject the request because it carried a TEMPERATURE?
+const TEMPERATURE_REFUSAL =
+    /temperature[^.]{0,80}(?:not\s+support|unsupported|not\s+allowed|not\s+enabled|not\s+available|must\s+be|may\s+only|can\s+only|only\s+(?:be\s+set|(?:the\s+)?default)|cannot|can't|invalid)|(?:not\s+support|unsupported|unsupported\s+value|invalid|unknown|unrecognized)[^.]{0,80}\btemperature/i;
+
+export const isTemperatureRefusal = (message) => {
+    const text = errorPayloadText(message);
+    if (!text || !/temperature/i.test(text)) return false;
+    return TEMPERATURE_REFUSAL.test(text);
 };
 
 // ---------------------------------------------------------------------------

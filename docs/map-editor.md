@@ -371,7 +371,14 @@ Boolean ops run directly on OL geometries in EPSG:3857 via `polygon-clipping` (n
 
 Server REST at `/api/mapeditor/documents` (web build routes through `runtime/web/editorStore.js`): `GET` list, `GET /:id`, `POST` create, `PUT /:id` update, `DELETE /:id`. `downloadJson` writes a local `.json`.
 
-`buildPayload()` (`MapEditor.jsx:180`) is a **strict whitelist** — `name, metadata, types, features, colorOverrides, flags, tags, ownerSchema, regions`. **Anything not named here is silently dropped on save**; a new document field appears to work until the first reload. `regions` = `api.serializeRegions()`.
+`buildDocumentFields()` (`MapEditor.jsx`) is a **strict whitelist** — `name, metadata, types, features, colorOverrides, flags, tags, polities, ownerSchema`. **Anything not named here is silently dropped on save**; a new document field appears to work until the first reload. `buildPayload(regions?)` adds the map to it, for an export or a full save.
+
+**A save carries only the regions that moved.** The autosave runs every 2 seconds while the document is dirty, and it used to write the whole world each time — 5.5 MB of JSON on the shipped map, an ~83 MB string on the z9 seed, whether or not a polygon had moved. Now `api.serializeRegionChanges()` writes each region on its own, stamps it (`src/Editor/regionChanges.js`) and compares the stamp with what the last save wrote, so an autosave after a rename sends nothing at all and one after redrawing a border sends that border. Nothing asks a tool to declare what it touched: the comparison is against the geometry itself, so an edit cannot be missed however it was made.
+
+- The payload is then `regionsDelta: { changed, removed, count }` instead of `regions`, applied by `server/regionDelta.js` — shared by the desktop store (`server/mapEditorStore.js`) and the website's IndexedDB one (`src/runtime/web/editorStore.js`).
+- A difference that does not add up — `count` disagreeing with the merge, a region with no id, a document whose geometry the store does not have — is **refused whole**, the stored map is left exactly as it was, and the store answers `needsFullRegions`; `saveNow` then immediately writes the whole map. A half-applied difference would be a map the author silently loses; one extra full save is not.
+- The whole map travels anyway on the first save after a document is opened, loaded or reseeded (the record of stamps is empty), on create, and when any region has no id to key it by.
+- The stamps are committed only once the save has landed, so a failed save is retried with the same contents.
 
 Save robustness:
 - **Debounced autosave** every 2s while `dirty`, keyed on `d.doc` (a fresh object per change) rather than a hand-listed field set — the old field list went stale and silently lost colour/flag/tag edits (`:289`).

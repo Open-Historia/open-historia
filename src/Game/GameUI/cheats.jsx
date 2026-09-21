@@ -29,7 +29,11 @@ import {
 } from "../../runtime/politicalTraitRegistry.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import { buildPoliticalDecisionContext } from "../AI/politicalDecisionContext.js";
+import { isSceneInProgress } from "../AI/interactiveRewind.js";
+import { isOfferableEvent } from "../../runtime/interactiveOffer.js";
 import { setRegionClickInterceptor } from "../Selection/Regions.jsx";
+import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
@@ -85,6 +89,7 @@ const TOOLS = [
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
     { id: "events", title: "Event Editor", subtitle: "Search, create, and repair canonical timeline events", icon: "≡" },
+    { id: "interactive-event", title: "Interactive Event", subtitle: "Play any event on the record out as a scene, the way a time skip offers one now and then", icon: "⚡" },
     { id: "history-document", title: "History Document", subtitle: "Read and edit the living history the AI is given in place of older events; the timeline keeps every event", icon: "≣" },
 ];
 
@@ -94,7 +99,7 @@ const TOOL_GROUPS = [
         title: "GM & History",
         subtitle: "Intervene in the world, repair canon, or restore an earlier state.",
         icon: "✦",
-        tools: ["master-ai", "reminders", "events", "history-document", "roll-back-turn"],
+        tools: ["master-ai", "reminders", "events", "interactive-event", "history-document", "roll-back-turn"],
     },
     {
         id: "countries-territory",
@@ -155,15 +160,15 @@ const buttonStyle = {
 
 const primaryButtonStyle = {
     ...buttonStyle,
-    background: "rgba(124,58,237,0.35)",
-    border: "1px solid rgba(139,92,246,0.55)",
+    background: "rgba(255,255,255,0.1)",
+    border: "1px solid rgba(255,255,255,0.28)",
 };
 
 const homeToolButtonStyle = {
     ...buttonStyle,
     alignItems: "center",
-    background: "rgba(255,255,255,0.035)",
-    border: "1px solid rgba(255,255,255,0.085)",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.09)",
     borderRadius: 10,
     gap: "0.65rem",
     justifyContent: "flex-start",
@@ -174,10 +179,10 @@ const homeToolButtonStyle = {
 
 const iconTileStyle = {
     alignItems: "center",
-    background: "rgba(124,58,237,0.16)",
-    border: "1px solid rgba(139,92,246,0.2)",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 8,
-    color: "rgba(233,213,255,0.95)",
+    color: "#f4f4f5",
     display: "flex",
     flex: "0 0 2rem",
     fontSize: "0.9rem",
@@ -188,7 +193,7 @@ const iconTileStyle = {
 };
 
 const badgeStyle = {
-    background: "rgba(255,255,255,0.055)",
+    background: "rgba(255,255,255,0.06)",
     border: "1px solid rgba(255,255,255,0.1)",
     borderRadius: 999,
     color: "rgba(255,255,255,0.52)",
@@ -369,7 +374,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     return (
         <>
         {clickMode && (
-            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24, 24, 27, 0.96)", border: "1px solid rgba(139,92,246,0.32)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
+            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24, 24, 27, 0.96)", border: "1px solid rgba(0,0,0,0.19)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
             <span>{clickMode.label}</span>
             <button type="button" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
             </div>
@@ -403,8 +408,8 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             <div style={{ overflowY: "auto", paddingRight: "0.15rem" }}>
             <div style={{
                 alignItems: "center",
-                background: "linear-gradient(135deg, rgba(124,58,237,0.12), rgba(59,130,246,0.045))",
-                border: "1px solid rgba(139,92,246,0.18)",
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.09)",
                 borderRadius: 11,
                 display: "flex",
                 gap: "0.65rem",
@@ -424,7 +429,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             {TOOL_GROUPS.map((group) => (
                 <section key={group.id}>
                     <div style={{ alignItems: "flex-start", display: "flex", gap: "0.45rem", marginBottom: "0.36rem", padding: "0 0.1rem" }}>
-                        <span style={{ color: "rgba(196,181,253,0.92)", fontSize: "0.75rem", lineHeight: "1rem" }}>{group.icon}</span>
+                        <span style={{ color: "#e4e4e7", fontSize: "0.75rem", lineHeight: "1rem" }}>{group.icon}</span>
                         <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: "0.69rem", fontWeight: 850, letterSpacing: "0.055em", textTransform: "uppercase" }}>{group.title}</div>
                             <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.35, marginTop: "0.04rem" }}>{group.subtitle}</div>
@@ -484,6 +489,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             endClickMode={endClickMode}
             setStatus={setStatus}
             navigateTool={(nextTool) => { setTool(nextTool); setStatus(""); }}
+            closePanel={onClose}
             />
         )}
         {status && !tool && (
@@ -517,7 +523,7 @@ const MAP_FEATURE_KINDS = [
 ];
 
 const MAP_FEATURE_STATUS_META = {
-    planned: { label: "Planned", color: "#c4b5fd" },
+    planned: { label: "Planned", color: "#e4e4e7" },
     under_construction: { label: "Under construction", color: "#fcd34d" },
     active: { label: "Active", color: "#86efac" },
     damaged: { label: "Damaged", color: "#fca5a5" },
@@ -968,13 +974,13 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         {header(meta.title, "Identity, Political World v2, national baseline, and present-state administration")}
         <div style={{ overflowY: "auto", paddingRight: "0.12rem" }}>
             <div style={{
-                background: "linear-gradient(135deg, rgba(124,58,237,0.13), rgba(59,130,246,0.06))",
-                border: "1px solid rgba(139,92,246,0.24)",
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.12)",
                 borderRadius: 11,
                 marginBottom: "0.72rem",
                 padding: "0.62rem 0.7rem",
             }}>
-                <div style={{ color: "#ddd6fe", fontSize: "0.66rem", fontWeight: 900, letterSpacing: "0.065em", textTransform: "uppercase" }}>
+                <div style={{ color: "#f4f4f5", fontSize: "0.66rem", fontWeight: 900, letterSpacing: "0.065em", textTransform: "uppercase" }}>
                     Canonical now · evolvable later
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.67rem", lineHeight: 1.4, marginTop: "0.16rem" }}>
@@ -1070,11 +1076,11 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                 style={{ ...inputStyle, flex: 1 }}
                                 value={form.color ?? ""}
                                 onChange={(event) => change("color", event.target.value)}
-                                placeholder="#7c3aed"
+                                placeholder="#a1a1aa"
                             />
                             <input
                                 type="color"
-                                value={hexToRgb(form.color) ? (String(form.color).startsWith("#") ? form.color : `#${form.color}`) : "#7c3aed"}
+                                value={hexToRgb(form.color) ? (String(form.color).startsWith("#") ? form.color : `#${form.color}`) : "rgba(255,255,255,0.22)"}
                                 onChange={(event) => change("color", event.target.value)}
                                 style={{ background: "none", border: "none", cursor: "pointer", height: "2.2rem", padding: 0, width: "2.8rem" }}
                             />
@@ -1390,7 +1396,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                     {[
                                         ["Agriculture", "agriculture", "#22c55e"],
                                         ["Industry", "industry", "#3b82f6"],
-                                        ["Services", "services", "#8b5cf6"],
+                                        ["Services", "services", "#d4d4d8"],
                                     ].map(([label, key, tone]) => {
                                         const value = Math.max(0, Math.min(100, Math.round(Number(form[key]) || 0)));
                                         return (
@@ -1423,7 +1429,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                 }}>
                                     <div style={{ background: "#22c55e", width: `${Math.max(0, Math.min(100, Number(form.agriculture) || 0))}%` }} />
                                     <div style={{ background: "#3b82f6", width: `${Math.max(0, Math.min(100, Number(form.industry) || 0))}%` }} />
-                                    <div style={{ background: "#8b5cf6", width: `${Math.max(0, Math.min(100, Number(form.services) || 0))}%` }} />
+                                    <div style={{ background: "rgba(255,255,255,0.07)", width: `${Math.max(0, Math.min(100, Number(form.services) || 0))}%` }} />
                                 </div>
                                 <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
                                     Always totals 100%. Moving one sector keeps that value and redistributes the remainder across the other two in proportion to their current shares.
@@ -1598,7 +1604,6 @@ const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
         }
 
         const manualRecord = {
-            catalyst: null,
             date,
             eventIds: [eventId],
             fallbackReason: "",
@@ -1626,7 +1631,7 @@ const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
 };
 
 const eventBadgeStyle = (tone = "rgba(255,255,255,0.55)") => ({
-    background: "rgba(255,255,255,0.045)",
+    background: "rgba(255,255,255,0.05)",
     border: `1px solid ${tone}`,
     borderRadius: 999,
     color: tone,
@@ -1641,9 +1646,9 @@ const eventBadgeStyle = (tone = "rgba(255,255,255,0.55)") => ({
 
 const eventFilterButtonStyle = (active) => ({
     ...buttonStyle,
-    background: active ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.045)",
-    borderColor: active ? "rgba(139,92,246,0.55)" : "rgba(255,255,255,0.1)",
-    color: active ? "#ddd6fe" : "rgba(255,255,255,0.7)",
+    background: active ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.05)",
+    borderColor: active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)",
+    color: active ? "#f4f4f5" : "rgba(255,255,255,0.7)",
     fontSize: "0.66rem",
     padding: "0.36rem 0.5rem",
 });
@@ -1791,13 +1796,151 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
                         <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
                             {pending.map((entry) => (
                                 <div key={entry.id} style={{ ...cardStyle, fontSize: "0.7rem", lineHeight: 1.4 }}>
-                                    <span style={{ color: "rgba(196,181,253,0.85)", fontSize: "0.6rem", fontWeight: 750, marginRight: "0.4rem", textTransform: "uppercase" }}>{gmChangeKindLabel(entry.kind)}</span>
+                                    <span style={{ color: "#e4e4e7", fontSize: "0.6rem", fontWeight: 750, marginRight: "0.4rem", textTransform: "uppercase" }}>{gmChangeKindLabel(entry.kind)}</span>
                                     {entry.summary}
                                 </div>
                             ))}
                         </div>
                     )}
             </div>
+            {statusLine}
+        </div>
+        </>
+    );
+};
+
+// Interactive Event: offer any event on the record to be played out as a scene.
+// A time skip does this by itself now and then — one skip in three, and never
+// twice within three rounds (runtime/interactiveOffer.js). This puts the same
+// offer on an event of the Game Master's choosing and opens the panel that
+// plays it out (GameUI/interactive.jsx).
+//
+// It writes the offer and nothing else. The scene itself costs what it always
+// costs (one request to open, one a move, one to end), and the cooldown is left
+// alone, so skips go on offering their own.
+const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, closePanel }) => {
+    // The shared store, like the panels that play the scene: an offer written
+    // here reaches the buttons below without a re-read.
+    const world = useRuntimeState("world");
+    const events = useRuntimeState("events");
+    const [search, setSearch] = useState("");
+    const [limit, setLimit] = useState(30);
+    // A scene starts from what the player has seen, so an event the reveal has
+    // not reached cannot be offered yet (gameplay.js createInteractive).
+    const unseen = useUnseenEventIds();
+
+    const sceneInProgress = isSceneInProgress(world?.activeInteractive);
+    const offer = world?.interactiveOffer ?? null;
+    const query = cleanEventText(search).toLowerCase();
+    // Newest first: the moment closest to where the player stands is the one
+    // worth playing out, and the one a scene can open on.
+    const listed = useMemo(() => {
+        const all = Array.isArray(events) ? [...events].reverse() : [];
+        if (!query) return all;
+        return all.filter((event) => [event?.title, event?.date, event?.description, event?.id]
+            .some((value) => cleanEventText(value).toLowerCase().includes(query)));
+    }, [events, query]);
+
+    const openScene = () => {
+        window.dispatchEvent(new Event("oh:open-interactive-event"));
+        // The cheats panel sits above the scene, so it steps out of the way.
+        closePanel?.();
+    };
+
+    const offerEvent = (event) => runBusy(async () => {
+        const id = cleanEventText(event?.id);
+        if (!id) throw new Error("That event has no id, so a scene cannot be opened on it.");
+        const current = await readWorldState({ force: true });
+        await writeWorldState({ ...current, interactiveOffer: { eventId: id, round: Math.max(0, Math.trunc(Number(game?.round) || 0)) } });
+        openScene();
+        return `Offered "${cleanEventText(event?.title) || id}". Play it out in the panel that just opened.`;
+    });
+
+    const clearOffer = () => runBusy(async () => {
+        const current = await readWorldState({ force: true });
+        await writeWorldState({ ...current, interactiveOffer: null });
+        return "The offer is gone. Nothing else changed.";
+    });
+
+    const noteStyle = { color: "rgba(255,255,255,0.48)", fontSize: "0.68rem", lineHeight: 1.45 };
+    const warnStyle = { background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.32)", borderRadius: 8, color: "#fde68a", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.5rem 0.6rem" };
+    const statusLine = status && (
+        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.72rem", marginTop: "0.55rem" }}>
+            {status}
+        </div>
+    );
+    const offeredTitle = offer && cleanEventText((Array.isArray(events) ? events : []).find((event) => cleanEventText(event?.id) === cleanEventText(offer.eventId))?.title);
+
+    return (
+        <>
+        {header(meta.title, meta.subtitle)}
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.55rem", minHeight: 0, overflowY: "auto", paddingRight: "0.12rem" }}>
+            <div style={noteStyle}>
+                Pick an event and it becomes the moment to play out: the scene opens inside it, you make the moves, and how it ends is written into the record as one event. Only the scene costs requests — offering one costs nothing, and letting it pass costs nothing.
+            </div>
+
+            {sceneInProgress && (
+                <div style={warnStyle}>
+                    A scene is already in progress. End it or set it aside before opening another.
+                    <button type="button" onClick={openScene} style={{ ...buttonStyle, display: "block", marginTop: "0.4rem" }}>Open the scene</button>
+                </div>
+            )}
+
+            {offer && !sceneInProgress && (
+                <div style={warnStyle}>
+                    <span data-no-translate>{offeredTitle || cleanEventText(offer.eventId)}</span> is offered now.
+                    <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.4rem" }}>
+                        <button type="button" onClick={openScene} style={{ ...primaryButtonStyle, flex: 1 }}>Play it out</button>
+                        <button type="button" disabled={busy} onClick={clearOffer} style={{ ...buttonStyle, flex: 1 }}>Clear the offer</button>
+                    </div>
+                </div>
+            )}
+
+            <input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search the record…"
+                style={{ ...inputStyle, width: "100%" }}
+            />
+
+            {world === null && <div style={noteStyle}>Loading the record…</div>}
+            {world !== null && listed.length === 0 && <div style={noteStyle}>{query ? "No event matches that." : "The record is empty: play a turn first."}</div>}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {listed.slice(0, limit).map((event) => {
+                    const id = cleanEventText(event.id);
+                    const revealing = unseen.has(id);
+                    const wouldBeOffered = isOfferableEvent(event);
+                    return (
+                        <div key={id || `${event.title}-${event.date}`} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.6rem" }}>
+                            <div data-no-translate style={{ fontSize: "0.76rem", fontWeight: 700, lineHeight: 1.35 }}>{cleanEventText(event.title) || "Untitled event"}</div>
+                            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.25rem" }}>
+                                {isGameDate(event.date) && <span data-no-translate style={{ ...noteStyle, fontSize: "0.64rem" }}>{formatGameDateReadable(event.date)}</span>}
+                                <span style={eventBadgeStyle(wouldBeOffered ? "rgba(134,239,172,0.5)" : "rgba(255,255,255,0.28)")}>
+                                    {wouldBeOffered ? "a skip could offer this" : "a skip never would"}
+                                </span>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={busy || revealing || sceneInProgress}
+                                onClick={() => offerEvent(event)}
+                                title={revealing
+                                    ? "Finish revealing the last time skip first: a scene starts from what you have seen."
+                                    : "Offer this moment and open the scene"}
+                                style={{ ...primaryButtonStyle, marginTop: "0.45rem", opacity: busy || revealing || sceneInProgress ? 0.5 : 1, width: "100%" }}
+                            >
+                                {revealing ? "Not revealed yet" : "Play this out"}
+                            </button>
+                        </div>
+                    );
+                })}
+            </div>
+
+            {listed.length > limit && (
+                <button type="button" onClick={() => setLimit((value) => value + 30)} style={buttonStyle}>
+                    Show {Math.min(30, listed.length - limit)} more of {listed.length}
+                </button>
+            )}
             {statusLine}
         </div>
         </>
@@ -2088,9 +2231,9 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 
     const choiceButton = (active) => ({
         ...buttonStyle,
-        background: active ? "rgba(124,58,237,0.32)" : "rgba(255,255,255,0.045)",
-        borderColor: active ? "rgba(167,139,250,0.65)" : "rgba(255,255,255,0.1)",
-        color: active ? "#ede9fe" : "rgba(255,255,255,0.7)",
+        background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.05)",
+        borderColor: active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)",
+        color: active ? "#f4f4f5" : "rgba(255,255,255,0.7)",
         fontSize: "0.64rem",
         minHeight: "2rem",
         padding: "0.34rem 0.48rem",
@@ -2181,7 +2324,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
         {header(meta.title, meta.subtitle)}
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto", paddingRight: "0.12rem" }}>
             <div style={{
-                background: "linear-gradient(135deg, rgba(59,130,246,0.09), rgba(124,58,237,0.08))",
+                background: "rgba(255,255,255,0.045)",
                 border: "1px solid rgba(96,165,250,0.2)",
                 borderRadius: 10,
                 color: "rgba(219,234,254,0.78)",
@@ -2211,8 +2354,8 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
             </button>
 
             {creating && (
-                <div style={{ ...editorFieldStyle, borderColor: "rgba(139,92,246,0.45)", marginTop: "0.55rem" }}>
-                    <div style={{ color: "#ddd6fe", fontSize: "0.7rem", fontWeight: 850, letterSpacing: "0.04em", textTransform: "uppercase" }}>New canonical event</div>
+                <div style={{ ...editorFieldStyle, borderColor: "rgba(255,255,255,0.23)", marginTop: "0.55rem" }}>
+                    <div style={{ color: "#f4f4f5", fontSize: "0.7rem", fontWeight: 850, letterSpacing: "0.04em", textTransform: "uppercase" }}>New canonical event</div>
                     <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.18rem" }}>
                         Inserts history directly and links it into the normal Events panel. Optional NPC reactions are evaluated separately only after the undo window.
                     </div>
@@ -2326,7 +2469,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                     const pendingReactionSeconds = pendingReaction ? Math.max(0, Math.ceil(pendingReactionMs / 1000)) : 0;
                     const reactionResult = cleanEventText(event?.npcReaction?.result).toLowerCase();
                     return (
-                        <div key={editorKey} style={{ ...editorFieldStyle, borderColor: isEditing ? "rgba(139,92,246,0.45)" : "rgba(255,255,255,0.1)", padding: "0.55rem 0.6rem" }}>
+                        <div key={editorKey} style={{ ...editorFieldStyle, borderColor: isEditing ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.1)", padding: "0.55rem 0.6rem" }}>
                             <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div data-no-translate style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.62rem", fontWeight: 700 }}>{event.date || "Undated"}</div>
@@ -2360,7 +2503,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.28rem", marginTop: "0.38rem" }}>
                                 {major && <span style={eventBadgeStyle("rgba(251,191,36,0.85)")}>Major</span>}
-                                {event.notable && <span style={eventBadgeStyle("rgba(196,181,253,0.85)")}>Notable</span>}
+                                {event.notable && <span style={eventBadgeStyle("#e4e4e7")}>Notable</span>}
                                 {event.playerRelated && <span style={eventBadgeStyle("rgba(96,165,250,0.85)")}>Player</span>}
                                 {manual && <span style={eventBadgeStyle("rgba(52,211,153,0.85)")}>Manual</span>}
                                 {event?.quote?.text && <span style={eventBadgeStyle("rgba(148,163,184,0.82)")}>Quote</span>}
@@ -2527,7 +2670,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 };
 
-const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool }) => {
+const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
     const [gmMode, setGmMode] = useState("world-intervention");
@@ -2701,6 +2844,20 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         );
     }
 
+    if (tool === "interactive-event") {
+        return (
+            <InteractiveEventView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                game={game}
+                runBusy={runBusy}
+                closePanel={closePanel}
+            />
+        );
+    }
+
     if (tool === "edit-country") {
         return (
             <CountryEditorView
@@ -2762,8 +2919,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         };
         const eventRef = (entry) => `event ${entry._eventIndex}`;
         const exactRowStyle = {
-            background: "rgba(255,255,255,0.028)",
-            border: "1px solid rgba(255,255,255,0.065)",
+            background: "rgba(255,255,255,0.03)",
+            border: "1px solid rgba(255,255,255,0.07)",
             borderRadius: 7,
             color: "rgba(255,255,255,0.66)",
             fontSize: "0.65rem",
@@ -2875,8 +3032,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 style={{
                                     ...buttonStyle,
                                     alignItems: "flex-start",
-                                    background: active ? "rgba(59,130,246,0.16)" : "rgba(255,255,255,0.035)",
-                                    borderColor: active ? "rgba(96,165,250,0.42)" : "rgba(255,255,255,0.1)",
+                                    background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+                                    borderColor: active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)",
                                     flexDirection: "column",
                                     gap: "0.18rem",
                                     justifyContent: "flex-start",
@@ -2885,7 +3042,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     textAlign: "left",
                                 }}
                             >
-                                <span style={{ color: active ? "#dbeafe" : "rgba(255,255,255,0.8)", fontSize: "0.74rem" }}>{option.title}</span>
+                                <span style={{ color: active ? "#f4f4f5" : "rgba(255,255,255,0.8)", fontSize: "0.74rem" }}>{option.title}</span>
                                 <span style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.63rem", fontWeight: 400, lineHeight: 1.3 }}>{option.description}</span>
                             </button>
                         );
@@ -2968,7 +3125,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 <div style={{ ...labelStyle, marginBottom: "0.3rem", marginTop: 0 }}>Authored events</div>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
                                     {events.map((event, index) => (
-                                        <div key={event.id || `${event.date}-${index}`} style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.55rem" }}>
+                                        <div key={event.id || `${event.date}-${index}`} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: "0.5rem 0.55rem" }}>
                                             <div style={{ color: "rgba(147,197,253,0.82)", fontSize: "0.61rem" }}>EVENT {index} · {event.date || "undated"}</div>
                                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
                                                 {[
@@ -2979,7 +3136,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                     ...(event.warId ? [`WAR · ${event.warId}`] : []),
                                                 ].map((badge) => (
                                                     <span key={badge} style={{
-                                                        background: "rgba(255,255,255,0.045)",
+                                                        background: "rgba(255,255,255,0.05)",
                                                         border: "1px solid rgba(255,255,255,0.09)",
                                                         borderRadius: 999,
                                                         color: "rgba(255,255,255,0.5)",
@@ -3557,8 +3714,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             {header(meta.title, meta.subtitle)}
             <div style={{ overflowY: "auto", paddingRight: "0.12rem" }}>
                 <div style={{
-                    background: "rgba(76,29,149,0.18)",
-                    border: "1px solid rgba(139,92,246,0.42)",
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.21)",
                     borderRadius: 9,
                     color: "rgba(255,255,255,0.72)",
                     fontSize: "0.68rem",
@@ -3566,7 +3723,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     marginBottom: "0.55rem",
                     padding: "0.58rem 0.68rem",
                 }}>
-                    <strong style={{ color: "#ede9fe", display: "block", fontSize: "0.72rem", marginBottom: "0.12rem" }}>
+                    <strong style={{ color: "#f4f4f5", display: "block", fontSize: "0.72rem", marginBottom: "0.12rem" }}>
                         CAUSAL CHALLENGE · NOT RUBBER-BANDING
                     </strong>
                     Difficulty changes how uncertainty, weak plans, opposition, and bargaining are resolved. Higher levels mean less benefit of the doubt and more competent opponents — never secret anti-player knowledge, arbitrary bad luck, or a world that conspires against you.
@@ -3589,8 +3746,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 style={{
                                     ...buttonStyle,
                                     alignItems: "flex-start",
-                                    background: active ? "rgba(124,58,237,0.30)" : "rgba(255,255,255,0.045)",
-                                    border: active ? "1px solid rgba(139,92,246,0.68)" : "1px solid rgba(255,255,255,0.10)",
+                                    background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
+                                    border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.10)",
                                     flexDirection: "column",
                                     gap: "0.26rem",
                                     minHeight: "6.1rem",
@@ -3605,10 +3762,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                             <strong style={{ color: "#fff", fontSize: "0.76rem" }}>{level.label}</strong>
                                             {active && (
                                                 <span style={{
-                                                    background: "rgba(139,92,246,0.28)",
-                                                    border: "1px solid rgba(167,139,250,0.45)",
+                                                    background: "rgba(255,255,255,0.1)",
+                                                    border: "1px solid rgba(255,255,255,0.23)",
                                                     borderRadius: 999,
-                                                    color: "#ddd6fe",
+                                                    color: "#f4f4f5",
                                                     fontSize: "0.5rem",
                                                     fontWeight: 900,
                                                     letterSpacing: "0.04em",
@@ -3616,7 +3773,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                 }}>ACTIVE</span>
                                             )}
                                         </div>
-                                        <div style={{ color: active ? "#c4b5fd" : "rgba(255,255,255,0.48)", fontSize: "0.58rem", marginTop: "0.06rem" }}>
+                                        <div style={{ color: active ? "#e4e4e7" : "rgba(255,255,255,0.48)", fontSize: "0.58rem", marginTop: "0.06rem" }}>
                                             {level.blurb}
                                         </div>
                                     </div>
@@ -3644,7 +3801,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                     <div style={{ display: "grid", gap: "0.34rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.5rem" }}>
                         {profileRows.map(([label, value]) => (
-                            <div key={label} style={{ background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 7, padding: "0.38rem 0.45rem" }}>
+                            <div key={label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 7, padding: "0.38rem 0.45rem" }}>
                                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.51rem", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{label}</div>
                                 <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.67rem", fontWeight: 700, marginTop: "0.08rem" }}>{value}</div>
                             </div>
@@ -3654,7 +3811,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     <div style={{ display: "grid", gap: "0.22rem", marginTop: "0.48rem" }}>
                         {(currentMeta.effects ?? []).map((effect) => (
                             <div key={effect} style={{ color: "rgba(255,255,255,0.56)", fontSize: "0.6rem", lineHeight: 1.38 }}>
-                                <span style={{ color: "#a78bfa", marginRight: "0.28rem" }}>◆</span>{effect}
+                                <span style={{ color: "#d4d4d8", marginRight: "0.28rem" }}>◆</span>{effect}
                             </div>
                         ))}
                     </div>
@@ -3820,10 +3977,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} placeholder={adding ? "Atlantis" : nameOf(target)} />
             <label style={labelStyle}>Color (hex)</label>
             <div style={{ alignItems: "center", display: "flex", gap: "0.45rem" }}>
-            <input style={{ ...inputStyle, width: "8rem" }} value={fields.color ?? ""} onChange={(event) => setFields({ ...fields, color: event.target.value })} placeholder="#7c3aed" />
+            <input style={{ ...inputStyle, width: "8rem" }} value={fields.color ?? ""} onChange={(event) => setFields({ ...fields, color: event.target.value })} placeholder="#a1a1aa" />
             <input
             type="color"
-            value={hexToRgb(fields.color) ? (fields.color.startsWith("#") ? fields.color : `#${fields.color}`) : "#7c3aed"}
+            value={hexToRgb(fields.color) ? (fields.color.startsWith("#") ? fields.color : `#${fields.color}`) : "#a1a1aa"}
             onChange={(event) => setFields({ ...fields, color: event.target.value })}
             style={{ background: "none", border: "none", cursor: "pointer", height: "2.1rem", padding: 0, width: "2.6rem" }}
             />
@@ -3846,7 +4003,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const isContested = claimants.length > 0;
         const isOccupied = Boolean(controller && sovereign && controller !== sovereign);
         const stateLabel = !controller ? "Unclaimed" : isOccupied ? "Occupied" : isContested ? "Disputed" : "Held";
-        const stateTone = isOccupied ? "#fcd34d" : isContested ? "#c4b5fd" : controller ? "#86efac" : "rgba(255,255,255,0.55)";
+        const stateTone = isOccupied ? "#fcd34d" : isContested ? "#e4e4e7" : controller ? "#86efac" : "rgba(255,255,255,0.55)";
 
         const normalizeClaimants = (raw, currentOwner = "") => [...new Set(
             (Array.isArray(raw)
@@ -3979,8 +4136,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <>
             {header(meta.title, meta.subtitle)}
             <div style={{ overflowY: "auto", paddingRight: "0.08rem" }}>
-                <div style={{ background: "rgba(124,58,237,0.1)", border: "1px solid rgba(139,92,246,0.34)", borderRadius: 10, color: "rgba(233,213,255,0.88)", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.55rem 0.65rem" }}>
-                    <strong style={{ color: "#e9d5ff" }}>Canonical now · evolvable later.</strong> Region edits change the present territorial state only. Future wars, treaties and simulated events remain free to move it again.
+                <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.17)", borderRadius: 10, color: "#e4e4e7", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.55rem 0.65rem" }}>
+                    <strong style={{ color: "#f4f4f5" }}>Canonical now · evolvable later.</strong> Region edits change the present territorial state only. Future wars, treaties and simulated events remain free to move it again.
                 </div>
 
                 <button
@@ -4018,7 +4175,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {fields.baseGid0 && infoRow("Base GID₀", fields.baseGid0, "rgba(255,255,255,0.58)")}
                             {infoRow("Controller", nameOf(controller), isOccupied ? "#fcd34d" : "#d1fae5")}
                             {infoRow("Sovereign", nameOf(sovereign), isOccupied ? "#fde68a" : "rgba(255,255,255,0.86)")}
-                            {infoRow("Claimants", claimants.length ? claimants.map(nameOf).join(", ") : "None", claimants.length ? "#ddd6fe" : "rgba(255,255,255,0.55)")}
+                            {infoRow("Claimants", claimants.length ? claimants.map(nameOf).join(", ") : "None", claimants.length ? "#f4f4f5" : "rgba(255,255,255,0.55)")}
                         </div>
                     </div>
 
@@ -4110,8 +4267,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         {claimants.length ? (
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem" }}>
                                 {claimants.map((claimant) => (
-                                    <div key={claimant} style={{ alignItems: "center", background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.2)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.38rem 0.5rem" }}>
-                                        <span style={{ color: "#ddd6fe", fontSize: "0.73rem", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{nameOf(claimant)}</span>
+                                    <div key={claimant} style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.38rem 0.5rem" }}>
+                                        <span style={{ color: "#f4f4f5", fontSize: "0.73rem", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{nameOf(claimant)}</span>
                                         <button
                                             type="button"
                                             disabled={busy}
@@ -4249,9 +4406,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             || String(kind || "landmark").replace(/\b\w/g, (letter) => letter.toUpperCase());
         const choiceButton = (active) => ({
             ...buttonStyle,
-            background: active ? "rgba(124,58,237,0.34)" : "rgba(255,255,255,0.045)",
-            border: active ? "1px solid rgba(139,92,246,0.62)" : "1px solid rgba(255,255,255,0.1)",
-            color: active ? "#ede9fe" : "rgba(255,255,255,0.72)",
+            background: active ? "rgba(0,0,0,0.48)" : "rgba(255,255,255,0.05)",
+            border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.1)",
+            color: active ? "#f4f4f5" : "rgba(255,255,255,0.72)",
             fontSize: "0.68rem",
             padding: "0.38rem 0.45rem",
         });
@@ -4356,8 +4513,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             {header(meta.title, "Runtime world features + scenario-authored cities")}
             <div style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
                 <div style={{
-                    background: "linear-gradient(135deg, rgba(124,58,237,0.11), rgba(59,130,246,0.045))",
-                    border: "1px solid rgba(139,92,246,0.2)",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.1)",
                     borderRadius: 10,
                     color: "rgba(255,255,255,0.55)",
                     fontSize: "0.66rem",
@@ -4365,7 +4522,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     marginBottom: "0.55rem",
                     padding: "0.55rem 0.62rem",
                 }}>
-                    <strong style={{ color: "#ddd6fe" }}>Two native layers, one editor.</strong> Runtime features live in the canonical world and coexist with cities. Scenario cities are the authored historical city set used when this scenario has custom cities enabled.
+                    <strong style={{ color: "#f4f4f5" }}>Two native layers, one editor.</strong> Runtime features live in the canonical world and coexist with cities. Scenario cities are the authored historical city set used when this scenario has custom cities enabled.
                 </div>
 
                 <button
@@ -4403,12 +4560,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     const key = `marker:${marker.id}`;
                     const isEditing = editingId === key;
                     return (
-                        <div key={key} style={{ background: "rgba(255,255,255,0.035)", border: isEditing ? "1px solid rgba(139,92,246,0.42)" : "1px solid rgba(255,255,255,0.085)", borderRadius: 10, padding: "0.55rem 0.62rem" }}>
+                        <div key={key} style={{ background: "rgba(255,255,255,0.04)", border: isEditing ? "1px solid rgba(0,0,0,0.5)" : "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "0.55rem 0.62rem" }}>
                             <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ alignItems: "center", display: "flex", gap: "0.36rem", minWidth: 0 }}>
-                                        <span style={{ color: "#ede9fe", fontSize: "0.8rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{marker.name}</span>
-                                        <span style={{ ...badgeStyle, color: "#c4b5fd" }}>RUNTIME</span>
+                                        <span style={{ color: "#f4f4f5", fontSize: "0.8rem", fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{marker.name}</span>
+                                        <span style={{ ...badgeStyle, color: "#e4e4e7" }}>RUNTIME</span>
                                         <span style={{ ...badgeStyle, color: mapFeatureStatusMeta(marker.status).color }}>
                                             {mapFeatureStatusMeta(marker.status).label}
                                         </span>
@@ -4573,7 +4730,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     const isEditing = editingId === key;
                     const tier = Math.max(1, Math.min(4, Number(props.tier) || (props.capital === "primary" || props.capital === true ? 4 : 2)));
                     return (
-                        <div key={key} style={{ background: "rgba(255,255,255,0.035)", border: isEditing ? "1px solid rgba(59,130,246,0.4)" : "1px solid rgba(255,255,255,0.085)", borderRadius: 10, padding: "0.55rem 0.62rem" }}>
+                        <div key={key} style={{ background: "rgba(255,255,255,0.04)", border: isEditing ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: "0.55rem 0.62rem" }}>
                             <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ alignItems: "center", display: "flex", gap: "0.36rem", minWidth: 0 }}>
@@ -4705,9 +4862,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const customKind = type === "other" ? String(fields.customKind ?? "").trim() : type;
         const choiceStyle = (active) => ({
             ...buttonStyle,
-            background: active ? "rgba(124,58,237,0.34)" : "rgba(255,255,255,0.045)",
-            border: active ? "1px solid rgba(139,92,246,0.62)" : "1px solid rgba(255,255,255,0.1)",
-            color: active ? "#ede9fe" : "rgba(255,255,255,0.72)",
+            background: active ? "rgba(0,0,0,0.48)" : "rgba(255,255,255,0.05)",
+            border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.1)",
+            color: active ? "#f4f4f5" : "rgba(255,255,255,0.72)",
             fontSize: "0.68rem",
             padding: "0.42rem 0.45rem",
         });
@@ -4929,7 +5086,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     </button>
                 )}
 
-                <details style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 9, marginTop: "0.55rem", padding: "0.5rem 0.58rem" }}>
+                <details style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 9, marginTop: "0.55rem", padding: "0.5rem 0.58rem" }}>
                     <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 800 }}>Advanced · city-layer source</summary>
                     <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.63rem", lineHeight: 1.45, marginTop: "0.45rem" }}>
                         Turning off scenario cities restores the stock PMTiles city database. On historical scenarios this may reintroduce modern/anachronistic cities, so this is intentionally not the default cleanup action.

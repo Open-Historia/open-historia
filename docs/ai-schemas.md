@@ -35,9 +35,9 @@ Each task is identified by a **task key**. `GAMEPLAY_SCHEMAS` maps the key to it
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
 | `nextSpeaker` | `NEXT_SPEAKER_SCHEMA` | `submit_next_speaker` | diplomatic chat turn order |
 | `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
-| `catalystCreation` | `CATALYST_CREATION_SCHEMA` (**= `catalystSchema`**, `:517`) | `submit_catalyst_creation` | catalyst scene creation |
-| `catalystExecutor` | `CATALYST_EXECUTOR_SCHEMA` | `submit_catalyst_execution` | advance a catalyst |
-| `catalystSummary` | `CATALYST_SUMMARY_SCHEMA` | `submit_catalyst_summary` | resolved catalyst → event |
+| `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**, `:517`) | `submit_interactive_creation` | opening an interactive event's scene |
+| `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
+| `interactiveSummary` | `INTERACTIVE_SUMMARY_SCHEMA` | `submit_interactive_summary` | finished interactive event → event |
 | `gameMaster` | `GAME_MASTER_SCHEMA` | `submit_game_master` | `applyGameMasterCommand` |
 | `countryStatSheet` | `COUNTRY_STAT_SHEET_SCHEMA` | `submit_country_stat_sheet` | national stat sheet |
 | `timelineCurator` | `TIMELINE_CURATOR_SCHEMA` | `submit_timeline_curator` | one judgment per fresh event; native gates in `nativeTimelineCurator.js` decide what a judgment may remove |
@@ -226,31 +226,48 @@ Also used for `autoJumpForward`. This is the largest task.
 
 `eventSchema` (`:322`): `id`, `date`* , `title`* , `description`* , `importance`, `kind`, `notable` (bool), `playerRelated` (bool), `impacts` (`impactsSchema`).
 
-There is **no `catalyst`**: a scene begins only when the player starts one in Catalyst mode (`catalystCreation`). The schema used to offer one on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
+There is **no scene** in the answer: a scene begins only when the player takes up an interactive event, an event of the skip that the engine offers for it now and then at no cost (`runtime/interactiveOffer.js`; `interactiveCreation`). The schema used to carry a `catalyst` on every skip, into a save no panel showed it from; an answer that still carries one has it dropped by `normalizeGameplayPayload` before validation, never refused.
 
-#### Ledger transports (`warUpdates`, `relationUpdates`, `agreementUpdates`)
+#### Ledger transports (`warUpdates`, `relationUpdates`, `agreementUpdates`, `puppetUpdates`)
 
-Three optional strings, one record per line, fields separated by `~`. They deliberately stay text: the nested object form is what Gemini function calling and strict tool modes choke on, and the formats are taught in the live prompt (`buildWarLedgerDirective` / `buildDiplomaticLedgerDirective` in gameplay.js), so every campaign carries them whatever guidance it edited (ai-prompts.md §2).
+Four optional strings, one record per line, fields separated by `~`. They deliberately stay text: the nested object form is what Gemini function calling and strict tool modes choke on, and the formats are taught in the live prompt (`buildWarLedgerDirective` / `buildDiplomaticLedgerDirective` in gameplay.js), so every campaign carries them whatever guidance it edited (ai-prompts.md §2).
 
 | Transport | Line | Ops |
 |---|---|---|
 | `warUpdates` | `warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note` | start, join-a, join-b, leave, ceasefire, resume, end |
 | `relationUpdates` | `A~B~score~status~eventNumbersCSV~summary` | absolute score; a blank status is derived from it |
 | `agreementUpdates` | `agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms` | start, update, suspend, resume, end, expire |
+| `puppetUpdates` | `op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note` | install, reclassify, loyalty, reveal, release, annex, revolt, suppress |
 
 `eventNumbersCSV` (1-based) is a hint first: the engine rebinds war records from `event.warId` and the transition's wording (`normalizeWorldWarEventLinks`, in `nativeWarLedger.js`) whenever an event carries the record's warId, and the diplomatic director binds relation and agreement records to the one event that matches. When no event carries the warId the model's own numbers are kept rather than blanked, so the validator reports the real defect (the event is missing its `warId`) instead of asking for a number the model already gave. Validation runs per segment against the world as the earlier segments left it (`validateSegmentLedgers`): strict while a retry remains, repaired on the final attempt (`repairWarLedgerPayload`): a record's own event numbers are stamped onto their events as the warId they declare, a record that still cannot bind is dropped with the war bindings of its events (events of wars that already exist keep theirs), and the segment is kept — the events stand as narrative, and only the canonical war change is lost, logged to the diagnostics log. Accepted records are bound to the segment's event ids, concatenated by `mergeSegmentPayloads`, remapped to the canonical round-scoped ids minted in `applySimulationResult` (`src/runtime/eventIdentity.js`), and applied by `applyWarUpdates` / `applyDiplomaticUpdates`. `eventSchema` carries `warId` and `combatants[]` for the combat rule (docs/world-state.md §2b-bis).
 
+`puppetUpdates` records a **subordination** — one polity directing another's will while it stays a separate country holding its own territory and its own sovereignty (docs/world-state.md §2b-bis and the Glossary). `kind` ∈ protectorate | satellite | client and says WHICH POWERS the Overlord holds rather than how tightly, so a change of arrangement is `reclassify` and never a step along a scale; only `install` needs kind/loyalty/secrecy. `loyalty` is 0-100 and `secrecy` is open | covert. `reveal` is one-way. The director refuses what the world cannot support: a second Overlord for a Puppet that has one, a cycle, and any chain — an `install` naming an Overlord that is itself held attaches to whoever holds it, and one naming a Puppet that holds others reparents those one hop up, permanently, in the same event.
+
+Three things the ENGINE does rather than the model, all for the same reason — a rule that depends on the model remembering to emit a line is a rule that silently lapses.
+
+A **refused demand** costs a fixed 10 Loyalty, charged once. A **demand** is an Overlord telling its own Puppet to do something, and it is a record, not a sentence: a `demand_made` event in the one-on-one thread between the two, answered by `demand_answered` events (`src/runtime/chatThreads.js`), exactly as a poll and its votes are kept. It runs open → accepted | refused | countered, and a countered demand → settled (the Overlord took the alternative) or superseded (the Overlord demanded again, revised or restated). Only a refusal costs anything; offering an alternative is negotiating.
+
+Who records what. The **player** answers from a demand card in the thread — Accept, Refuse, or an alternative in their own words — and, as an Overlord, makes a demand with the composer's ⚑ toggle and accepts or rejects a Puppet's alternative from the card. Those are choices, so they cost no request and cannot be misread. An **AI**'s reply in that thread is read by one small request, the `demandCheck` task (`DEMAND_CHECK_SCHEMA`, `src/runtime/demandCheck.js`), whose answer is a REQUIRED outcome from a fixed list — the code accepts only those the speaker may give in the state the demand is in. It is asked only in the one-on-one thread between the player and their own Overlord or Puppet; group chats have no demand machinery. It replaced an optional hidden `REFUSED_DEMAND` line the model was asked to add to its reply: a live run showed an Overlord answer a flat refusal with "Belarus's refusal is noted" and not mark it, two in three at best one-on-one and none in groups. The next jump collects refused demands off the saved threads with `chargeRefusals` (`gameState.js`), and records each in `world.chargedRefusals` — never on the thread, because chat writers save whatever copy they hold and erased a flag kept there.
+
+A Puppet whose Loyalty falls below 35 is handed a hidden **Storyline** once, which the world director then ripens; the model still decides whether and when anything comes of it, through `revolt` or `suppress`, and either settles the Storyline. And an **`annex` costs the Overlord `internationalReputation`** — 8 for a covert arrangement, 16 for one the world could see — because a cost the model only sometimes remembers is one players learn to ignore, and a Puppet then becomes free territory with a waiting period.
+
+What the engine does *not* decide is whether unrest was foreseen. The bounded ledger slice tells the jump whether the Overlord has an agent inside its own Puppet, or services strong enough to catch word — the fact — and the model writes the fiction from there.
+
+**Who is told what.** The jump, the idle diplomacy pass and next-speaker read the whole ledger from the canonical diplomatic context: they reason about the entire world. A **leader** is not given that context and must not be: it speaks as one country, so `puppetBriefingFor` (`src/runtime/puppets.js`) briefs it on what that country knows — its own arrangements, and for a covert one which of the people in the room have *not* found out, which is what it needs to know which way to lie. The one-on-one leader and every AI participant of a group turn get it; the player is counted into the room by hand, because a chat's `countries` list only its non-player members. A covert arrangement a third party knows of is one its **agents uncovered**: an *active* agent inside either party reveals it to its owner at the end of the turn (`revealPuppetsToSpies`), and refreshes what that owner last saw, so a lapsed arrangement can be learned to have lapsed; with no agent in place the old belief stands. A turned agent reveals nothing, because its captors choose what it reports.
+
+The **pregame bootstrap** declares Puppets already standing on the start date in its flat `canonicalUpdates`, as `puppet:open` or `puppet:covert` with `polities` = [overlord, puppet], `category` the kind and `score` the loyalty (`puppetUpdatesFromCanonical`).
+
 `PREGAME_HISTORY_SCHEMA` takes the same facts for round zero as one flat `canonicalUpdates` array (`canonicalUpdateSchema`: `kind` = relation | war:<op> | agreement:start, plus id / polities / opponents / score / category / title / detail), which `expandCanonicalUpdateEnvelope` turns into the three transports before `validatePregameCanonicalBootstrap` runs.
 
-### 4.8 `catalystSchema` (`:346`) and executor/summary
+### 4.8 `interactiveSchema` (`:346`) and executor/summary
 
-`CATALYST_CREATION_SCHEMA` is `catalystSchema` directly.
+`INTERACTIVE_CREATION_SCHEMA` is `interactiveSchema` directly.
 
 | Schema | Fields (required*) |
 |---|---|
-| `catalystSchema` | `title`*, `premise`*, `opening`*, `choices`* (array, `minItems: 2`, `maxItems: 5`, nonempty items) |
-| `CATALYST_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items) |
-| `CATALYST_SUMMARY_SCHEMA` (`:539`) | `title`*, `description`*, `importance`* |
+| `interactiveSchema` | `title`*, `premise`*, `opening`*, `choices`* (array, `minItems: 2`, `maxItems: 5`, nonempty items) |
+| `INTERACTIVE_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items) |
+| `INTERACTIVE_SUMMARY_SCHEMA` (`:539`) | `title`*, `description`*, `importance`* |
 
 ### 4.9 Small single-purpose schemas
 
@@ -313,9 +330,9 @@ After the schema walk passes, `validateGameplayPayload` runs task-specific check
 |---|---|---|
 | `jumpForward` / `autoJumpForward` | `stopDate` non-blank; every event's `date`/`title`/`description` non-blank after trim; **at least one of** events or a non-empty summary | `:866` |
 | `pregameHistory` | every event's `date`/`title`/`description` non-blank; `summary` non-blank | `:892` |
-| `descriptionToAction`, `nextSpeaker`, `eventConsolidator`, `catalystCreation`, `catalystExecutor`, `catalystSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
-| `catalystCreation` | `choices` distinct (`validateDistinctChoices`) | `:921` |
-| `catalystExecutor` | `nextChoices` **must be empty when `resolved`**; must have **≥2** when unresolved; must be distinct | `:926` |
+| `descriptionToAction`, `nextSpeaker`, `eventConsolidator`, `interactiveCreation`, `interactiveExecutor`, `interactiveSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
+| `interactiveCreation` | `choices` distinct (`validateDistinctChoices`) | `:921` |
+| `interactiveExecutor` | `nextChoices` **must be empty when `resolved`**; must have **≥2** when unresolved; must be distinct | `:926` |
 | `countryStatSheet` | deep no-blank-strings (`findBlankString`); **gdpBreakdown sum = 100** | `:937` |
 | `actions` | each topic `title` non-blank; each action `title` AND `text` non-blank | `:946` |
 
@@ -408,7 +425,7 @@ Every AI gameplay call goes through this one function. It owns prompt assembly, 
 1. `loadPromptCatalog` + `renderTemplate` build the system prompt from the current templates plus the campaign's guidance edits (ai-prompts.md §2).
 2. Append the **difficulty directive** from `readGameData().difficulty` (`:400`).
 3. For `jumpForward`/`autoJumpForward`: append **[Player Agency]** and **[Map Truth]** blocks at call time (`:411-421`) — a leftover of the frozen-prompt era; the templates now reach every campaign (ai-prompts.md §2), and `promptDedupe.js` skips a directive the template already carries.
-4. For `actions`/jumps/catalysts: append **[International Reputation]** context (`:425`).
+4. For `actions`/jumps/interactive events: append **[International Reputation]** context (`:425`).
 
 ### 8.3 The two-attempt loop (`:447-502`)
 

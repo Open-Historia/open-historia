@@ -49,3 +49,28 @@ test("standard tools are unchanged when no custom sheet is active", () => {
   assert.ok(standard.schema.properties.territorialMacroComponentsText);
   assert.equal(standard.schema.properties.customStats, undefined);
 });
+
+test("custom GM transport advertises exact customStats keys inside its shallow JSON text fields", () => {
+  const tool = getGameplayToolForCustomStatSheet("gameMaster", rows, { custom: true });
+  const patchField = tool.schema.properties.countryStatPatchesJson;
+  const eventsField = tool.schema.properties.eventsJson;
+
+  assert.match(tool.description, /custom National Stats sheet/i);
+  assert.match(patchField.description, /patch\.customStats/);
+  assert.match(patchField.description, /timber, silver, grainYield/);
+  assert.match(patchField.description, /Do not use population, economy, indices, stability, or gdpBreakdown/);
+  assert.match(patchField.description, /"customStats":\{"timber":1\}/);
+  assert.match(eventsField.description, /impacts\.polityChanges\[\]\.stats/);
+  assert.match(eventsField.description, /timber, silver, grainYield/);
+
+  // The provider transport remains shallow; the fix teaches the string fields
+  // rather than expanding the huge internal GM transaction schema again.
+  assert.equal(patchField.type, "string");
+  assert.equal(eventsField.type, "string");
+});
+
+test("standard GM transport remains unchanged when no custom sheet is active", () => {
+  const standard = getGameplayToolForCustomStatSheet("gameMaster", rows, { custom: false });
+  assert.doesNotMatch(standard.schema.properties.countryStatPatchesJson.description, /patch\.customStats/);
+});
+

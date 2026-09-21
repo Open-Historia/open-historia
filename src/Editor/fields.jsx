@@ -175,7 +175,7 @@ export const TagField = ({ value, onChange, suggestions = [], placeholder = "add
               key={tag}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 4,
-                background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.5)",
+                background: "rgba(255,255,255,0.11)", border: "1px solid rgba(255,255,255,0.25)",
                 borderRadius: 999, padding: "1px 4px 1px 7px", fontSize: 11, lineHeight: "16px",
               }}
             >

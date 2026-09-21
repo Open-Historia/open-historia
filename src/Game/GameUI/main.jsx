@@ -92,9 +92,9 @@ const LazyCheatsPanel = lazy(() =>
 const LazyDebugConsole = lazy(() =>
   import("./debugConsole.jsx").then((module) => ({ default: module.DebugConsole })),
 );
-// Catalyst mode (catalyst.jsx): nothing of it loads until the player enters it.
-const LazyCatalystPanel = lazy(() =>
-  import("./catalyst.jsx").then((module) => ({ default: module.CatalystPanel })),
+// Interactive events (interactive.jsx): nothing of them loads until the player takes one up.
+const LazyInteractivePanel = lazy(() =>
+  import("./interactive.jsx").then((module) => ({ default: module.InteractivePanel })),
 );
 
 const checkWebGL = () => {
@@ -184,7 +184,7 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
       height: "4rem", width: "4rem",
       cursor: "pointer", fontSize: "1.5rem",
       background: isAdvisorOpen
-        ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
+        ? "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.05))"
         : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
       transition: `${dockStyle.transition}, background 0.15s ease`,
     }}
@@ -208,7 +208,7 @@ const Main = ({
   const [shouldLoadCheats, setShouldLoadCheats] = useState(false);
   const [isDebugConsoleOpen, setIsDebugConsoleOpen] = useState(false);
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
-  const [isCatalystOpen, setIsCatalystOpen] = useState(false);
+  const [isInteractiveOpen, setIsInteractiveOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
   const [isCountryOpen, setIsCountryOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
@@ -278,7 +278,7 @@ const Main = ({
   // running game), there is a small chance a polity messages the player's
   // inbox unprompted. Everything that could break it is guarded inside
   // maybeSendIdleDiplomacy — it skips entirely while a time skip, game-master
-  // command, or catalyst stage is in flight, never overlaps itself, and stays
+  // command, or interactive event stage is in flight, never overlaps itself, and stays
   // silent on any failure. Hidden tabs don't roll the dice.
   useEffect(() => {
     if (hasNoGames) return undefined;
@@ -428,12 +428,13 @@ const Main = ({
     ));
   }, []);
 
-  // Catalyst mode opens from the Tools menu, and from the time panel's note
-  // while a scene holds time still (time.jsx dispatches this).
+  // An interactive event opens from the card of the event a time skip offered,
+  // and from the time panel's note while one is offered or in progress (time.jsx
+  // dispatches this).
   useEffect(() => {
-    const openCatalyst = () => setIsCatalystOpen(true);
-    window.addEventListener("oh:open-catalyst-mode", openCatalyst);
-    return () => window.removeEventListener("oh:open-catalyst-mode", openCatalyst);
+    const openInteractive = () => setIsInteractiveOpen(true);
+    window.addEventListener("oh:open-interactive-event", openInteractive);
+    return () => window.removeEventListener("oh:open-interactive-event", openInteractive);
   }, []);
 
   return (
@@ -515,11 +516,11 @@ const Main = ({
         </Presence>
       </Suspense>
       <Suspense fallback={null}>
-        <Presence open={isCatalystOpen}>
-          <LazyCatalystPanel
-            open={isCatalystOpen}
-            onClose={() => setIsCatalystOpen(false)}
-            onOpenTimeline={() => { setIsCatalystOpen(false); setActiveBottomPanel("history"); }}
+        <Presence open={isInteractiveOpen}>
+          <LazyInteractivePanel
+            open={isInteractiveOpen}
+            onClose={() => setIsInteractiveOpen(false)}
+            onOpenTimeline={() => { setIsInteractiveOpen(false); setActiveBottomPanel("history"); }}
           />
         </Presence>
       </Suspense>
@@ -571,10 +572,6 @@ const Main = ({
           }}
           onOpenGameManagement={() => openLibraryTab("games")}
           onOpenEvents={() => setActiveBottomPanel("history")}
-          onOpenCatalyst={() => {
-            setIsCatalystOpen(true);
-            setIsSettingsOpen(false);
-          }}
           onOpenCheats={() => {
             setShouldLoadCheats(true);
             setIsCheatsOpen(true);

@@ -252,8 +252,8 @@ test("an impact entry that normalization threw away is reported by count", () =>
 
 test("the next jump reports on the newest JUMP, stepping over what the simulator did not write", () => {
   const jump = { mode: "jump", source: "ai", fromDate: "1936-03-01", toDate: "1936-06-01", receipt: { applied: { events: 3 }, notes: [] } };
-  // A Game Master intervention and a resolved catalyst sit above the jump.
-  assert.equal(selectLastJumpRecord([{ mode: "game-master" }, { mode: "catalyst" }, jump]), jump);
+  // A Game Master intervention and a resolved interactive event sit above the jump.
+  assert.equal(selectLastJumpRecord([{ mode: "game-master" }, { mode: "interactive" }, jump]), jump);
   assert.match(renderLastTurnReceipt([{ mode: "game-master" }, jump]), /Applied: 3 events\./);
 });
 

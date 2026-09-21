@@ -16,7 +16,7 @@ const buttonStyle = (active = false) => ({
   cursor: "pointer",
   fontSize: 12,
   fontWeight: 700,
-  background: active ? "rgba(59,130,246,0.42)" : "rgba(255,255,255,0.06)",
+  background: active ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.06)",
 });
 
 const downloadGeoJSON = (fc, filename) => {
@@ -1203,7 +1203,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
             </label>
 
             {metadataFile && (
-              <div style={{ display: "grid", gap: 7, padding: "9px 10px", borderRadius: 9, background: "rgba(59,130,246,0.07)", border: "1px solid rgba(59,130,246,0.18)" }}>
+              <div style={{ display: "grid", gap: 7, padding: "9px 10px", borderRadius: 9, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <div style={{ fontSize: 11.5, fontWeight: 800 }}>Metadata join</div>
                 <div style={{ fontSize: 10.7, color: "rgba(255,255,255,0.56)", lineHeight: 1.4 }}>
                   Auto-match compares IDs in both files. If it chooses the wrong fields, run Analyze once, select the correct keys below, then Analyze again.
@@ -1259,7 +1259,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
             </div>
 
             {stats?.cityMarkers > 0 && (
-              <div style={{ display: "grid", gap: 6, padding: "9px 10px", borderRadius: 9, background: "rgba(168,85,247,0.07)", border: "1px solid rgba(168,85,247,0.2)" }}>
+              <div style={{ display: "grid", gap: 6, padding: "9px 10px", borderRadius: 9, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <div style={{ fontSize: 11.5, fontWeight: 800 }}>City markers detected: {Number(stats.cityMarkers).toLocaleString()}</div>
                 <label style={{ fontSize: 11 }}>
                   <input type="checkbox" checked={importCities} onChange={(e) => setImportCities(e.target.checked)} />{" "}
@@ -1298,7 +1298,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
         {(busy || progress.message) && (
           <div style={{ display: "grid", gap: 5 }}>
             <div style={{ height: 7, borderRadius: 999, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-              <div style={{ width: `${Math.max(0, Math.min(100, (progress.fraction || 0) * 100))}%`, height: "100%", background: "rgba(59,130,246,0.85)" }} />
+              <div style={{ width: `${Math.max(0, Math.min(100, (progress.fraction || 0) * 100))}%`, height: "100%", background: "rgba(255,255,255,0.14)" }} />
             </div>
             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.62)" }}>{progress.message}</div>
           </div>

@@ -188,7 +188,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | Runtime **JSON** state | `/api/runtime/json/:key` (GET/PUT) | `readRuntimeJsonAsset`/`writeRuntimeJsonAsset` in `libraryStore.js` | Per-game/scenario state: `game`, `world`, `events`, `chat`, `advisor`, `actions`, `colors`, `flags`, `tags`, `prompts`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData` (`assets.js:260`) |
 | Runtime **binary** tiles | `/api/runtime/pmtiles/:key` (GET/HEAD, range) | `resolveRuntimeBinaryAsset` → `streamBinaryFile` | `regions` / `countries` / `cities` PMTiles archives (or a scenario override) |
 
-`game` vs `world`: `game.json` holds the player-facing scenario meta (`GAME_DEFAULTS` — country, difficulty, dates, round), `world.json` holds the mutable simulation (`WORLD_DEFAULTS` — units, markers, catalyst, reputation, region ownership/claimants, tags, label styling, history). Both are `gameState.js`.
+`game` vs `world`: `game.json` holds the player-facing scenario meta (`GAME_DEFAULTS` — country, difficulty, dates, round), `world.json` holds the mutable simulation (`WORLD_DEFAULTS` — units, markers, interactive events, reputation, region ownership/claimants, tags, label styling, history). Both are `gameState.js`.
 
 ### The `/api` surface (`server/server.js`)
 

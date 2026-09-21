@@ -57,9 +57,12 @@ test("a broken transport field is reported rather than silently dropped", () => 
 test("the provider sees a shallow contract while the decoded transaction is validated in full", () => {
   assert.deepEqual(Object.keys(GAME_MASTER_TRANSPORT_SCHEMA.properties).sort(), [
     "agreementUpdatesJson", "countryStatPatchesJson", "diplomaticOutreachJson", "eventsJson",
-    "mode", "relationUpdatesJson", "storylineUpdatesJson", "summary", "territorialScopesJson", "warUpdatesJson",
+    "mode", "puppetUpdatesJson", "relationUpdatesJson", "storylineUpdatesJson", "summary", "territorialScopesJson", "warUpdatesJson",
   ]);
   assert.equal("storylineUpdates" in GAME_MASTER_SCHEMA.properties, true);
+  // A GM answer can make a country a puppet (protectorate, satellite or client).
+  // Without this field it could only narrate one, leaving world.puppets empty.
+  assert.equal("puppetUpdates" in GAME_MASTER_SCHEMA.properties, true);
 
   const minimal = decodeGameMasterTransportPayload(transport()).payload;
   assert.equal(validateGameplayPayload("gameMaster", minimal).valid, true);

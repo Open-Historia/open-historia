@@ -7,7 +7,7 @@
 // already used on this map, or the community's — matching BasemapPicker exactly.
 //
 // Styling note: like BasemapPicker, this deliberately does NOT use editorStyles.js.
-// The picker family shares the game's Community-hub purple (#7c3aed), not the
+// The picker family shares the game's grey selection finish, not the
 // editor chrome's blue ACCENT. Keeping the constants local (rather than importing
 // the editor's) is what makes the two pickers look like siblings.
 
@@ -29,13 +29,13 @@ const overlay = {
   inset: 0,
   // Same shell as BasemapPicker (120); 130 only so the two can't fight if both are
   // ever open. Mounted at MapEditor's root, NOT inside the selection panel: that
-  // panel has backdrop-filter, which makes a containing block for position:fixed —
-  // inside it this overlay resolved to the panel's 300x400 box at top:64 instead of
-  // the viewport, so its top was cut off and the Apply & Play / close buttons sat
-  // over it however high its z-index went.
+  // panel used to carry backdrop-filter, which makes a containing block for
+  // position:fixed — inside it this overlay resolved to the panel's 300x400 box at
+  // top:64 instead of the viewport, so its top was cut off and the Apply & Play /
+  // close buttons sat over it however high its z-index went. The Workshop is flat
+  // grey now and the hazard is gone, but the root is where this belongs anyway.
   zIndex: 130,
-  background: "rgba(8,8,9,0.74)",
-  backdropFilter: "blur(4px)",
+  background: "rgba(8,8,9,0.82)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -46,7 +46,7 @@ const panel = {
   maxHeight: "88vh",
   display: "flex",
   flexDirection: "column",
-  background: "rgba(21,21,24,0.98)",
+  background: "#1b1b1e",
   border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: "18px",
   color: "#fff",
@@ -72,7 +72,7 @@ const cardSurface = {
   cursor: "pointer",
 };
 const tabBtn = (active) => ({
-  background: active ? "rgba(124,58,237,0.9)" : "rgba(255,255,255,0.06)",
+  background: active ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.06)",
   border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: "999px",
   color: "#fff",
@@ -81,7 +81,7 @@ const tabBtn = (active) => ({
   padding: "0.35rem 0.8rem",
 });
 const uploadBtn = {
-  background: "rgba(59,130,246,0.85)",
+  background: "rgba(255,255,255,0.14)",
   border: "1px solid rgba(255,255,255,0.14)",
   borderRadius: "8px",
   color: "#fff",
@@ -107,7 +107,7 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
   <div
     style={{
       ...cardSurface,
-      outline: active ? "2px solid rgba(124,58,237,0.9)" : "none",
+      outline: active ? "2px solid rgba(255,255,255,0.28)" : "none",
       outlineOffset: "-2px",
     }}
     onClick={onClick}
@@ -131,7 +131,7 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
       {subtitle && <div style={{ fontSize: "0.7rem", opacity: 0.55 }}>{subtitle}</div>}
     </div>
     {active && (
-      <div style={{ position: "absolute", top: 6, right: 6, background: "rgba(124,58,237,0.9)", borderRadius: 6, fontSize: "0.65rem", padding: "0.1rem 0.35rem" }}>
+      <div style={{ position: "absolute", top: 6, right: 6, background: "rgba(255,255,255,0.28)", borderRadius: 6, fontSize: "0.65rem", padding: "0.1rem 0.35rem" }}>
         ✓ In use
       </div>
     )}
@@ -155,7 +155,7 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
         title="Share this flag with the community"
         onClick={(e) => { e.stopPropagation(); onPublish(); }}
         style={{
-          position: "absolute", left: 6, bottom: 6, background: "rgba(124,58,237,0.85)",
+          position: "absolute", left: 6, bottom: 6, background: "rgba(255,255,255,0.1)",
           border: "none", borderRadius: 6, color: "#fff", cursor: "pointer", fontSize: "0.7rem",
           lineHeight: 1, padding: "0.2rem 0.35rem",
         }}
@@ -425,7 +425,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
               <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.6rem" }}>
                 <button
                   type="button"
-                  style={{ ...uploadBtn, background: "rgba(124,58,237,0.85)" }}
+                  style={{ ...uploadBtn, background: "rgba(255,255,255,0.1)" }}
                   onClick={() => openFlagPublishForm({ name: ownerCode ? `${ownerCode} flag` : "", author, code: ownerCode || "" })}
                   title="Opens the hub's flag form — drag your image in and submit"
                 >
@@ -463,7 +463,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                           <span style={{ fontSize: "2rem", opacity: 0.6 }}>🚩</span>
                         )}
                         {post.fromScenario && (
-                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(124,58,237,0.85)", borderRadius: 6, color: "#fff", fontSize: "0.62rem", fontWeight: 700, padding: "0.15rem 0.35rem" }}>
+                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(255,255,255,0.28)", borderRadius: 6, color: "#fff", fontSize: "0.62rem", fontWeight: 700, padding: "0.15rem 0.35rem" }}>
                             {post.flagCount} flag{post.flagCount === 1 ? "" : "s"} · scenario
                           </span>
                         )}

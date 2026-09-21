@@ -461,8 +461,8 @@ const PolitiesPanel = ({
                   textAlign: "left",
                   padding: "7px 9px",
                   borderRadius: 8,
-                  border: active ? "1px solid rgba(59,130,246,0.8)" : "1px solid rgba(255,255,255,0.08)",
-                  background: active ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.035)",
+                  border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.08)",
+                  background: active ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.035)",
                   color: "white",
                   cursor: "pointer",
                 }}
@@ -649,7 +649,7 @@ const PolitiesPanel = ({
         </div>
 
         {rosterPreview && (
-          <div style={{ padding: "8px 9px", borderRadius: 8, background: "rgba(59,130,246,0.08)", border: "1px solid rgba(59,130,246,0.22)", display: "grid", gap: 6 }}>
+          <div style={{ padding: "8px 9px", borderRadius: 8, background: "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.1)", display: "grid", gap: 6 }}>
             <div style={{ fontSize: 11.5, fontWeight: 700 }}>{rosterPreview.fileName}</div>
             <div style={{ fontSize: 10.8, lineHeight: 1.45, color: "rgba(255,255,255,0.62)" }}>
               {rosterPreview.rows.length.toLocaleString()} unique polity keys · {rosterPreview.fresh.toLocaleString()} new · {rosterPreview.existing.toLocaleString()} already present

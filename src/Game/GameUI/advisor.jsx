@@ -438,11 +438,11 @@ const AdvisorActionsCard = ({ items, onOpenActions }) => {
         .join(", ");
 
     return (
-        <div style={{ marginTop: "0.75rem", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
+        <div style={{ marginTop: "0.75rem", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", padding: "0.65rem 0.8rem" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "rgba(216,196,255,0.95)" }}>📋 Actions {summary}</span>
+        <span style={{ fontSize: "0.76rem", fontWeight: 700, color: "#f4f4f5" }}>📋 Actions {summary}</span>
         {onOpenActions && (
-            <button type="button" onClick={onOpenActions} style={{ background: "none", border: "1px solid rgba(139,92,246,0.5)", borderRadius: "6px", color: "rgba(216,196,255,0.9)", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
+            <button type="button" onClick={onOpenActions} style={{ background: "none", border: "1px solid rgba(255,255,255,0.25)", borderRadius: "6px", color: "#e4e4e7", cursor: "pointer", fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}>
             Open Actions
             </button>
         )}
@@ -520,10 +520,10 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
     return (
         <button type="button" onClick={handleClick} disabled={busy} style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
-            background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(139,92,246,0.16)",
-            border: `1px solid ${status === "placed" ? "rgba(52,211,153,0.4)" : "rgba(139,92,246,0.45)"}`,
+            background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
+            border: `1px solid ${status === "placed" ? "rgba(52,211,153,0.4)" : "rgba(255,255,255,0.23)"}`,
             borderRadius: "8px",
-            color: status === "placed" ? "rgba(167,243,208,0.95)" : "rgba(216,196,255,0.95)",
+            color: status === "placed" ? "rgba(167,243,208,0.95)" : "#f4f4f5",
             cursor: busy ? "default" : "pointer",
             fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
         }}>
@@ -591,7 +591,7 @@ const AdvisorInstitutionDraftAction = ({ draft, completed, onExecute }) => {
     );
 };
 
-const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#a78bfa","#f87171","#38bdf8"];
+const CHART_COLORS = ["#60a5fa","#34d399","#f472b6","#fbbf24","#94a3b8","#f87171","#38bdf8"];
 
 const AdvisorChart = ({ config }) => {
     const canvasRef = useRef(null);

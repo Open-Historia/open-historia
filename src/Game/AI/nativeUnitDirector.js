@@ -9,7 +9,6 @@
 // postures, so there is no attack op here.
 
 import { normalizeUnitEntry, normalizeUnits } from "../../runtime/gameState.js";
-import { distanceKm, moveLeashKm } from "../Map/unitCombat.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -23,13 +22,33 @@ const cloneValue = (value) => {
 const MILITARY_EVENT_PATTERN =
   /\b(battle|clash|combat|skirmish|firefight|shootout|gunfire|exchange(?:s|d)? of fire|opens? fire|comes? under fire|armed border incident|border incident|frontier incident|military incident|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw|withdrawal|mobiliz(?:e|es|ed|ation)|deploy|deployment|redeploy|redeployment|siege|invad(?:e|es|ed|ing|er|ers)|invasion|garrison(?:ed|ing)?|bombard|blockade|landing|breakthrough|encircle|engag(?:e|es|ed|ement)|make(?:s)? contact|made contact|surrender|capitulat|reinforc|maneuver|manoeuvre|march(?:es|ed|ing)?|cross(?:es|ed|ing) the|storm(?:s|ed|ing))\b/i;
 
+const MILITARY_FORMATION_PATTERN =
+  /\b(army|armies|forces?|troops?|legions?|fleet|flotilla|division|corps|brigade|regiment|battalion|cavalry|infantry|artillery|garrison|war elephants?|navy|naval|air force|squadrons?|warships?|frigates?|destroyers?|submarines?|carriers?)\b/i;
+
 // R3.7: the expensive Unit Director is only useful when prose describes an
 // operational change that could actually move/spawn/fight/reinforce/remove a
 // persistent counter. Military industry, labs, doctrine, surveillance networks,
 // readiness coordination and procurement can remain military events without
 // paying an AI unit-state pass.
 const OPERATIONAL_UNIT_DELTA_PATTERN =
-  /\b(?:battle|clash|combat|skirmish|firefight|opens? fire|comes? under fire|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw(?:s|al|n|ing)?|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment|ing)?\s+(?:troops?|forces?|brigade|division|corps|army|battalion|regiment|units?)|redeploy(?:s|ed|ment|ing)?|siege|invad(?:e|es|ed|ing)|invasion|garrison(?:s|ed|ing)?|bombard(?:s|ed|ment|ing)?|blockade|landing|breakthrough|encircl(?:e|es|ed|ement)|engag(?:e|es|ed|ement)|surrender|capitulat|reinforcements? (?:arrive|deployed|sent)|reserve(?:s)? (?:activated|mobilized|called up)|march(?:es|ed|ing)?\s+(?:toward|to|into|across)|cross(?:es|ed|ing)\s+(?:the\s+)?(?:border|frontier|river))\b/i;
+  /\b(?:battle|clash|combat|skirmish|firefight|opens? fire|comes? under fire|offensive|counteroffensive|attack|assault|advanc(?:e|es|ed|ing)|retreat|withdraw(?:s|al|n|ing)?|mobiliz(?:e|es|ed|ation)|deploy(?:s|ed|ment|ing)?\s+(?:troops?|forces?|brigade|division|corps|army|battalion|regiment|units?)|redeploy(?:s|ed|ment|ing)?|siege|invad(?:e|es|ed|ing)|invasion|garrison(?:s|ed|ing)?|bombard(?:s|ed|ment|ing)?|blockade|landing|breakthrough|encircl(?:e|es|ed|ement)|engag(?:e|es|ed|ement)|surrender|capitulat|reinforcements? (?:arrive|deployed|sent)|reserve(?:s)? (?:activated|mobilized|called up)|march(?:es|ed|ing)?(?:\s+(?:toward|to|into|across))?|cross(?:es|ed|ing)|enter(?:s|ed|ing)?|reach(?:es|ed|ing)?|arriv(?:e|es|ed|ing)|embark(?:s|ed|ing)?|sail(?:s|ed|ing)?|maneuver(?:s|ed|ing)?|manoeuv(?:re|res|red|ring)|encamp(?:s|ed|ing)?|establish(?:es|ed|ing)?\s+(?:camp|encampment|winter quarters?|positions?)|relocat(?:e|es|ed|ing)|fall(?:s|ing)?\s+back)\b/i;
+
+// A formation that comes into being by being built, delivered or stood up
+// rather than raised from reserves: a warship commissioned, a submarine
+// delivered, a squadron formed, a task group activated. The army wording below
+// (NEW_FORMATION_PATTERN) never matched a navy or an air force, so a power that
+// commissioned ships for years never gained a counter. The ship or squadron
+// must be NAMED as what was commissioned, delivered or formed: "commissions a
+// review" and "launches a campaign" stay paperwork.
+const SERVICE_FORMATION_NOUN =
+  "(?:aircraft carriers?|carriers?|frigates?|destroyers?|submarines?|boats?|warships?|cruisers?|corvettes?|patrol vessels?|vessels?|ships?|squadrons?|air wings?|flotillas?|task (?:forces?|groups?)|strike groups?)";
+const SERVICE_FORMATION_PATTERN = new RegExp(
+  "\\b(?:commission(?:s|ed|ing)?|deliver(?:s|ed|ing)?|delivery of|launch(?:es|ed|ing)?)\\b[^.!?]{0,60}\\b" + SERVICE_FORMATION_NOUN + "\\b"
+  + "|\\b" + SERVICE_FORMATION_NOUN + "\\b[^.!?]{0,40}\\b(?:(?:is|are|was|were|been) (?:formally )?(?:commissioned|formed|activated|stood up)|enters? (?:active |operational )?service|entered (?:active |operational )?service|joins? the fleet|joined the fleet)\\b"
+  + "|\\b(?:forms?|formed|stands? up|stood up|activates?|activated|establish(?:es|ed)?|creates?|created)\\b (?:an? |the |its )?(?:new )?(?:[\\w-]+ ){0,3}" + SERVICE_FORMATION_NOUN + "\\b"
+  + "|\\bjoins? the fleet\\b|\\bjoined the fleet\\b|\\benters? (?:active |operational )?service\\b",
+  "i",
+);
 
 const COMBAT_EVENT_PATTERN =
   /\b(battle|clash|combat|offensive|counteroffensive|attack|assault|advance|breakthrough|siege|invasion|invade|engage|fighting|war|recapture|capture|seize|retake)\b/i;
@@ -78,12 +97,21 @@ const opKey = (op) => {
   return `${kind}|${JSON.stringify(op)}`;
 };
 
-const hasMilitaryContent = (event) =>
-  normalizeArray(event?.impacts?.unitOps).length > 0 || MILITARY_EVENT_PATTERN.test(eventText(event));
+const hasMilitaryContent = (event) => {
+  if (normalizeArray(event?.impacts?.unitOps).length > 0) return true;
+  const text = eventText(event);
+  const explicitlyMilitary =
+    normalizeString(event?.kind).toLowerCase() === "military"
+    || normalizeArray(event?.tags).some((tag) => normalizeString(tag).toLowerCase() === "military");
+  return MILITARY_EVENT_PATTERN.test(text)
+    || ((explicitlyMilitary || MILITARY_FORMATION_PATTERN.test(text))
+      && (OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text)));
+};
 
 export const eventNeedsNativeUnitDirector = (event) => {
   if (!event || typeof event !== "object") return false;
-  return OPERATIONAL_UNIT_DELTA_PATTERN.test(eventText(event));
+  const text = eventText(event);
+  return OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text);
 };
 
 const makeWorkingUnitMap = (units) =>
@@ -175,7 +203,7 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
         }
 
         const ownerUnits = [...unitMap.values()].filter((unit) => unit.ownerCode === owner);
-        if (ownerUnits.length > 0 && !NEW_FORMATION_PATTERN.test(text)) {
+        if (ownerUnits.length > 0 && !NEW_FORMATION_PATTERN.test(text) && !SERVICE_FORMATION_PATTERN.test(text)) {
           reject("existing units already represent this polity; no explicit new-formation cue");
           continue;
         }
@@ -200,13 +228,12 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
           continue;
         }
 
-        const distance = distanceKm(unit, { lng: toLng, lat: toLat });
-        const leash = moveLeashKm(unit.type, normalizeString(event?.date || game?.gameDate));
-        if (distance > leash) {
-          reject(`move is ${Math.round(distance)} km, beyond the ${unit.type} leash of ~${leash} km`);
-          continue;
-        }
-
+        // The director describes the formation's TRUE objective from the event.
+        // Do not reject a distant objective here: the canonical unit engine
+        // already clamps travel by elapsed time and keeps the remainder as a
+        // standing order. Dropping the order here strands a counter at its old
+        // location and makes every later story movement progressively harder to
+        // recover from.
         keep();
         continue;
       }

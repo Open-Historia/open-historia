@@ -26,7 +26,7 @@ const codeToColor = (code) => {
 // string; region fills need it translucent so the dark basemap reads through.
 const withAlpha = (hex, alpha) => {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
-  if (!m) return `rgba(124,58,237,${alpha})`;
+  if (!m) return `#a1a1aa`;
   const n = parseInt(m[1], 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 };
@@ -93,7 +93,7 @@ const CountryPickerMap = ({
   selectionMode = "country",
   selectedRegionIds = null,
   onToggleRegion = null,
-  selectionColor = "#7c3aed",
+  selectionColor = "#a1a1aa",
 }) => {
   const containerRef = useRef(null);
   const layerRef = useRef(null);
@@ -183,7 +183,7 @@ const CountryPickerMap = ({
           fill: new Fill({
             color: isSelected
               ? withAlpha(selectionColorRef.current, 0.6)
-              : isHovered ? "rgba(124,58,237,0.28)" : "rgba(66,66,70,0.3)",
+              : isHovered ? "rgba(255,255,255,0.28)" : "rgba(66,66,70,0.3)",
           }),
           stroke: new Stroke({
             color: isSelected ? withAlpha(selectionColorRef.current, 0.95) : "rgba(150,155,170,0.4)",
@@ -208,11 +208,11 @@ const CountryPickerMap = ({
 
       return new Style({
         fill: new Fill({
-          color: isHovered ? "rgba(124,58,237,0.55)" : codeToColor(code),
+          color: isHovered ? "rgba(255,255,255,0.35)" : codeToColor(code),
         }),
         stroke: new Stroke({
           color: isHovered
-            ? "rgba(124,58,237,0.9)"
+            ? "rgba(255,255,255,0.85)"
             : "rgba(255,255,255,0.3)",
           width: isHovered ? 2.5 : 1,
         }),

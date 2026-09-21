@@ -435,26 +435,26 @@ test("a failure that would happen on any model is not a reason to fall back", ()
 });
 
 test("a provider retries a failure only where the Fallback list rules say it should", () => {
-  const retry = (kind, { attempt = 1, retries = 3, canFallBack = true, rateLimitPolicy = "wait" } = {}) =>
+  const retry = (kind, { attempt = 1, retries = 3, canFallBack = true, rateLimitPolicy = "next" } = {}) =>
     shouldRetryProviderFailure({ failure: { kind }, attempt, retries, canFallBack, rateLimitPolicy });
 
   // Waiting fixes none of these, so asking again is a wasted request.
   for (const kind of ["spent", "unusable", "other"]) assert.equal(retry(kind), false, kind);
 
-  // Busy: one retry, then the list moves on.
-  assert.equal(retry("busy", { attempt: 1 }), true);
-  assert.equal(retry("busy", { attempt: 2 }), false);
+  // Busy, with a backup: the next model answers now, and the call after this
+  // one starts at the top again anyway (fallbackRunner.js).
+  assert.equal(retry("busy", { attempt: 1 }), false);
 
-  // Rate limited: the player's choice.
+  // Rate limited: the same, unless the player chose to wait.
+  assert.equal(retry("rateLimited", { attempt: 1 }), false);
   assert.equal(retry("rateLimited", { attempt: 2, rateLimitPolicy: "wait" }), true);
   assert.equal(retry("rateLimited", { attempt: 3, rateLimitPolicy: "wait" }), false, "out of attempts");
-  assert.equal(retry("rateLimited", { attempt: 1, rateLimitPolicy: "next" }), false);
 
   // Nowhere to fall back to: today's full retries, because giving up early
   // would only lose the turn sooner.
   assert.equal(retry("busy", { attempt: 2, canFallBack: false }), true);
   assert.equal(retry("busy", { attempt: 3, canFallBack: false }), false);
-  assert.equal(retry("rateLimited", { attempt: 1, canFallBack: false, rateLimitPolicy: "next" }), true);
+  assert.equal(retry("rateLimited", { attempt: 1, canFallBack: false }), true);
 });
 
 test("a per-minute limit is Rate limited, and carries the wait the provider asked for", () => {

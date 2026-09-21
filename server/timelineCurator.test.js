@@ -92,8 +92,9 @@ const redundant = (index) => judgment(index, {
   incrementalProcess: true,
 });
 
-const curate = (analyzeBatch, mode = "jump") => curateGeneratedEvents({
+const curate = (analyzeBatch, mode = "jump", isSparedFromFiller = null) => curateGeneratedEvents({
   events: candidates,
+  isSparedFromFiller,
   priorEvents,
   game: { gameDate: "1930-04-28", round: 5 },
   world: {},
@@ -126,10 +127,26 @@ test("the curator keeps everything when the analysis fails or the mode is not a 
   assert.deepEqual(failed.map((event) => event.id), ["c0", "c1", "c2", "c4"], "without an analysis only the deterministic exact-duplicate guard acts");
 
   let called = false;
-  const skipped = await curate(async () => { called = true; return { payload: { judgments: [] } }; }, "catalyst");
+  const skipped = await curate(async () => { called = true; return { payload: { judgments: [] } }; }, "interactive");
   assert.equal(called, false, "only jump and auto turns are curated");
   assert.equal(skipped.length, 5);
 
   const silent = await curate(async () => ({ payload: { judgments: [], storylineSaturation: [] } }));
   assert.deepEqual(silent.map((event) => event.id), ["c0", "c1", "c2", "c4"], "no judgment means KEEP; only the exact duplicate goes");
+});
+
+test("an event the player's focus spares survives a filler verdict", async () => {
+  const analysis = async () => ({
+    payload: {
+      judgments: [redundant(0), redundant(1), redundant(2), judgment(3), judgment(4)],
+      recentHistoryMechanical: false,
+      storylineSaturation: [],
+      underrepresentedDomains: [],
+    },
+  });
+  const dropped = await curate(analysis);
+  assert.equal(dropped.some((event) => event.id === "c0"), false);
+
+  const spared = await curate(analysis, "jump", (event) => event.id === "c0");
+  assert.equal(spared.some((event) => event.id === "c0"), true, "it answers an order or a due milestone, so the filler gates may not take it");
 });

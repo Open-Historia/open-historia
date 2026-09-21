@@ -37,7 +37,7 @@ MODES
 - world-intervention: Author a coherent multi-system intervention. Use as many events as causally necessary (normally 1-8), and attach each persistent effect to the event that actually establishes it.
 
 TRANSACTION RULES
-1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
+1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
 2. The decoded events array is the canonical historical narrative that will be added if the administrator applies this preview. Use 0-based eventIndexes in ledger operations and Stats patches to point into this transaction's decoded events array.
 2A. EXHAUSTIVE TERRITORY IS A SET CONTRACT. If the administrator says all/every/entire/whole territories, regions, states, provinces or lands, do NOT enumerate a representative handful of provinces in eventsJson. Put the semantic footprint in territorialScopesJson. baseCountries are the exact immutable rendered base geographies listed below, not the polity that currently owns them. Example: a request for all Baltic-state territory can name the three rendered base geographies for Estonia, Latvia and Lithuania once; native code then expands EVERY rendered region in those footprints into exact operations before Preview. Use kind=legal-transfer for legal sovereignty, kind=control for decisive de-facto control, and kind=contest for an active territorial contest. The event at eventIndex must narrate the same change. Avoid duplicating that scope with a partial manual region list.
 3. impacts.regionTransfers = LEGAL sovereignty only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. A unilateral declaration of independence, secession, uprising, revolution, civil war, or breakaway proclamation does NOT by itself transfer legal sovereignty. If a new polity is rebelling against its current sovereign and the conflict is still active, leave legal sovereignty with the prior sovereign and represent rebel gains with impacts.regionControlOps (contest/control). Only emit regionTransfers for the breakaway territory when the administrator explicitly establishes legal recognition/cession/settlement or another event in this same transaction clearly does so.
@@ -47,19 +47,20 @@ TRANSACTION RULES
 7. impacts.politicalActorOps = canonical political-state mutations. Political Actors own government/leader/party/power-bloc/strategy/traits/perceptions truth; do NOT write leader or government through polityChanges.stats or countryStatPatches. Each entry is {"op":"...","polityKey":"Full Polity Name","argsJson":"{...}"}; argsJson is a JSON STRING containing the native operation arguments. Never guess the decoded argsJson shape.
 ${POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE}
 Never emit native-only set-political-pressures or set-behavioral-disposition. If the same event renames a polity, address politicalActorOps to the NEW name because rename is applied first. STRUCTURAL COMPLETENESS: when a constitution, election result, government formation, coalition, coup or succession establishes durable politics, write all political facts that event and surrounding campaign canon actually establish. A foundational election result for a sparse/emergent polity must not leave it as an unspecified shell: establish the political system, represented parties/power actors and their support/influence, governing force/coalition/leadership, and strategic goals/fears/ambitions; include decision-maker traits when the political settlement supports them. For set-traits, use only canonical keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not fabricate unsupported detail merely to fill fields; if final results are not known yet, narrate polling/counting rather than a completed result.
-8. countryStatPatches = authoritative current-baseline edits requested by the administrator, especially exact population, GDP and macroeconomic corrections. These are not simulation outcomes. Use absolute numbers.
+8. countryStatPatches = authoritative current-baseline edits requested by the administrator. These are not simulation outcomes. Use absolute numbers. On the standard National Stats sheet this includes exact population, GDP and macroeconomic corrections. If a [Scenario National Stats Sheet — LIVE] block is present later in this prompt, it OVERRIDES the standard Stats families: write numeric Stats only as patch.customStats using the exact live machine keys listed there.
 9. impacts.unitOps = persistent military unit mutations: spawn a genuinely new formation, or move, strength, remove for an existing unit id. Reuse the existing unit ids listed under current military units.
 10. impacts.markerOps = persistent physical-world lifecycle mutations: build, update, rename, remove, population. BUILD only a genuinely new, significant, named, geographically concrete feature. UPDATE an existing feature's status, owner, kind, note or location by markerId; destruction is an update to status destroyed, not a removal. REMOVE only for a canonical correction.
 11. warUpdates controls ONLY world.wars belligerency. Relations are not wars and alliances do not automatically create belligerency. Any event that starts, joins, leaves, ceasefires, resumes or ends a war must carry the matching warUpdates operation and, on the event itself, the same warId and its combatants.
 12. storylineUpdates controls the persistent world.storylines ledger: the unresolved multi-turn processes (a crisis, an insurgency, a negotiation in progress, an economic emergency, a war's course) whose hidden state the world director advances between turns. Create one when the transaction leaves a process unresolved, advance or resolve the existing id when it changes one, and never mirror a single settled fact as a storyline. participants are cumulative; state says what is true now and why the process is still open.
-13. Every storylineUpdates, warUpdates, relationUpdates and agreementUpdates entry must reference at least one real transaction event through eventIndexes. Even direct mode should author a concise correction event when it changes a ledger.
+13. Every storylineUpdates, warUpdates, relationUpdates, agreementUpdates and puppetUpdates entry must reference at least one real transaction event through eventIndexes. Even direct mode should author a concise correction event when it changes a ledger.
 14. relationUpdates controls the sparse bilateral political-climate ledger. The NUMERIC SCORE is canonical; status is the presentation band derived from that score, not a second independent fact.
 15. agreementUpdates controls formal treaty, alliance and guarantee lifecycle. A proposal is not an agreement; a concluded or ratified commitment is.
-16. diplomaticOutreach creates direct NPC-to-player chats not attached to one specific authored event. Event-caused outreach belongs in that event's impacts.createdChats. Never invent private NPC-only conversations; every chat is with the player.
-17. In countryStatPatches, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100.
-18. If a request is ambiguous, choose the most literal conservative interpretation that still fulfills it. Do not silently broaden the scope. If a requested operation cannot be represented safely, leave it out and say so in the summary.
-19. Narration and state must agree. Never say a border moved, a war began or ended, a treaty was signed, a unit moved, a government changed, or a physical feature was built or destroyed unless the matching structured operation is present.
-20. This is PREVIEW GENERATION. Nothing is being applied yet. Describe what WOULD change, not what has already been persisted by this call.
+16. puppetUpdates controls canonical subordination lifecycle: installing, reclassifying, changing loyalty/secrecy, releasing, annexing, revolting or suppressing a puppet/protectorate/client. A narrated puppet relationship without the matching puppetUpdates operation does not exist in canonical state.
+17. diplomaticOutreach creates direct NPC-to-player chats not attached to one specific authored event. Event-caused outreach belongs in that event's impacts.createdChats. Never invent private NPC-only conversations; every chat is with the player.
+18. On the standard National Stats sheet, population.total is an absolute number of people and economy.gdp is the absolute whole-polity GDP number (for example 500 billion = 500000000000). If gdpBreakdown is present its three percentages must total exactly 100. On a custom National Stats sheet, do not emit those standard numeric families at all; use patch.customStats with the exact live machine keys and ranges instead.
+19. If a request is ambiguous, choose the most literal conservative interpretation that still fulfills it. Do not silently broaden the scope. If a requested operation cannot be represented safely, leave it out and say so in the summary.
+20. Narration and state must agree. Never say a border moved, a war began or ended, a treaty was signed, a unit moved, a government changed, a puppet relationship changed, or a physical feature was built or destroyed unless the matching structured operation is present.
+21. This is PREVIEW GENERATION. Nothing is being applied yet. Describe what WOULD change, not what has already been persisted by this call.
 
 PROVIDER TRANSPORT FIELD SHAPES
 The *Json fields are STRINGS whose contents must be valid JSON arrays. Keep JSON keys exactly as shown. Omit optional object fields when irrelevant, but never invent new keys. Dates are YYYY-MM-DD; a year before AD 1 is written with a leading minus and counts backwards with no year zero (-0218-03-01 is 1 March 218 BC, -0001-12-31 the last day of 1 BC), and every date you output in such a scenario uses exactly that form.
@@ -81,8 +82,11 @@ territorialScopesJson element:
 Use this for exhaustive geographic-set requests. The names in baseCountries must come exactly from the rendered base-geography catalog below; native code expands the full set. Use [] when the request is not an exhaustive territorial-set change.
 
 countryStatPatchesJson element:
+Standard National Stats sheet:
 {"country":"Full Polity Name","patch":{"population":{"total":1},"economy":{"gdp":1}},"eventIndexes":[],"reason":""}
-Only include requested patch subfields. Supported patch families: capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown.
+Scenario-defined National Stats sheet, when a [Scenario National Stats Sheet — LIVE] block is present:
+{"country":"Full Polity Name","patch":{"customStats":{"<exact live machine key>":1}},"eventIndexes":[],"reason":""}
+Only include requested patch subfields. On the standard sheet the supported patch families are capital, continent, government, leader, stability, population.total, indices, economy and gdpBreakdown. On a custom sheet, numeric Stats MUST use customStats with the exact live machine keys; never invent a field inside economy or another standard family for a custom stat.
 
 storylineUpdatesJson element:
 {"id":"storyline-stable-id","status":"active|dormant|resolved","pressure":0,"momentum":0,"startedDate":"","kind":"crisis","title":"","participants":["Full Polity Name"],"eventIndexes":[0],"state":""}
@@ -95,6 +99,12 @@ relationUpdatesJson element:
 
 agreementUpdatesJson element:
 {"id":"stable-agreement-id","op":"start|update|suspend|resume|end|expire","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other","parties":[],"eventIndexes":[0],"title":"","terms":""}
+
+puppetUpdatesJson element — a SUBORDINATION: one polity directing another's will while it remains a separate country holding its own territory and sovereignty:
+{"op":"install|reclassify|loyalty|reveal|release|annex|revolt|suppress","overlord":"Full Polity Name","puppet":"Full Polity Name","kind":"protectorate|satellite|client","loyalty":50,"secrecy":"open|covert","eventIndexes":[0],"note":""}
+- install makes the puppet state; kind says which powers the overlord holds — the player sees these as PROTECTORATE, PUPPET STATE and CLIENT STATE (protectorate: it runs the puppet's foreign policy and defence, the puppet governs itself at home; satellite: the player's "puppet state" — it controls the puppet's government behind an independent front; client: the puppet's government depends on its backing and follows its lead but makes most of its own decisions). Use the kind the administrator names; "puppet", "puppet state" or "satellite" all mean kind satellite; secrecy is open if the world knows, covert if only the two parties do; loyalty 0-100 is how far the puppet accepts it. reclassify changes kind, loyalty moves the score, reveal makes a covert one open for good, release/annex/revolt end it, suppress puts down a rising. Every field is required; for an op that does not use one, repeat the arrangement's current value.
+- A country has at most one overlord, cannot direct its own overlord, and a puppet holds no puppets of its own. Tie each change to the event that brings it about with eventIndexes.
+- When the administrator asks for a country to become someone's puppet, satellite, protectorate or client, the puppetUpdatesJson install IS the change. An event that only narrates it leaves the world exactly as it was: no puppet on the map, none in the country's panel, and nothing that can later be demanded of it, refused or ended. Write the event AND the install.
 
 CURRENT WORLD / CANON
 World before round one:
@@ -128,7 +138,7 @@ Rendered base-geography catalog (exact names/counts for territorialScopesJson):
 \${gameMasterBaseGeographyCatalog}
 
 Recent campaign history / continuity:
-\${ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS}
+\${ALL_EVENTS_WITH_CONSOLIDATION}
 
 Recent diplomacy:
 \${CHATS_NON_CONSOLIDATED_ROUNDS}
@@ -246,7 +256,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "HISTORICAL_PRESET_SIMULATION_RULES",
       "TARGET_ROUND_DATE",
       "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CONSOLIDATED_HISTORY",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
@@ -263,7 +273,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "PLAYER_POLITY_REPUTATION_CONTEXT",
       "TARGET_ROUND_DATE",
       "CURRENT_UNITS",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CONSOLIDATED_HISTORY",
       "PLAYER_ACTIONS_THIS_ROUND",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
@@ -326,44 +336,44 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
-    description: "Create branching catalyst scenes.",
+    description: "Open the scene of an interactive event the player took up.",
     helpers: [
       "PLAYER_POLITY",
       "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_CATALYST_DATE",
+      "RUNNING_INTERACTIVE_DATE",
       "WORLD_BEFORE_ROUND_ONE_TEXT",
       "HISTORICAL_PRESET_SIMULATION_RULES",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "PLAYER_ACTIONS_THIS_ROUND",
     ],
-    key: "catalystCreation",
-    label: "Catalyst Creation",
+    key: "interactiveCreation",
+    label: "Interactive Event Creation",
     type: "task",
   },
   {
-    description: "Advance an active catalyst scene.",
+    description: "Play one move of an interactive event.",
     helpers: [
       "PLAYER_POLITY",
       "PLAYER_POLITY_REPUTATION_CONTEXT",
-      "RUNNING_CATALYST_DATE",
-      "CATALYST_PREMISE_DESCRIPTION",
-      "CATALYST_SIMULATION_HISTORY",
-      "RUNNING_CATALYST_PERCENT",
+      "RUNNING_INTERACTIVE_DATE",
+      "INTERACTIVE_PREMISE_DESCRIPTION",
+      "INTERACTIVE_SIMULATION_HISTORY",
+      "RUNNING_INTERACTIVE_PERCENT",
     ],
-    key: "catalystExecutor",
-    label: "Catalyst Execution",
+    key: "interactiveExecutor",
+    label: "Interactive Event Execution",
     type: "task",
   },
   {
-    description: "Turn a resolved catalyst into a campaign event.",
+    description: "Turn a finished interactive event into a campaign event.",
     helpers: [
       "PLAYER_POLITY",
-      "RUNNING_CATALYST_DATE",
-      "CATALYST_PREMISE_DESCRIPTION",
-      "CATALYST_SIMULATION_HISTORY",
+      "RUNNING_INTERACTIVE_DATE",
+      "INTERACTIVE_PREMISE_DESCRIPTION",
+      "INTERACTIVE_SIMULATION_HISTORY",
     ],
-    key: "catalystSummary",
-    label: "Catalyst Summary",
+    key: "interactiveSummary",
+    label: "Interactive Event Summary",
     type: "task",
   },
   {
@@ -377,7 +387,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
       "GRAND_MAP_DESCRIPTION_NO_CITY",
       "CURRENT_UNITS",
       "CURRENT_MAP_STRUCTURES",
-      "ALL_EVENTS_WITH_CONSOLIDATION_CATALYSTS",
+      "ALL_EVENTS_WITH_CONSOLIDATION",
       "CHATS_NON_CONSOLIDATED_ROUNDS",
     ],
     key: "gameMaster",

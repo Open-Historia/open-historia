@@ -99,3 +99,4 @@ test("boundary feature ids cannot collide for distinct owner groups", () => {
   assert.equal(features.length, 2);
   assert.equal(new Set(features.map((feature) => String(feature.id))).size, 2);
 });
+

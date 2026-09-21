@@ -936,6 +936,9 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
   return clone ? cloneJsonFor(url, value) : value;
 };
 
+// Did the document come back, or is this a defaultValue served after a failed read?
+export const jsonReadSucceeded = (url) => jsonLoadedUrls.has(url);
+
 // clone: false is safe because the payload is discarded here, and size reads
 // the recorded wire text. A primed or defaulted URL has none and reports 0.
 export const warmJson = async (url, options = {}) => {

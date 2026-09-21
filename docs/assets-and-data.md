@@ -10,8 +10,8 @@ Every runtime asset the map depends on, with its physical filename, MIME, and ho
 
 | Asset | Key | File on disk | Source of truth | Served to client via | Notes |
 |---|---|---|---|---|---|
-| Regions vector tiles | `regions` | `regions.pmtiles` (~105.8 MB) | `map-data` Release | `GET /api/runtime/pmtiles/regions` | GADM level-1 borders; the z0 tile is the region catalog; paints owners above z6.5 |
-| Countries vector tiles | `countries` | `countries.pmtiles` (~62.7 MB) | `map-data` Release | `GET /api/runtime/pmtiles/countries` | z0 tile is the country index + label source; warmed on **every** map |
+| Regions vector tiles | `regions` | `regions.pmtiles` (~105.8 MB) | `map-data` Release | `GET /api/runtime/pmtiles/regions` | GADM level-1 borders; the z0 tile is the region catalog; paints owners above z6.5. Carries z9/z10, which the style never asks for — see `scripts/trim-pmtiles.mjs` |
+| Countries vector tiles | `countries` | `countries.pmtiles` (~62.7 MB) | `map-data` Release | `GET /api/runtime/pmtiles/countries` | z0 tile is the country index + label source; warmed on **every** map; same unused z9/z10 |
 | Cities vector tiles | `cities` | `cities.pmtiles` (~1.5 MB) | `map-data` Release | `GET /api/runtime/pmtiles/cities` | Modern-day city labels layer |
 | Custom regions geometry | `regionsGeojson` | `regions.geojson` (per-scenario) | Scenario dir, else the stock world below | `GET /api/runtime/json/regionsGeojson` | The scenario's own map (the built-in Modern Day has one, a hand-drawn world); a scenario without one renders on the stock world; **never cached client-side** |
 | Stock world geometry | — | `server/data/stock/regions.geojson` (~55.4 MB) | `map-data` Release (`default-regions-names.geojson`) | via `regionsGeojson` for scenarios without a map | GADM level-1 regions with owner names — what the hub's re-ownership presets (keyed by GADM ids) and "Modern Day (classic map)" render on |
@@ -119,6 +119,26 @@ Makes the local tree match the manifest. Called by the launcher and updater **in
 | Ensure | `node scripts/fetch-map-assets.mjs --ensure` | Faster: trusts size, only fetches missing / wrong-size files |
 
 Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path, `fetch-map-assets.mjs:92`) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+
+### `scripts/trim-pmtiles.mjs` — the zoom levels nothing draws
+
+`regions.pmtiles` and `countries.pmtiles` were cut at `-z10`, but the map mounts both as vector sources capped at `maxzoom: 8` (`src/Game/Map/Nations.jsx`), and past z8 MapLibre overzooms the z8 tile rather than asking for a z9 one. Those two levels are **80% of both archives** and have never been drawn.
+
+```
+node scripts/trim-pmtiles.mjs <input.pmtiles> <output.pmtiles> <maxzoom> [--verify]
+```
+
+A pure repack: tile bodies are copied across still compressed, byte for byte, so nothing is re-encoded and nothing about how the map looks can change. Tile type, compressions, bounds, center, minZoom and the metadata blob are preserved; `maxZoom`, the counts, the directories and every offset are rewritten. `--verify` reads both archives back and compares tiles.
+
+| Archive | Now | At z8 | Saved |
+|---|---|---|---|
+| `regions.pmtiles` | 105,827,424 | 21,106,005 | 84.7 MB |
+| `countries.pmtiles` | 62,739,546 | 12,580,027 | 50.2 MB |
+| `cities.pmtiles` | 1,547,924 | — | nothing; `-zg` already stopped it at z3 |
+
+That is **134.9 MB off the 288.7 MB** a player pulls on first launch. Shipping it is the ordinary release dance and is NOT done by running the script: upload the trimmed archives to the `map-data` release, put their new `bytes`/`sha256` in `scripts/map-assets.json`, regenerate `public/content-manifest.json` (`scripts/build-content-manifest.mjs`) and re-sign it, then re-populate the content nodes. Installs that already have the big archives keep them until `fetch-map-assets.mjs` runs in verify mode.
+
+Two things a trimmed archive still says about itself: the metadata blob is preserved verbatim, so `vector_layers[0].maxzoom` and `tilestats` still describe z10 (MapLibre reads the header, not these, so rendering is unaffected — `tippecanoe-decode` and friends would be misled), and `centerZoom` is carried across as it was.
 
 ### Embedded (Android) variant
 

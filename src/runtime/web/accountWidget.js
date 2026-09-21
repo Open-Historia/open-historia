@@ -17,7 +17,7 @@ const css = `
 .oh-acct-panel h4{margin:0 0 4px;font-size:14px;color:#e8e8ea}
 .oh-acct-panel p{margin:0 0 10px;color:#9aa2b1;font-size:12px}
 .oh-acct-panel input{width:100%;box-sizing:border-box;background:#111112;border:1px solid #2a2a2d;color:#e8e8ea;border-radius:8px;padding:8px 10px;margin-bottom:8px}
-.oh-acct-panel button{width:100%;font:inherit;cursor:pointer;border:1px solid #7c3aed;background:#7c3aed;color:#fff;border-radius:8px;padding:8px 10px}
+.oh-acct-panel button{width:100%;font:inherit;cursor:pointer;border:1px solid rgba(255,255,255,0.22);background:rgba(255,255,255,0.22);color:#fff;border-radius:8px;padding:8px 10px}
 .oh-acct-panel button.ghost{background:transparent;border-color:#2a2a2d;color:#e8e8ea;margin-top:6px}
 .oh-acct-msg{color:#9aa2b1;font-size:12px;margin-top:8px}
 .oh-acct-msg a{color:#9ab0ff;word-break:break-all}

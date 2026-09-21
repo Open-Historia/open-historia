@@ -1,5 +1,6 @@
 import { buildCompactEconomicContext, isCompleteCountryStatSheet } from "../../runtime/countryStats.js";
 import { buildBoundedDiplomaticContext } from "./nativeDiplomaticDirector.js";
+import { trimWorldForFocus } from "./playerFocus.js";
 import {
   buildNativeWorldExplorationSlate,
   deriveWorldTrajectoryValue,
@@ -3359,6 +3360,11 @@ export const buildWorldInitiativeContext = (
   {
     targetDate = "",
     maxCandidates = DEFAULT_MAX_CANDIDATES,
+    playerFocus = "",
+    // The scenario's "Puppet states" feature, handed down rather than read:
+    // this module runs in a worker and in node tests, so it stays clear of the
+    // browser runtime (see the same argument in nativeDiplomaticDirector.js).
+    puppetStates = true,
   } = {},
 ) => {
   const originDate = normalizeString(bundle?.game?.gameDate);
@@ -3413,6 +3419,7 @@ export const buildWorldInitiativeContext = (
     playerPolity: normalizeString(bundle?.game?.country),
     selectedStorylines: storylineAttention.selected,
     maxActors: 8,
+    puppetStates,
   });
 
   const canonicalStorylineId = (value) => {
@@ -3508,13 +3515,13 @@ export const buildWorldInitiativeContext = (
     normalizeString(bundle?.game?.country),
   );
 
-  const activeCatalyst = bundle?.world?.activeCatalyst;
-  if (activeCatalyst && typeof activeCatalyst === "object") {
-    const title = normalizeString(activeCatalyst.title);
-    const premise = normalizeString(activeCatalyst.premise || activeCatalyst.opening);
+  const activeInteractive = bundle?.world?.activeInteractive;
+  if (activeInteractive && typeof activeInteractive === "object") {
+    const title = normalizeString(activeInteractive.title);
+    const premise = normalizeString(activeInteractive.premise || activeInteractive.opening);
     if (title || premise) {
       candidates.push({
-        id: "active-catalyst",
+        id: "active-interactive",
         type: "active-crisis",
         score: 11,
         date: originDate,
@@ -3574,7 +3581,18 @@ export const buildWorldInitiativeContext = (
   const currentUnitLedger = formatCurrentPersistentUnitLedger(bundle?.world || {});
   const currentUnitCount = normalizeArray(bundle?.world?.units).length;
 
-  const lines = bounded.map((candidate, index) => {
+  // The player's focus decides how much of the world's own attention this
+  // context carries (AI/playerFocus.js): all of it at World first and Balanced,
+  // less at Focused and Spotlight. The world loses its weakest ranked evidence
+  // first; anything naming the player stays, as does every player-sphere
+  // exploration lane and the protected crisis lane below.
+  const playerKey = normalizeString(bundle?.game?.country).toLowerCase();
+  const keptCandidates = trimWorldForFocus(bounded, {
+    focus: playerFocus,
+    isPlayerItem: (candidate) => Boolean(playerKey)
+      && `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`.toLowerCase().includes(playerKey),
+  });
+  const lines = keptCandidates.map((candidate, index) => {
     const meta = [
       candidate.type,
       candidate.date ? candidate.date : "",
@@ -3658,7 +3676,11 @@ export const buildWorldInitiativeContext = (
     return `${index + 1}. [${meta}] ${storyline.title}${detail ? `\n   ${detail}` : ""}`;
   });
 
-  const explorationLines = explorationSlate.map((slot) => {
+  const keptExplorationSlate = trimWorldForFocus(explorationSlate, {
+    focus: playerFocus,
+    isPlayerItem: (slot) => slot?.scope === "player-sphere" || slot?.type === "crisis-discovery",
+  });
+  const explorationLines = keptExplorationSlate.map((slot) => {
     const deferredGuard = slot.deferredTopics.length
       ? ` Avoid routine restatement of deferred process(es): ${slot.deferredTopics.join("; ")}. Deferral does NOT freeze their actors: a genuinely material endogenous development or external trigger may reactivate one.`
       : "";

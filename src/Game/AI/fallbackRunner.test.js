@@ -3,6 +3,10 @@
 //
 // The Fallback list's rules (docs/world-state.md, "AI access"; ADR 0001):
 // every call starts at the top and moves down only when an entry cannot answer.
+// A short mark — busy, rate limited — says what a row shows, never where a call
+// begins: it is worth one fast refusal to find out it has cleared. A Spent one
+// does move the start, because its reset is hours away, but it only sinks to
+// the back: the call still reaches it when nothing else has answered.
 // fallbackRunner.js is import-free, so these drive it with a fake attempt and a
 // fake clock — no network, no storage.
 import test from "node:test";
@@ -44,17 +48,37 @@ test("the top entry answers, so nothing else is tried", async () => {
     assert.deepEqual(tried, ["a"]);
 });
 
-test("a Spent entry moves the call down, and later calls skip it", async () => {
+test("a Spent entry moves the call down, and is not asked again while the mark holds", async () => {
     const store = createMemoryStateStore();
     const entries = [entry("a"), entry("b")];
     const first = scripted({ a: fail("spent") });
     const outcome = await runWithFallback({ entries, store, now: () => 0, attempt: first.attempt });
     assert.equal(outcome.entry.id, "b");
     assert.deepEqual(first.tried, ["a", "b"]);
+    assert.ok(store.get("a").spentUntil > 0, "the mark is kept: the Settings row says so");
 
+    // The provider said the allowance is gone until a reset hours away. Asking
+    // again on every call of every turn buys nothing but the refusal's latency.
     const second = scripted({});
     await runWithFallback({ entries, store, now: () => 1000, attempt: second.attempt });
-    assert.deepEqual(second.tried, ["b"], "no request is wasted on an entry known to be Spent");
+    assert.deepEqual(second.tried, ["b"], "the call goes straight to the entry that can answer");
+
+    // Once the mark expires it is back at the top on its own, unmarked.
+    const afterReset = scripted({});
+    await runWithFallback({ entries, store, now: () => store.get("a").spentUntil + 1, attempt: afterReset.attempt });
+    assert.deepEqual(afterReset.tried, ["a"]);
+});
+
+test("a Spent entry is still tried when everything above it has failed", async () => {
+    const store = createMemoryStateStore({ a: { spentUntil: 60_000 } });
+    const entries = [entry("a"), entry("b")];
+
+    // Being wrong about a reset must never be what fails a turn: `a` is last,
+    // not gone, so a busy backup hands the call back to it.
+    const { attempt, tried } = scripted({ b: fail("busy") });
+    const outcome = await runWithFallback({ entries, store, now: () => 0, attempt });
+    assert.deepEqual(tried, ["b", "a"], "the presumed-out entry is the last resort, not a lost one");
+    assert.equal(outcome.entry.id, "a");
 });
 
 // Google resets the free tier at midnight Pacific time. The expected instants
@@ -79,7 +103,7 @@ test("a Spent Gemini entry comes back at the next midnight Pacific, across the d
     }
 });
 
-test("an Unusable entry moves the call down and stays skipped, with what went wrong", async () => {
+test("an Unusable entry moves the call down, and says what went wrong", async () => {
     const store = createMemoryStateStore();
     const entries = [entry("a"), entry("b")];
     await runWithFallback({ entries, store, now: () => 0, attempt: scripted({ a: fail("unusable", { reason: "key rejected (401)" }) }).attempt });
@@ -87,21 +111,21 @@ test("an Unusable entry moves the call down and stays skipped, with what went wr
 
     const aWeekLater = scripted({});
     await runWithFallback({ entries, store, now: () => 7 * 24 * 60 * 60 * 1000, attempt: aWeekLater.attempt });
-    assert.deepEqual(aWeekLater.tried, ["b"], "only an edit brings it back");
+    assert.deepEqual(aWeekLater.tried, ["a"], "a key the player has since fixed answers again on its own");
 });
 
-test("a busy entry is skipped for 60 seconds, then is back at the top", async () => {
+test("a busy entry is marked for 60 seconds, and is still tried first straight away", async () => {
     const store = createMemoryStateStore();
     const entries = [entry("a"), entry("b")];
     await runWithFallback({ entries, store, now: () => 0, attempt: scripted({ a: fail("busy") }).attempt });
+    assert.deepEqual(store.get("a"), { skipUntil: 60_000, skipReason: "busy" }, "the row says busy for a minute");
 
+    // A busy spell is usually over in seconds, so the next call asks again
+    // rather than settling for a weaker model.
     const soon = scripted({});
-    await runWithFallback({ entries, store, now: () => 59_000, attempt: soon.attempt });
-    assert.deepEqual(soon.tried, ["b"]);
-
-    const later = scripted({});
-    await runWithFallback({ entries, store, now: () => 60_000, attempt: later.attempt });
-    assert.deepEqual(later.tried, ["a"]);
+    await runWithFallback({ entries, store, now: () => 1000, attempt: soon.attempt });
+    assert.deepEqual(soon.tried, ["a"]);
+    assert.deepEqual(store.get("a"), { lastAnsweredAt: 1000 }, "it answered, so the mark is gone");
 });
 
 test("Rate limited on 'wait' fails as it always did, without falling back", async () => {
@@ -115,32 +139,55 @@ test("Rate limited on 'wait' fails as it always did, without falling back", asyn
     assert.equal(store.get("a"), undefined, "a pause is not a mark");
 });
 
-test("Rate limited on 'next' skips the entry for as long as the provider asked, or 60 seconds", async () => {
+test("Rate limited on 'next' (the default) hands the call on, and is marked for as long as the provider asked", async () => {
     const entries = [entry("a"), entry("b")];
     for (const [waitMs, skipMs] of [[35_000, 35_000], [null, 60_000]]) {
         const store = createMemoryStateStore();
         const first = scripted({ a: fail("rateLimited", { waitMs }) });
-        const outcome = await runWithFallback({ entries, store, now: () => 0, rateLimitPolicy: "next", attempt: first.attempt });
+        const outcome = await runWithFallback({ entries, store, now: () => 0, attempt: first.attempt });
         assert.equal(outcome.entry.id, "b");
+        assert.deepEqual(store.get("a"), { skipUntil: skipMs, skipReason: "rate limited" });
 
-        const during = scripted({});
-        await runWithFallback({ entries, store, now: () => skipMs - 1, rateLimitPolicy: "next", attempt: during.attempt });
-        assert.deepEqual(during.tried, ["b"], `still skipped before ${skipMs}ms`);
-
-        const after = scripted({});
-        await runWithFallback({ entries, store, now: () => skipMs, rateLimitPolicy: "next", attempt: after.attempt });
-        assert.deepEqual(after.tried, ["a"], `back at ${skipMs}ms`);
+        // A per-minute limit is over within the minute, so the call after it
+        // goes back to the top rather than staying on the backup.
+        const next = scripted({});
+        await runWithFallback({ entries, store, now: () => 2000, attempt: next.attempt });
+        assert.deepEqual(next.tried, ["a"], `marked until ${skipMs}ms, but never passed over`);
     }
 });
 
-test("an entry that is only busy is still tried when nothing else can answer", async () => {
+test("only a Spent mark moves an entry; busy and Unusable keep their place", async () => {
     const store = createMemoryStateStore();
-    const entries = [entry("a"), entry("b")];
-    await runWithFallback({ entries, store, now: () => 0, attempt: scripted({ a: fail("busy"), b: fail("spent") }).attempt }).catch(() => {});
+    const entries = [entry("a"), entry("b"), entry("c"), entry("d")];
+    await runWithFallback({
+        entries, store, now: () => 0,
+        attempt: scripted({
+            a: fail("busy"),
+            b: fail("spent"),
+            c: fail("unusable", { reason: "model not found (404)" }),
+        }).attempt,
+    });
 
-    const retry = scripted({});
+    // `a` was busy for a moment and `c` may have caught the provider in a bad
+    // one, so both are asked again where they stand. Only `b` — which said its
+    // allowance is gone until a reset — waits at the back.
+    const retry = scripted({ a: fail("busy"), c: fail("unusable", { reason: "model not found (404)" }) });
     const outcome = await runWithFallback({ entries, store, now: () => 10_000, attempt: retry.attempt });
-    assert.equal(outcome.entry.id, "a", "a short pause never makes the game fail when the entry is all there is");
+    assert.deepEqual(retry.tried, ["a", "c", "d"], "the Spent entry is not asked at all; the rest are, in list order");
+    assert.equal(outcome.entry.id, "d");
+});
+
+test("nothing is asked past the entry that answers, so a full list costs one request", async () => {
+    // The failure this fixes: four Spent models refused before the fifth
+    // answered, on every call of every turn.
+    const store = createMemoryStateStore({
+        a: { spentUntil: 60_000 }, b: { spentUntil: 60_000 }, c: { spentUntil: 60_000 }, d: { spentUntil: 60_000 },
+    });
+    const entries = ["a", "b", "c", "d", "e"].map((id) => entry(id));
+    const { attempt, tried } = scripted({});
+    const outcome = await runWithFallback({ entries, store, now: () => 0, attempt });
+    assert.deepEqual(tried, ["e"]);
+    assert.equal(outcome.entry.id, "e");
 });
 
 test("a failure that says nothing about the entry fails the call, as it always did", async () => {
@@ -230,17 +277,18 @@ test("when every entry is Spent, the call says which comes back first, and when"
     assert.equal(error.fallbackUnavailable.nextEntry.id, "oai");
     assert.equal(error.message, "Every model in your Fallback list has used its allowance for now. The first back is oai, at 2026-07-01T13:00:00.000Z.");
 
-    // The next call does not waste a request finding that out again.
-    const again = scripted({});
-    const second = await runWithFallback({ entries, store, now: () => at + 1000, attempt: again.attempt, formatTime: String }).catch((caught) => caught);
-    assert.deepEqual(again.tried, []);
-    assert.ok(second.fallbackUnavailable);
-
     // What the time-skip gate asks before starting a turn.
     assert.deepEqual(fallbackAvailability({ entries, store, now: () => at }), {
         canAnswer: false, nextResetAt: at + 60 * 60 * 1000, nextEntry: entries[1],
     });
     assert.equal(fallbackAvailability({ entries, store, now: () => at + 60 * 60 * 1000 }).canAnswer, true);
+
+    // The next call asks them both again, and when they fail the same way it
+    // says the same thing, from the newer guess.
+    const again = scripted({ gem: fail("spent"), oai: fail("spent") });
+    const second = await runWithFallback({ entries, store, now: () => at + 1000, attempt: again.attempt, formatTime: String }).catch((caught) => caught);
+    assert.deepEqual(again.tried, ["gem", "oai"]);
+    assert.equal(second.fallbackUnavailable.nextResetAt, at + 1000 + 60 * 60 * 1000);
 });
 
 test("when no entry can ever answer, the call says what is wrong with the first", async () => {
@@ -293,7 +341,8 @@ test("the player is told once per switch, however many calls follow it", async (
     ]);
     release();
     await both;
-    // And the rest of the turn, which never touches "a" again.
+    // And the rest of the turn, which tries "a" again each time and finds it
+    // Spent each time: already marked, so the player hears it once.
     for (let call = 0; call < 5; call += 1) await runWithFallback({ entries, store, now: () => 0, attempt, onSwitch });
 
     assert.deepEqual(switches, [{ from: ["a:spent"], to: "b" }]);
@@ -341,18 +390,27 @@ test("each row says whether its entry is ready, Spent, Unusable or busy, and whe
     assert.equal(entryStatus(store.get("c"), 61_000).status, "ready");
 });
 
-test("a Spent entry on another provider gets one try an hour later", async () => {
+test("a Spent entry on another provider is marked for an hour", async () => {
     const store = createMemoryStateStore();
     const entries = [entry("a", "openai"), entry("b")];
     await runWithFallback({ entries, store, now: () => 0, attempt: scripted({ a: fail("spent") }).attempt });
+    assert.equal(store.get("a").spentUntil, 60 * 60 * 1000, "OpenAI does not say when it resets");
 
-    const tooSoon = scripted({});
-    await runWithFallback({ entries, store, now: () => 59 * 60 * 1000, attempt: tooSoon.attempt });
-    assert.deepEqual(tooSoon.tried, ["b"]);
+    // Until then the row says Spent, the gate before a time skip counts it as
+    // unable to answer, and calls go round it. It is reached again only as a
+    // last resort — and a try that finds it still spent puts the guess an hour
+    // further out.
+    assert.equal(entryStatus(store.get("a"), 59 * 60 * 1000).status, "spent");
+    const lastResort = scripted({ a: fail("spent"), b: fail("busy") });
+    await runWithFallback({ entries, store, now: () => 59 * 60 * 1000, attempt: lastResort.attempt }).catch(() => {});
+    assert.deepEqual(lastResort.tried, ["b", "a"], "the backup first, then the guess");
+    assert.equal(store.get("a").spentUntil, 119 * 60 * 1000);
 
-    const anHourOn = scripted({});
-    await runWithFallback({ entries, store, now: () => 60 * 60 * 1000, attempt: anHourOn.attempt });
-    assert.deepEqual(anHourOn.tried, ["a"], "the top entry is tried again, and answers");
+    // Past the new guess it is back at the top, and answering clears the mark.
+    const back = scripted({});
+    await runWithFallback({ entries, store, now: () => 120 * 60 * 1000, attempt: back.attempt });
+    assert.deepEqual(back.tried, ["a"]);
+    assert.equal(entryStatus(store.get("a"), 120 * 60 * 1000).status, "ready");
 });
 
 // --- the context preflight (contextWindow.js) ---

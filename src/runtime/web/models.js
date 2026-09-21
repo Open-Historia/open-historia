@@ -12,6 +12,7 @@ import {
   DEFAULT_SCENARIO_META,
   SUPPORTED_IMAGE_CONTENT_TYPES,
   TEMPLATE_WORLD_OVERRIDE_KEYS,
+  accentOrDefault,
 } from "./storeConstants.js";
 import { cloneJson } from "./util.js";
 
@@ -221,7 +222,7 @@ export const readScenarioMeta = (scenarioId, raw = {}) => {
   const subtitle = String(raw?.subtitle ?? "").trim() || DEFAULT_SCENARIO_META.subtitle;
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_SCENARIO_META.description;
   return {
-    accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
+    accentColor: accentOrDefault(raw?.accentColor, DEFAULT_SCENARIO_META.accentColor),
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     countryNameOverrides: raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object" ? raw.countryNameOverrides : {},
     createdAt: raw?.createdAt ?? nowIso(),
@@ -244,7 +245,7 @@ export const readGameMeta = (gameId, raw = {}) => {
   const subtitle = String(raw?.subtitle ?? "").trim() || DEFAULT_GAME_META.subtitle;
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
   return {
-    accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_GAME_META.accentColor,
+    accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? nowIso(),
     description,

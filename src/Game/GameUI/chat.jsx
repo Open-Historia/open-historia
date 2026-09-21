@@ -3,8 +3,12 @@ import React, { memo, useEffect, useMemo, useRef, useState } from "react";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { checkDemandReply, chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
+import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
+import { logForNextStep, startChatReveal } from "./chatReveal.js";
+import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { isChatGenerationLikely } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
@@ -30,7 +34,8 @@ import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readGameData, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
@@ -305,7 +310,7 @@ const FlagImg = ({ url, alt = "", size = "1em", width, height }) => {
 
 // ── Nation colors (from colors.json, same source as WorldMap) ─────────────────
 const countryAccentColor = (name) => {
-    const colors = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#8b5cf6","#ec4899"];
+    const colors = ["#ef4444","#f97316","#eab308","#22c55e","#14b8a6","#3b82f6","#94a3b8","#ec4899"];
     let h = 0;
     for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
     return colors[h % colors.length];
@@ -345,13 +350,13 @@ const useNationColor = (code) => {
 
 // ── ThinkingDots ──────────────────────────────────────────────────────────────
 
-const ThinkingDots = () => {
+const ThinkingDots = ({ label = "Thinking" }) => {
     const [dots, setDots] = useState(0);
     useEffect(() => {
         const iv = setInterval(() => setDots(d => (d + 1) % 4), 500);
         return () => clearInterval(iv);
     }, []);
-    return <span style={{ opacity: 0.6 }}>Thinking{".".repeat(dots)}&nbsp;</span>;
+    return <span style={{ opacity: 0.6 }}>{label}{".".repeat(dots)}&nbsp;</span>;
 };
 
 // Cycles 1-3 dots (never empty, unlike ThinkingDots' 0-3) — used where there's
@@ -470,7 +475,7 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                         title={voters.length ? voters.join(", ") : "No vote yet"}
                         style={{
                             background: `linear-gradient(to right, rgba(96,165,250,0.28) ${share}%, rgba(255,255,255,0.05) ${share}%)`,
-                            border: chosen ? "1px solid rgba(96,165,250,0.85)" : "1px solid rgba(255,255,255,0.12)",
+                            border: chosen ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
                             borderRadius: "8px",
                             color: "white",
                             cursor: mine ? "default" : "pointer",
@@ -576,6 +581,139 @@ const ReactionStrip = ({ reactions, align = "left" }) => {
     );
 };
 
+// A demand between the player and their own Overlord or Puppet
+// (runtime/demandCheck.js, chatThreads.js), drawn like a poll: a card in the
+// thread, answered by the side whose move it is, once. Two buttons and your own
+// words, the shape of an interactive event's "play it out / let it pass" with an
+// angle of your own. It appears only on DEMANDS — every other message from an
+// Overlord is just a message.
+//
+//   the player is the Puppet, the demand open      → Accept · Refuse · an alternative
+//   the player is the Puppet, having refused        → the same choice, to think again
+//   the player is the Overlord, an alternative on it → Accept it · Reject (optionally revised)
+//
+// A card sits under the message that made the demand, where the conversation
+// reached it, rather than at the foot of the thread.
+//
+// Only a Refuse costs the Puppet anything, and only once (gameState.js
+// chargeRefusals). A refusal is not the end of it: the card stays answerable, so
+// a player who thinks better of it agrees to the same demand instead of being
+// handed a second one. Rejecting an alternative is demanding again: revised if
+// you write something, the original restated if you do not.
+const DEMAND_STATUS_TEXT = {
+    accepted: "Accepted",
+    refused: "Refused",
+    settled: "Settled on the alternative",
+    superseded: "Replaced by a new demand",
+};
+
+const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlternative, onReject }) => {
+    const [text, setText] = useState("");
+    const me = String(playerCountry ?? "").trim().toLowerCase();
+    const iAmPuppet = String(demand?.target ?? "").trim().toLowerCase() === me;
+    const iAmOverlord = String(demand?.by ?? "").trim().toLowerCase() === me;
+    const reconsidering = iAmPuppet && demand?.status === "refused";
+    const myMovePuppet = iAmPuppet && (demand?.status === "open" || reconsidering);
+    const myMoveOverlord = iAmOverlord && demand?.status === "countered";
+    const settled = myMovePuppet ? "" : DEMAND_STATUS_TEXT[demand?.status] ?? "";
+    const standing = reconsidering ? "Refused" : "";
+
+    const button = (label, onClick, tone = "neutral") => (
+        <button
+            type="button"
+            disabled={busy}
+            onClick={onClick}
+            style={{
+                background: tone === "danger" ? "rgba(248,113,113,0.14)" : tone === "go" ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${tone === "danger" ? "rgba(248,113,113,0.45)" : tone === "go" ? "rgba(74,222,128,0.45)" : "rgba(255,255,255,0.16)"}`,
+                borderRadius: "8px",
+                color: "white",
+                cursor: busy ? "default" : "pointer",
+                flex: 1,
+                fontFamily: "inherit",
+                fontSize: "0.78rem",
+                fontWeight: 700,
+                opacity: busy ? 0.6 : 1,
+                padding: "0.4rem 0.6rem",
+            }}
+        >{label}</button>
+    );
+
+    return (
+        <div style={{
+            background: "rgba(234,179,8,0.08)",
+            border: "1px solid rgba(234,179,8,0.35)",
+            borderRadius: "12px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.45rem",
+            margin: "0.35rem 0",
+            opacity: settled ? 0.7 : 1,
+            padding: "0.7rem 0.85rem",
+        }}>
+            <span style={{ fontSize: "0.68rem", letterSpacing: "0.04em", color: "rgba(250,204,21,0.9)", textTransform: "uppercase" }}>
+                {iAmOverlord ? `Your demand · of ${demand?.target}` : `Demand · from ${demand?.by}`}
+                {settled || standing ? ` · ${settled || standing}` : ""}
+            </span>
+            <span style={{ fontSize: "0.85rem", fontWeight: 700, lineHeight: 1.35 }}>{demand?.summary}</span>
+            {demand?.alternative && (
+                <span style={{ color: "rgba(255,255,255,0.75)", fontSize: "0.78rem", lineHeight: 1.35 }}>
+                    {iAmPuppet ? "You offered instead: " : `${demand?.target} offers instead: `}{demand.alternative}
+                </span>
+            )}
+
+            {reconsidering && (
+                <span style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", lineHeight: 1.35 }}>
+                    You refused this. You can still change your mind.
+                </span>
+            )}
+
+            {myMovePuppet && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button(reconsidering ? "Accept after all" : "Accept", () => onAnswer?.("accepted", ""), "go")}
+                        {!reconsidering && button("Refuse", () => onAnswer?.("refused", ""), "danger")}
+                    </div>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <input
+                            value={text}
+                            onChange={(event) => setText(event.target.value)}
+                            placeholder="Or offer an alternative…"
+                            disabled={busy}
+                            style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", flex: 1, fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                        />
+                        {button("Offer", () => { if (text.trim()) { onAnswer?.("alternative", text.trim()); setText(""); } })}
+                    </div>
+                </>
+            )}
+
+            {myMoveOverlord && (
+                <>
+                    <div style={{ display: "flex", gap: "0.4rem" }}>
+                        {button("Accept alternative", () => onAcceptAlternative?.(), "go")}
+                        {button("Reject", () => { onReject?.(text.trim()); setText(""); }, "danger")}
+                    </div>
+                    <input
+                        value={text}
+                        onChange={(event) => setText(event.target.value)}
+                        placeholder="Revise your demand (or leave empty to insist on it)…"
+                        disabled={busy}
+                        style={{ background: "rgba(0,0,0,0.28)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8, color: "white", fontSize: "0.78rem", outline: "none", padding: "0.4rem 0.6rem" }}
+                    />
+                </>
+            )}
+
+            {!settled && !myMovePuppet && !myMoveOverlord && (
+                <span data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
+                    {demand?.status === "countered"
+                        ? `Waiting for ${demand?.by} to consider the alternative`
+                        : `Waiting for ${demand?.target}'s answer`}
+                </span>
+            )}
+        </div>
+    );
+};
+
 const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
     const isPlayer = msg.role === "user";
     const isError  = msg.role === "error";
@@ -671,16 +809,17 @@ const InstitutionRecord = ({ msg }) => {
     );
 };
 
-// ── Typing indicator ─────────────────────────────────────────────────────────
-
-const TypingBubble = ({ speaker, code }) => {
+// `label`: "Thinking" while the request is out, "Typing" while a line of the
+// table's turn waits to be said.
+const TypingBubble = ({ speaker, code, hint = "", label = "Thinking" }) => {
     const flagUrl = useCountryFlagUrl({ code, name: speaker });
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: "0.3rem", fontSize: "0.7rem", color: "rgba(255,255,255,0.4)", marginBottom: "0.25rem" }}><FlagImg url={flagUrl} alt={speaker} size="0.95em" /> {speaker}</span>
         <div style={{ padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.85rem" }}>
-        <ThinkingDots />
+        <ThinkingDots label={label} />
         </div>
+        {hint && <span style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.32)", marginTop: "0.3rem" }}>{hint}</span>}
         </div>
     );
 };
@@ -726,6 +865,10 @@ const LifecycleOutcomePanel = ({ cases = [], institution = null, concluded = fal
         </div>
     );
 };
+
+// The campaign in front of the player, for a write made seconds after the
+// turn that produced it (runtime/campaignGuard.js).
+const activeCampaignNow = () => String(getLibraryState()?.activeGameId ?? "").trim();
 
 // ── Country selector ──────────────────────────────────────────────────────────
 
@@ -828,7 +971,7 @@ const CountrySelectorModal = ({
         <span style={{ position: "absolute", left: "0.75rem", color: "rgba(255,255,255,0.35)", display: "flex", pointerEvents: "none" }}><SearchIcon /></span>
         <input type="text" placeholder="Search countries..." value={search} onChange={e => setSearch(e.target.value)}
         style={{ width: "100%", padding: "0.55rem 0.85rem 0.55rem 2.2rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "white", fontSize: "0.82rem", outline: "none", boxSizing: "border-box", fontFamily: "sans-serif" }}
-        onFocus={e => e.target.style.borderColor = "rgba(139,92,246,0.5)"}
+        onFocus={e => e.target.style.borderColor = "rgba(255,255,255,0.25)"}
         onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.12)"} />
         </div>
         </div>
@@ -843,7 +986,7 @@ const CountrySelectorModal = ({
         onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
         onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
         <button onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
-        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "#3b82f6" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
+        style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
         {confirmLabel(selected.length)}
@@ -961,6 +1104,51 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const messagesRef       = useRef(chat.messages ?? []);
     const composerRef       = useRef(null);
     const lifecycleRevealTokenRef = useRef(0);
+    // A group turn is said a line at a time (AI/chatActions.js planChatReveal):
+    // the first at once, each later one after its speaker has been seen typing.
+    // The lines still to come are held HERE, not in the thread, until they are
+    // shown — so a line the player cuts in on was never said, and nothing has
+    // to be taken back out of the saved thread. `typingNext` is who is typing.
+    const revealRef = useRef(null);
+    const [typingNext, setTypingNext] = useState(null);
+    // The thread as last rendered, for a line shown seconds after its turn: a
+    // vote the player cast in between is kept under it.
+    const chatRef = useRef(chat);
+    useEffect(() => { chatRef.current = chat; }, [chat]);
+
+    // DEMANDS, in the one-on-one thread between the player and their own
+    // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
+    // player, from the same shared rule as the list's markers.
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
+    const puppetRelations = usePuppetMarkers();
+    const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
+    // The composer offers "make this a demand" only to an Overlord writing to
+    // its own Puppet; an Overlord's demands of the player arrive on their own.
+    const canDemand = theyAre === "puppet";
+    const [makeDemand, setMakeDemand] = useState(false);
+    const [demandBusy, setDemandBusy] = useState(false);
+    const newThreadId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // Appends events to the thread's log, the way a poll vote is — but read from
+    // the thread as LAST RENDERED, never the copy this closure started with: a
+    // demand is often appended after a model request, seconds later, and writing
+    // the older copy back would drop whatever the thread gained meanwhile.
+    const appendThreadEvents = (newEvents) => {
+        if (!newEvents?.length) return;
+        const current = chatRef.current ?? chat;
+        const events = [
+            ...(current.events?.length ? current.events : eventsFromLegacyChat({ ...current, messages: messagesRef.current })),
+            ...newEvents,
+        ];
+        const projected = projectChatThread(events);
+        onThreadUpdate?.(current.id, {
+            events,
+            countries: projected.countries,
+            title: projected.title,
+            polls: projected.polls,
+            demands: projected.demands,
+        });
+    };
 
     useEffect(() => {
         countries.forEach(({ name, code }) => resolveFlagImageUrl({ code, name }));
@@ -1045,7 +1233,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const scroller = messagesScrollRef.current;
             if (!scroller) return;
             scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-        }, [messages, isLoading, phase]);
+        }, [messages, isLoading, phase, typingNext]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -1080,6 +1268,85 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setLifecycleRevealInProgress(false);
         };
 
+        // The panel's copy of a thread's messages, from its log's projection.
+        const viewMessagesOf = (projected) => projected.messages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            speaker: message.speaker,
+            code: message.code,
+            text: message.text,
+            time: message.time,
+            reactions: message.reactions,
+            ...(message.memorySummary ? { memorySummary: message.memorySummary } : {}),
+            ...(message.eventId ? { eventId: message.eventId } : {}),
+            ...(message.catchUp ? { catchUp: message.catchUp, catchUpLabel: message.catchUpLabel } : {}),
+        }));
+
+        // Adds a step of a group turn to its thread: the log, the roster, title
+        // and polls, and the panel's messages when that thread is on screen.
+        // Nothing is written once the player has switched campaign: the runtime
+        // files follow the open campaign, so a late write would land on the one
+        // switched to (runtime/campaignGuard.js).
+        const addTurnEvents = (reveal, newEvents, { cursors = null, onScreen = true } = {}) => {
+            if (campaignChanged(reveal.campaignId, activeCampaignNow())) return false;
+            const live = chatRef.current;
+            const events = [
+                ...logForNextStep({ turnLog: reveal.events, wroteAny: reveal.written, chatId: reveal.chatId, liveChatId: live?.id, liveLog: live?.events }),
+                ...newEvents,
+            ];
+            reveal.events = events;
+            reveal.written = true;
+            const projected = projectChatThread(events);
+            const shown = viewMessagesOf(projected);
+            if (onScreen && String(live?.id) === String(reveal.chatId)) pushMessages(shown);
+            else onMessagesUpdate(reveal.chatId, shown);
+            onThreadUpdate?.(reveal.chatId, { events, countries: projected.countries, title: projected.title, polls: projected.polls, demands: projected.demands, ...(cursors ? { cursors } : {}) });
+            return true;
+        };
+
+        // The rest of a group turn, a line at a time (chatReveal.js): each
+        // speaker is seen typing for CHAT_REVEAL_PAUSE_MS, then says the line.
+        const sayLater = (reveal, steps) => {
+            revealRef.current = reveal;
+            reveal.controller = startChatReveal({
+                steps,
+                pauseMs: CHAT_REVEAL_PAUSE_MS,
+                onTyping: (step) => setTypingNext(step
+                    ? { speaker: step.speaker, code: countries.find((country) => (country.name || "").toLowerCase() === step.speaker.toLowerCase())?.code || "" }
+                    : null),
+                onSay: (step) => {
+                    if (addTurnEvents(reveal, step.events)) return true;
+                    logDebugEvent("diplomacy", `Chat #${reveal.chatId}: the campaign changed while the table was still talking; the rest of the turn was not written.`, undefined, { problem: true });
+                    return false;
+                },
+                onEnd: () => { if (revealRef.current === reveal) revealRef.current = null; },
+            });
+        };
+
+        // The player spoke while the table was still talking. What had not been
+        // said yet never is — the way Intervene discards the events a skip's
+        // reveal has not reached — and the next turn is told whose lines went
+        // unsaid (describeChatCutIn).
+        const cutIn = () => {
+            const reveal = revealRef.current;
+            const unsaid = reveal?.controller?.stop() ?? [];
+            if (!unsaid.length) return;
+            const note = describeChatCutIn({ player: playerCountry, steps: unsaid });
+            if (note) actionFeedbackRef.current = [actionFeedbackRef.current, note].filter(Boolean).join("\n\n");
+            logDebugEvent("diplomacy",
+                `${playerCountry || "The player"} cut in on chat #${reveal.chatId}: ${unsaid.length} line(s) of the table's turn were never said.`,
+                { unsaid: unsaid.map((step) => step.speaker) }, { verbose: true });
+        };
+
+        // Leaving the thread is not cutting in: what the table was still to say
+        // is said, all at once, into the thread it belongs to.
+        useEffect(() => () => {
+            const reveal = revealRef.current;
+            const rest = reveal?.controller?.stop() ?? [];
+            if (rest.length) addTurnEvents(reveal, rest.flatMap((step) => step.events), { onScreen: false });
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [chat.id]);
+
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
         const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
@@ -1104,8 +1371,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 const { reply, reaction, memorySummary } = await sendDiplomaticMessage(playerMessage, country.name, countries, { chatId: chat.id, catchUp: asked?.catchUp || "" });
                 // The thread's rolling durable memory rides on the reply that
                 // produced it, so a reopened thread, the advisor's one-off sends
-                // and the world director read the same continuity.
+                // and the world director read the same continuity. Its id is set
+                // here so a demand this reply makes can be attached to it.
                 const leaderMessage = {
+                    id: newThreadId("msg"),
                     role: "leader", speaker: country.name, code: country.code, text: reply, time: repliedOn,
                     ...(memorySummary ? { memorySummary } : {}),
                 };
@@ -1122,6 +1391,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     pushMessages([...msgs, leaderMessage]);
                 } else {
                     pushMessages([...messagesRef.current, leaderMessage]);
+                }
+                // Did this reply make, answer or settle a demand? Only asked in
+                // the one-on-one thread between the player and their own Overlord
+                // or Puppet — everywhere else checkDemandReply returns at once,
+                // without a request. It runs after the reply is shown, so the
+                // player is never kept waiting for it; a failure records nothing.
+                if (!isGroup && theyAre) {
+                    void checkDemandReply({
+                        chat: { ...(chatRef.current ?? chat), messages: messagesRef.current },
+                        speaker: country.name,
+                        reply,
+                        answering: playerMessage,
+                        messageId: leaderMessage.id,
+                        time: repliedOn,
+                    })
+                        .then((events) => appendThreadEvents(events))
+                        .catch((error) => logDebugEvent("diplomacy", `Demand check on ${country.name}'s reply failed; nothing recorded.`, error));
                 }
             } catch (err) {
                 pushMessages([...messagesRef.current, {
@@ -1205,6 +1491,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
+            // The campaign this turn belongs to: nothing is written after a switch.
+            const campaignId = activeCampaignNow();
             try {
                 const outcome = await runChatActionBatch({
                     chat: { ...chat, messages: nextMessages, actionFeedback: actionFeedbackRef.current },
@@ -1214,9 +1502,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     time: asked?.time || "",
                     lifecycleResponseRequested,
                 });
-                const spoken = (outcome?.newEvents ?? []).filter((event) => event.kind === "message");
+                const newEvents = outcome?.newEvents ?? [];
+                const spoken = newEvents.filter((event) => event.kind === "message");
                 const lifecycleApplied = Array.isArray(outcome?.lifecycle) && outcome.lifecycle.length > 0;
-                if (!spoken.length && !(outcome?.newEvents ?? []).length && !lifecycleApplied) return false;
+                if (!newEvents.length && !lifecycleApplied) return false;
                 actionFeedbackRef.current = outcome?.feedback ?? "";
                 if (lifecycleApplied) {
                     setLifecycleCaseOverrides((previous) => {
@@ -1228,29 +1517,39 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         return next;
                     });
                 }
-                const projected = projectChatThread(outcome.events);
-                const projectedMessages = projected.messages.map((message) => ({
-                    id: message.id,
-                    role: message.role,
-                    speaker: message.speaker,
-                    code: message.code,
-                    text: message.text,
-                    time: message.time,
-                    reactions: message.reactions,
-                    ...(message.memorySummary ? { memorySummary: message.memorySummary } : {}),
-                    ...(message.eventId ? { eventId: message.eventId } : {}),
-                    ...(message.catchUp ? { catchUp: message.catchUp, catchUpLabel: message.catchUpLabel } : {}),
-                }));
-                onThreadUpdate?.(chat.id, { events: outcome.events, countries: projected.countries, title: projected.title, polls: projected.polls, cursors: outcome.cursors, committed: outcome.committed === true });
-                // A lifecycle response batch is canonically committed as one
-                // atomic turn, but present its several diplomatic replies one at
-                // a time so the table reads like people answering rather than a
-                // transcript dump. The saved thread remains complete throughout.
+
+                // Lifecycle response batches are committed atomically by native institution
+                // governance, then only PRESENTED one government at a time. Ordinary group
+                // turns keep Beta's staged reveal so the player can cut in before later lines
+                // are ever written to the thread.
                 if (isLifecycleConversation && lifecycleResponseRequested && outcome.committed === true) {
+                    const projected = projectChatThread(outcome.events);
+                    const projectedMessages = viewMessagesOf(projected);
+                    onThreadUpdate?.(chat.id, {
+                        events: outcome.events,
+                        countries: projected.countries,
+                        title: projected.title,
+                        polls: projected.polls,
+                        demands: projected.demands,
+                        cursors: outcome.cursors,
+                        committed: true,
+                    });
                     const newMessageIds = spoken.map((event) => event.id).filter(Boolean);
                     await presentCommittedLifecycleReplies(projectedMessages, newMessageIds);
                 } else {
-                    pushMessages(projectedMessages);
+                    const [first, ...later] = planChatReveal(newEvents);
+                    const reveal = {
+                        chatId: chat.id,
+                        campaignId,
+                        events: outcome.events.slice(0, outcome.events.length - newEvents.length),
+                        written: false,
+                        controller: null,
+                    };
+                    if (!addTurnEvents(reveal, first.events, { cursors: outcome.cursors })) {
+                        logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
+                        return true;
+                    }
+                    if (later.length) sayLater(reveal, later);
                 }
                 setPhase("player");
                 return true;
@@ -1279,21 +1578,108 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             logDebugEvent("diplomacy", `${playerCountry} voted in chat #${chat.id}.`, { poll: poll.question, optionId }, { verbose: true });
         };
 
+        // The demand card's moves (runtime/demandCheck.js). Each is appended to
+        // the thread's log AND said, as a line from the player, so the other side
+        // answers it the way it answers anything typed — and that answer is then
+        // checked in turn. Only a refusal costs the Puppet anything.
+        const answerDemand = async (demand, answer, text = "") => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer, text, time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                // A change of mind says so, or the other side reads the
+                // acceptance as coming out of nowhere.
+                const reconsidered = demand.status === "refused";
+                const line = answer === "accepted"
+                    ? (reconsidered ? `We have reconsidered. We accept: ${demand.summary}.` : `We accept: ${demand.summary}.`)
+                    : answer === "refused" ? "We refuse this demand."
+                        : (reconsidered ? `We have reconsidered. ${text}` : text);
+                await submitPlayerText(line);
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        const acceptAlternative = async (demand) => {
+            const event = playerAnswerEvent({ demand, player: playerCountry, answer: "alternative_accepted", time: gameDate, idFor: newThreadId });
+            if (!event) return;
+            setDemandBusy(true);
+            try {
+                appendThreadEvents([event]);
+                await submitPlayerText(`We accept your alternative: ${demand.alternative}.`);
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
+        // Rejecting an alternative is demanding again: the player's revision if
+        // they wrote one, the original restated if not — "this is the demand".
+        const rejectAlternative = async (demand, revised = "") => {
+            setDemandBusy(true);
+            try {
+                await submitPlayerText(revised || `No. The demand stands: ${demand.summary}.`, {
+                    onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: demand.target,
+                        text: revised,
+                        openDemand: demand,
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean)),
+                });
+            } finally {
+                setDemandBusy(false);
+            }
+        };
+
         const handlePlayerSubmit = async () => {
             const text = playerInput.trim();
             if (!text || isLoading) return;
-            lastPlayerMessage.current = text;
             setPlayerInput("");
+            // "Make this a demand" — only offered to an Overlord writing to its
+            // own Puppet, and only for this one message.
+            const asDemand = canDemand && makeDemand;
+            setMakeDemand(false);
+            await submitPlayerText(text, {
+                // Rejecting an alternative from the card is demanding again; so is
+                // this. Either replaces whatever demand was still in play.
+                onSent: asDemand
+                    ? ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
+                        player: playerCountry,
+                        target: countries[0]?.name,
+                        text,
+                        openDemand: openDemandOf(chatRef.current),
+                        messageId,
+                        time,
+                        idFor: newThreadId,
+                    })].filter(Boolean))
+                    : null,
+            });
+        };
+
+        // Sends a line as the player and gets the table's answer: the composer's
+        // path, and the demand card's, so a button press is answered exactly as a
+        // typed message is. `onSent` runs once the line is on the thread, with its
+        // id — which is what a demand made by this line is attached to.
+        const submitPlayerText = async (text, { onSent = null } = {}) => {
+            if (!text || isLoading) return;
+            // Speaking while the table is still talking cuts it off.
+            cutIn();
+            lastPlayerMessage.current = text;
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
             const moment = await readSeenChatMoment(gameDate);
             const catchUp = buildLeaderCatchUp(messagesRef.current, chat, playerCountry, moment);
+            const messageId = newThreadId("msg");
             const nextMessages = [...messagesRef.current, {
-                role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
+                id: messageId, role: "user", speaker: playerCountry, text, time: moment.date || gameDate,
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }];
             pushMessages(nextMessages);
+            onSent?.({ messageId, time: moment.date || gameDate });
             // One request for the whole table. Only for a group: a one-on-one
             // chat is already a single request, and its streaming reply is what
             // the player watches arrive.
@@ -1399,6 +1785,29 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             : shownEntries;
         const hiddenMessageCount = shownEntries.length - visibleEntries.length;
 
+        // DEMANDS, placed in the conversation rather than under it
+        // (runtime/demandCheck.js placeDemandCards).
+        // A demand belongs to an overlord and its puppet, so a game with the
+        // system switched off shows none — including ones a thread was already
+        // carrying when it was switched off. They are not deleted: the thread
+        // keeps its log, and switching back on brings the open ones back.
+        const { byMessage: demandsByMessage, stranded: strandedDemands } = placeDemandCards({
+            messages: visibleEntries.map(({ msg }) => msg),
+            demands: puppetStatesOn ? chat.demands : [],
+            isGroup,
+        });
+        const renderDemandCard = (demand) => (
+            <DemandCard
+                key={demand.id}
+                demand={demand}
+                playerCountry={playerCountry}
+                busy={demandBusy || isLoading}
+                onAnswer={(answer, text) => answerDemand(demand, answer, text)}
+                onAcceptAlternative={() => acceptAlternative(demand)}
+                onReject={(text) => rejectAlternative(demand, text)}
+            />
+        );
+
         return (
             <>
             {isInstitutionCouncil ? (!embeddedInstitution ? (
@@ -1501,6 +1910,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ? <InstitutionRecord msg={msg} />
                         : <MessageBubble msg={msg} compact={compact} showTime={!groupedWithNext}
                             onRetry={msg.retry && !isLoading && index === messages.length - 1 ? () => handleRetry(index) : undefined} />}
+                    {(demandsByMessage.get(msg.id) ?? []).map(renderDemandCard)}
                     </React.Fragment>
                 );
             })}
@@ -1515,9 +1925,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     onVote={(optionId) => handlePlayerVote(poll, optionId)}
                 />
             ))}
+            {/* A demand whose message is older than the window, or which was
+                never tied to one, still has to be answerable: it sits at the
+                foot of the thread rather than nowhere. */}
+            {strandedDemands.map(renderDemandCard)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
                 : isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
+            {!isLoading && typingNext && (
+                <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
+            )}
             <div ref={messagesEndRef} />
             </div>
 
@@ -1535,9 +1952,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 >{isInstitutionCouncil ? "Speak instead" : "Speak"}</button>
                 <button
                 onClick={handleLetSpeak}
-                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(139,92,246,0.3)", background: "rgba(139,92,246,0.12)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(139,92,246,0.24)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.55)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(139,92,246,0.12)"; e.currentTarget.style.borderColor = "rgba(139,92,246,0.3)"; }}
+                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
+                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
+                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
                 >Let {pendingCountry.name} speak →</button>
                 </div>
                 </div>
@@ -1562,9 +1979,18 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     </div> : isInstitutional && !lifecycleTerminal ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
                 </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {canDemand && (
+                        <button
+                        type="button"
+                        onClick={() => setMakeDemand((on) => !on)}
+                        aria-pressed={makeDemand}
+                        title={makeDemand ? "This message is a demand. Click to send it as an ordinary message." : `Make this message a demand of ${countries[0]?.name}`}
+                        style={{ background: makeDemand ? "rgba(234,179,8,0.22)" : "rgba(255,255,255,0.05)", border: `1px solid ${makeDemand ? "rgba(234,179,8,0.7)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: makeDemand ? "rgb(250,204,21)" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 700, height: "2.5rem", padding: "0 0.6rem" }}
+                        >{makeDemand ? "⚑ Demand" : "⚑"}</button>
+                    )}
                     <textarea
                     ref={composerRef}
-                    placeholder={isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
+                    placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
                     rows={1} value={playerInput}
                     onChange={e => setPlayerInput(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
@@ -1933,9 +2359,9 @@ const ChatGroupHeader = ({ label }) => (
 // those merely COULD produce a chat, and saying so for the length of every jump
 // made the indicator meaningless.
 const GeneratingBanner = () => (
-    <div style={{ alignItems: "center", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
+    <div style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", display: "flex", gap: "0.55rem", padding: "0.6rem 0.8rem" }}>
     <span style={{ flexShrink: 0, fontSize: "1rem" }}>🖊</span>
-    <span style={{ color: "rgba(216,196,255,0.9)", fontSize: "0.78rem", fontWeight: 600 }}>
+    <span style={{ color: "#f4f4f5", fontSize: "0.78rem", fontWeight: 600 }}>
     Diplomacy in progress<PulsingDots /><span style={{ color: "rgba(255,255,255,0.4)", fontWeight: 400 }}> — a country may be reaching out</span>
     </span>
     </div>
@@ -1943,7 +2369,50 @@ const GeneratingBanner = () => (
 
 // ── Chat list item ────────────────────────────────────────────────────────────
 
-const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false }) => {
+// Which threads are the ones that matter politically: your Overlord, and the
+// countries you hold. Deliberately a MARKER on an existing row rather than a
+// tab or a panel of its own - being somebody's Puppet is played out through the
+// diplomacy the player already uses, and a new screen for it would be one more
+// thing to learn for a relationship they can already see.
+//
+// The answer comes from runtime/puppets.js, like the country panel's and the
+// map overlay's, so the three cannot disagree about the player's own empire.
+const usePuppetMarkers = () => {
+    const [markers, setMarkers] = React.useState({});
+    React.useEffect(() => {
+        let cancelled = false;
+        const load = async () => {
+            try {
+                // The cached view, not a forced re-read: this decorates a list
+                // row, and forcing world.json off the server every 15 s for the
+                // life of the panel is a lot of traffic for a label.
+                const [world, game] = await Promise.all([
+                    readWorldStateView().catch(() => ({})),
+                    readGameData().catch(() => ({})),
+                ]);
+                if (cancelled) return;
+                // Per counterpart: the label, and what THEY are to the player —
+                // the demand card and the composer's "make this a demand" need
+                // the relationship itself, not a label to parse.
+                const next = {};
+                for (const row of livePuppetsFor(world, game?.country || "")) {
+                    describeRole(row, {
+                        puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
+                        overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
+                        foreign: () => {},
+                    });
+                }
+                setMarkers(next);
+            } catch { /* a marker is decoration; never break the list for it */ }
+        };
+        load();
+        const timer = setInterval(load, 15000);
+        return () => { cancelled = true; clearInterval(timer); };
+    }, []);
+    return markers;
+};
+
+const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
     const [hovered, setHovered] = React.useState(false);
     const [confirming, setConfirming] = React.useState(false);
     const counterparts = diplomaticCounterparts(chat?.countries, playerCountry);
@@ -1955,6 +2424,7 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
     const preview = rawPreview.slice(0, 96) + (rawPreview.length > 96 ? "…" : "");
     const speaker = lastMsg?.role === "leader" || (lastMsg?.speaker && lastMsg?.role !== "user") ? String(lastMsg?.speaker || "") : "";
     const channelMeta = counterparts.length > 1 ? `${counterparts.length + (playerCountry ? 1 : 0)}-party channel` : "Direct channel";
+    const chatMarker = counterparts.map((country) => puppetMarkers[country.name]?.label).find(Boolean) || "";
 
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
@@ -1979,7 +2449,7 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
             <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: ".48rem", minWidth: 0 }}>
                     <div style={{ flex: 1, minWidth: 0, fontSize: ".84rem", fontWeight: unread ? 740 : 650, color: unread ? "#fff" : "rgba(255,255,255,.9)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{names}</div>
-                    <span style={{ flexShrink: 0, fontSize: ".59rem", color: "rgba(255,255,255,.25)", textTransform: "uppercase", letterSpacing: ".045em" }}>{channelMeta}</span>
+                    <span style={{ flexShrink: 0, fontSize: ".59rem", color: chatMarker ? "rgba(234,179,8,.9)" : "rgba(255,255,255,.25)", textTransform: "uppercase", letterSpacing: ".045em" }}>{chatMarker || channelMeta}</span>
                 </div>
                 <div style={{ marginTop: ".17rem", fontSize: ".74rem", color: unread ? "rgba(255,255,255,.59)" : "rgba(255,255,255,.38)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                     {speaker && counterparts.length > 1 && <span style={{ color: "rgba(255,255,255,.5)", fontWeight: 600 }}>{speaker}: </span>}{preview}
@@ -2042,8 +2512,8 @@ export const requestDiplomaticChat = (target, { draft = "" } = {}) => {
 
 const spyBtn = (accent) => ({
     padding: "0.35rem 0.6rem", borderRadius: "8px", fontSize: "0.72rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif",
-    border: "1px solid " + (accent ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,0.12)"),
-    background: accent ? "rgba(139,92,246,0.22)" : "rgba(255,255,255,0.06)", color: accent ? "#e9d5ff" : "rgba(255,255,255,0.8)",
+    border: "1px solid " + (accent ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.12)"),
+    background: accent ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.06)", color: accent ? "#f4f4f5" : "rgba(255,255,255,0.8)",
 });
 
 const ClarityMeter = ({ clarity }) => {
@@ -2051,10 +2521,10 @@ const ClarityMeter = ({ clarity }) => {
     return (
         <div title="How much of the intercept your service could decode">
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.68rem", color: "rgba(255,255,255,0.5)", marginBottom: "0.2rem" }}>
-        <span>Signal clarity</span><span data-no-translate style={{ color: "#c4b5fd", fontWeight: 700 }}>{pct}%</span>
+        <span>Signal clarity</span><span data-no-translate style={{ color: "#e4e4e7", fontWeight: 700 }}>{pct}%</span>
         </div>
         <div style={{ height: "0.3rem", borderRadius: "999px", background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
-        <div style={{ width: pct + "%", height: "100%", background: "linear-gradient(90deg,#7c3aed,#c4b5fd)" }} />
+        <div style={{ width: pct + "%", height: "100%", background: "rgba(231,231,234,0.7)" }} />
         </div>
         </div>
     );
@@ -2090,7 +2560,7 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
                 <div key={index} style={{ alignSelf: mine ? "flex-start" : "flex-end", maxWidth: "88%" }}>
                 <div style={{ fontSize: "0.65rem", color: "rgba(255,255,255,0.45)", marginBottom: "0.15rem", textAlign: mine ? "left" : "right" }}>{message.speaker}</div>
                 <div data-no-translate style={{ padding: "0.55rem 0.75rem", borderRadius: "12px", fontSize: "0.82rem", lineHeight: 1.45, fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: "0.01em", userSelect: "none",
-                    background: mine ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    background: mine ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                 {message.text}
                 </div>
                 </div>
@@ -2565,6 +3035,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
     const currentView = view === "spy" && !espionageOn ? "chats" : view;
+    const puppetMarkers = usePuppetMarkers();
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -2833,10 +3304,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // itself (the truth of the thread), the roster after a join or a departure,
     // the title, the polls, and each speaker's cross-chat cursors. The cursors
     // live in world state, so they are written there rather than on the chat.
-    const handleThreadUpdate = (chatId, { events, countries, title, polls, cursors, committed = false }) => {
+    const handleThreadUpdate = (chatId, { events, countries, title, polls, demands, cursors, committed = false }) => {
         setChats((prev) => {
             const updated = prev.map((c) => (c.id === chatId
-                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls }
+                ? { ...c, events, countries: countries ?? c.countries, title: title || c.title, polls: polls ?? c.polls, demands: demands ?? c.demands }
                 : c));
             // Institutional one-request turns are already committed atomically
             // with their legal governance/world/event changes in gameplay.js.
@@ -3146,7 +3617,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ) : groupedChats.map((group, index) => (
                     <React.Fragment key={`${group.label}-${group.chats[0]?.id ?? index}`}>
                     <ChatGroupHeader label={group.label} />
-                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
+                    {group.chats.map(chat => <ChatListItem key={chat.id} chat={chat} playerCountry={playerCountry} puppetMarkers={puppetMarkers} unread={unreadIds.has(String(chat.id))} onClick={() => openChatFromList(chat)} onDelete={() => handleDeleteChat(chat.id)} onToggleRead={() => setChatReadState(chat, unreadIds.has(String(chat.id)))} />)}
                     </React.Fragment>
                 ))}
                 </div>
@@ -3953,8 +4424,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                 background: isOpen
                 ? "rgba(59,130,246,0.16)"
                 : hovered
-                ? "rgba(255,255,255,0.075)"
-                : "rgba(255,255,255,0.035)",
+                ? "rgba(255,255,255,0.08)"
+                : "rgba(255,255,255,0.04)",
                 border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
                 borderRadius: "10px",
                 boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
@@ -3979,7 +4450,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     // Replaces the numeric badge (rather than sitting beside it) so
                     // the icon says one thing at a time; the count returns on its
                     // own once generation ends and the next 15s poll catches it.
-                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.3rem", borderRadius: "999px", background: "#7c3aed", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.68rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
+                    <span style={{ position: "absolute", top: "-0.55rem", right: "-0.8rem", minWidth: "1.05rem", height: "1.05rem", padding: "0 0.3rem", borderRadius: "999px", background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.35)", color: "white", fontSize: "0.68rem", fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, boxShadow: "0 1px 4px rgba(0,0,0,0.5)" }}>
                         <PulsingDots />
                     </span>
                 ) : unseenCount > 0 && (

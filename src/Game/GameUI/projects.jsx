@@ -5,7 +5,7 @@
 //
 // The player cannot author an entry's CONTENT here, deliberately. Two things
 // write what a project is: events, through impacts.projectOps on any
-// jump/GM/catalyst turn, and the advisor, through the ```projects block in a chat
+// jump/GM/interactive event turn, and the advisor, through the ```projects block in a chat
 // reply. A board the player could hand-edit would be a wishlist; this one is a
 // readout of what the simulation actually believes is happening.
 //
@@ -151,7 +151,7 @@ const VERIFICATION_BADGE = {
 };
 
 const cardStyle = {
-  backgroundColor: "rgba(255,255,255,0.045)",
+  backgroundColor: "rgba(255,255,255,0.05)",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "12px",
   padding: "0.7rem 0.8rem",
@@ -233,9 +233,9 @@ const Chip = ({ active, children, onClick, title }) => (
     onClick={onClick}
     style={{
       ...chipBase,
-      background: active ? "rgba(139,92,246,0.28)" : "rgba(255,255,255,0.05)",
-      border: `1px solid ${active ? "rgba(139,92,246,0.6)" : "rgba(255,255,255,0.1)"}`,
-      color: active ? "#ddd6fe" : "rgba(255,255,255,0.6)",
+      background: active ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.05)",
+      border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)"}`,
+      color: active ? "#f4f4f5" : "rgba(255,255,255,0.6)",
     }}
   >
     {children}
@@ -360,9 +360,9 @@ const PrioritySwitch = ({ busy, onSelect, value }) => (
           onClick={() => onSelect(option.key)}
           style={{
             ...ghostButtonStyle,
-            background: active ? "rgba(139,92,246,0.28)" : "rgba(255,255,255,0.06)",
-            border: `1px solid ${active ? "rgba(139,92,246,0.6)" : "rgba(255,255,255,0.12)"}`,
-            color: active ? "#ddd6fe" : "rgba(255,255,255,0.5)",
+            background: active ? "rgba(0,0,0,0.39)" : "rgba(255,255,255,0.06)",
+            border: `1px solid ${active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.12)"}`,
+            color: active ? "#f4f4f5" : "rgba(255,255,255,0.5)",
             cursor: busy ? "default" : "pointer",
             opacity: busy ? 0.5 : 1,
             padding: "0.3rem 0.45rem",
@@ -570,7 +570,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
           onClick={() => onAskAdvisor(mine
             ? buildBriefPrompt(project)
             : buildForeignBriefPrompt(project, ownerLabel))}
-          onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(139,92,246,0.25)"; }}
+          onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.09)"; }}
           onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
         >
           🧭 {mine ? "Ask advisor" : "What do we know?"}
@@ -1192,8 +1192,8 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
               type="button"
               onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
               style={{
-                background: "linear-gradient(145deg, rgba(109,40,217,0.55), rgba(76,29,149,0.55))",
-                border: "1px solid rgba(139,92,246,0.5)",
+                background: "rgba(255,255,255,0.06)",
+                border: "1px solid rgba(255,255,255,0.25)",
                 borderRadius: "10px",
                 color: "white",
                 cursor: "pointer",
@@ -1233,7 +1233,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
                   style={{
                     background: "none",
                     border: "none",
-                    color: "#c4b5fd",
+                    color: "#e4e4e7",
                     cursor: "pointer",
                     font: "inherit",
                     padding: 0,
@@ -1277,7 +1277,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             type="button"
             onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
             style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
-            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(139,92,246,0.2)"; }}
+            onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
           >
             🧭 Ask the advisor to review or extend the board
@@ -1325,8 +1325,8 @@ const Projects = ({ hovered, isOpen, mapRef, onOpenAdvisor, onToggle, setHovered
           background: isOpen
           ? "rgba(59,130,246,0.16)"
           : hovered
-          ? "rgba(255,255,255,0.075)"
-          : "rgba(255,255,255,0.035)",
+          ? "rgba(255,255,255,0.08)"
+          : "rgba(255,255,255,0.04)",
           border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
           borderRadius: "10px",
           boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",

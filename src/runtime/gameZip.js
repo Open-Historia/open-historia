@@ -10,6 +10,7 @@
 import { exportGameBundle, exportScenarioBundle, readGameSnapshotsText } from "./library.js";
 import { buildSettingsReport } from "./debugLog.js";
 import { zipBundle, unzipBundle } from "./bundleZip.js";
+import { restoreBundleFiles, splitBundleFiles } from "./bundleFiles.js";
 import {
   splitScenarioBundleImage,
   embedScenarioBundleImage,
@@ -106,7 +107,12 @@ export const buildGameZipBlob = async (gameId, { confirmCarryingScenario } = {})
       files[split.imageName] = split.imageBytes;
       if (split.previewBytes) files[split.previewName] = split.previewBytes;
     }
-    files[GAME_ZIP_SCENARIO] = JSON.stringify(scenarioBundle);
+    // And the same lift: the map's geometry and any tile archive become real
+    // entries, so what rides inside the game is a compressed map rather than one
+    // enormous JSON string (bundleFiles.js).
+    const lifted = splitBundleFiles(scenarioBundle);
+    Object.assign(files, lifted.files);
+    files[GAME_ZIP_SCENARIO] = JSON.stringify(lifted.bundle);
     carriesScenario = true;
   }
 
@@ -131,7 +137,7 @@ export const readGameZip = async (buffer) => {
   const scenarioText = await zip.text(GAME_ZIP_SCENARIO);
   let scenarioBundle = null;
   if (scenarioText) {
-    scenarioBundle = JSON.parse(scenarioText);
+    scenarioBundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
     const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
     if (imageName) {
       embedScenarioBundleImage(scenarioBundle, await zip.bytes(imageName), imageName);

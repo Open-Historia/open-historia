@@ -12,18 +12,21 @@ import {
     loadRegionCatalog,
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
 import { describeJumpCost, requestDay, savingRequests } from "../AI/requestBudget.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { logDebugEvent, setDebugLogContext } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { EVENT_TAG_ENUM } from "../../runtime/eventTags.js";
 import { documentsForEvent } from "../../runtime/reportDelivery.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
-import { isSceneInProgress } from "../AI/catalystRewind.js";
+import { isSceneInProgress } from "../AI/interactiveRewind.js";
+import { offeredEvent } from "../../runtime/interactiveOffer.js";
+import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
     applyEventImpactsToWorld,
@@ -673,10 +676,10 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
             border: "1px solid rgba(96,165,250,0.22)",
             color: "#bfdbfe",
         },
-        violet: {
-            background: "rgba(168,85,247,0.12)",
-            border: "1px solid rgba(192,132,252,0.2)",
-            color: "#e9d5ff",
+        slate: {
+            background: "rgba(255,255,255,0.04)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "#f4f4f5",
         },
     };
 
@@ -690,7 +693,7 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
         onClick={onClick ?? undefined}
         style={{
             alignItems: "center",
-            background: active ? "rgba(96,165,250,0.24)" : resolved.background,
+            background: active ? "rgba(0,0,0,0.42)" : resolved.background,
             border: resolved.border,
             borderRadius: "999px",
             color: resolved.color,
@@ -729,7 +732,7 @@ const TagPill = ({ children }) => (
 
 const ghostButtonStyle = {
     alignItems: "center",
-    background: "rgba(255,255,255,0.035)",
+    background: "rgba(255,255,255,0.04)",
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: "10px",
     color: "rgba(255,255,255,0.84)",
@@ -831,7 +834,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     return (
         <div
         style={{
-            background: "linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03))",
+            background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
             border: "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
@@ -905,6 +908,42 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
 
         {footer}
         </div>
+        </div>
+    );
+};
+
+// Opens the interactive event panel (main.jsx listens): on the offer, or on
+// the scene in progress.
+const openInteractiveEvent = () => window.dispatchEvent(new Event("oh:open-interactive-event"));
+
+// On the card of the event a time skip offered as an interactive event
+// (runtime/interactiveOffer.js): play the moment out, or let it pass. Neither
+// button spends a request; playing it out opens the panel that does.
+const InteractiveOfferStrip = () => {
+    const [passing, setPassing] = useState(false);
+    const letPass = async () => {
+        if (passing) return;
+        setPassing(true);
+        try {
+            await declineInteractiveOffer();
+        } catch (error) {
+            console.warn("[interactive] the offer could not be let pass.", error);
+        } finally {
+            setPassing(false);
+        }
+    };
+    return (
+        <div style={{ alignItems: "center", background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.45)", borderRadius: "12px", display: "flex", flexWrap: "wrap", gap: "0.5rem", padding: "0.55rem 0.7rem" }}>
+            <div style={{ flex: "1 1 12rem", minWidth: 0 }}>
+                <div style={{ color: "#fde047", fontSize: "0.74rem", fontWeight: 800 }}>⚡ Interactive event</div>
+                <div style={{ color: "rgba(254,249,195,0.72)", fontSize: "0.68rem", lineHeight: 1.4 }}>Play this moment out as a scene: you make the moves, and how it ends goes into the record.</div>
+            </div>
+            <button type="button" onClick={openInteractiveEvent} style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.4rem 0.75rem" }}>
+                Play it out
+            </button>
+            <button type="button" onClick={letPass} disabled={passing} title="Let the moment pass as it happened — free" style={{ ...ghostButtonStyle, opacity: passing ? 0.6 : 1, padding: "0.4rem 0.75rem" }}>
+                {passing ? "Letting it pass…" : "Let it pass"}
+            </button>
         </div>
     );
 };
@@ -1075,8 +1114,8 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
             onJump(opt.days);
         }}
         style={{
-            background: hovered ? "rgba(109,40,217,0.35)" : "rgba(109,40,217,0.15)",
-            border: hovered ? "1px solid rgba(139,92,246,0.7)" : "1px solid rgba(139,92,246,0.35)",
+            background: hovered ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+            border: hovered ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.18)",
             borderRadius: "10px",
             color: "white",
             cursor: "pointer",
@@ -1089,7 +1128,7 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
         }}
         >
         <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{opt.sublabel}</div>
-        <div style={{ color: "rgba(196,165,255,0.7)", fontSize: "0.7rem" }}>
+        <div style={{ color: "#e4e4e7", fontSize: "0.7rem" }}>
         {opt.label}
         </div>
         </button>
@@ -1146,6 +1185,7 @@ const TimelineSkipPanel = ({
     isRetryingProjects,
     isRetryingSegment,
     modeSuggestion,
+    offeredInteractive = null,
     onAcceptModeSuggestion,
     onAutoJump,
     onCancel,
@@ -1168,8 +1208,8 @@ const TimelineSkipPanel = ({
 }) => {
     const [customValue, setCustomValue] = useState("");
     const [customUnit, setCustomUnit] = useState("days");
-    // Time stands still while a scene is being played (Catalyst mode): the
-    // skips wait for it to end or be set aside, as the engine does.
+    // Time stands still while an interactive event is being played: the skips
+    // wait for it to end or be set aside, as the engine does.
     const blocked = isLoading || sceneInProgress;
     const unitToDays = { hours: 1 / 24, days: 1, weeks: 7, months: 30, years: 365 };
     const runCustomJump = () => {
@@ -1217,10 +1257,24 @@ const TimelineSkipPanel = ({
                 ⚡ A scene is in progress. Time stands still until it ends or is set aside.
                 <button
                 type="button"
-                onClick={() => window.dispatchEvent(new Event("oh:open-catalyst-mode"))}
+                onClick={openInteractiveEvent}
                 style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", display: "block", fontSize: "0.72rem", fontWeight: 800, margin: "0.4rem auto 0", padding: "0.3rem 0.7rem" }}
                 >
                 Return to the scene
+                </button>
+            </div>
+        )}
+        {/* The offer outlives the reveal until the next skip replaces it; this
+            says so where the skip is pressed. */}
+        {!sceneInProgress && offeredInteractive && (
+            <div style={{ background: "rgba(250,204,21,0.07)", border: "1px solid rgba(250,204,21,0.35)", borderRadius: "10px", color: "#fef08a", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "0.6rem", padding: "0.5rem 0.6rem", textAlign: "center", width: "12.5rem" }}>
+                ⚡ An interactive event is on offer: <span data-no-translate style={{ fontWeight: 800 }}>{offeredInteractive.title}</span>. The next time skip lets it pass.
+                <button
+                type="button"
+                onClick={openInteractiveEvent}
+                style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", display: "block", fontSize: "0.72rem", fontWeight: 800, margin: "0.4rem auto 0", padding: "0.3rem 0.7rem" }}
+                >
+                Play it out
                 </button>
             </div>
         )}
@@ -1247,15 +1301,15 @@ const TimelineSkipPanel = ({
             {undoCount} turn{undoCount === 1 ? "" : "s"} can be undone
             </div>
             </button>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+            <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
             </>
         )}
         <div
         style={{
-            background: "rgba(109,40,217,0.2)",
-            border: "2px solid rgba(139,92,246,0.8)",
+            background: "rgba(255,255,255,0.07)",
+            border: "2px solid rgba(255,255,255,0.28)",
             borderRadius: "999px",
-            color: "rgba(196,165,255,0.95)",
+            color: "#e4e4e7",
             fontSize: "0.7rem",
             fontWeight: 700,
             letterSpacing: "0.04em",
@@ -1269,12 +1323,12 @@ const TimelineSkipPanel = ({
 
         {jumpOptions.map((opt) => (
             <React.Fragment key={opt.label}>
-            <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+            <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
             <JumpNode isLoading={blocked} opt={opt} onJump={onJump} />
             </React.Fragment>
         ))}
 
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+        <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
         <button
         type="button"
         onClick={() => {
@@ -1299,7 +1353,7 @@ const TimelineSkipPanel = ({
         <div style={{ fontSize: "0.85rem", fontWeight: 700 }}>Auto-jump</div>
         </button>
 
-        <div style={{ background: "rgba(139,92,246,0.4)", height: "1.25rem", width: "2px" }} />
+        <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
         <div
         style={{
             alignItems: "center",
@@ -1362,8 +1416,8 @@ const TimelineSkipPanel = ({
         onClick={runCustomJump}
         disabled={blocked || !customValue}
         style={{
-            background: "rgba(109,40,217,0.4)",
-            border: "1px solid rgba(139,92,246,0.6)",
+            background: "rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.28)",
             borderRadius: "8px",
             color: "#fff",
             cursor: blocked || !customValue ? "default" : "pointer",
@@ -1628,6 +1682,8 @@ const TimelineHistoryPanel = ({
     onRollbackTurn,
     canIntervene = false,
     onIntervene = null,
+    // The event of this turn offered as an interactive event, by id; "" for none.
+    offeredInteractiveId = "",
     // The record is still being written: nothing is saved and the world has not
     // moved. The cards and the reveal are a finished turn's, but everything that
     // acts on a written turn waits for it to land.
@@ -1820,8 +1876,8 @@ const TimelineHistoryPanel = ({
                         style={{
                             padding: "0.2rem 0.6rem",
                             borderRadius: "999px",
-                            border: active ? "1px solid rgba(96,165,250,0.8)" : "1px solid rgba(255,255,255,0.16)",
-                            background: active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.06)",
+                            border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.16)",
+                            background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.06)",
                             color: "white",
                             fontSize: "0.68rem",
                             fontWeight: 700,
@@ -1842,12 +1898,14 @@ const TimelineHistoryPanel = ({
                 return (
                     <div key={event.id} ref={isLastVisible ? lastVisibleEventRef : null}>
                     {/* No "Show on map" footer: the camera already flies to
-                        every event as it is revealed. */}
+                        every event as it is revealed. The offered interactive
+                        event carries its offer instead. */}
                     <EventCard
                     event={event}
                     lookups={lookups}
                     openMapChanges={openMapChanges ? openMapChanges.has(openKey) : null}
                     onToggleMapChanges={onToggleMapChanges ? () => onToggleMapChanges(openKey) : null}
+                    footer={offeredInteractiveId && event.id === offeredInteractiveId ? <InteractiveOfferStrip /> : null}
                     />
                     </div>
                 );
@@ -1972,6 +2030,12 @@ const DateWidget = ({
     const setGameData = (game) => primeRuntimeValue("game", game);
     const setEvents = (next) => primeRuntimeValue("events", next);
     const setWorldState = (world) => primeRuntimeValue("world", world);
+    // The interactive event the last skip offered (runtime/interactiveOffer.js),
+    // once the reveal has reached its event; none while a scene is in progress.
+    const unseenEventIds = useUnseenEventIds();
+    const sceneInProgress = isSceneInProgress(worldState?.activeInteractive);
+    const offeredInteractive = offeredEvent({ offer: worldState?.interactiveOffer, events, sceneInProgress });
+    const shownOffer = offeredInteractive && !unseenEventIds.has(offeredInteractive.id) ? offeredInteractive : null;
     const [countryBounds, setCountryBounds] = useState(new Map());
     const [countryCatalog, setCountryCatalog] = useState([]);
     const [regionBounds, setRegionBounds] = useState(new Map());
@@ -2634,6 +2698,9 @@ const DateWidget = ({
     // scenarios) display verbatim instead of "Undated".
     // Full display name, never the code: era polity name first, then the
     // base country name, then the raw value as a last resort.
+    // Re-read when the game's features change, so the log's header follows a
+// Player focus the player just changed in Settings.
+    const activeFeatures = useActiveFeatures();
     const playerCountryCode = gameData?.country || "";
     const playerCountry = playerCountryCode
     ? (worldState?.polityOverrides?.[playerCountryCode]?.name
@@ -2650,9 +2717,10 @@ const DateWidget = ({
             gameDate: gameData?.gameDate || "",
             round: gameData?.round == null ? "" : String(gameData.round),
             difficulty: gameData?.difficulty || "",
+            playerFocus: getActivePlayerFocus() ?? "off",
             playerCountry: playerCountry || playerCountryCode || "",
         });
-    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, playerCountry, playerCountryCode]);
+    }, [gameData?.gameDate, gameData?.round, gameData?.difficulty, activeFeatures, playerCountry, playerCountryCode]);
 
     // "Save logging file" (TimelineHistoryPanel, next to the fallback warning):
     // the diagnostics log, with this fallback's own details attached at the top —
@@ -3048,10 +3116,11 @@ const DateWidget = ({
         onRetryProjects={retryHeldProjects}
         onRetrySegment={retryHeldSegment}
         onUndo={runUndo}
+        offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
         projectsHeld={projectsHeld}
         projectsRetries={projectsRetries}
-        sceneInProgress={isSceneInProgress(worldState?.activeCatalyst)}
+        sceneInProgress={sceneInProgress}
         segmentHeld={segmentHeld}
         segmentRetries={segmentRetries}
         topOffset={topOffset}
@@ -3072,6 +3141,9 @@ const DateWidget = ({
         onRollbackTurn={() => runUndo({ stayOnHistory: true })}
         canIntervene={canInterveneTurn && undoCount > 0 && !isLoading && !skipInFlight}
         onIntervene={runIntervene}
+        // The last written turn's offer, never on a skip still being written:
+        // that skip replaces it.
+        offeredInteractiveId={!skipInFlight && shownOffer ? shownOffer.id : ""}
         live={Boolean(liveTurnRecord)}
         progress={skipInFlight ? { label: jumpProgress, onCancel: cancelJump } : null}
         record={displayRecord}
@@ -3151,7 +3223,7 @@ const DateWidget = ({
         type="button"
         style={{
             ...buttonStyle,
-            color: openPanel === "skip" ? "rgba(196,165,255,0.9)" : buttonStyle.color,
+            color: openPanel === "skip" ? "#e4e4e7" : buttonStyle.color,
         }}
         onClick={() => {
             if (isLoading) {
@@ -3172,7 +3244,7 @@ const DateWidget = ({
             }
         }}
         >
-        {isLoading ? <SpinnerRing size={15} tone="rgba(196,165,255,0.95)" /> : "\u00BB"}
+        {isLoading ? <SpinnerRing size={15} tone="rgba(255,255,255,0.28)" /> : "\u00BB"}
         </button>
         </div>
         </>

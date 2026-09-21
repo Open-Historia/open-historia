@@ -1,8 +1,10 @@
 /*! Open Historia — the running game's gameplay features © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { useSyncExternalStore } from "react";
+import { setPuppetStatesEnabled } from "./puppets.js";
 import {
   idleDiplomacyChancePerMinute as chancePerMinute,
   isFeatureEnabled,
+  playerFocusOf,
   resolveFeatures,
   worldDirectionOf,
 } from "../../server/gameFeatures.js";
@@ -24,12 +26,23 @@ export {
 let activeFeatures = resolveFeatures(null, null);
 const listeners = new Set();
 
+// runtime/puppets.js is deliberately import-free, so the one feature that
+// decides whether a whole ledger exists at all is pushed into it from here —
+// the single place resolved features land. Done on load as well as on every
+// change, so a surface that reads the ledger before a library syncs is already
+// answering with this game's setting rather than the built-in default.
+const publishFeatures = () => {
+  setPuppetStatesEnabled(isFeatureEnabled(activeFeatures, "puppetStates"));
+};
+publishFeatures();
+
 export const getActiveFeatures = () => activeFeatures;
 
 export const setActiveFeatures = (scenarioFeatures, gameFeatures) => {
   const next = resolveFeatures(scenarioFeatures, gameFeatures);
   if (JSON.stringify(next) === JSON.stringify(activeFeatures)) return activeFeatures;
   activeFeatures = next;
+  publishFeatures();
   for (const listener of listeners) listener();
   return activeFeatures;
 };
@@ -49,3 +62,7 @@ export const idleDiplomacyChancePerMinute = () => chancePerMinute(activeFeatures
 // The scenario author's settings for how the world is run, or null when world
 // direction is off for this game (src/Game/AI/worldDirection.js).
 export const getActiveWorldDirection = () => worldDirectionOf(activeFeatures);
+
+// How much of a time skip belongs to the player (src/Game/AI/playerFocus.js):
+// the scenario's default under this game's own choice. Always a level.
+export const getActivePlayerFocus = () => playerFocusOf(activeFeatures);

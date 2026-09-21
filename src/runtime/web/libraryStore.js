@@ -1199,9 +1199,12 @@ const exportScenarioBundle = async (id) => {
       ? { data: parseJsonValue(record[key], {}), fileName, mode: "embedded" }
       : { fileName, mode: "default" };
   }
+  // JSON assets travel as JSON, not base64: the geometry is most of a shared
+  // map's weight, and base64 added a third to it for nothing. The desktop
+  // exporter writes the same shape (server/libraryStore.js encodeJsonFile).
   for (const [key, fileName] of [["regionsGeojson", "regions.geojson"], ["citiesGeojson", "cities.geojson"], ["backgroundData", "background.json"]]) {
     assets[key] = record.geojson?.[key] !== undefined
-      ? { contentType: "application/json", data: bytesToBase64(new TextEncoder().encode(serializeJsonValue(record.geojson[key]))), encoding: "base64", fileName, mode: "embedded" }
+      ? { contentType: "application/json", data: parseJsonValue(record.geojson[key], null), fileName, mode: "embedded" }
       : { fileName, mode: "default" };
   }
   for (const [key, fileName] of [["cities", "cities.pmtiles"], ["countries", "countries.pmtiles"], ["regions", "regions.pmtiles"]]) {
@@ -1255,6 +1258,10 @@ const importScenarioBundle = async (bundle) => {
       // geojson / pmtiles: base64-encoded binary. The typeof guard keeps any stray
       // non-string payload from reaching atob and crashing the whole import.
       await uploadScenarioAsset(newId, key, base64ToBytes(descriptor.data), descriptor.contentType);
+    } else if (embedded && descriptor.data !== undefined && descriptor.data !== null) {
+      // A JSON asset that travelled as JSON — the shape exports write now. Without
+      // this branch a current bundle would import with no geometry at all.
+      await uploadScenarioAsset(newId, key, new TextEncoder().encode(serializeJsonValue(descriptor.data)), descriptor.contentType || "application/json");
     } else {
       await removeScenarioAsset(newId, key);
     }

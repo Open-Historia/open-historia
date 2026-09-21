@@ -36,6 +36,7 @@ import DragBox from "ol/interaction/DragBox";
 import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
+import { buildRegionChanges } from "./regionChanges.js";
 import { BORDER_CLEANUP, bucketRegions, planTopologyChunks, yieldToBrowser } from "./topologySweep.js";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
@@ -60,12 +61,12 @@ import {
 } from "./geometry.js";
 
 const BASEMAP_BG = {
-  dark: "#0b1020",
+  dark: "#131315",
   black: "#000000",
   white: "#ffffff",
   grayscale: "#3a3a3f",
-  osm: "#0b1020",
-  light: "#0b1020",
+  osm: "#131315",
+  light: "#131315",
 };
 
 // Web-Mercator world extent (±180° lon, ±85.0511° lat) — a custom image
@@ -272,7 +273,7 @@ const topologyDiagnosticStyle = (feature) => {
 // this reason — the Style wrapping it was not. The key collapses to just the size
 // when the label is hidden, so a zoomed-out world uses three objects in total no
 // matter how many cities were imported.
-const cityStyleCache = new Map();
+const cityStyleCache = new globalThis.Map();
 const cityStyle = (size, name) => {
   const key = name ? `${size}|${name}` : size;
   let style = cityStyleCache.get(key);
@@ -296,7 +297,7 @@ const cityStyle = (size, name) => {
 
 // A feature the Features panel has selected (box-select or a ticked row):
 // always drawn, ringed in yellow, labelled — so a selection reads on the map.
-const selectedCityStyleCache = new Map();
+const selectedCityStyleCache = new globalThis.Map();
 const selectedCityStyle = (size, name) => {
   const key = name ? `${size}|${name}` : size;
   let style = selectedCityStyleCache.get(key);
@@ -325,7 +326,7 @@ const selectedCityStyle = (size, name) => {
 // A starting unit placed in the Workshop: a diamond in its owner's colour with
 // the type's initial; the name replaces the initial at closer zooms.
 const UNIT_GLYPH = { infantry: "I", armor: "A", air: "✈", naval: "N", artillery: "R", garrison: "G" };
-const unitStyleCache = new Map();
+const unitStyleCache = new globalThis.Map();
 const unitStyle = (feature, zoom, rgb) => {
   const type = feature.get("type") || "infantry";
   const name = zoom >= 4.5 ? feature.get("name") || "" : "";
@@ -357,7 +358,7 @@ const unitStyle = (feature, zoom, rgb) => {
 // Same reasoning for region labels: the region styles are memoised (see
 // olStyle.js) and these were the one place still allocating per feature per
 // frame. Keyed on the text, the only thing that varies.
-const labelStyleCache = new Map();
+const labelStyleCache = new globalThis.Map();
 const labelStyle = (name) => {
   let style = labelStyleCache.get(name);
   if (!style) {
@@ -537,6 +538,10 @@ const OlMap = ({
     // should be set to false." So this is a correctness fix that happens to be
     // the performance fix.
     const regionSource = new VectorSource({ wrapX: false });
+    // What the last save wrote: region id -> a hash of its GeoJSON, so the next
+    // save can carry only what has moved (serializeRegionChanges below). Empty
+    // means the next save is a full one, which is what a fresh load leaves it as.
+    const savedRegionHashes = new globalThis.Map();
     const getZoom = (res) => mapRef.current?.getView().getZoomForResolution(res) ?? 3;
 
     // VectorImage, not Vector: the regions are ~3,662 separate filled+stroked
@@ -1931,6 +1936,7 @@ const OlMap = ({
         emitHistory();
 
         regionSource.clear();
+        savedRegionHashes.clear();
         regionSource.addFeatures(feats);
         regionLayer.changed();
         labelLayer.changed();
@@ -1953,9 +1959,57 @@ const OlMap = ({
           featureProjection: "EPSG:3857",
           decimals: 5,
         }),
+
+      // What a save actually has to carry (regionChanges.js). Each region is
+      // written on its own and compared with what the last save wrote, so an
+      // autosave after a rename sends nothing at all and the one after redrawing
+      // a border sends that border. The features are written lazily, so a map
+      // that turns out to need a full save is never built twice.
+      //
+      // `full` is a whole FeatureCollection when a difference cannot be trusted —
+      // the first save after a map is loaded or reseeded, or a region with no id
+      // to key it by. `commit()` is called only once the save has landed, so a
+      // failed save is retried with the same contents rather than quietly
+      // forgetting them.
+      serializeRegionChanges: () => {
+        const format = new GeoJSON();
+        const options = { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857", decimals: 5 };
+        const features = regionSource.getFeatures();
+        const writtenFeatures = (function* write() {
+          for (const feature of features) yield format.writeFeatureObject(feature, options);
+        })();
+
+        const result = buildRegionChanges({ writtenFeatures, saved: savedRegionHashes });
+        const commit = () => {
+          savedRegionHashes.clear();
+          if (result.marks) for (const [id, stamp] of result.marks) savedRegionHashes.set(id, stamp);
+        };
+
+        if (result.full) {
+          return {
+            // `features` is there whenever every region was keyed, and is exactly
+            // what writeFeaturesObject would have produced — writing them twice is
+            // the cost this whole thing exists to avoid.
+            full: result.features
+              ? { type: "FeatureCollection", features: result.features }
+              : format.writeFeaturesObject(features, options),
+            changed: [],
+            removed: [],
+            count: features.length,
+            commit,
+          };
+        }
+
+        return { full: null, changed: result.changed, removed: result.removed, count: result.count, commit };
+      },
+
+      // Forget what the last save wrote, so the next one carries the whole map.
+      // Used when the store says it could not apply a difference.
+      forgetSavedRegions: () => savedRegionHashes.clear(),
       loadRegions: (fc, ownershipOverrides = null) => {
         const fmt = new GeoJSON();
         regionSource.clear();
+        savedRegionHashes.clear();
         if (fc && Array.isArray(fc.features)) {
           const feats = fmt.readFeatures(fc, {
             dataProjection: "EPSG:4326",
@@ -1983,6 +2037,7 @@ const OlMap = ({
       reseedWorld: () => {
         loadSeedFeatures().then((feats) => {
           regionSource.clear();
+        savedRegionHashes.clear();
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
@@ -1995,6 +2050,7 @@ const OlMap = ({
       reseedWorldWithOwners: (overrides = {}) => {
         loadSeedFeatures().then((feats) => {
           regionSource.clear();
+        savedRegionHashes.clear();
           for (const f of feats) {
             const id = f.getId();
             if (id != null && overrides[id] !== undefined) f.set("owner", overrides[id] || null);
@@ -2626,7 +2682,7 @@ const OlMap = ({
     if (el) {
       el.style.background = customActive
         ? "#0b1a2b"
-        : esri?.editorBackground || BASEMAP_BG[basemap] || "#0b1020";
+        : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
     }
   }, [basemap, customBackground]);
 

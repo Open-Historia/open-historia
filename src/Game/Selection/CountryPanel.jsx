@@ -4,7 +4,8 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
-import { readEventsState, readWorldState } from "../../runtime/gameState.js";
+import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
+import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -90,6 +91,7 @@ const CountryInfoPanel = () => {
     const [polityKey, setPolityKey] = useState("");
     const [displayName, setDisplayName] = useState("");
     const [flagPickerOpen, setFlagPickerOpen] = useState(false);
+    const [playerCountry, setPlayerCountry] = useState("");
 
     _openPanel = (next) => {
         setCountry(next);
@@ -108,14 +110,16 @@ const CountryInfoPanel = () => {
 
         (async () => {
             try {
-                const [allEvents, world, catalog, baseTags, flags] = await Promise.all([
+                const [allEvents, world, catalog, baseTags, flags, game] = await Promise.all([
                     readEventsState({ force: true }).catch(() => []),
                     readWorldState({ force: true }),
                     loadRegionCatalog().catch(() => []),
                     getNationTags().catch(() => ({})),
                     getNationFlags({ force: true }).catch(() => ({})),
+                    readGameData().catch(() => ({})),
                 ]);
                 if (cancelled) return;
+                setPlayerCountry(game?.country || "");
 
                 const identity = resolvePolityIdentity(
                     country.polityKey || country.name || country.code,
@@ -197,6 +201,18 @@ const CountryInfoPanel = () => {
             window.removeEventListener("oh:flags-updated", refresh);
         };
     }, [country]);
+
+    // What this viewer may see of this country's subordination, and nothing more.
+    // The answer comes from runtime/puppets.js because the map overlay, the
+    // diplomacy markers and the advisor's prompt all have to give the same one.
+    //
+    // A covert arrangement the player has not discovered renders NOTHING here -
+    // not a locked row, not a greyed-out line. A disabled control would announce
+    // the existence of the secret it is keeping.
+    const subordination = useMemo(
+        () => puppetSummaryFor(worldState, playerCountry, displayName || country?.name || ""),
+        [worldState, playerCountry, displayName, country],
+    );
 
     const filteredEvents = useMemo(() => {
         const mode = FILTER_MODES[filterIndex].id;
@@ -318,12 +334,54 @@ const CountryInfoPanel = () => {
             </div>
         )}
 
+        {subordination && (
+            <div
+                style={{
+                    background: "rgba(255,255,255,0.05)",
+                    border: "1px solid rgba(255,255,255,0.13)",
+                    borderLeft: "2px solid rgba(255,255,255,0.3)",
+                    borderRadius: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.45rem",
+                    marginTop: "0.5rem",
+                    padding: "0.65rem 0.8rem",
+                }}
+            >
+                <span style={{ fontSize: "0.9rem", fontWeight: 800, letterSpacing: "0.01em" }}>{subordination.headline}</span>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.78rem", lineHeight: 1.45 }}>{subordination.meaning}</div>
+                {subordination.facts.length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+                        {subordination.facts.map((fact) => (
+                            <span
+                                key={fact}
+                                style={{
+                                    background: "rgba(0,0,0,0.22)",
+                                    border: "1px solid rgba(255,255,255,0.1)",
+                                    borderRadius: 999,
+                                    color: "rgba(255,255,255,0.7)",
+                                    fontSize: "0.68rem",
+                                    padding: "0.12rem 0.45rem",
+                                    whiteSpace: "nowrap",
+                                }}
+                            >{fact}</span>
+                        ))}
+                    </div>
+                )}
+                {subordination.provenance && (
+                    <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", fontStyle: "italic" }}>
+                        {subordination.provenance}
+                    </div>
+                )}
+            </div>
+        )}
+
         {tags.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.5rem" }}>
             {tags.map((tag) => (
                 <span
                     key={tag}
-                    style={{ ...pillStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(124,58,237,0.5)" }}
+                    style={{ ...pillStyle, background: "rgba(255,255,255,0.11)", borderColor: "rgba(255,255,255,0.25)" }}
                     title="What this country is — the map-maker set this, and the AI reads it as context"
                 >
                     {tag}
@@ -413,7 +471,7 @@ const CountryInfoPanel = () => {
         <button type="button" onClick={runAdvisorReport} style={footerButtonStyle}>
         Advisor Report
         </button>
-        <button type="button" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(124,58,237,0.3)", border: "1px solid rgba(168,85,247,0.65)" }}>
+        <button type="button" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
         Open Diplomacy
         </button>
         </div>

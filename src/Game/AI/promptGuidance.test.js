@@ -206,3 +206,12 @@ test("a materialized transfer folds current defaults back to sparse overrides on
     tasks: {},
   });
 });
+
+test("edits stored under a renamed task's old key are the new task's", () => {
+  const [first] = guidanceSegmentsFor("interactiveCreation");
+  const packWith = (tasks) => ({ promptModel: PROMPT_MODEL_VERSION, guidance: { tasks } });
+  const before = normalizePackGuidance(packWith({ catalystCreation: { [first.id]: "An edit made before the rename." } }), GUIDANCE_DEFAULTS);
+  assert.deepEqual(before.tasks, { interactiveCreation: { [first.id]: "An edit made before the rename." } }, "kept under the new key only");
+  const both = normalizePackGuidance(packWith({ catalystCreation: { [first.id]: "Old." }, interactiveCreation: { [first.id]: "New." } }), GUIDANCE_DEFAULTS);
+  assert.deepEqual(both.tasks.interactiveCreation, { [first.id]: "New." }, "the new key wins");
+});

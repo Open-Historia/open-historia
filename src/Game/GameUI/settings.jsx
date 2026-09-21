@@ -5,6 +5,8 @@ import {
     AI_TASK_ROUTING,
     CONNECTION_TEMPLATES,
     DEFAULT_PROVIDER,
+    GEMINI_DEFAULT_CHAIN,
+    OPENAI_DEFAULT_MODEL,
     PROVIDER_OPTIONS,
     addConnection,
     addEntry,
@@ -23,7 +25,6 @@ import {
     getTaskPick,
     moveEntry,
     providerSetupRequirement,
-    providerSupportsModelDiscovery,
     removeConnection,
     removeEntry,
     resetEntryState,
@@ -35,6 +36,9 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
+import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { playerFocusOf } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -57,7 +61,7 @@ import {
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { getLibraryState } from "../../runtime/library.js";
+import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { copyToClipboard } from "../../runtime/clipboard.js";
 import {
     buildLoggingFile,
@@ -82,11 +86,6 @@ import { isNativeApp } from "../../runtime/web/nativeBoot.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
-import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { isSceneInProgress } from "../AI/catalystRewind.js";
-
-// A primitive, so the menu wakes only when a scene starts or ends.
-const selectSceneInProgress = (world) => isSceneInProgress(world?.activeCatalyst);
 
 const baseStyle = {
     position: "fixed",
@@ -429,8 +428,8 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
                             padding: "0.7rem 0.75rem",
                             borderRadius: "8px",
                             border: "1px solid",
-                            borderColor: selected ? "rgba(59,130,246,0.8)" : "rgba(255,255,255,0.08)",
-                            backgroundColor: selected ? "rgba(59,130,246,0.18)" : "rgba(0,0,0,0.16)",
+                            borderColor: selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
+                            backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(0,0,0,0.16)",
                             color: "white",
                             cursor: "pointer",
                             textAlign: "left",
@@ -617,9 +616,12 @@ const STATUS_COLORS = {
 const describeRowStatus = (status, at) => {
     if (status.status === "spent") return `Spent until ${formatResetTime(status.until)}`;
     if (status.status === "unusable") return `Unusable: ${status.reason}`;
+    // Not a skip: the next call still starts here (fallbackRunner.js). It says
+    // how long the provider asked for, which is how long it is likely to keep
+    // handing the call to the backup.
     if (status.status === "busy") {
         const seconds = Math.max(1, Math.ceil((status.until - at) / 1000));
-        return `${status.reason === "rate limited" ? "Rate limited" : "Busy"}, back in ${seconds < 90 ? `${seconds}s` : `${Math.ceil(seconds / 60)} min`}`;
+        return `${status.reason === "rate limited" ? "Rate limited" : "Busy"}, for about ${seconds < 90 ? `${seconds}s` : `${Math.ceil(seconds / 60)} min`}`;
     }
     return "Ready";
 };
@@ -720,8 +722,8 @@ const EntryEditor = ({ entry, connections, entries }) => {
         value={entry.model}
         onChange={set("model")}
         suggestions={suggestions}
-        placeholder={provider === "gemini" ? "gemini-3.5-flash-lite" : provider.startsWith("anthropic") ? "claude-haiku-4-5" : "Model id"}
-        helperText={providerSupportsModelDiscovery(provider)
+        placeholder={provider === "gemini" ? GEMINI_DEFAULT_CHAIN[0] : provider === "openai" ? OPENAI_DEFAULT_MODEL : provider.startsWith("anthropic") ? "claude-haiku-4-5" : "Model id"}
+        helperText={provider === "openai-compatible"
             ? "Leave blank to auto-pick a chat-capable model from the server's /models."
             : "Leave blank to use the built-in default."}
         />
@@ -767,7 +769,7 @@ const FillPanel = ({ connections, onDone }) => {
             {connectionDisplayName(connection)} <span style={{ color: "rgba(255,255,255,0.45)" }}>({getProviderMeta(connection.provider).label})</span>
             </label>
         ))}
-        <SettingsInput label="Models, strongest first (one per line)" multiline value={models} onChange={setModels} placeholder={"gemini-3.7-flash\ngemini-3.6-flash\ngemini-3.5-flash\ngemini-3.5-flash-lite"} />
+        <SettingsInput label="Models, strongest first (one per line)" multiline value={models} onChange={setModels} placeholder={GEMINI_DEFAULT_CHAIN.join("\n")} />
         <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
         <button type="button" onClick={fill} disabled={!ticked.length || !models.trim()} style={{ ...primaryButtonStyle, opacity: ticked.length && models.trim() ? 1 : 0.5 }}>Fill</button>
         <button type="button" onClick={onDone} style={smallButtonStyle}>Close</button>
@@ -809,7 +811,7 @@ const FallbackListSection = () => {
     return (
         <SettingsSection
         title="Models"
-        description="Backup models: when one runs out, the next one takes over. Every AI call starts at the top of the list and moves down only when a model can't answer."
+        description="Backup models: when one runs out, the next one takes over. Every AI call starts at the top of the list and moves down only when a model can't answer — including the call right after a busy moment, so a model is back in use the moment it can answer again. One that has used up its allowance is passed over until it resets, and tried again only if nothing else answers."
         >
         {entries.length === 0 && (
             <div style={{ ...helperStyle, marginTop: 0, marginBottom: "0.7rem" }}>No models yet. Add one to let the game write turns and replies.</div>
@@ -842,7 +844,7 @@ const FallbackListSection = () => {
             <button type="button" onClick={() => moveEntry(entry.id, index - 1)} disabled={index === 0} aria-label="Move up" title="Move up" style={{ ...rowButtonStyle, opacity: index === 0 ? 0.4 : 1 }}>↑</button>
             <button type="button" onClick={() => moveEntry(entry.id, index + 1)} disabled={index === entries.length - 1} aria-label="Move down" title="Move down" style={{ ...rowButtonStyle, opacity: index === entries.length - 1 ? 0.4 : 1 }}>↓</button>
             <button type="button" onClick={() => setEditingId(editingId === entry.id ? null : entry.id)} style={rowButtonStyle}>{editingId === entry.id ? "Done" : "Edit"}</button>
-            {entry.status.status !== "ready" && <button type="button" onClick={() => resetEntryState(entry.id)} title="Try it again on the next call" style={rowButtonStyle}>Reset</button>}
+            {entry.status.status !== "ready" && <button type="button" onClick={() => resetEntryState(entry.id)} title="Clear this status. Every call tries this model again either way." style={rowButtonStyle}>Reset</button>}
             <button type="button" onClick={() => remove(entry)} aria-label="Remove" title="Remove from the list" style={rowButtonStyle}>✕</button>
             </div>
             {editingId === entry.id && (
@@ -861,12 +863,13 @@ const FallbackListSection = () => {
         <div style={{ ...fieldGroupStyle, marginTop: "0.9rem" }}>
         <label style={labelStyle}>When a model is rate limited</label>
         <select data-no-translate value={view.rateLimitPolicy} onChange={(event) => setRateLimitPolicy(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
-        <option value="wait" style={{ color: "black" }}>Wait, then try it again (default)</option>
-        <option value="next" style={{ color: "black" }}>Try the next one straight away</option>
+        <option value="next" style={{ color: "black" }}>Use the next one straight away (default)</option>
+        <option value="wait" style={{ color: "black" }}>Wait, then try it again</option>
         </select>
         <div style={helperStyle}>
-        A rate limit is a short pause, not a used-up allowance. Waiting keeps your
-        backups' daily allowance for when the top model has truly run out.
+        A rate limit is a short pause, not a used-up allowance, and it is usually
+        over by the next call — which starts at the top of the list again. Waiting
+        instead keeps your backups' daily allowance, at the cost of a slower turn.
         </div>
         </div>
         <div style={{ ...helperStyle, marginBottom: 0 }}>
@@ -1010,6 +1013,7 @@ const ReasoningSection = () => {
 const REVIEW_SECTION_LABELS = {
     units: ["Move units to match the events", "Armies advance, retreat and take losses where the events say they did."],
     territory: ["Mark occupied and disputed land", "Captured towns change hands on the map; contested ones are striped."],
+    structures: ["Put new structures on the map", "Bases, shipyards, data centres and ground stations appear where the events built them."],
     timeline: ["Take repeats and filler off the timeline", "Events that restate the record, or report a meeting with no outcome, are left out."],
     board: ["Keep the Projects board in step", "Progress, stalls and new long-term efforts follow from what happened."],
     spies: ["Collect your agents' reports", "Each agent files what it intercepted, at least every third skip."],
@@ -1179,8 +1183,8 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                    background: "rgba(255,255,255,0.035)",
-                    border: "1px solid rgba(255,255,255,0.075)",
+                    background: "rgba(255,255,255,0.04)",
+                    border: "1px solid rgba(255,255,255,0.08)",
                     borderRadius: "7px",
                     color: "rgba(255,255,255,0.58)",
                     fontSize: "0.68rem",
@@ -1698,12 +1702,10 @@ const diagnosticsButton = {
 
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
-        neutral: { background: "rgba(255,255,255,0.035)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
-        violet: { background: "rgba(124,58,237,0.09)", border: "rgba(167,139,250,0.18)", icon: "rgba(124,58,237,0.18)", color: "#ddd6fe" },
+        neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
+        slate: { background: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "rgba(255,255,255,0.08)", color: "#e4e4e7" },
         blue: { background: "rgba(59,130,246,0.08)", border: "rgba(96,165,250,0.18)", icon: "rgba(59,130,246,0.16)", color: "#dbeafe" },
         amber: { background: "rgba(245,158,11,0.07)", border: "rgba(251,191,36,0.17)", icon: "rgba(245,158,11,0.14)", color: "#fde68a" },
-        // Catalyst mode's own: the one tool that should catch the eye.
-        yellow: { background: "rgba(250,204,21,0.13)", border: "rgba(250,204,21,0.55)", icon: "rgba(250,204,21,0.28)", color: "#fde047" },
     };
     const palette = tones[tone] ?? tones.neutral;
     const common = {
@@ -1738,8 +1740,83 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
 
+// How much of each time skip is about the player's own country (AI/playerFocus.js).
+// Kept with the GAME rather than on this device, unlike its neighbours in this
+// section: a Spotlight war campaign should not decide how the next sandbox game
+// reads. Existing games have none stored and start on Balanced.
+const PLAYER_FOCUS_HINTS = {
+    "world-first": "The world comes first. At least a quarter of each skip is about you when you have something going on; the rest of the world gets the room.",
+    balanced: "The default. At least 40% of each skip is about you when you have orders, Projects or open threads.",
+    focused: "Your country leads. At least 60% of each skip is about you, and other powers' plans take up less of what the AI is shown.",
+    spotlight: "The story follows you. At least three quarters of each skip is about you, and the wider world is kept to what matters most.",
+};
+
+const PlayerFocusSetting = () => {
+    // The scenario's default under this game's own choice (server/gameFeatures.js).
+    // Kept with the GAME, not on this device: a Spotlight war campaign should not
+    // decide how the next sandbox game reads. A scenario author sets where new
+    // games start, in the library's Features tab.
+    useActiveFeatures();
+    const library = useLibraryState();
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
+    const gameId = library.activeGameId;
+    const scenarioLevel = normalizePlayerFocus(playerFocusOf(library.runtimeScenario?.features));
+    const override = library.activeGame?.features?.playerFocus?.level;
+    const focus = normalizePlayerFocus(getActivePlayerFocus());
+    const following = !override;
+
+    const choose = async (value) => {
+        if (!gameId) { setError("No game is open, so there is nothing to set it on."); return; }
+        setSaving(true);
+        setError("");
+        try {
+            // undefined clears the override, so the game follows its scenario again.
+            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+        } catch (problem) {
+            setError(problem?.message || "That could not be saved.");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const scenarioLabel = PLAYER_FOCUS_LEVELS.find((level) => level.key === scenarioLevel)?.label ?? scenarioLevel;
+    return (
+        <div style={fieldGroupStyle}>
+        <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
+        <select
+        data-no-translate
+        disabled={saving || !gameId}
+        value={following ? "" : focus}
+        onChange={(event) => choose(event.target.value || null)}
+        style={{ ...inputStyle, cursor: "pointer" }}
+        >
+        <option value="" style={{ color: "black" }}>{`Scenario default (${scenarioLabel})`}</option>
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <option key={level.key} value={level.key} style={{ color: "black" }}>
+            {level.label}
+            </option>
+        ))}
+        </select>
+        <div style={helperStyle}>
+        {/* Every level, not only the one selected: the choice is between four
+            feels, and a player cannot compare them one at a time. */}
+        {PLAYER_FOCUS_LEVELS.map((level) => (
+            <div key={level.key} style={{ marginBottom: 4, opacity: level.key === focus ? 1 : 0.65 }}>
+            <strong>{level.label}</strong> — {PLAYER_FOCUS_HINTS[level.key]}
+            </div>
+        ))}
+        <div style={{ marginTop: 6 }}>
+        It never invents events for you: in a quiet stretch the world fills the skip as usual, and what you have going on — orders, milestones due, wars, open threads — is what the share is measured against.
+        </div>
+        {error ? <div style={{ color: "#fca5a5", marginTop: 6 }}>{error}</div> : null}
+        </div>
+        </div>
+    );
+};
+
 const SettingsSection = ({ title, description, right, children }) => (
-    <section style={{ background: "rgba(255,255,255,0.022)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
+    <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", padding: "1rem" }}>
         <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between", marginBottom: "0.9rem" }}>
             <div style={{ minWidth: 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.92)", fontSize: "0.88rem", fontWeight: 850 }}>{title}</div>
@@ -1861,10 +1938,10 @@ const SettingsWorkspace = ({
                     onClick={() => onSectionChange(section.key)}
                     style={{
                         alignItems: "center",
-                        background: selected ? "rgba(59,130,246,0.12)" : "transparent",
-                        border: `1px solid ${selected ? "rgba(96,165,250,0.22)" : "transparent"}`,
+                        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
+                        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
                         borderRadius: "9px",
-                        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.58)",
+                        color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
                         cursor: "pointer",
                         display: "flex",
                         flex: isMobile ? "0 0 auto" : "none",
@@ -1876,7 +1953,7 @@ const SettingsWorkspace = ({
                         width: isMobile ? "auto" : "100%",
                     }}
                     >
-                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(59,130,246,0.16)" : "rgba(255,255,255,0.045)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
+                        <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
                         <span>
                             <span style={{ display: "block", fontSize: "0.74rem", fontWeight: 850 }}>{section.label}</span>
                             {!isMobile && <span style={{ color: "rgba(255,255,255,0.3)", display: "block", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.12rem" }}>{section.description}</span>}
@@ -1973,6 +2050,7 @@ const SettingsWorkspace = ({
                 <ReasoningSection />
                 <RequestBudgetSection />
                 <SettingsSection title="Generation behavior" description="Bound model waiting behavior without changing the deterministic fallback path.">
+                    <PlayerFocusSetting />
                     <Toggle label="Limit AI generation" enabled={mapSettings.limitAiGeneration} onToggle={() => updateMapSetting("limitAiGeneration", MAP_SETTING_KEYS.limitAiGeneration, !mapSettings.limitAiGeneration)} />
                     <div style={settingsHelper}>
                     Off (default): waits as long as the model needs, however stuck. On: the game stops waiting and falls back to canned events when the model goes quiet — 5 minutes of silence part-way through an answer, or 15 minutes with no answer at all. A model that is still writing is never interrupted, however long it takes. Cancel works either way.
@@ -2033,7 +2111,7 @@ const SettingsWorkspace = ({
                     </div>
                     <Toggle label="Rate AI generations" enabled={ratingOn} onToggle={onToggleRating} />
                     <div style={{ ...settingsHelper, marginBottom: 0 }}>
-                    A small 1-10 bar after each time skip, Game Master edit and catalyst. Ratings sit beside the call in the console and its exports.
+                    A small 1-10 bar after each time skip, Game Master edit and interactive event. Ratings sit beside the call in the console and its exports.
                     </div>
                 </SettingsSection>
                 {!import.meta.env.VITE_OH_WEB && (
@@ -2054,7 +2132,7 @@ const SettingsWorkspace = ({
             <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
                 <div aria-hidden="true" className="oh-ws-tint" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
-                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
+                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
@@ -2064,7 +2142,7 @@ const SettingsWorkspace = ({
                             {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
                     <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
@@ -2088,10 +2166,10 @@ const QuickMenuTabButton = ({ label, selected, onClick }) => (
     type="button"
     onClick={onClick}
     style={{
-        background: selected ? "rgba(59,130,246,0.16)" : "transparent",
-        border: `1px solid ${selected ? "rgba(96,165,250,0.28)" : "transparent"}`,
+        background: selected ? "rgba(0,0,0,0.42)" : "transparent",
+        border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "transparent"}`,
         borderRadius: "8px",
-        color: selected ? "#e0f2fe" : "rgba(255,255,255,0.56)",
+        color: selected ? "#f4f4f5" : "rgba(255,255,255,0.56)",
         cursor: "pointer",
         fontFamily: "inherit",
         fontSize: "0.72rem",
@@ -2123,7 +2201,7 @@ const ContextSummaryCard = ({ context }) => {
     ];
 
     return (
-        <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "11px", padding: "0.8rem 0.85rem" }}>
             <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", fontWeight: 800, marginBottom: "0.6rem" }}>Current session</div>
             <div style={{ display: "grid", gap: "0.45rem" }}>
                 {rows.map((row) => (
@@ -2145,7 +2223,6 @@ const SettingsMenu = ({
     onToggleFullscreen,
     onToggleGlobe,
     onToggleTerrain,
-    onOpenCatalyst,
     onOpenCheats,
     onOpenDebugConsole,
     onOpenEvents,
@@ -2161,8 +2238,6 @@ const SettingsMenu = ({
     initialSection = null,
 }) => {
     const isMobile = useIsMobile();
-    // Catalyst mode's card says when there is a scene to return to.
-    const sceneInProgress = useRuntimeState("world", selectSceneInProgress);
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
     // The small menu's card: measured when a section opens so the workspace can
@@ -2331,18 +2406,8 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Tools" description="High-frequency in-game tools should stay one click away.">
                 <div style={grid}>
-                    {/* Catalyst mode (catalyst.jsx): the only way into a scene. */}
-                    {typeof onOpenCatalyst === "function" && (
-                        <QuickAction
-                            title="Catalyst mode"
-                            description={sceneInProgress ? "A scene is in progress — return to it" : "Play out a moment as a scene, beat by beat"}
-                            symbol="⚡"
-                            tone="yellow"
-                            onClick={() => runAndClose(onOpenCatalyst)}
-                        />
-                    )}
                     {typeof onOpenCheats === "function" && (
-                        <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="violet" onClick={() => runAndClose(onOpenCheats)} />
+                        <QuickAction title="Cheats" description="Game master tools and world editing" symbol="⌁" tone="slate" onClick={() => runAndClose(onOpenCheats)} />
                     )}
                     {typeof onOpenEvents === "function" && (
                         <QuickAction title="Events / Timeline" description="Review the current turn and world history" symbol="◷" tone="blue" onClick={() => runAndClose(onOpenEvents)} />
@@ -2396,7 +2461,7 @@ const SettingsMenu = ({
                 <button type="button" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
 
-            <div style={{ background: "rgba(255,255,255,0.028)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
+            <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
                 {QUICK_MENU_TABS.map((tab) => (
                     <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} />
                 ))}

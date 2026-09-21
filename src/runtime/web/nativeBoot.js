@@ -46,14 +46,14 @@ export const bootStatusText = (connection) => {
   return `Connected · ${parts.join(" · ")}`;
 };
 
-// #0b1020 is the <meta name="theme-color"> and the launcher background behind
+// #131315 is the <meta name="theme-color"> and the launcher background behind
 // drawable/splash.png, so the native splash hands over to this with no seam — the
 // player sees one continuous screen from tap to game.
 const css = `
 #${BOOT_ID}{
   position:fixed;inset:0;z-index:2147483000;display:flex;flex-direction:column;
   align-items:center;justify-content:center;gap:22px;padding:32px;
-  background:#0b1020;color:#e8eaf2;
+  background:#131315;color:#e8eaf2;
   font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   opacity:1;transition:opacity 260ms ease;
   -webkit-font-smoothing:antialiased;

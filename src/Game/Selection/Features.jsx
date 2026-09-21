@@ -28,6 +28,12 @@ export const onFeatureSelected = (payload) => {
   _setSelection(payload);
 };
 
+// Search opens a feature without a click's toggle, so landing on the one already open leaves it open.
+export const focusFeature = (payload) => {
+  if (!_setSelection || !payload?.name) return;
+  _setSelection(payload);
+};
+
 // Called when another selection (unit, region, empty space) takes over.
 export const dismissFeaturePopup = () => {
   if (_currentSelection) _dismiss?.();
@@ -65,7 +71,7 @@ const titleCase = (value) =>
 const TIER_LABEL = { 1: "Town", 2: "City", 3: "Major city", 4: "Capital" };
 
 const MARKER_STATUS_META = {
-  planned: { label: "Planned", color: "#c4b5fd" },
+  planned: { label: "Planned", color: "#e4e4e7" },
   under_construction: { label: "Under construction", color: "#fcd34d" },
   active: { label: "Active", color: "#86efac" },
   damaged: { label: "Damaged", color: "#fca5a5" },

@@ -332,8 +332,18 @@ const SCENARIO_BUNDLE_SCHEMA = "pax-historia-scenario-bundle/2";
 const ACCEPTED_BUNDLE_SCHEMAS = new Set([SCENARIO_BUNDLE_SCHEMA, "pax-historia-scenario-bundle"]);
 const SCENARIO_BUNDLE_VERSION = 2;
 
+// The accent a scenario or game wears in the library. The app's old default was
+// a purple; it is retired, and anything still carrying it reads as the new one
+// (accentOrDefault below), so an install made before the change does not keep a
+// colour the app no longer uses anywhere.
+export const RETIRED_ACCENT_COLOR = "#7c3aed";
+const accentOrDefault = (raw, fallback) => {
+  const value = String(raw ?? "").trim();
+  return !value || value.toLowerCase() === RETIRED_ACCENT_COLOR ? fallback : value;
+};
+
 const DEFAULT_SCENARIO_META = {
-  accentColor: "#7c3aed",
+  accentColor: "#2bc1f3",
   description: "Server-backed base scenario",
   eyebrow: "Scenario",
   heroSubtitle: "Editable server-backed scenario template.",
@@ -343,7 +353,7 @@ const DEFAULT_SCENARIO_META = {
 };
 
 const DEFAULT_GAME_META = {
-  accentColor: "#7c3aed",
+  accentColor: "#2bc1f3",
   description: "Active playable game",
   eyebrow: "Game",
   heroSubtitle: "Playable campaign session",
@@ -780,7 +790,7 @@ const readScenarioMeta = (scenarioId) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_SCENARIO_META.description;
 
   return {
-    accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
+    accentColor: accentOrDefault(raw?.accentColor, DEFAULT_SCENARIO_META.accentColor),
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     countryNameOverrides:
     raw?.countryNameOverrides && typeof raw.countryNameOverrides === "object"
@@ -839,7 +849,7 @@ const readGameMeta = (gameId) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
 
   return {
-    accentColor: String(raw?.accentColor ?? "").trim() || DEFAULT_GAME_META.accentColor,
+    accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
     // Hidden from the library but fully intact on disk — the "I want it out of
     // the way, not gone" case that delete cannot serve.
     archived: raw?.archived === true,
@@ -2056,7 +2066,7 @@ const createScenario = ({
 
   const createdAt = new Date().toISOString();
   writeJsonFile(getScenarioMetaPath(scenarioId), {
-    accentColor: String(accentColor ?? "").trim() || DEFAULT_SCENARIO_META.accentColor,
+    accentColor: accentOrDefault(accentColor, DEFAULT_SCENARIO_META.accentColor),
                 coverImageContentType: sourceScenario?.coverImageContentType ?? null,
                 features: normalizeFeatureSettings(features ?? sourceScenario?.features),
                 countryNameOverrides:
@@ -3345,6 +3355,20 @@ const resolveRuntimeBinaryAsset = (assetKey) => {
 
 const encodeBinaryFile = (sourcePath) => fs.readFileSync(sourcePath).toString("base64");
 
+// A JSON asset travels as JSON. Base64 made every shared map a third bigger for
+// nothing: in a real hub bundle the region geometry was 17.1 MB of the 18.1 MB
+// file. Anything that does not parse as JSON still travels byte-exact as base64,
+// so a hand-edited or half-written file is never silently lost.
+const encodeJsonFile = (sourcePath) => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(sourcePath, "utf-8"));
+    if (parsed && typeof parsed === "object") return { data: parsed };
+  } catch {
+    // Not JSON we can re-serialise; fall through to the bytes.
+  }
+  return { data: encodeBinaryFile(sourcePath), encoding: "base64" };
+};
+
 const buildScenarioBundleAsset = (scenarioId, assetKey) => {
   if (assetKey === COVER_IMAGE_ASSET_KEY) {
     const uploadPath = getScenarioUploadPath(scenarioId, assetKey);
@@ -3390,8 +3414,7 @@ const buildScenarioBundleAsset = (scenarioId, assetKey) => {
 
     return {
       contentType: "application/json",
-      data: encodeBinaryFile(geojsonPath),
-      encoding: "base64",
+      ...encodeJsonFile(geojsonPath),
       fileName: SCENARIO_GEOJSON_ASSET_FILES[assetKey],
       mode: "embedded",
     };
@@ -3560,9 +3583,13 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
   if (assetValue?.mode === "embedded") {
     if (Object.hasOwn(OPTIONAL_JSON_ASSET_FILES, assetKey)) {
       writeJsonFile(getScenarioJsonPath(scenarioId, assetKey), assetValue.data ?? {});
-    } else {
+    } else if (assetValue.encoding === "base64" || typeof assetValue.data === "string") {
+      // Binary, or a bundle written before JSON assets stopped being base64'd.
       const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
       fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
+    } else {
+      // A JSON asset that travelled as JSON (geometry, a vector basemap).
+      fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), JSON.stringify(assetValue.data ?? {}), "utf-8");
     }
     return;
   }

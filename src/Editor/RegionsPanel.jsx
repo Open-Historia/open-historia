@@ -53,8 +53,8 @@ const RegionsPanel = ({ api, selection, setSelection, onClose }) => {
                 textAlign: "left",
                 padding: "6px 8px",
                 borderRadius: 8,
-                border: active ? "1px solid rgba(59,130,246,0.8)" : "1px solid transparent",
-                background: active ? "rgba(59,130,246,0.18)" : "rgba(255,255,255,0.03)",
+                border: active ? "1px solid rgba(255,255,255,0.28)" : "1px solid transparent",
+                background: active ? "rgba(0,0,0,0.25)" : "rgba(255,255,255,0.03)",
                 color: "white",
                 cursor: "pointer",
               }}

@@ -527,7 +527,7 @@ const Units = () => {
             "circle-stroke-color": [
               "case",
               ["==", ["get", "status"], "pending"], "#93c5fd",
-              ["get", "covert"], "#c4b5fd",
+              ["get", "covert"], "#e4e4e7",
               ["==", ["get", "status"], "moving"], "#ffd24a",
               ["==", ["get", "status"], "engaged"], "#ff6b6b",
               "#ffffff",

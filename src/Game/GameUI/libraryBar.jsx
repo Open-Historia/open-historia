@@ -54,6 +54,7 @@ import {
   embedScenarioBundleVector,
 } from "../../runtime/communityBasemaps.js";
 import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
+import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { isNativeApp } from "../../runtime/web/nativeBoot.js";
 
@@ -72,6 +73,10 @@ const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
 // Lazy so OpenLayers only loads when the country picker map is opened.
 const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
+
+// The accent a scenario or game falls back to when it carries none: the same
+// default the stores hand out (server/libraryStore.js, web/storeConstants.js).
+const DEFAULT_ACCENT_COLOR = "#2bc1f3";
 
 const BAR_HEIGHT = 64;
 
@@ -231,7 +236,7 @@ const buildScenarioEditorState = (details) => {
   const world = details?.data?.world ?? {};
 
   return {
-    accentColor: scenario.accentColor ?? "#7c3aed",
+    accentColor: scenario.accentColor ?? DEFAULT_ACCENT_COLOR,
     allowedUnitTypes: Array.isArray(world.allowedUnitTypes) ? world.allowedUnitTypes : [...UNIT_TYPES],
     country: game.country ?? "",
     description: scenario.description ?? "",
@@ -259,7 +264,7 @@ const buildGameEditorState = (details) => {
   const world = details?.data?.world ?? {};
 
   return {
-    accentColor: gameMeta.accentColor ?? "#7c3aed",
+    accentColor: gameMeta.accentColor ?? DEFAULT_ACCENT_COLOR,
     country: game.country ?? "",
     description: gameMeta.description ?? "",
     eyebrow: gameMeta.eyebrow ?? "",
@@ -504,9 +509,9 @@ const PromptSectionEditor = ({
             style={{
               ...actionButtonStyle,
               background:
-                section.key === currentSection.key ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+                section.key === currentSection.key ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
               borderColor:
-                section.key === currentSection.key ? "rgba(124,58,237,0.42)" : "rgba(255,255,255,0.08)",
+                section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
               minHeight: "2rem",
               padding: "0 0.8rem",
             }}
@@ -522,8 +527,8 @@ const PromptSectionEditor = ({
       </div>
       <div
         style={{
-          background: "rgba(124,58,237,0.08)",
-          border: "1px solid rgba(124,58,237,0.22)",
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.11)",
           borderRadius: "12px",
           color: "rgba(255,255,255,0.62)",
           fontSize: "0.76rem",
@@ -547,7 +552,7 @@ const PromptSectionEditor = ({
               <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                 <label style={{ ...fieldLabelStyle, marginBottom: 0 }}>
                   {segment.label}
-                  {edited ? <span style={{ color: "#c4b5fd", marginLeft: "0.4rem" }}>· edited</span> : null}
+                  {edited ? <span style={{ color: "#e4e4e7", marginLeft: "0.4rem" }}>· edited</span> : null}
                 </label>
                 {edited ? (
                   <button
@@ -698,11 +703,16 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             <div
               style={{
                 color: "rgba(244,244,246,0.7)",
+                display: "-webkit-box",
                 fontSize: "0.92rem",
                 lineHeight: 1.45,
                 marginTop: "0.65rem",
                 maxWidth: "16rem",
+                overflow: "hidden",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 6,
               }}
+              title={scenario.heroSubtitle || scenario.description || scenario.subtitle || undefined}
             >
               {scenario.heroSubtitle || scenario.description || scenario.subtitle}
             </div>
@@ -710,7 +720,18 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
         </div>
 
         <div>
-          <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.8rem", marginBottom: "0.7rem" }}>
+          <div
+            style={{
+              color: "rgba(255,255,255,0.68)",
+              display: "-webkit-box",
+              fontSize: "0.8rem",
+              marginBottom: "0.7rem",
+              overflow: "hidden",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: 2,
+            }}
+            title={scenario.subtitle || undefined}
+          >
             {scenario.subtitle}
           </div>
           <AssetBadgeRow badges={assetBadges} />
@@ -977,7 +998,19 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
             <div style={{ color: "rgba(244,244,246,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
               {game.country || "No player country"} / {game.currentDate || "No date"} / Round {game.round || 1}
             </div>
-            <div style={{ color: "rgba(244,244,246,0.58)", fontSize: "0.84rem", marginTop: "0.5rem", lineHeight: 1.45 }}>
+            <div
+              style={{
+                color: "rgba(244,244,246,0.58)",
+                display: "-webkit-box",
+                fontSize: "0.84rem",
+                lineHeight: 1.45,
+                marginTop: "0.5rem",
+                overflow: "hidden",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 6,
+              }}
+              title={game.description || undefined}
+            >
               {game.description || "Playable campaign session."}
             </div>
           </div>
@@ -992,7 +1025,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
               onClick={() => onActivate(game.id)}
               style={{
                 ...actionButtonStyle,
-                background: active ? "rgba(255,255,255,0.16)" : `${game.accentColor}cc`,
+                background: active ? "rgba(0,0,0,0.42)" : `${game.accentColor}cc`,
                 borderColor: active ? "rgba(255,255,255,0.22)" : `${game.accentColor}dd`,
                 color: "#fff",
                 flexBasis: "100%",
@@ -1074,9 +1107,9 @@ const SectionTabs = ({ currentSection, sections, setSection }) => (
         style={{
           ...actionButtonStyle,
           background:
-            currentSection === sectionKey ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
+            currentSection === sectionKey ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
           borderColor:
-            currentSection === sectionKey ? "rgba(124,58,237,0.42)" : "rgba(255,255,255,0.08)",
+            currentSection === sectionKey ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
           minHeight: "2rem",
           padding: "0 0.8rem",
         }}
@@ -1238,8 +1271,8 @@ const EditorDrawer = ({
                         }}
                         style={{
                           ...actionButtonStyle,
-                          background: checked ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.04)",
-                          borderColor: checked ? "rgba(124,58,237,0.5)" : "rgba(255,255,255,0.1)",
+                          background: checked ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
+                          borderColor: checked ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
                           minHeight: "2rem",
                           padding: "0 0.7rem",
                         }}
@@ -1472,7 +1505,7 @@ const EditorDrawer = ({
         {kind === "scenario" && onOpenMapEditor && (
           <button
             onClick={onOpenMapEditor}
-            style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.24)", borderColor: "rgba(124,58,237,0.38)", color: "#fff", minWidth: "9rem" }}
+            style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.19)", color: "#fff", minWidth: "9rem" }}
             type="button"
           >
             🗺️ Open Map Editor
@@ -1646,7 +1679,7 @@ const LibraryTopBar = () => {
       const gameDetails = await loadGameDetails(gameId).catch(() => null);
       const world = { ...(gameDetails?.data?.world ?? {}) };
       const name = faction.name;
-      const hexColor = /^#[0-9a-fA-F]{6}$/.test(faction.color) ? faction.color : "#7c3aed";
+      const hexColor = /^#[0-9a-fA-F]{6}$/.test(faction.color) ? faction.color : "#a1a1aa";
 
       world.polityOverrides = {
         ...(world.polityOverrides ?? {}),
@@ -2280,13 +2313,18 @@ const LibraryTopBar = () => {
         // hub shares. With no custom basemap there's nothing to split out, so the zip
         // just holds scenario.json (still a valid, self-contained bundle).
         const split = await splitScenarioBundleImage(bundle).catch(() => null);
-        const files = { "scenario.json": JSON.stringify(bundle) };
+        const files = {};
         if (split) {
           delete bundle.assets.backgroundData; // the basemap now travels as a real file
-          files["scenario.json"] = JSON.stringify(bundle);
           files[split.imageName] = split.imageBytes;
           if (split.previewBytes) files[split.previewName] = split.previewBytes;
         }
+        // The heavy assets — the region geometry, a custom tile archive — ride as
+        // real entries too, so the zip actually compresses them instead of carrying
+        // them as one long JSON string (src/runtime/bundleFiles.js).
+        const lifted = splitBundleFiles(bundle);
+        Object.assign(files, lifted.files);
+        files["scenario.json"] = JSON.stringify(lifted.bundle);
         saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
       } else {
         saveJsonBundleToDisk(bundle, `${id}-scenario.json`);
@@ -2320,7 +2358,7 @@ const LibraryTopBar = () => {
         const zip = await unzipBundle(buffer);
         const scenarioText = await zip.text("scenario.json");
         if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-        bundle = JSON.parse(scenarioText);
+        bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
         const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
         if (imageName) {
           embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
@@ -2832,8 +2870,8 @@ const LibraryTopBar = () => {
                         ...actionButtonStyle,
                         flex: 1,
                         fontWeight: 700,
-                        background: pickerTab === "country" ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
-                        borderColor: pickerTab === "country" ? "rgba(124,58,237,0.7)" : undefined,
+                        background: pickerTab === "country" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "country" ? "rgba(255,255,255,0.28)" : undefined,
                       }}
                     >
                       Pick a country
@@ -2845,8 +2883,8 @@ const LibraryTopBar = () => {
                         ...actionButtonStyle,
                         flex: 1,
                         fontWeight: 700,
-                        background: pickerTab === "faction" ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.05)",
-                        borderColor: pickerTab === "faction" ? "rgba(124,58,237,0.7)" : undefined,
+                        background: pickerTab === "faction" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "faction" ? "rgba(255,255,255,0.28)" : undefined,
                       }}
                     >
                       Create a faction
@@ -2865,7 +2903,7 @@ const LibraryTopBar = () => {
                     <button
                       type="button"
                       onClick={() => pickCountry("")}
-                      style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(124,58,237,0.18)", marginBottom: "0.4rem" }}
+                      style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.06)", marginBottom: "0.4rem" }}
                     >
                       {playGameId ? "Keep scenario default" : "Scenario default"}
                     </button>
@@ -2924,7 +2962,7 @@ const LibraryTopBar = () => {
                   <button
                     disabled={isBusy}
                     onClick={() => handleMissingScenarioImport(pending)}
-                    style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(139,92,246,0.55)", minHeight: "2.6rem" }}
+                    style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.6rem" }}
                     type="button"
                   >
                     {isBusy ? "Getting the scenario…" : "Import & play"}
@@ -3037,8 +3075,8 @@ const LibraryTopBar = () => {
                   onClick={() => setActiveTab(tab)}
                   style={{
                     ...actionButtonStyle,
-                    background: activeTab === tab ? "rgba(124,58,237,0.24)" : "rgba(255,255,255,0.05)",
-                    borderColor: activeTab === tab ? "rgba(124,58,237,0.38)" : "rgba(255,255,255,0.08)",
+                    background: activeTab === tab ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
+                    borderColor: activeTab === tab ? "rgba(255,255,255,0.19)" : "rgba(255,255,255,0.08)",
                     minWidth: isMobile ? "0" : "6.6rem",
                     padding: isMobile ? "0.55rem 0.6rem" : undefined,
                   }}
@@ -3105,7 +3143,7 @@ const LibraryTopBar = () => {
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "center" }}>
                     <button
                       type="button"
-                      style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(139,92,246,0.55)", minHeight: "2.8rem", padding: "0 1.4rem" }}
+                      style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.8rem", padding: "0 1.4rem" }}
                       onClick={() => setActiveTab("scenarios")}
                     >
                       Start from a scenario
@@ -3288,6 +3326,8 @@ const LibraryTopBar = () => {
                   : {},
                 background,
                 basemap: world.basemap || null,
+                // Carried like the flags above: a round-trip must not reset it.
+                customCities: Boolean(world.customCities),
                 // The scenario's starting units, so the Units panel edits what the game starts with.
                 units: Array.isArray(world.units) ? world.units : [],
               });

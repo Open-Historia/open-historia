@@ -206,9 +206,6 @@ export const buildSegmentInstruction = ({
 //   summary             the segment summaries in order; each covers its own span,
 //                       so joining them describes the whole period without asking
 //                       any one call to summarise time it never saw.
-//   catalyst            the LAST one offered. A catalyst is a scene the player
-//                       answers AFTER the jump, so it has to hang off the end of
-//                       the period, not the middle of it.
 //   diplomaticOutreach  concatenated — every approach made during the round.
 //   clearActions        the final segment's word, keeping the `!== false` default
 //                       (absent means resolved) the single-call path has always had.
@@ -233,7 +230,6 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const agreementUpdates = [];
   const storylineUpdates = [];
   const summaries = [];
-  let catalyst = null;
   let clearActions = true;
   let stopDate = "";
 
@@ -246,14 +242,12 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     storylineUpdates.push(...asLedgerRecords(payload.storylineUpdates));
     const summary = normalizeString(payload.summary);
     if (summary) summaries.push(summary);
-    if (payload.catalyst) catalyst = payload.catalyst;
     clearActions = payload.clearActions !== false;
     const segmentStop = normalizeString(payload.stopDate);
     if (segmentStop) stopDate = segmentStop;
   }
 
   return {
-    catalyst,
     clearActions,
     agreementUpdates,
     diplomaticOutreach,

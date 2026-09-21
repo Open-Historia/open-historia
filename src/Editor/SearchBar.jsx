@@ -152,7 +152,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
               onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
-              {badge("THIS MAP", "#a5b4fc")}
+              {badge("THIS MAP", "#d4d4d8")}
               <span style={{ fontSize: 12.5, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {f.name}
               </span>
@@ -200,7 +200,7 @@ const SearchBar = ({ api, features, onAddCity }) => {
                   background: "transparent",
                   border: "1px solid rgba(255,255,255,0.2)",
                   borderRadius: 6,
-                  color: "#93c5fd",
+                  color: "#e4e4e7",
                   cursor: "pointer",
                   fontSize: 11,
                   fontWeight: 700,

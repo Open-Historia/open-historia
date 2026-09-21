@@ -1,5 +1,7 @@
 /*! Open Historia — portions (server relay for OpenAI-style APIs + reasoning toggle) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import {
+    GEMINI_DEFAULT_CHAIN,
+    OPENAI_DEFAULT_MODEL,
     fallbackStateStore,
     getEntryStatus,
     getRateLimitPolicy,
@@ -25,6 +27,7 @@ import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
   buildDiplomaticTurnInstruction,
@@ -47,6 +50,7 @@ import {
     isContextWindowErrorText,
     isStreamingRefusal,
     isStreamingRequired,
+    isTemperatureRefusal,
     looksLikeDeliberation,
     providerErrorReplyMessage,
     shouldRetryProviderFailure,
@@ -55,6 +59,7 @@ import {
 } from "./providerErrors.js";
 import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
+import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
@@ -91,18 +96,21 @@ import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiploma
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
 // Usage: import { sendMessage, sendDiplomaticMessage, startChat, startDiplomaticChat, loadHistory, loadDiplomaticHistory, buildDiplomaticSystemPrompt } from './main.jsx'
 
-const GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite";
+// An entry with a blank model: the top of Gemini's default list (providerConfig.js).
+const GEMINI_DEFAULT_MODEL = GEMINI_DEFAULT_CHAIN[0];
 const ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5";
 
 // What each model has said about its context window (contextWindow.js), kept
 // with the other AI settings. Storage is reached at every call rather than
 // once: the harness installs its localStorage after this module has loaded,
 // and a browser that refuses storage simply forgets between sessions.
-export const contextWindows = createContextWindowMemory({
+const settingsStorage = {
     getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
     setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
     removeItem: (key) => { try { localStorage.removeItem(key); } catch { /* nothing to forget */ } },
-});
+};
+export const contextWindows = createContextWindowMemory(settingsStorage);
+export const temperatureRefusals = createTemperatureMemory(settingsStorage);
 const OPENAI_API_ENDPOINT = "https://api.openai.com/v1";
 const ANTHROPIC_API_ENDPOINT = "https://api.anthropic.com/v1";
 
@@ -893,12 +901,13 @@ async function callGemini(systemPrompt, history, {
     onRequest,
     onToolStream,
     onUsage,
-    rateLimitPolicy = "wait",
+    rateLimitPolicy = "next",
     retries = 3,
     retryDelay = 15000,
     onModel,
     signal,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -922,6 +931,7 @@ async function callGemini(systemPrompt, history, {
     onModel?.(model);
 
     const customParams = parseCustomParams(settings.customParams, "Gemini");
+    const samplingConfig = temperatureBody(taskKey);
 
     // Sorted once for every retryable status either path below can see, so the
     // Fallback list and the retry count agree (shouldRetryProviderFailure).
@@ -973,6 +983,7 @@ async function callGemini(systemPrompt, history, {
                     contents: geminiContentsFromHistory(history),
                     generationConfig: {
                         maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
+                        ...samplingConfig,
                         ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
                     },
                     ...customParams,
@@ -1020,16 +1031,17 @@ async function callGemini(systemPrompt, history, {
         // changes. (The advisor's own streaming is handled above, where the
         // tokens go to the UI as they arrive.)
         const requestUrl = tool ? getGeminiStreamUrl(model, apiKey) : getGeminiUrl(model, apiKey);
+        const generationConfig = {
+            ...samplingConfig,
+            ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
+        };
         const response = await fetch(requestUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 system_instruction: { parts: [{ text: systemPrompt }] },
                 contents: geminiContentsFromHistory(history),
-                // Reasoning toggle (settings): let thinking-capable Gemini models think.
-                ...(getReasoningEnabled()
-                     ? { generationConfig: { thinkingConfig: { thinkingBudget: 8192 } } }
-                     : {}),
+                ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
                 ...customParams,
                 ...(tool ? {
                     tools: [{ functionDeclarations: [
@@ -1148,7 +1160,7 @@ async function callOpenAIStyleChatCompletions({
     retries = 3,
     retryDelay = 15000,
     canFallBack = false,
-    rateLimitPolicy = "wait",
+    rateLimitPolicy = "next",
     deadline,
     signal,
     tool,
@@ -1163,6 +1175,7 @@ async function callOpenAIStyleChatCompletions({
     maxTokens,
     tokenLimitField = "max_tokens",
     lookupTools,
+    taskKey = "",
     requireOutputTool = false,
 }) {
     // Lookup functions (lookupTools.js) beside the output function. On the
@@ -1202,6 +1215,9 @@ async function callOpenAIStyleChatCompletions({
     // discipline as the two above: it drives a retry that does not consume one of
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
+    const samplingKey = temperatureRefusalKey({ provider: providerLabel, endpoint, model });
+    const ownTemperature = temperatureBody(taskKey);
+    let disableTemperature = temperatureRefusals.refuses(samplingKey);
     const wantsReasoning = getReasoningEnabled();
 
     let attempt = 1;
@@ -1271,6 +1287,7 @@ async function callOpenAIStyleChatCompletions({
                 ...(Number(maxTokens) > 0 && !liftedCapForReasoning
                     ? { [tokenLimitField]: Number(maxTokens) + (wantsReasoning && !tool ? REASONING_HEADROOM_TOKENS : 0) }
                     : {}),
+                ...(disableTemperature ? {} : ownTemperature),
                 ...requestCustomParams,
                 ...(structuredMode === "tool" && disableToolReasoning ? { reasoning_effort: "none" } : {}),
                 ...(structuredMode === "tool" ? {
@@ -1324,7 +1341,16 @@ async function callOpenAIStyleChatCompletions({
             // walking the ladder would spend a request per rung finding that out.
             if (failure.kind === "tooBig") throw providerFailureError(contextWindowMessage(providerLabel, errorMessage, requestChars), failure);
 
-            // Cheapest concession first. A gateway that refuses stream+tools still
+            const sentOwnTemperature = Object.keys(ownTemperature).length > 0
+                && requestCustomParams.temperature === undefined;
+            if (!disableTemperature && sentOwnTemperature && isTemperatureRefusal(errorMessage)) {
+                disableTemperature = true;
+                temperatureRefusals.learn(samplingKey);
+                console.warn(`[ai] ${providerLabel} refused the requested temperature; retrying at the model's own, and remembering.`);
+                continue;
+            }
+
+            // Next cheapest. A gateway that refuses stream+tools still
             // does tools, it just stops keeping the connection warm — whereas
             // dropping out of tool mode costs structured output, which is the
             // difference between a real turn and canned events.
@@ -1590,6 +1616,7 @@ async function callOpenAI(systemPrompt, history, opts = {}) {
         entrySettings,
         endpoint: OPENAI_API_ENDPOINT,
         headers,
+        fallbackModel: OPENAI_DEFAULT_MODEL,
         providerLabel: "OpenAI",
         signal: opts.signal,
     });
@@ -1685,13 +1712,14 @@ async function callAnthropic(systemPrompt, history, {
     onRequest,
     onToolStream,
     onUsage,
-    rateLimitPolicy = "wait",
+    rateLimitPolicy = "next",
     retries = 3,
     retryDelay = 15000,
     onModel,
     signal,
     staticPrefixEnd,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -1752,6 +1780,7 @@ async function callAnthropic(systemPrompt, history, {
             system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -1900,13 +1929,14 @@ async function callAnthropicCompatible(systemPrompt, history, {
     onRequest,
     onToolStream,
     onUsage,
-    rateLimitPolicy = "wait",
+    rateLimitPolicy = "next",
     retries = 3,
     retryDelay = 15000,
     onModel,
     signal,
     staticPrefixEnd,
     tool,
+    taskKey = "",
     lookupTools,
     requireOutputTool = false,
 } = {}) {
@@ -1994,6 +2024,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
             ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -2788,6 +2819,41 @@ ${projectsSummary}`;
 // the template keeps its sentence, and this is what now stands in it.
 export const CONVERSATION_IN_TURNS = "(given below as the message turns, oldest first; the newest message is the last one)";
 
+// THE ADVISOR'S CONTRACT: it knows everything the player knows and nothing more.
+//
+// This is the first field in any prompt that is filtered by ACQUIRED KNOWLEDGE.
+// Two weaker forms already existed — whole-field omission (the advisor is simply
+// never handed storylines, spies or the Board) and filtering by PARTICIPATION
+// (chatVisibility.js gives each leader only the chats that polity was in, and
+// makes the advisor's filter a deliberate no-op because the player is in every
+// chat). Knowing whether a covert subordination has been DISCOVERED is neither:
+// it is state accumulated over time, and it can be out of date.
+//
+// It lives here, on the advisor alone, and NOT in the world summary — that
+// summary is read by twelve prompts including the jump and the leader, both of
+// which must see the truth instead (they get it from the canonical diplomatic
+// context). A player's-eye view reaching the simulator would have it resolving
+// the world from a picture it knows to be incomplete.
+const buildAdvisorPuppetsDirective = (world, playerCountry) => {
+    // With the system off the whole section goes, rather than saying nobody
+    // directs anybody: the directives list is filtered, and an advisor told the
+    // concept exists will reach for it when a player asks about their "puppets".
+    if (!puppetStatesEnabled()) return "";
+    const rows = livePuppetsFor(world, playerCountry);
+    const lines = rows.slice(0, 40).map((row) => {
+        const who = describeRole(row, {
+            overlord: () => `${row.puppet} is OUR ${row.kind} (loyalty: ${row.loyaltyBand.toLowerCase()})`,
+            puppet: () => `WE are the ${row.kind} of ${row.overlord}`,
+            foreign: () => `${row.overlord} directs ${row.puppet} (${row.kind})`,
+        });
+        const source = row.fromIntelligence ? ` — from intelligence${row.asOf ? `, as of ${row.asOf}` : ""}` : "";
+        return `- ${who}${source}`;
+    });
+    return `[Subordinations You Know Of]
+A Puppet is a separate country holding its own territory and sovereignty, whose will is directed by another. What follows is the player's own intelligence picture: it may be incomplete, and anything marked "from intelligence" may be out of date. Never reason from a subordination that is not on this list, and never reveal a loyalty for a country that is not the player's own Puppet.
+${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
+};
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
@@ -2837,6 +2903,12 @@ async function buildAdvisorSystemPrompt() {
         ADVISOR_DEPLOY_DIRECTIVE,
         buildAdvisorProjectsDirective(variables.projectsSummary),
         buildAdvisorForcesDirective(variables.forcePosture),
+        // Subordinations as the PLAYER knows them (runtime/puppets.js). worldData
+        // is already the world as the player has been shown it (viewAsSeen), so a
+        // subordination a still-unrevealed event installed is not on it yet —
+        // the puppet ledger rides the turn's restore point like the other
+        // ledgers do.
+        buildAdvisorPuppetsDirective(worldData, gameData?.country || ""),
         // The government's papers (runtime/reportDelivery.js): what reached it
         // through its diplomats, its agents and the news. The file the player
         // no longer browses; the advisor, as the government's staff, reads it.
@@ -2959,8 +3031,24 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         })
         : "";
 
+    // What this leader's country knows of who directs whom (runtime/puppets.js):
+    // its own arrangements, and for a covert one who in THIS room has not found
+    // out - without that a covert Puppet cannot know to speak as an independent
+    // country, and an Overlord does not know it has a Puppet to make demands of.
+    // Its country's knowledge, not the whole ledger: that would hand every leader
+    // every secret.
+    //
+    // The PLAYER is added to the room by hand: a chat's countries list only its
+    // non-player members (chatVisibility.js), and playerCountry arrives null on
+    // the panel's path. Without this a covert Puppet talking to the player would
+    // count nobody present as unaware, and speak openly to the one party it most
+    // needs to deceive.
+    const subordinations = speaker
+        ? describePuppetBriefing(puppetBriefingFor(worldData, speaker, { present: [...countries, playerCountry || gameData?.country] }), speaker)
+        : "";
+
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${politicalSection}${espionage}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${rendered}${politicalSection}${espionage}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];
@@ -3275,6 +3363,7 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         max_tokens: Math.max(anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT, 1024),
         messages: toAnthropicMessages(history),
         system: systemPrompt,
+        ...temperatureBody(taskKey),
         ...(tool ? {
             tools: [{ name: tool.name, description: tool.description, input_schema: tool.schema }],
             tool_choice: { type: "tool", name: tool.name },

@@ -5,13 +5,16 @@ import {
     PMTILES_PROTOCOL_URLS,
     JSON_URLS,
     ensurePmtilesProtocol,
+    jsonReadSucceeded,
     readJson,
 } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
+import { publishCustomCityIndex } from "../../runtime/placeSearch.js";
 import {
     EMPTY_CITY_FEATURE_COLLECTION,
     customCityFeatureCount,
     normalizeCustomCityFeatureCollection,
+    resolveCityLayerSource,
 } from "../../runtime/cityFeatures.js";
 
 ensurePmtilesProtocol();
@@ -237,7 +240,8 @@ const Cities = () => {
     // so the map doesn't fire its own independent 5s poll.
     const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
     const [customData, setCustomData] = useState(null);
-    const [customLoadFailed, setCustomLoadFailed] = useState(false);
+    // Whether the asset arrived, not whether it held any cities.
+    const [customRead, setCustomRead] = useState(false);
     const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
@@ -259,26 +263,31 @@ const Cities = () => {
         let cancelled = false;
         if (!customFlag) {
             setCustomData(null);
-            setCustomLoadFailed(false);
+            setCustomRead(false);
+            publishCustomCityIndex(null);
             return undefined;
         }
 
         setCustomData(null);
-        setCustomLoadFailed(false);
+        setCustomRead(false);
         readJson(citiesGeojsonUrl, { defaultValue: EMPTY_CITY_FEATURE_COLLECTION, force: true })
             .then((data) => {
                 if (cancelled) return;
                 const normalized = normalizeCustomCityFeatureCollection(data);
                 const count = customCityFeatureCount(normalized);
+                // The empty default is served on failure too, so counting can't tell.
+                const read = jsonReadSucceeded(citiesGeojsonUrl);
                 setCustomData(normalized);
-                setCustomLoadFailed(count === 0);
+                // Names for the place search; stock cities are OSM's already.
+                publishCustomCityIndex(count > 0 ? normalized : null);
+                setCustomRead(read);
 
                 if (import.meta.env?.DEV) {
                     console.info(`[cities] custom city asset loaded: ${count} point features`);
                 }
-                if (count === 0) {
+                if (!read) {
                     console.warn(
-                        "[cities] world.customCities=true but cities.geojson is empty/missing; " +
+                        "[cities] world.customCities=true but cities.geojson could not be read; " +
                         "using stock cities as a temporary fallback.",
                     );
                 }
@@ -287,7 +296,8 @@ const Cities = () => {
                 if (cancelled) return;
                 console.warn("[cities] failed to load scenario cities.geojson; using stock fallback.", error);
                 setCustomData(EMPTY_CITY_FEATURE_COLLECTION);
-                setCustomLoadFailed(true);
+                publishCustomCityIndex(null);
+                setCustomRead(false);
             });
 
         return () => {
@@ -295,15 +305,13 @@ const Cities = () => {
         };
     }, [customFlag, citiesGeojsonUrl, cityEditorEpoch]);
 
-    // Never turn the whole planet cityless because a custom city asset is absent.
-    if (customFlag) {
-        if (customData === null) return null;
-        if (!customLoadFailed && customCityFeatureCount(customData) > 0) {
-            return <CustomCities data={customData} label={label} pop={pop} />;
-        }
-        return <StockCities label={label} pop={pop} />;
-    }
-
+    const source = resolveCityLayerSource({
+        customCities: customFlag,
+        collection: customData,
+        readSucceeded: customRead,
+    });
+    if (source === "loading") return null;
+    if (source === "custom") return <CustomCities data={customData} label={label} pop={pop} />;
     return <StockCities label={label} pop={pop} />;
 };
 

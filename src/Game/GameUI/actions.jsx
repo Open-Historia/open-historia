@@ -217,8 +217,8 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
             disabled={isQueued}
             onClick={() => onQueue(action)}
             style={{
-                background: isQueued ? "rgba(34,197,94,0.12)" : "rgba(109,40,217,0.12)",
-                border: isQueued ? "1px solid rgba(74,222,128,0.35)" : "1px solid rgba(139,92,246,0.24)",
+                background: isQueued ? "rgba(34,197,94,0.12)" : "rgba(255,255,255,0.04)",
+                border: isQueued ? "1px solid rgba(74,222,128,0.35)" : "1px solid rgba(255,255,255,0.12)",
                 borderRadius: "10px",
                 color: "rgba(255,255,255,0.9)",
                 cursor: isQueued ? "default" : "pointer",
@@ -257,8 +257,8 @@ const useTurnRunning = (active) => {
 };
 
 const goalButtonStyle = (enabled, tone = "neutral") => ({
-    background: tone === "primary" ? (enabled ? "rgba(109,40,217,0.55)" : "rgba(109,40,217,0.2)") : "none",
-    border: tone === "primary" ? "1px solid rgba(139,92,246,0.55)" : "1px solid rgba(255,255,255,0.14)",
+    background: tone === "primary" ? (enabled ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.07)") : "none",
+    border: tone === "primary" ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.14)",
     borderRadius: "8px",
     color: enabled ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)",
     cursor: enabled ? "pointer" : "not-allowed",
@@ -347,7 +347,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
 
     if (editing) {
         return (
-            <div style={{ background: "rgba(109,40,217,0.08)", border: "1px solid rgba(139,92,246,0.35)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.6rem 0.75rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.6rem 0.75rem" }}>
             {label}
             <textarea
             ref={draftRef}
@@ -403,9 +403,9 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
             title={turnRunning ? lockedNote : "Your advisor, the time skip and the AI suggestions steer by it. Foreign leaders never see it."}
             style={{
                 background: "none",
-                border: "1px dashed rgba(139,92,246,0.4)",
+                border: "1px dashed rgba(255,255,255,0.2)",
                 borderRadius: "10px",
-                color: turnRunning ? "rgba(196,165,255,0.4)" : "rgba(196,165,255,0.85)",
+                color: turnRunning ? "rgba(255,255,255,0.45)" : "#e4e4e7",
                 cursor: turnRunning ? "not-allowed" : "pointer",
                 fontFamily: "sans-serif",
                 fontSize: "0.78rem",
@@ -423,7 +423,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     }
 
     return (
-        <div style={{ background: "rgba(109,40,217,0.08)", border: "1px solid rgba(139,92,246,0.3)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.55rem 0.75rem" }}>
+        <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", display: "flex", flexDirection: "column", gap: "0.3rem", padding: "0.55rem 0.75rem" }}>
         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
         {label}
         <button
@@ -431,7 +431,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         disabled={turnRunning}
         onClick={startEditing}
         title={turnRunning ? lockedNote : "Change or clear the goal"}
-        style={{ background: "none", border: "none", color: turnRunning ? "rgba(196,165,255,0.35)" : "rgba(196,165,255,0.85)", cursor: turnRunning ? "not-allowed" : "pointer", fontFamily: "sans-serif", fontSize: "0.74rem", padding: 0 }}
+        style={{ background: "none", border: "none", color: turnRunning ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.28)", cursor: turnRunning ? "not-allowed" : "pointer", fontFamily: "sans-serif", fontSize: "0.74rem", padding: 0 }}
         >
         Edit
         </button>
@@ -733,10 +733,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // suggestions above offer.
         onClick={() => onOpenAdvisor("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.")}
         style={{
-            background: "rgba(109, 40, 217, 0.15)",
-            border: "1px solid rgba(139, 92, 246, 0.4)",
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.2)",
             borderRadius: "10px",
-            color: "rgba(196, 165, 255, 0.95)",
+            color: "#e4e4e7",
             cursor: "pointer",
             fontSize: "0.82rem",
             fontWeight: 500,
@@ -746,12 +746,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             width: "100%",
         }}
         onMouseEnter={(event) => {
-            event.currentTarget.style.background = "rgba(109, 40, 217, 0.28)";
-            event.currentTarget.style.borderColor = "rgba(139,92,246,0.65)";
+            event.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            event.currentTarget.style.borderColor = "rgba(255,255,255,0.28)";
         }}
         onMouseLeave={(event) => {
-            event.currentTarget.style.background = "rgba(109, 40, 217, 0.15)";
-            event.currentTarget.style.borderColor = "rgba(139,92,246,0.4)";
+            event.currentTarget.style.background = "rgba(255,255,255,0.05)";
+            event.currentTarget.style.borderColor = "rgba(255,255,255,0.2)";
         }}
         >
         Help brainstorm actions
@@ -882,7 +882,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             width: "100%",
         }}
         onFocus={(event) => {
-            event.target.style.borderColor = "rgba(139,92,246,0.5)";
+            event.target.style.borderColor = "rgba(255,255,255,0.25)";
         }}
         onBlur={(event) => {
             event.target.style.borderColor = "rgba(255,255,255,0.12)";
@@ -898,7 +898,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             background: "none",
             border: "none",
             borderRadius: "8px",
-            color: isImproving || inputValue.trim() ? "rgba(196,165,255,0.78)" : "rgba(196,165,255,0.35)",
+            color: isImproving || inputValue.trim() ? "#e4e4e7" : "rgba(255,255,255,0.45)",
             cursor: isImproving || inputValue.trim() ? "pointer" : "default",
             display: "flex",
             height: "1.8rem",
@@ -976,8 +976,8 @@ const Actions = ({ onOpenAdvisor, hovered, setHovered, isOpen, onToggle }) => {
             background: isOpen
             ? "rgba(59,130,246,0.16)"
             : hovered
-            ? "rgba(255,255,255,0.075)"
-            : "rgba(255,255,255,0.035)",
+            ? "rgba(255,255,255,0.08)"
+            : "rgba(255,255,255,0.04)",
             border: isOpen ? "1px solid rgba(96,165,250,0.34)" : "1px solid rgba(255,255,255,0.1)",
             borderRadius: "10px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",

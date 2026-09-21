@@ -11,6 +11,7 @@
 // diplomatic facts; any one AI request sees only the relevant slice.
 
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
+import { MAX_PUPPETS, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
@@ -1296,14 +1297,519 @@ export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = 
   return { world: { ...nextWorld, agreements }, agreements, appliedIds: applied };
 };
 
-export const applyDiplomaticUpdates = ({
+// ---------------------------------------------------------------------------
+// Puppets — subordination between two polities.
+//
+// Directional, unlike a relation; partly secret, unlike an agreement. That is
+// why it is its own ledger rather than a new agreement type — see
+// docs/adr/0004-puppet-ledger-and-secrecy.md. What a given viewer may SEE of a
+// row is not decided here: that is runtime/puppets.js, which every surface asks.
+//
+// Transport, like the relation and agreement lines above:
+//   op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note
+//
+// The verbs are deliberately not a degree scale. `kind` states WHICH POWERS the
+// Overlord holds — a protectorate keeps internal rule and surrenders foreign
+// policy, a satellite the reverse — so "tighten" and "loosen" would be lies
+// about what is changing. `reclassify` says it plainly instead.
+// ---------------------------------------------------------------------------
+
+const PUPPET_OP_VALUES = Object.freeze([
+  "install", "reclassify", "loyalty", "reveal", "release", "annex", "revolt", "suppress",
+]);
+const PUPPET_OP_SET = new Set(PUPPET_OP_VALUES);
+const PUPPET_ENDING_OPS = new Set(["release", "annex", "revolt"]);
+const PUPPET_KIND_SET = new Set(PUPPET_KINDS);
+const MAX_PUPPET_UPDATES_PER_PASS = 24;
+// How many subordinations the bounded prompt slice may carry. Its own bound:
+// borrowing the agreements cap made the number lie about what it limited.
+const MAX_CONTEXT_PUPPETS = 24;
+
+// The ONE deterministic engine rule on Loyalty. Everything else — mistreatment,
+// a good decade, a humiliation — is the model's judgement, moved by a `loyalty`
+// line. This exists because a refused demand is the single interaction the
+// PLAYER directly drives, and it must cost the same every time rather than
+// depending on whether the model remembered to emit a line for it. The
+// precedent is the exposed spy ring that sours a relation by a fixed 20.
+export const REFUSED_DEMAND_LOYALTY_COST = 10;
+
+// A revolt does not merely end the arrangement: it leaves the two bitter. The
+// score is forced down rather than nudged, because a satellite that has just
+// thrown off its Overlord is not "strained".
+const REVOLT_RELATION_SCORE = -60;
+
+// A coup that FAILED. The Overlord held on, so loyalty is forced up — obedience
+// bought at gunpoint, not affection — and the prompt asks for the reputation
+// drop that watching a government crush its client's rising costs you. Without
+// this verb low Loyalty is a countdown the player can only watch; with it, a
+// brewing revolt is a crisis they can answer, badly and at a price.
+const SUPPRESSED_COUP_LOYALTY_GAIN = 25;
+
+// Below this, resentment is a situation rather than a mood, and the world
+// director is given something to ripen. Not a trigger: the Storyline decides
+// WHEN, and may decide never.
+const COUP_STORYLINE_LOYALTY = 35;
+
+// Swallowing a client costs standing, and costs more the more openly it was a
+// client — the world watched a country disappear. Deterministic rather than left
+// to the prompt, because a cost the model only sometimes remembers is a cost
+// players learn to ignore, and then a Puppet is just free territory with a
+// waiting period. That is the one thing this whole subsystem exists to prevent.
+const ANNEXED_PUPPET_REPUTATION_COST = 8;
+const ANNEXED_OPEN_PUPPET_REPUTATION_COST = 16;
+export const puppetCoupStorylineId = (row) => `storyline-puppet-${slug(row?.puppet)}`;
+
+const decodePuppetLine = (line, index) => {
+  const text = String(line ?? "");
+  const [op, overlord, puppet, kind, loyaltyRaw, secrecy, eventNumbers, note] = splitFixedFields(text, 7);
+  const loyalty = Number(loyaltyRaw);
+  return {
+    id: `puppet-update-${index}`,
+    op: lower(op),
+    overlord: clean(overlord),
+    puppet: clean(puppet),
+    kind: lower(kind),
+    loyalty: Number.isFinite(loyalty) && clean(loyaltyRaw) ? clamp(Math.round(loyalty), 0, 100) : null,
+    secrecy: lower(secrecy),
+    eventIndexes: parseEventNumbers(eventNumbers),
+    eventIds: [],
+    note: clean(note),
+  };
+};
+
+export const decodePuppetUpdates = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((entry, index) => {
+      if (typeof entry === "string") return decodePuppetLine(entry, index);
+      if (!entry || typeof entry !== "object") return null;
+      const loyalty = Number(entry.loyalty);
+      return {
+        id: clean(entry.id) || `puppet-update-${index}`,
+        op: lower(entry.op),
+        overlord: clean(entry.overlord),
+        puppet: clean(entry.puppet),
+        kind: lower(entry.kind),
+        loyalty: Number.isFinite(loyalty) ? clamp(Math.round(loyalty), 0, 100) : null,
+        secrecy: lower(entry.secrecy),
+        eventIndexes: array(entry.eventIndexes).map(Number).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 16),
+        eventIds: unique(entry.eventIds, 24),
+        note: clean(entry.note),
+      };
+    }).filter(Boolean).slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+  }
+  return String(value ?? "")
+    .split(/\r?\n/)
+    .map((line, index) => decodePuppetLine(line, index))
+    .filter((entry) => entry.op || entry.overlord || entry.puppet)
+    .slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+};
+
+export const bindPuppetUpdatesToEvents = (updates, events) =>
+  bindEventIds(decodePuppetUpdates(updates), events);
+
+const livePuppetRow = (rows, overlord, puppet) => rows.find((row) =>
+  row.status === "active" && lower(row.overlord) === lower(overlord) && lower(row.puppet) === lower(puppet));
+
+const livePuppetByPuppet = (rows, puppet) => rows.find((row) =>
+  row.status === "active" && lower(row.puppet) === lower(puppet));
+
+// A revolt leaves the two at each other's throats and voids what they had
+// signed. The relation goes through applyRelationUpdates — the ORDINARY path,
+// bound to the revolt's own event — rather than being written onto the ledger
+// behind its back, so a thrown-off satellite reads in history exactly like any
+// other collapse in relations.
+const applyRevoltFallout = (world, overlord, puppet, causalEventIds, events, date, round) => {
+  const score = REVOLT_RELATION_SCORE;
+  const merged = applyRelationUpdates({
+    world,
+    updates: [{
+      id: `relation-revolt-${slug(puppet)}`,
+      a: overlord,
+      b: puppet,
+      score,
+      status: normalizeRelationStatus("", score),
+      eventIds: causalEventIds,
+      summary: `${puppet} threw off ${overlord}.`,
+    }],
+    events,
+    stopDate: date,
+    round,
+    // The revolt's event is already bound; this keeps the merge from refusing
+    // the line when the caller is replaying a baseline turn.
+    allowUnboundBaseline: true,
+  });
+
+  const both = [lower(overlord), lower(puppet)];
+  const agreements = array(merged.world.agreements).map((agreement) => {
+    const parties = array(agreement.parties).map(lower);
+    const between = both.every((name) => parties.includes(name));
+    if (!between || ["ended", "expired"].includes(lower(agreement.status))) return agreement;
+    return {
+      ...agreement,
+      status: "ended",
+      endedDate: date || clean(agreement.lastUpdatedDate),
+      lastUpdatedDate: date || clean(agreement.lastUpdatedDate),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    };
+  });
+
+  return { ...merged.world, agreements };
+};
+
+// Which polities still hold land. A Puppet keeps its own territory — that is
+// what makes it a Puppet and not a province — so a country with none left (an
+// annexed Ireland) has no state to subordinate. A region counts for whoever
+// administers it and for its lawful sovereign, so an occupied homeland is still
+// a homeland; a stock region nobody has overridden belongs to its map country.
+// With no region list to consult it cannot tell, so it answers null and nothing
+// is refused on its account.
+export const landedPolityCheck = (world, regionCatalog) => {
+  const regions = array(regionCatalog);
+  if (!regions.length) return null;
+  const control = world?.regionOwnershipOverrides || {};
+  const sovereignty = world?.regionSovereigntyOverrides || {};
+  const holders = new Set([...Object.values(control), ...Object.values(sovereignty)].map(clean));
+  for (const region of regions) {
+    if (clean(control[region?.id])) continue;
+    holders.add(clean(region?.country) || clean(toCountryName(clean(region?.countryCode))));
+  }
+  const landed = new Set([...holders]
+    .filter(Boolean)
+    .map((name) => lower(canonicalDiplomaticPolity(name, world, { allowUnknown: true }))));
+  return (polity) => landed.has(lower(polity));
+};
+
+export const applyPuppetUpdates = ({
   world,
-  relationUpdates,
-  agreementUpdates,
+  updates,
   events = [],
   stopDate = "",
   round = 0,
   allowUnboundBaseline = false,
+  refusedDemands = [],
+  regionCatalog = [],
+} = {}) => {
+  let nextWorld = normalizeWorldState(world);
+  const holdsLand = landedPolityCheck(nextWorld, regionCatalog);
+  let rows = array(nextWorld.puppets).map((row) => ({ ...row }));
+  const decoded = bindPuppetUpdatesToEvents(updates, events);
+  const applied = [];
+  const settledStorylines = new Set();
+  // What was NOT applied, and why. A skip can shrug a bad line off, but the GM
+  // console must not: a player who asks it for a puppet and gets nothing is the
+  // bug this list exists to prevent, so the GM refuses its preview and says why.
+  const dropped = [];
+  const drop = (index, update, reason) => {
+    console.warn(`[OH puppets] ${reason}`);
+    dropped.push({ index, op: update.op, overlord: update.overlord, puppet: update.puppet, reason });
+  };
+
+  for (const [index, update] of decoded.entries()) {
+    if (!PUPPET_OP_SET.has(update.op)) {
+      drop(index, update, `"${update.op || "(none)"}" is not a subordination change.`);
+      continue;
+    }
+
+    const causalEvents = linkedEvents(update, events);
+    if (!causalEvents.length && !allowUnboundBaseline) {
+      drop(index, update, `${update.op} ${update.overlord || "?"} -> ${update.puppet || "?"} is tied to no event; a subordination may not persist without one.`);
+      continue;
+    }
+
+    const namedOverlord = canonicalDiplomaticPolity(update.overlord, nextWorld);
+    const puppet = canonicalDiplomaticPolity(update.puppet, nextWorld);
+    // NO CHAINS, from either direction. Reparenting below handles the case where
+    // the new Puppet already holds Puppets; this handles the mirror image, where
+    // the new OVERLORD is itself held. A satellite that subjugates its neighbour
+    // does not acquire a Puppet of its own — the neighbour answers to whoever
+    // answers for the satellite, directly. Only `install` may redirect: the other
+    // verbs must act on the row exactly as it stands.
+    const heldOverlord = update.op === "install" ? livePuppetByPuppet(rows, namedOverlord) : null;
+    const overlord = heldOverlord && lower(heldOverlord.overlord) !== lower(puppet)
+      ? heldOverlord.overlord
+      : namedOverlord;
+    if (!overlord || !puppet || lower(overlord) === lower(puppet)) {
+      // Say WHICH name is the problem. A GM that named "Republic of Ireland" for a
+      // country the player had already annexed was told only that the two were
+      // "not two different countries this world knows" — true, and no help to a
+      // retry or a player trying to see what went wrong.
+      const unknown = [
+        !namedOverlord ? `"${update.overlord}"` : "",
+        !puppet ? `"${update.puppet}"` : "",
+      ].filter(Boolean);
+      drop(index, update, unknown.length
+        ? `${update.op}: ${unknown.join(" and ")} ${unknown.length === 1 ? "is not a country" : "are not countries"} this world knows — ${unknown.length === 1 ? "it may have been annexed, renamed, or never existed" : "they may have been annexed, renamed, or never existed"}. Use the name the world uses now.`
+        : `${update.op}: "${update.overlord}" cannot be its own puppet.`);
+      continue;
+    }
+
+    const date = updateDate(update, events, stopDate);
+    const eventIds = unique(update.eventIds, 24);
+    const existing = livePuppetRow(rows, overlord, puppet);
+
+    if (update.op === "install") {
+      if (holdsLand && !holdsLand(puppet)) {
+        drop(index, update, `install: ${puppet} holds no territory — it has been annexed or has lost all its land, so there is no state left to make a puppet. A puppet keeps its own land; restore some first if that is the story.`);
+        continue;
+      }
+      // One Overlord per Puppet. A condominium is a curiosity this deliberately
+      // does not model, so a second claimant loses to the one in possession.
+      const heldByAnother = livePuppetByPuppet(rows, puppet);
+      if (heldByAnother && heldByAnother !== existing) {
+        drop(index, update, `${puppet} is already the ${heldByAnother.kind} of ${heldByAnother.overlord}; a country has one overlord at a time, so release it first.`);
+        continue;
+      }
+      if (livePuppetRow(rows, puppet, overlord)) {
+        drop(index, update, `${overlord} is itself a puppet of ${puppet}, so it cannot also direct it.`);
+        continue;
+      }
+
+      if (existing) {
+        rows = rows.map((row) => row !== existing ? row : {
+          ...row,
+          kind: PUPPET_KIND_SET.has(update.kind) ? update.kind : row.kind,
+          loyalty: update.loyalty === null ? row.loyalty : update.loyalty,
+          // Reveal is one-way: a secret that is out stays out, so an install
+          // restating an open arrangement as covert changes nothing.
+          secrecy: row.secrecy === "open" ? "open" : (update.secrecy === "open" ? "open" : row.secrecy),
+          lastUpdatedDate: date || row.lastUpdatedDate,
+          sourceEventIds: unique([...array(row.sourceEventIds), ...eventIds], 24),
+          updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+        });
+        applied.push(existing.id);
+        continue;
+      }
+
+      // NO CHAINS. If the new Puppet already holds Puppets of its own, they are
+      // reparented one hop up, in this same event — they keep their own kind and
+      // their own Loyalty, because they did not choose this. Permanent: letting
+      // the middle party go later does not give them back.
+      rows = rows.map((row) => row.status === "active" && lower(row.overlord) === lower(puppet)
+        ? {
+          ...row,
+          overlord,
+          lastUpdatedDate: date || row.lastUpdatedDate,
+          sourceEventIds: unique([...array(row.sourceEventIds), ...eventIds], 24),
+          updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+        }
+        : row);
+
+      const secrecy = update.secrecy === "covert" ? "covert" : "open";
+      rows.push({
+        id: `puppet-${slug(overlord)}-${slug(puppet)}-${rows.length}`,
+        overlord,
+        puppet,
+        kind: PUPPET_KIND_SET.has(update.kind) ? update.kind : "client",
+        loyalty: update.loyalty === null ? 50 : update.loyalty,
+        secrecy,
+        // Both parties know what they agreed to. Everyone else has to find out.
+        knownTo: [
+          { polity: overlord, learnedDate: date },
+          { polity: puppet, learnedDate: date },
+        ],
+        status: "active",
+        startedDate: date,
+        endedDate: "",
+        lastUpdatedDate: date,
+        sourceEventIds: eventIds,
+        createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+        updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      });
+      applied.push(rows[rows.length - 1].id);
+      continue;
+    }
+
+    // Every other verb acts on a subordination that is already on the books. An
+    // unrecorded one has nothing to reclassify, reveal or end, and inventing the
+    // row from the verb is how a ledger fills with relationships nobody formed.
+    if (!existing) {
+      drop(index, update, `${update.op}: ${overlord} does not direct ${puppet}, so there is nothing to ${update.op}.`);
+      continue;
+    }
+
+    const patch = {
+      lastUpdatedDate: date || existing.lastUpdatedDate,
+      sourceEventIds: unique([...array(existing.sourceEventIds), ...eventIds], 24),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    };
+    if (update.op === "reclassify" && PUPPET_KIND_SET.has(update.kind)) patch.kind = update.kind;
+    if (update.op === "loyalty" && update.loyalty !== null) patch.loyalty = update.loyalty;
+    if (update.op === "reveal") patch.secrecy = "open";
+    if (update.op === "suppress") {
+      patch.loyalty = clamp(Math.round(Number(existing.loyalty) || 0) + SUPPRESSED_COUP_LOYALTY_GAIN, 0, 100);
+    }
+    if (PUPPET_ENDING_OPS.has(update.op)) {
+      patch.status = update.op === "release" ? "released" : update.op === "annex" ? "annexed" : "revolted";
+      patch.endedDate = date || existing.lastUpdatedDate;
+    }
+    if (update.op === "annex") {
+      const cost = existing.secrecy === "covert" ? ANNEXED_PUPPET_REPUTATION_COST : ANNEXED_OPEN_PUPPET_REPUTATION_COST;
+      const reputation = { ...(nextWorld.internationalReputation || {}) };
+      const before = Number.isFinite(Number(reputation[overlord])) ? Number(reputation[overlord]) : 50;
+      reputation[overlord] = clamp(Math.round(before - cost), 0, 100);
+      nextWorld = { ...nextWorld, internationalReputation: reputation };
+    }
+
+    rows = rows.map((row) => row === existing ? { ...row, ...patch } : row);
+    // The resentment played out, one way or another: it revolted, it was put
+    // down, or the arrangement it was about is over. Either way the Storyline
+    // has nothing left to ripen, and leaving it active would also block the
+    // seeder from ever opening a fresh one for the next arrangement.
+    if (PUPPET_ENDING_OPS.has(update.op) || update.op === "suppress") settledStorylines.add(puppetCoupStorylineId(existing));
+    if (update.op === "revolt") nextWorld = applyRevoltFallout(nextWorld, overlord, puppet, eventIds, events, date, round);
+    applied.push(existing.id);
+  }
+
+  // The one deterministic Loyalty rule, applied after the model's own lines so
+  // a turn that both narrated the refusal and scored it does not double-count:
+  // the model's score is the baseline, this is the cost on top.
+  let refusedDemandCount = 0;
+  for (const demand of array(refusedDemands)) {
+    const overlord = canonicalDiplomaticPolity(demand?.overlord, nextWorld);
+    const puppet = canonicalDiplomaticPolity(demand?.puppet, nextWorld);
+    if (!overlord || !puppet) continue;
+    const row = livePuppetRow(rows, overlord, puppet);
+    if (!row) continue;
+    rows = rows.map((entry) => entry === row ? {
+      ...entry,
+      loyalty: clamp(Math.round(Number(entry.loyalty) || 0) - REFUSED_DEMAND_LOYALTY_COST, 0, 100),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    } : entry);
+    refusedDemandCount += 1;
+  }
+
+  // Handed over WHOLE: normalizeWorldPuppets evicts finished rows before live
+  // ones. Truncating here would drop whatever happened to be last, and a new
+  // install is pushed to the end — so a full ledger would silently swallow the
+  // subordination this very turn created.
+  const merged = normalizeWorldState({ ...nextWorld, puppets: rows });
+
+  // A Puppet whose Loyalty has fallen far enough gets a hidden Storyline, once,
+  // and the world director ripens it from there like any other ongoing
+  // situation. The ENGINE opens it rather than the model, for the same reason
+  // the refused demand is an engine rule: a turn that forgot to open one would
+  // mean a decade of mistreatment silently never happened. What it never does is
+  // fire the coup — pressure and momentum decide that, and may decide never.
+  const existingStorylineIds = new Set(array(merged.storylines).map((entry) => lower(entry?.id)));
+  const liveStorylineIds = new Set(array(merged.storylines)
+    .filter((entry) => lower(entry?.status) !== "resolved")
+    .map((entry) => lower(entry?.id)));
+
+  // Closing lines first, so a Puppet that revolted and whose Storyline is now
+  // settled cannot also be re-seeded by the pass that follows.
+  const storylineResolutions = [...settledStorylines]
+    .filter((id) => liveStorylineIds.has(lower(id)))
+    .map((id) => [id, "resolved", "0", "0", "", "", "", "", "", "It played out."].join(SEP));
+
+  const storylineSeeds = array(merged.puppets)
+    .filter((row) => row.status === "active" && Number(row.loyalty) < COUP_STORYLINE_LOYALTY)
+    .filter((row) => !existingStorylineIds.has(lower(puppetCoupStorylineId(row))))
+    .filter((row) => !settledStorylines.has(puppetCoupStorylineId(row)))
+    .map((row) => {
+      const pressure = clamp(Math.round(100 - (Number(row.loyalty) || 0) * 2), 20, 100);
+      return [
+        puppetCoupStorylineId(row),
+        "active",
+        String(pressure),
+        "35",
+        row.lastUpdatedDate || "",
+        "unrest",
+        `Resentment in ${row.puppet}`,
+        `${row.puppet},${row.overlord}`,
+        "",
+        `${row.puppet} chafes under ${row.overlord}. Whether this ripens into a coup, a negotiated loosening or nothing at all is unsettled.`,
+      ].join(SEP);
+    });
+  return { world: merged, puppets: merged.puppets, appliedIds: applied, dropped, refusedDemandCount, storylineSeeds: [...storylineResolutions, ...storylineSeeds] };
+};
+
+// STARTING PUPPETS. The pregame bootstrap answers in one flat canonicalUpdates
+// list (canonicalUpdateSchema), not in per-ledger lines, so its subordinations
+// arrive as entries like any other day-one fact. At the start of a game the only
+// thing to say of one is that it stands, so the operation slot carries its
+// secrecy instead of a verb: puppet:open or puppet:covert. The shared fields do
+// the rest — polities is [overlord, puppet], category the kind, score the
+// loyalty. Lives here rather than beside the other families in gameplay.js
+// because this module is the one that can be tested.
+export const puppetUpdatesFromCanonical = (canonicalUpdates) => array(canonicalUpdates)
+  .filter((raw) => raw && typeof raw === "object" && !Array.isArray(raw))
+  .map((raw) => {
+    const [family = "", secrecy = ""] = lower(raw.kind).split(":").map((part) => part.trim());
+    if (family !== "puppet") return null;
+    const [overlord = "", puppet = ""] = array(raw.polities).map(clean);
+    if (!overlord || !puppet) return null;
+    const loyalty = Number(raw.score);
+    return {
+      op: "install",
+      overlord,
+      puppet,
+      kind: lower(raw.category),
+      loyalty: Number.isFinite(loyalty) && loyalty > 0 ? clamp(Math.round(loyalty), 0, 100) : null,
+      secrecy: secrecy === "covert" ? "covert" : "open",
+      eventIndexes: [],
+      eventIds: [],
+      note: clean(raw.detail),
+    };
+  })
+  .filter(Boolean);
+
+// ESPIONAGE UNCOVERS COVERT ARRANGEMENTS. An agent working inside either party
+// to a covert subordination tells its owner of it; this is the one door by which
+// a third party joins knownTo. Deterministic on presence: the roll that matters
+// already happened in spycraft, when the agent got in and stayed undiscovered.
+//
+// Only an ACTIVE agent. A turned one reports what its captors choose, and they
+// would not hand over their own secret; a discovered one reports nothing.
+//
+// Each knownTo entry records the status its polity LAST SAW (seenStatus). An
+// agent still in place refreshes it, which is how a lapsed arrangement is ever
+// learned to have lapsed; with no agent, the old belief stands. That is the
+// staleness the design wants, now with a way out of it.
+export const revealPuppetsToSpies = (world, date = "") => {
+  const spies = array(world?.spies).filter((spy) => lower(spy?.status) === "active");
+  if (!spies.length || !array(world?.puppets).length) return world;
+  const stamp = clean(date);
+  const puppets = array(world.puppets).map((row) => {
+    if (lower(row?.secrecy) !== "covert") return row;
+    const party = [lower(row.overlord), lower(row.puppet)];
+    const learners = [...new Set(spies
+      .filter((spy) => party.includes(lower(spy?.target)) && !party.includes(lower(spy?.owner)))
+      .map((spy) => clean(spy.owner))
+      .filter(Boolean))];
+    if (!learners.length) return row;
+    const knownTo = array(row.knownTo).map((entry) => (typeof entry === "string" ? { polity: entry, learnedDate: "" } : { ...entry }));
+    const seenStatus = lower(row.status) || "active";
+    for (const learner of learners) {
+      const existing = knownTo.find((entry) => lower(entry?.polity) === lower(learner));
+      if (existing) {
+        existing.learnedDate = stamp || existing.learnedDate;
+        existing.seenStatus = seenStatus;
+      } else if (seenStatus === "active") {
+        // A past arrangement nobody told you of is not news worth an agent's
+        // cable; only a standing one is uncovered for the first time.
+        knownTo.push({ polity: learner, learnedDate: stamp, seenStatus });
+      }
+    }
+    return { ...row, knownTo };
+  });
+  return { ...world, puppets };
+};
+
+export const applyDiplomaticUpdates = ({
+  world,
+  relationUpdates,
+  agreementUpdates,
+  puppetUpdates,
+  refusedDemands = [],
+  events = [],
+  stopDate = "",
+  round = 0,
+  allowUnboundBaseline = false,
+  regionCatalog = [],
+  // The scenario's "Puppet states" feature. Passed in rather than read from
+  // runtime/gameFeatures.js so this module stays testable without the browser
+  // runtime, exactly as the rest of the director is.
+  puppetStates = true,
 } = {}) => {
   const relationMerge = applyRelationUpdates({
     world,
@@ -1321,12 +1827,44 @@ export const applyDiplomaticUpdates = ({
     round,
     allowUnboundBaseline,
   });
+  // Puppets merge LAST, so a revolt's fallout lands on the relation and the
+  // agreements this same pass has already written rather than under them.
+  //
+  // With the system off the pass is SKIPPED WHOLE rather than handed no updates:
+  // applyPuppetUpdates also seeds a coup storyline off every row ALREADY in the
+  // ledger and charges refused demands, so a game that switched the system off
+  // with arrangements standing would otherwise go on brewing risings inside it.
+  // The rows themselves are left untouched, ready for a game that switches back.
+  const puppetMerge = puppetStates
+    ? applyPuppetUpdates({
+        world: agreementMerge.world,
+        updates: puppetUpdates,
+        refusedDemands,
+        regionCatalog,
+        events,
+        stopDate,
+        round,
+        allowUnboundBaseline,
+      })
+    : {
+        world: agreementMerge.world,
+        puppets: array(agreementMerge.world?.puppets),
+        appliedIds: [],
+        dropped: [],
+        refusedDemandCount: 0,
+        storylineSeeds: [],
+      };
   return {
-    world: agreementMerge.world,
+    world: puppetMerge.world,
     relations: relationMerge.relations,
     agreements: agreementMerge.agreements,
+    puppets: puppetMerge.puppets,
     appliedRelationIds: relationMerge.appliedIds,
     appliedAgreementIds: agreementMerge.appliedIds,
+    appliedPuppetIds: puppetMerge.appliedIds,
+    droppedPuppetUpdates: puppetMerge.dropped,
+    refusedDemandCount: puppetMerge.refusedDemandCount,
+    puppetStorylineSeeds: puppetMerge.storylineSeeds,
   };
 };
 
@@ -1337,6 +1875,33 @@ const agreementDisplay = (agreement, world) => {
     : "";
   return `- ${agreement.id} | ${String(agreement.status || "active").toUpperCase()} | ${agreement.type} | ${agreement.title} | parties: ${parties.join(", ")}${role}` +
     (clean(agreement.terms) ? ` | terms: ${clean(agreement.terms).slice(0, 280)}` : "");
+};
+
+const puppetDisplay = (row, world) => {
+  const overlord = diplomaticDisplayName(world, row.overlord);
+  const puppet = diplomaticDisplayName(world, row.puppet);
+  const secrecy = row.secrecy === "covert" ? "COVERT" : "open";
+  const knownTo = array(row.knownTo)
+    .map((entry) => diplomaticDisplayName(world, entry?.polity || entry))
+    .filter((name) => lower(name) !== lower(overlord) && lower(name) !== lower(puppet));
+  // Whether the Overlord could plausibly SEE trouble coming inside its own
+  // Puppet. The engine owns that fact, the model owns the fiction — the same
+  // line the projects board draws between whether a question can honestly be
+  // asked and what the answer is. Without it the model simply invented whether
+  // foreknowledge was earned, which made "warning is bought with espionage"
+  // untrue whenever it guessed generously.
+  const watching = array(world.spies).some((spy) =>
+    lower(spy?.owner) === lower(row.overlord) && lower(spy?.target) === lower(row.puppet) && lower(spy?.status) === "active");
+  const service = Number(world.intelligence?.[row.overlord]);
+  const eyes = watching
+    ? " | the overlord has an agent inside: unrest there is visible to it"
+    : Number.isFinite(service) && service >= 70
+      ? " | the overlord's services are strong: it may catch word of unrest there"
+      : " | the overlord has no eyes inside: unrest there would take it by surprise";
+
+  return `- ${overlord} directs ${puppet} | ${row.kind} | ${secrecy} | loyalty ${row.loyalty}${eyes}` +
+    (row.startedDate ? ` | since ${row.startedDate}` : "") +
+    (row.secrecy === "covert" ? ` | also known to: ${knownTo.length ? knownTo.join(", ") : "nobody else"}` : "");
 };
 
 const relationDisplay = (relation, world) =>
@@ -1352,6 +1917,7 @@ export const buildBoundedDiplomaticContext = (
     focusActors = [],
     selectedStorylines = [],
     maxActors = MAX_CONTEXT_ACTORS,
+    puppetStates = true,
   } = {},
 ) => {
   const world = normalizeWorldState(worldLike);
@@ -1408,6 +1974,19 @@ export const buildBoundedDiplomaticContext = (
     })
     .slice(0, MAX_CONTEXT_AGREEMENTS);
 
+  // Subordinations among the attention actors, as the TRUTH — loyalty, secrecy
+  // and who else has found out. This context reaches the jump, the idle
+  // diplomacy pass and next-speaker, all of which reason about the whole world.
+  // It does NOT reach a leader or a group turn, and must not: a leader speaks as
+  // one country and is briefed on what that country knows instead
+  // (runtime/puppets.js puppetBriefingFor). An earlier comment here said the chat
+  // task read this block; it never did, and believing so hid that a covert
+  // Puppet in conversation did not know it was one.
+  const puppets = (puppetStates ? array(world.puppets) : [])
+    .filter((row) => row.status === "active")
+    .filter((row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet)))
+    .slice(0, MAX_CONTEXT_PUPPETS);
+
   const text = [
     `[Canonical Diplomatic State v${DIPLOMATIC_DIRECTOR_VERSION} — bounded relevant slice]`,
     `Attention actors (${actors.length}/${maxActors} max): ${actors.length ? actors.map((actor) => diplomaticDisplayName(world, actor)).join(", ") : "none"}`,
@@ -1417,13 +1996,21 @@ export const buildBoundedDiplomaticContext = (
     "",
     "FORMAL AGREEMENTS / COMMITMENTS",
     agreements.length ? agreements.map((agreement) => agreementDisplay(agreement, world)).join("\n") : "No active/suspended formal agreement among these attention actors.",
-    "",
+    // With the system off the section is left out ENTIRELY rather than saying
+    // nobody directs anybody: the simulator is never told the concept exists,
+    // so it cannot narrate a subordination the engine would refuse to record.
+    ...(puppetStates ? [
+      "",
+      "SUBORDINATIONS (who directs whom)",
+      puppets.length ? puppets.map((row) => puppetDisplay(row, world)).join("\n") : "No polity here directs another.",
+      "A Puppet is a SEPARATE COUNTRY: it holds its own territory and its own sovereignty, and only its will is directed. A COVERT subordination is known only to the two parties and anyone listed; a covert Puppet speaking to anyone else must present itself as fully independent. Loyalty is never public knowledge, not even for an open arrangement.",
+    ] : []),
     "Sparse-ledger rule: an untracked pair is NOT secretly hostile and is NOT a numeric score of zero. It only means no material bilateral state has yet been canonically recorded.",
     "Formal commitments and bilateral warmth are different facts. An alliance may be strained; friendly countries may have no alliance.",
     "world.wars remains the sole authority for actual belligerency. A hostile relation or alliance does not itself start a war.",
   ].join("\n");
 
-  return { actors, relations, agreements, text };
+  return { actors, relations, agreements, puppets, text };
 };
 
 const migrationAliasesForPolity = (canonical, polity) => {

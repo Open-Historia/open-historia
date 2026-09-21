@@ -19,6 +19,8 @@
 // editor; the model-facing tasks (curator, directors, resolver, stat sheet,
 // spy desks, the board) are entirely technical by design.
 
+import { readUnderTaskKey } from "./formerTaskKeys.js";
+
 const segment = (id, label, start, end, hint = "") => Object.freeze({ id, label, start, end, hint });
 
 export const PROMPT_GUIDANCE = Object.freeze({
@@ -153,9 +155,9 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "Only newsworthy events belong in the output.",
         "Filler, meta events and mechanical spacing."),
     ]),
-    catalystCreation: Object.freeze([
-      segment("guidelines", "What makes a good catalyst",
-        "[Important Guidelines] Catalysts are NOT a clone of one of the listed events",
+    interactiveCreation: Object.freeze([
+      segment("guidelines", "What makes a good interactive event",
+        "[Important Guidelines] Interactive events are NOT a clone of one of the listed events",
         "Think of variety and fun, not just bland and generic political meetings.**",
         "The kinds of scenes worth simulating, with examples."),
       segment("reminders", "Writing reminders",
@@ -163,21 +165,21 @@ export const PROMPT_GUIDANCE = Object.freeze({
         "your output shouldn’t include “the player decided” or “this will make the player”.\nGiven this, begin outputting.",
         "Dialogue, tone, immersion and the choices offered."),
     ]),
-    catalystExecutor: Object.freeze([
-      segment("style", "How a catalyst reads",
-        "The Catalyst MUST be engaging and immersive but not overdramatic and meaningless.",
+    interactiveExecutor: Object.freeze([
+      segment("style", "How an interactive event reads",
+        "The Interactive event MUST be engaging and immersive but not overdramatic and meaningless.",
         "Do not just make it boring busywork.",
         "Engagement, length and personality."),
-      segment("duration", "How much time a catalyst covers",
-        "[Length/In-game Duration of the Catalyst]",
+      segment("duration", "How much time an interactive event covers",
+        "[Length/In-game Duration of the Interactive event]",
         "Overall, each action and passage you make should be logical and not reflect something bizarre happening for the sake of a variety of actions for the player. Always keep it fun but immersive.",
-        "Days, replies and pacing inside a catalyst."),
+        "Days, replies and pacing inside an interactive event."),
       segment("reminders", "Writing reminders",
         "Reminders:\nDialogue should always be surrounded by double quotes",
         "your output shouldn’t include “the player decided” or “this will make the player”.\nGiven this, begin outputting.",
         "Dialogue, tone, reaction to the player's choice, and the choices offered."),
     ]),
-    catalystSummary: Object.freeze([
+    interactiveSummary: Object.freeze([
       segment("style", "How the summary is written",
         "The simulation MUST be engaging and immersive but not overdramatic and meaningless.",
         "“Diplomat from Polity X spoke to the prime minister of Polity Y about trade”.",
@@ -292,14 +294,16 @@ export const buildGuidanceDefaults = (defaults) => ({
 // only, trimmed, with blanks and default-identical text dropped. A pack of any
 // other shape carries nothing — the old model stored whole prompts, technical
 // text included, and those froze at the time of the save; they are ignored so
-// every scenario and game runs the current defaults plus its guidance.
+// every scenario and game runs the current defaults plus its guidance. A
+// renamed task's edits are read from its old key when its new one has none
+// (formerTaskKeys.js), and kept under the new one.
 export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
   const pack = isRecord(rawPack) ? rawPack : {};
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
   const taskGuidance = {};
   for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) {
-    const bucket = normalizeSectionGuidance(key, tasks[key], guidanceDefaults?.tasks?.[key] ?? null);
+    const bucket = normalizeSectionGuidance(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? null);
     if (Object.keys(bucket).length) taskGuidance[key] = bucket;
   }
   return {

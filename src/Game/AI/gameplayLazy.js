@@ -42,20 +42,23 @@ export const rollBackToSnapshot = async (...args) => (await gameplay()).rollBack
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);
 export const interveneAfterEvent = async (...args) => (await gameplay()).interveneAfterEvent(...args);
 
-// --- Catalyst mode ------------------------------------------------------------
-// A moment played out as a scene (GameUI/catalyst.jsx): started by the player,
-// beat by beat, taken back (catalystRewind.js), ended into the record or set
-// aside. Nothing of it exists until the player enters the mode.
-export const createCatalyst = async (...args) => (await gameplay()).createCatalyst(...args);
-export const advanceActiveCatalyst = async (...args) => (await gameplay()).advanceActiveCatalyst(...args);
-export const rewindActiveCatalyst = async (...args) => (await gameplay()).rewindActiveCatalyst(...args);
-export const endActiveCatalyst = async (...args) => (await gameplay()).endActiveCatalyst(...args);
-export const setAsideActiveCatalyst = async (...args) => (await gameplay()).setAsideActiveCatalyst(...args);
+// --- Interactive events -----------------------------------------------------
+// A moment played out as a scene (GameUI/interactive.jsx): offered now and then
+// by a time skip (runtime/interactiveOffer.js), taken up or let pass by the
+// player, played beat by beat, taken back (interactiveRewind.js), ended into
+// the record or set aside.
+export const createInteractive = async (...args) => (await gameplay()).createInteractive(...args);
+export const declineInteractiveOffer = async (...args) => (await gameplay()).declineInteractiveOffer(...args);
+export const advanceActiveInteractive = async (...args) => (await gameplay()).advanceActiveInteractive(...args);
+export const rewindActiveInteractive = async (...args) => (await gameplay()).rewindActiveInteractive(...args);
+export const endActiveInteractive = async (...args) => (await gameplay()).endActiveInteractive(...args);
+export const setAsideActiveInteractive = async (...args) => (await gameplay()).setAsideActiveInteractive(...args);
 
 // --- Chat and diplomacy -----------------------------------------------------
 export const chooseNextDiplomaticSpeaker = async (...args) => (await gameplay()).chooseNextDiplomaticSpeaker(...args);
 // One request acts for every AI participant in a thread (AI/chatActions.js).
 export const runChatActionBatch = async (...args) => (await gameplay()).runChatActionBatch(...args);
+export const checkDemandReply = async (...args) => (await gameplay()).checkDemandReply(...args);
 export const ensureCountryAssessed = async (...args) => (await gameplay()).ensureCountryAssessed(...args);
 export const processPendingEventOutreach = async (...args) => (await gameplay()).processPendingEventOutreach(...args);
 

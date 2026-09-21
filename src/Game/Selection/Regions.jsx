@@ -3,7 +3,8 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
-import { readWorldState } from "../../runtime/gameState.js";
+import { readGameData, readWorldState } from "../../runtime/gameState.js";
+import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
@@ -26,6 +27,20 @@ export const setRegionClickInterceptor = (fn) => {
 // Passive tap on every normal region click (the Stats tab watches which country
 // the player is inspecting). Never consumes the click — popups still open.
 let _clickObserver = null;
+
+// WHO IS PLAYING, and why it is read here rather than per click. What the card
+// may say about a subordination depends on the viewer, and a COVERT one is
+// invisible to a viewer it does not know — so a popup that had not yet learned
+// the player's country showed no puppet panel at all, and an open one in a
+// stranger's words. It is read once, kept for the session, and refreshed in the
+// background; the first click of a session no longer races a request.
+let _playerCountry = "";
+const rememberPlayerCountry = (readGame) => readGame()
+    .then((game) => {
+        _playerCountry = String(game?.country ?? "").trim() || _playerCountry;
+        return _playerCountry;
+    })
+    .catch(() => _playerCountry);
 
 export const setRegionClickObserver = (fn) => {
     _clickObserver = typeof fn === "function" ? fn : null;
@@ -118,13 +133,13 @@ const commitRegionSelection = (props) => {
     _currentSelection.COUNTRY === COUNTRY &&
     _currentSelection.NAME_1 === NAME_1;
 
-    if (isSame) {
-        _dismiss?.();
-    } else if (_currentSelection !== null) {
-        _dismiss?.();
-    } else {
-        _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
-    }
+    // Clicking the region already shown closes its card. Clicking a DIFFERENT
+    // one shows that region: it used to only close the open card, so every
+    // other click round the map appeared to do nothing and the card had to be
+    // asked for twice. _setSelection replays the card's entrance on the new
+    // region, which discards the outgoing one.
+    if (isSame) _dismiss?.();
+    else _setSelection({ COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat });
 };
 
 export const onRegionSelected = (props) => {
@@ -224,6 +239,21 @@ const RegionPopup = () => {
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
     const [polities, setPolities] = useState({});
     const [worldState, setWorldState] = useState(null);
+    // Who is looking, for the puppet lines: what the card may say about a
+    // subordination depends on whether the player is party to it or found it out.
+    // Kept across popups, not read afresh for each: the read is a promise, and
+    // the first paint after a click would otherwise have no viewer at all — and
+    // a card with no viewer is the player's own overlord described to them as a
+    // stranger's business. The panel is suppressed until this is known.
+    const [playerCountry, setPlayerCountry] = useState(_playerCountry);
+    useEffect(() => {
+        let cancelled = false;
+        // The cached read, not a forced one: this is the same game.json every
+        // other panel holds, and a failed round trip used to leave the card
+        // with no viewer and so no puppet panel.
+        rememberPlayerCountry(readGameData).then((country) => { if (!cancelled) setPlayerCountry(country); });
+        return () => { cancelled = true; };
+    }, [selection]);
     // sparse control metadata. ownership is the de-facto controller; sovereignty is
     // only stored when it differs, because duplicating every normal border is dumb.
     const [territoryState, setTerritoryState] = useState({
@@ -506,6 +536,19 @@ const RegionPopup = () => {
     };
     // header stays on the current administrator/controller. legal title goes below.
     const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
+    // The same summary the country panel shows (runtime/puppets.js), and for an
+    // Overlord the Puppets this viewer knows it holds. A covert arrangement the
+    // player never uncovered leaves no trace on the card.
+    const controllerKey = isUnclaimed ? "" : (resolvePolityIdentity(controllerCode, worldState, {
+        allowUnknown: true,
+        requireActive: false,
+        allowCoreMatch: true,
+        allowStockBase: true,
+    }).resolved || controllerCode || "");
+    const subordination = controllerKey && worldState ? puppetSummaryFor(worldState, playerCountry, controllerKey) : null;
+    const heldPuppets = controllerKey && worldState && playerCountry
+        ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
+        : [];
     const POPUP_WIDTH = 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
 
@@ -612,6 +655,29 @@ const RegionPopup = () => {
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
+
+        {subordination && (
+            <div style={{ marginTop: "7px", padding: "7px 9px", borderRadius: "9px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.13)", borderLeft: "2px solid rgba(255,255,255,0.3)" }}>
+            <span style={{ display: "block", fontSize: "12px", fontWeight: 800, color: "rgba(255,255,255,0.96)" }}>{subordination.headline}</span>
+            <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.82)", lineHeight: 1.4, marginTop: "3px" }}>{subordination.meaning}</div>
+            {subordination.facts.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "3px", marginTop: "5px" }}>
+                {subordination.facts.map((fact) => (
+                    <span key={fact} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "999px", color: "rgba(255,255,255,0.7)", fontSize: "10px", padding: "1px 6px", whiteSpace: "nowrap" }}>{fact}</span>
+                ))}
+                </div>
+            )}
+            {subordination.provenance && (
+                <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", fontStyle: "italic", marginTop: "3px" }}>{subordination.provenance}</div>
+            )}
+            </div>
+        )}
+        {heldPuppets.length > 0 && (
+            <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.8)" }}>
+            <span style={{ color: "rgba(255,255,255,0.45)" }}>{heldPuppets[0].role === "overlord" ? "Our puppets: " : "Puppets: "}</span>
+            {heldPuppets.map((row) => `${row.puppet} (${puppetKindLabel(row.kind)})`).join(", ")}
+            </div>
+        )}
 
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.1)", margin: "7px 0" }} />
 

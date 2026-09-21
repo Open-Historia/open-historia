@@ -26,9 +26,7 @@ const BorderCleanupOverlay = ({ state }) => {
         alignItems: "center",
         justifyContent: "center",
         padding: 16,
-        background: "rgba(5,9,16,0.74)",
-        backdropFilter: "blur(3px)",
-        WebkitBackdropFilter: "blur(3px)",
+        background: "rgba(8,8,9,0.82)",
       }}
     >
       <style>{"@keyframes oh-border-cleanup-spin { to { transform: rotate(360deg); } }"}</style>
@@ -36,8 +34,8 @@ const BorderCleanupOverlay = ({ state }) => {
         style={{
           width: "min(440px, 100%)",
           borderRadius: 14,
-          background: "rgba(17,24,39,0.96)",
-          border: "1px solid rgba(147,197,253,0.35)",
+          background: "#1b1b1e",
+          border: "1px solid rgba(255,255,255,0.12)",
           boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
           padding: "22px 24px",
           color: "white",
@@ -54,8 +52,8 @@ const BorderCleanupOverlay = ({ state }) => {
               height: 34,
               flexShrink: 0,
               borderRadius: "50%",
-              border: "3px solid rgba(147,197,253,0.25)",
-              borderTopColor: "#93c5fd",
+              border: "3px solid rgba(255,255,255,0.11)",
+              borderTopColor: "rgba(255,255,255,0.28)",
               animation: "oh-border-cleanup-spin 0.9s linear infinite",
             }}
           />
@@ -69,7 +67,7 @@ const BorderCleanupOverlay = ({ state }) => {
             style={{
               width: `${Math.round(fraction * 100)}%`,
               height: "100%",
-              background: "linear-gradient(90deg, #60a5fa, #34d399)",
+              background: "rgba(231,231,234,0.72)",
               transition: "width 220ms ease",
             }}
           />

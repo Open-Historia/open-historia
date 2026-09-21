@@ -15,6 +15,9 @@
 // next turn in words the model can act on — the same discipline as the
 // application receipt for a time skip.
 //
+// The batch is then said a line at a time, a few seconds apart, and the player
+// may cut in on what has not been said yet (planChatReveal, below).
+//
 // Two rules the reference taught, kept because they are what make a batch
 // coherent rather than a list of messages:
 //   - REFS, NOT IDS. A poll invented in this batch is addressed by the
@@ -119,8 +122,14 @@ export const normalizeChatAction = (entry) => {
 // [name], messageIds: [id], polls: [{ id, options: [{id, label}], votes }] }.
 // Returns { events, applied, rejected, unansweredPolls } — events are
 // chatThreads.js events, ready to append.
+//
+// `takenIds` are the ids already in the thread's log. An id is minted from the
+// turn's date and a count, so a second turn on the same game day minted the
+// first turn's ids again — and the log keeps only the first event of an id
+// (chatThreads.js normalizeChatEvents), so that turn's replies vanished, and a
+// reaction meant for one landed on the old line. A taken id is skipped.
 
-export const applyChatActionBatch = (actions, roster = {}, { time = "", disallowMembershipChanges = false } = {}) => {
+export const applyChatActionBatch = (actions, roster = {}, { time = "", takenIds = [], disallowMembershipChanges = false } = {}) => {
     const ai = asArray(roster.aiParticipants).map(asText).filter(Boolean);
     const humans = asArray(roster.humanParticipants).map(asText).filter(Boolean);
     const known = asArray(roster.knownPolities).map(asText).filter(Boolean);
@@ -138,10 +147,16 @@ export const applyChatActionBatch = (actions, roster = {}, { time = "", disallow
     // Polls of THIS batch, and who has voted in them, for the binding rule.
     const pollsThisBatch = new Map();
     const membersNow = new Set([...ai.map(fold), ...humans.map(fold)]);
+    const taken = new Set(asArray(takenIds).map(asText).filter(Boolean));
     let sequence = 0;
     const nextId = (prefix) => {
-        sequence += 1;
-        return `${prefix}-${asText(time) || "turn"}-${sequence}`;
+        let id = "";
+        do {
+            sequence += 1;
+            id = `${prefix}-${asText(time) || "turn"}-${sequence}`;
+        } while (taken.has(id));
+        taken.add(id);
+        return id;
     };
     const refuse = (action, reason) => rejected.push({ action, reason });
 
@@ -295,4 +310,56 @@ export const describeChatActionFeedback = ({ rejected = [], unansweredPolls = []
     }
     if (!lines.length) return "";
     return `[What your last actions did]\n${lines.join("\n")}`;
+};
+
+// ---------------------------------------------------------------------------
+// Saying a batch a line at a time
+// ---------------------------------------------------------------------------
+//
+// One request answers for the whole table, but a table does not talk all at
+// once. A batch's events are shown in steps: the first message at once (the
+// request was the wait for it), and each later message only after its speaker
+// has been seen typing for CHAT_REVEAL_PAUSE_MS. A step is a message and what
+// follows it up to the next message (a reaction, a vote, a newcomer); what
+// comes before the first message goes with the first. A batch with fewer than
+// two messages is one step.
+//
+// A step not shown yet has not been said. If the player speaks first it never
+// is (GameUI/chat.jsx), the way Intervene discards the events of a time skip
+// the reveal has not reached, and the next turn is told whose lines went
+// unsaid (describeChatCutIn).
+
+export const CHAT_REVEAL_PAUSE_MS = 5000;
+
+export const planChatReveal = (events) => {
+    const steps = [];
+    let step = null;
+    for (const event of asArray(events)) {
+        if (!event || typeof event !== "object") continue;
+        const isMessage = event.kind === "message";
+        if (isMessage && step?.speaker) {
+            steps.push(step);
+            step = null;
+        }
+        if (!step) step = { speaker: "", events: [] };
+        if (isMessage) step.speaker = asText(event.by);
+        step.events.push(event);
+    }
+    if (step) steps.push(step);
+    return steps;
+};
+
+// What the next turn is told when the player spoke before the last one was
+// said in full: whose lines went unsaid. Not the lines themselves — they were
+// never said, and a model shown them would only say them again.
+export const describeChatCutIn = ({ player = "", steps = [] } = {}) => {
+    const speakers = [...new Set(asArray(steps)
+        .flatMap((step) => asArray(step?.events))
+        .filter((event) => event?.kind === "message")
+        .map((event) => asText(event.by))
+        .filter(Boolean))];
+    if (!speakers.length) return "";
+    const who = asText(player) || "The player";
+    const names = speakers.length === 1 ? speakers[0] : `${speakers.slice(0, -1).join(", ")} and ${speakers.at(-1)}`;
+    return `[The player cut in]\n- ${who} spoke before ${names} had finished: what ${speakers.length === 1 ? "it was" : "they were"} about to say was never said. Answer what ${who} has just said.`;
 };

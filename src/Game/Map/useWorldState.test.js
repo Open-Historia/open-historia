@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { foldOwnerTokens } from "./useWorldState.js";
+import { foldOwnerTokens, withSettledClaims } from "./useWorldState.js";
 
 // The renderer keys surfaces, colours and labels by owner token. A save that
 // holds a polity's regions under both its token and its display name must reach
@@ -44,4 +44,14 @@ test("a genuinely separate polity is not folded into a namesake", () => {
     regionOwnershipOverrides: { "RUS.9_1": "Free Siberia" },
   });
   assert.equal(overrides["RUS.9_1"], "Free Siberia");
+});
+
+test("the map's view of claims: an ended dispute is present and empty, a live one wins, nothing settled is the same object", () => {
+  const live = { a: ["X"] };
+  assert.equal(withSettledClaims(live, []), live, "nothing settled: the same object, so the store's comparisons hold");
+  assert.equal(withSettledClaims(live, undefined), live);
+  const view = withSettledClaims(live, ["a", "b"]);
+  assert.deepEqual(view, { a: ["X"], b: [] }, "the settled region is present with no claimants; the live one keeps its list");
+  assert.equal(view.a, live.a);
+  assert.deepEqual(live, { a: ["X"] }, "the world's own object is untouched");
 });

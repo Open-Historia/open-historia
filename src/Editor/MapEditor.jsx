@@ -119,9 +119,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [customBgId, setCustomBgId] = useState(null); // library basemap id applied (null = built-in / doc's own)
   const [basemapPickerOpen, setBasemapPickerOpen] = useState(false);
   // Which country's flag we're picking, or null. Owned HERE, not in the inspector:
-  // panelSurface has backdrop-filter, which makes a containing block for
-  // position:fixed — an overlay rendered inside the panel gets clipped to it and
-  // trapped under its z-index, whatever z-index the overlay itself asks for.
+  // panelSurface used to carry backdrop-filter, which makes a containing block
+  // for position:fixed — an overlay rendered inside the panel was clipped to it
+  // and trapped under its z-index. The panels are flat grey now, but this stays
+  // owned here: a full-screen overlay belongs at the root either way.
   const [flagPickerFor, setFlagPickerFor] = useState(null);
   // Session-only tracing aid ({ dataUrl, aspect, opacity, visible }) — kept out
   // of the document on purpose so it can never leak into saves or game exports.
@@ -296,7 +297,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   // This list is a whitelist and it drops anything not named here, silently. A
   // field left off does not fail to save — it fails to EXIST, and only when someone
   // reopens the document.
-  const buildPayload = () => ({
+  const buildDocumentFields = () => ({
     name: d.name,
     metadata: d.metadata,
     types: d.types,
@@ -312,7 +313,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // forever — and, far worse, a document saved after being migrated still reads
     // as legacy to everything downstream.
     ownerSchema: d.doc?.ownerSchema ?? OWNER_SCHEMA,
-    regions: api?.serializeRegions() || { type: "FeatureCollection", features: [] },
+  });
+
+  // The whole document, map and all: what an export writes and what a save falls
+  // back to. `regions` may be handed in when the caller has already written them,
+  // so the map is never serialised twice for one save.
+  const buildPayload = (regions = null) => ({
+    ...buildDocumentFields(),
+    regions: regions || api?.serializeRegions() || { type: "FeatureCollection", features: [] },
   });
 
   // Persist the Workshop map into the scenario without forcing a new game.
@@ -370,12 +378,32 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     }
   };
 
+  // A save carries the document plus either the whole map or only the regions
+  // that moved since the last one (OlMap serializeRegionChanges). That matters
+  // because this runs every two seconds while the map is dirty: it used to write
+  // the entire world each time, whether or not a polygon had moved.
+  //
+  // A store that cannot apply a difference — one built against another copy of
+  // the map, or a document whose geometry it does not have — says so, and the
+  // save is made again with the whole map. The record of what was last written is
+  // committed only once the save has landed, so a failure is retried in full.
   const saveNow = async () => {
     if (!api) return;
     try {
       d.setSaveStatus("saving");
-      const saved = await saveDocument(docId, buildPayload());
+      const changes = api.serializeRegionChanges?.() ?? null;
+      const creating = !docId;
+      const payload = !changes || creating || changes.full
+        ? buildPayload(changes?.full ?? null)
+        : { ...buildDocumentFields(), regionsDelta: { changed: changes.changed, count: changes.count, removed: changes.removed } };
+      let saved = await saveDocument(docId, payload);
+      if (saved?.needsFullRegions) {
+        console.warn("[editor] the store could not apply the map difference; writing the whole map:", saved.needsFullRegions);
+        api.forgetSavedRegions?.();
+        saved = await saveDocument(saved.id ?? docId, buildPayload());
+      }
       if (!docId) setDocId(saved.id);
+      changes?.commit?.();
       d.setSaveStatus("saved");
     } catch (e) {
       console.warn("[editor] save failed:", e);
@@ -530,6 +558,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
+    // Keeps the city set the map's own even if the author empties it here.
+    if (initialMap.customCities) base.metadata.citiesAuthored = true;
     base.features = (initialMap.cities?.features || [])
       .map((f) => ({
         id: newId("feat"),
@@ -770,8 +800,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
                   alignItems: "center",
                   justifyContent: "center",
                   gap: isMobile ? 0 : 6,
-                  background: scenarioAction ? "rgba(59,130,246,0.35)" : "rgba(59,130,246,0.85)",
-                  border: "1px solid rgba(147,197,253,0.5)",
+                  background: scenarioAction ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.14)",
+                  border: "1px solid rgba(255,255,255,0.23)",
                   opacity: scenarioAction || !hydrated ? 0.8 : 1,
                 }}
               >

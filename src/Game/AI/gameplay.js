@@ -1,6 +1,8 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
+import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
+import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
@@ -16,6 +18,19 @@ import {
 } from "../../runtime/applicationReceipt.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
+import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import {
+  buildPlayerFocusDirective,
+  collectPlayerMaterial,
+  combinedShares,
+  createPlayerEventTest,
+  createSpareTest,
+  normalizePlayerFocus,
+  playerFocusShortfall,
+  settleOrders,
+  slipPassedMilestones,
+  trimWorldForFocus,
+} from "./playerFocus.js";
 import { expandWholeCountryTransfer, wholeCountrySourceToken } from "./territoryTransferScope.js";
 import {
   detectExplicitBaseTerritoryScope,
@@ -91,7 +106,7 @@ import {
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -170,6 +185,8 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
+  confirmResolvedDeployments,
+  linkStructuresToProjects,
   enforceUnitVolume,
   readInterceptsState,
   writeInterceptsState,
@@ -177,6 +194,7 @@ import {
   normalizeEventEntry,
   normalizeActions,
   normalizeChatEntry,
+  chargeRefusals,
   normalizeChats,
   normalizeEvents,
   normalizeGameData,
@@ -219,6 +237,11 @@ import {
 import {
   DIPLOMATIC_LEDGER_VERSION,
   applyDiplomaticUpdates,
+  applyPuppetUpdates,
+  bindPuppetUpdatesToEvents,
+  revealPuppetsToSpies,
+  puppetUpdatesFromCanonical,
+  decodePuppetUpdates,
   bindAgreementUpdatesToEvents,
   bindRelationUpdatesToEvents,
   buildBoundedDiplomaticContext,
@@ -265,7 +288,7 @@ import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
@@ -292,7 +315,8 @@ import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPh
 import { createStreamedEventReader } from "./streamedEvents.js";
 import { deliveryEventId, documentExchange, documentNote, documentNotices, isDocumentExchange, markIntercepted, planReportDeliveries, withoutOrphanedDocuments, withoutOrphanedNotices } from "../../runtime/reportDelivery.js";
 import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.js";
-import { canRewindCatalystTo, isSceneInProgress, openCatalyst, recordCatalystBeat, rewindCatalyst } from "./catalystRewind.js";
+import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
+import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import {
@@ -610,6 +634,19 @@ Hard rules:
 
 const buildDiplomaticLedgerDirective = (variables) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
+  // A scenario may switch subordination off entirely (server/gameFeatures.js).
+  // The simulator is then never told the contract exists, which is what stops it
+  // quietly making one country another's puppet: the ledger would refuse the
+  // line anyway, and a model told to emit one it cannot have is a model writing
+  // events the world never records.
+  const puppetStates = isActiveFeatureEnabled("puppetStates");
+  const puppetContract = puppetStates ? `- puppetUpdates is compact text, one record per line, for a SUBORDINATION - one polity directing another's will while it remains a separate country holding its own territory and its own sovereignty:
+  op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note
+  ops: install (create) | reclassify (change kind) | loyalty (move the score) | reveal (covert becomes open, permanently) | release (the overlord lets go) | annex (absorbed) | revolt (thrown off) | suppress (a rising CRUSHED - the overlord holds on, loyalty is forced up at gunpoint, and the overlord's reputation should fall with it). kind is one of protectorate (keeps internal rule, surrenders foreign policy) | satellite (keeps formal sovereignty, loses real independence) | client (bought or installed government); it states WHICH POWERS the overlord holds, not how tightly, so use reclassify rather than treating the three as a scale. loyalty is 0-100, how far the puppet accepts direction - move it when the period earned it, never merely because time passed. secrecy is open (the arrangement is publicly known, as a signed protectorate is) or covert (only the two parties know). Only install needs kind/loyalty/secrecy; the rest may leave them blank.
+  A puppet may hold no puppets of its own: installing one over a polity that already has them moves those to the new overlord automatically. A polity has at most one overlord, and reveal cannot be undone.
+  Coup model: a puppet whose loyalty has collapsed has a hidden storyline building against it, and YOU decide whether and when that breaks. A rising may succeed (emit revolt) or be put down (emit suppress); either is a real outcome and neither is owed to the player. Before it breaks, unrest should be VISIBLE to an overlord who has the means to see it - if the overlord has an agent inside the puppet or a strong intelligence service, return a timeline event reporting the unrest, so the warning is bought rather than given. A puppet at high loyalty does not revolt.
+  Puppet decision model: a Puppet is a SEPARATE COUNTRY with its own interests, not a possession. It may refuse what its overlord demands, and loyalty is the prior for how likely that is, never a veto. Annexing one's own Puppet meets far less resistance than conquering a foreign power, and a Puppet at high loyalty may accept absorption outright - and the standing it costs the overlord is applied for you - do not emit a polityChanges reputation drop for it as well, or it is paid twice. Likewise a puppet REFUSING its overlord's demand in conversation is charged its loyalty cost for you, once, by the engine: narrate what follows from the refusal as you see fit, but do not also emit a loyalty line for the refusal itself, or it is paid twice. Move loyalty for everything else the period brought. A covert Puppet must speak and act as a fully independent country toward anyone not party to the arrangement.
+` : "";
   const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
   // The Native World Director context (jump tasks) already carries this slice —
   // its CANONICAL DIPLOMATIC STATE section, built from the same ledger for the
@@ -634,13 +671,20 @@ Relation decision model: a canonical bilateral relation score/status is persiste
 - agreementUpdates is compact text, one record per line:
   agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms
   ops: start | update | suspend | resume | end | expire. type is one of alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other. Use a stable, descriptive agreementId (e.g. franco-russian-alliance-1894) and reuse it for later lifecycle records; every record needs a real causal event in this response, and only start needs the full type/parties/title.
-- Return relationUpdates:"" and agreementUpdates:"" when nothing material changes.`;
+${puppetContract}- Return relationUpdates:"" and agreementUpdates:""${puppetStates ? ' and puppetUpdates:""' : ""} when nothing material changes.`;
 };
 
 const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
 Treat the canonical bilateral relation score/status as a strong prior for diplomatic tone and willingness to initiate contact. Friendly relations make reassurance, congratulations, candid consultation, alliance follow-up and commercial feelers more plausible; strained or hostile relations make protests, warnings, guarded clarification, counter-balancing or silence more plausible. This is not a hard threshold: current interests and events still decide whether anybody has a real reason to write.`;
 
 const buildPregameBootstrapDirective = (variables) => {
+  // With the system off, round zero may not seed a subordination either: a
+  // scenario cloned with the feature switched off must not start with puppets
+  // the rest of the game cannot see, change or end.
+  const puppetStatesBootstrapKind = isActiveFeatureEnabled("puppetStates")
+    ? `- puppet:open | puppet:covert: polities=[overlord, puppet], category (puppet kind: protectorate | satellite | client - which powers the overlord holds, not how tightly), score (the puppet's loyalty to its overlord, 0-100), detail (how it came about). A polity whose will another directs while it remains a separate country, holding its own territory - a Slovakia under Germany, a Manchukuo under Japan. open if the world knows of it; covert only if it is genuinely secret. One overlord per puppet, and a puppet holds no puppets of its own. Only arrangements standing on the start date.
+`
+    : "";
   const roundOneDate =
     normalizeString(variables?.pregameStartDate) ||
     normalizeString(variables?.dateReadable) ||
@@ -664,7 +708,7 @@ Kinds:
 - storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
 - war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
 - agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
-Never output relation status or event indexes/ids; the engine owns those.
+${puppetStatesBootstrapKind}Never output relation status or event indexes/ids; the engine owns those.
 
 ROUND-ZERO AUDIT
 - Every war still live at Round 1 must be represented.
@@ -769,7 +813,12 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
     }
   }
 
-  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates };
+  // Subordinations already standing on the start date (puppet:open / puppet:covert).
+  const puppetUpdates = isActiveFeatureEnabled("puppetStates")
+    ? puppetUpdatesFromCanonical(candidate.canonicalUpdates)
+    : [];
+
+  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates, puppetUpdates };
   delete expanded.canonicalUpdates;
   return expanded;
 };
@@ -919,6 +968,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
   const boundEvents = normalizeArray(candidate.events);
   candidate.warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(candidate.warUpdates), boundEvents);
   candidate.relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(candidate.relationUpdates), boundEvents);
+  candidate.puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), boundEvents);
   candidate.agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(candidate.agreementUpdates), boundEvents);
   return "";
 };
@@ -1059,6 +1109,7 @@ const screenSegmentPayload = (payload, {
   delete payload.boardProvisionalEventIds;
   payload.warUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.warUpdates, taggedEvents, screened.events);
   payload.relationUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.relationUpdates, taggedEvents, screened.events);
+  payload.puppetUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.puppetUpdates, taggedEvents, screened.events);
   payload.agreementUpdates = filterBoundLedgerUpdatesToKeptEvents(payload?.agreementUpdates, taggedEvents, screened.events);
   payload.storylineUpdates = filterStorylineUpdatesAfterIntegrityScreen({
     updates: decodedStorylineUpdates,
@@ -1095,6 +1146,13 @@ const selectBreadthRepairContext = (state, context) => {
   };
 };
 
+// The map's regions, for the one question a subordination needs of them: does
+// the would-be Puppet still hold land (landedPolityCheck). Loaded only when
+// there is a subordination to check.
+const regionCatalogForPuppets = async (puppetUpdates, world) => (normalizeArray(puppetUpdates).length
+  ? filterToRenderedRegions(await loadRegionCatalog().catch(() => []), world)
+  : []);
+
 // The world a later segment is validated against and shown: the base world plus
 // the war, diplomacy and storyline records of the segments already in hand. No impacts are
 // applied here - the round's events are applied once, at the end.
@@ -1111,6 +1169,8 @@ const advanceLedgerWorld = (world, payload, { stopDate = "", round = 0 } = {}) =
     world: warMerge.world,
     relationUpdates: normalizeArray(payload?.relationUpdates),
     agreementUpdates: normalizeArray(payload?.agreementUpdates),
+    puppetUpdates: normalizeArray(payload?.puppetUpdates),
+    puppetStates: isActiveFeatureEnabled("puppetStates"),
     events,
     stopDate,
     round,
@@ -1652,6 +1712,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       playerPolity: normalizeString(bundle?.game?.country),
       focusActors,
       maxActors: 8,
+      puppetStates: isActiveFeatureEnabled("puppetStates"),
     }).text;
   }
   if (wants("territorialControlContext")) {
@@ -1723,10 +1784,10 @@ const taskIdleTimeoutMs = () =>
   (getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
 // Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
-// diplomacy reading, catalysts their own, everything else the simulation one.
+// diplomacy reading, interactive events their own, everything else the simulation one.
 const difficultyScopeForTask = (taskKey) => {
   if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) return "diplomacy";
-  if (String(taskKey || "").startsWith("catalyst")) return "catalyst";
+  if (String(taskKey || "").startsWith("interactive")) return "interactive";
   return "simulation";
 };
 
@@ -1994,6 +2055,28 @@ const buildPlacementGazetteer = (context, world) => {
     return close ? { kind: "city", name: close.name, point: close.coordinates } : null;
   };
 
+  // A region by its id, for an operation that gives `regionId` and no phrase.
+  const findRegionId = (id) => {
+    const key = normalizeString(id);
+    if (!key) return null;
+    const row = withGeometry.find((candidate) => normalizeString(candidate.id) === key);
+    return row ? asRegion(row) : null;
+  };
+
+  // What a phrase ALMOST matched, for the receipt. The usual dead end is a name
+  // that fits several regions at once — "Falkland Islands" over East and West
+  // Falkland Islands — which matchRegionName refuses on purpose rather than pick
+  // one of them. Refusing is right; leaving the model to guess again is not, so
+  // the receipt names them and it can write one exactly next turn.
+  const suggest = (phrase) => {
+    const key = fold(phrase);
+    if (key.length < 4) return [];
+    return withGeometry
+      .filter((row) => fold(row.name).includes(key) || key.includes(fold(row.name)))
+      .slice(0, 4)
+      .map((row) => row.name);
+  };
+
   const regionAt = (point) => {
     const row = withGeometry.find((candidate) => point[0] >= candidate.bbox[0] && point[0] <= candidate.bbox[2]
       && point[1] >= candidate.bbox[1] && point[1] <= candidate.bbox[3]
@@ -2015,16 +2098,17 @@ const buildPlacementGazetteer = (context, world) => {
     const ashore = nearestInteriorPoint(best.geometry, point);
     return ashore ? { point: ashore, region: asRegion(best) } : null;
   };
-  return { find, regionAt, nearestLand };
+  return { find, findRegionId, suggest, regionAt, nearestLand };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 
-// Every `at` in a list of containers ({ event, impacts, path }) becomes
-// coordinates, and every newly placed thing is spaced off the rest. Mutates the
-// operations in place, like the region resolvers beside it. `receipt` hears what
-// could not be placed; an operation that then has no coordinates at all is left
-// for the normalizer to drop, exactly as one that never had any.
+// Every `at` — or, failing that, every `regionId` — in a list of containers
+// ({ event, impacts, path }) becomes coordinates, and every newly placed thing is
+// spaced off the rest. Mutates the operations in place, like the region resolvers
+// beside it. `receipt` hears what could not be placed; an operation that then has
+// no coordinates at all is left for the normalizer to drop, exactly as one that
+// never had any.
 const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
@@ -2034,9 +2118,9 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
       } else if (kind === "move") {
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2064,20 +2148,45 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
-    if (entry.phrase) {
-      const resolved = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name });
-      if (resolved.error) {
-        const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
-        noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
-          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${resolved.error}. `
-          + (hasCoordinates ? "Its coordinates were used instead." : "It was left off the map. Name a city, region, structure or unit as the map spells it."));
-        if (!hasCoordinates) continue;
-      } else {
-        target[lngKey] = resolved.lng;
-        target[latKey] = resolved.lat;
-        if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
-        placed += 1;
+    // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
+    // the region it belongs to is not. `regionId` is the fallback, and for an
+    // operation that gives only an id it is the whole answer. It used to be
+    // ignored, so such an operation was dropped for having no coordinates: the
+    // exact move a model reaches for after being told its `at` was not on the map.
+    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name }) : null;
+    const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
+      ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
+      : null;
+    const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    if (resolved) {
+      // A phrase that failed still gets said: the model wrote it, and next turn
+      // it should know which of the two the engine went with.
+      if (byPhrase?.error) {
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
+          + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
       }
+      target[lngKey] = resolved.lng;
+      target[latKey] = resolved.lat;
+      if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (byPhrase?.error || byRegion?.error) {
+      const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+          + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
+        : `could not be placed in region "${entry.regionId}" — ${byRegion.error}`;
+      // The commonest dead end is a name that fits several regions at once, which
+      // the matcher refuses rather than guess between. Naming them turns a turn
+      // wasted guessing again into one exact name.
+      const near = (byPhrase?.names ?? [entry.phrase])
+        .map((name) => gazetteer.suggest(name))
+        .find((hits) => hits.length) ?? [];
+      noteReceipt(receipt, hasCoordinates ? "adjusted" : "dropped",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}.`
+        + (near.length ? ` Did you mean ${near.map((name) => `"${name}"`).join(" or ")}?` : "")
+        + (hasCoordinates ? " Its coordinates were used instead." : " It was left off the map. Name a city, region, structure or unit as the map spells it."));
+      if (!hasCoordinates) continue;
     }
     delete target.at;
     let lng = Number(target[lngKey]); let lat = Number(target[latKey]);
@@ -2293,7 +2402,7 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // answers "ESP" gets canonicalised on ingest, but it also then reasons about "ESP"
   // and "Spain" as if they were two powers, so state the rule rather than only
   // repairing the output.
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Polity Names]\nEvery polity is identified ONLY by its full country name, exactly as written in the map description — "Spain", "United States", "Soviet Union". NEVER use a country code or abbreviation such as "ESP", "USA" or "SOV", anywhere, in any field. This applies to every owner field despite their names: toCode, fromCode, ownerCode and a polity's code all take the FULL NAME. A code is not a shorter way of writing a country here; it is a different, non-existent polity, and using one creates a phantom country on the map beside the real one. A renamed polity is listed under its new name with its former names as aliases: use the new name, and expect the old one only in history.`;
   }
 
@@ -2553,13 +2662,13 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // The unit director's runtime rules travel with the call so a campaign's
   // frozen prompt pack (which predates the task) still gets the current contract.
-  if (["unitDirector", "gameMaster", "idleDiplomacy", "catalystExecutor"].includes(taskKey)) {
+  if (["unitDirector", "structureDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
   }
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
     const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
-    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit when the event says that formation advances, withdraws, redeploys, mobilizes toward a front, or otherwise changes position, and set its posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting. A conscription law, mobilization order, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n3. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again.\n4. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n5. Do not invent military activity for diplomatic, political or economic events. It is valid to return no ops for an event.\n6. Never change territory. The territory layer is separate.\n7. Use only supplied existing unit ids. Keep movement local and plausible for the era.\n\nReturn exactly the required tool payload.`;
+    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. CURRENT PERSISTENT UNITS is authoritative; do not spend lookup rounds rediscovering units or powers that are already supplied here. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit whenever the event establishes that formation at a materially different place: advances, marches, crosses, enters, reaches, arrives, embarks, sails, retreats, redeploys, establishes a camp/encampment, or fights at a named battlefield away from its current position. Set posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting.\n3. EXPLICIT RELOCATION IS NOT OPTIONAL. If a supplied event clearly says an identifiable existing formation changed location, return a move for that unit. Use the event's destination wording in 'at' (for example 'Etruria', 'toward Rome', 'Apulia') and let the native placement/unit engine ground it and enforce travel speed. A destination may be far away: the engine advances long orders over time as standing orders, so do NOT omit a move merely because the objective is beyond one turn's travel.\n4. A conscription law, mobilization order with no field movement, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n5. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again. A warship or submarine commissioned or delivered into service, or a squadron, air wing or task group formed or stood up, IS a new formation: spawn it for the power that commissioned it, at its home port or base, even when that power already has units. Laying down hulls, ordering ships or funding a programme is not.\n6. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n7. Do not invent military activity for diplomatic, political or economic events. Return no ops only when the event truly leaves every supplied persistent unit materially unchanged.\n8. Never change territory. The territory layer is separate.\n9. Use only supplied existing unit ids. Prefer 'at' to coordinates; copy the event's named destination instead of guessing longitude/latitude.\n\nReturn exactly the required tool payload.`;
   }
 
   // GM territorial semantics: regionTransfers move LEGAL sovereignty, regionControlOps
@@ -2569,7 +2678,7 @@ So use the wider picture to choose the sender and the moment — never to give t
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
   }
 
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
       systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
@@ -2578,7 +2687,7 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // Espionage's counterpart to the reputation block above. Without it the rating
   // is invisible to the model and therefore frozen for the whole campaign.
-  if (["actions", "jumpForward", "autoJumpForward", "catalystCreation", "catalystExecutor"].includes(taskKey)) {
+  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const intelligenceContext = normalizeString(variables.playerPolityIntelligenceContext);
     if (intelligenceContext) {
       systemPrompt = `${systemPrompt}\n\n[Intelligence Services]\n${intelligenceContext}\nThis rating is how much of other polities' private diplomacy a service can read and how well it protects its own, and it moves the same way international reputation does. When this turn's events actually change what a service is capable of, record the new ABSOLUTE value (an integer 0-100) in an "intelligence" field on that polity's impacts.polityChanges entry. Concrete investment the player has ordered and that this turn actually delivers raises it a few points at a time — a training academy opening its doors, a new bureau or directorate standing up, a funding increase taking effect, a recruitment or codebreaking programme bearing fruit; a purge, a mass defection, a network rolled up by a rival, or deep cuts lower it. An intention is not a capability: do not move it for an order that has only just been given, do not restate it when nothing changed, and do not jump it by tens of points for a single measure.`;
@@ -2748,10 +2857,25 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   }
 
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const directionDirective = buildWorldDirectionDirective(getActiveWorldDirection(), {
-      playerPolity: normalizeString(variables?.playerPolity),
-      spanDays: computeSimulatedDays(variables) || 30,
-    });
+    // The player's focus (playerFocus.js), then the author's direction. Both are
+    // appended here rather than rendered into the template, so a campaign's own
+    // edited guidance can neither remove them nor starve them of room. Where the
+    // two shares together ask for more than the whole period, the world's share
+    // is the one that gives way (docs/adr/0003).
+    const focusDirective = normalizeString(variables?.playerFocusDirective);
+    if (focusDirective) systemPrompt = `${systemPrompt}\n\n${focusDirective}`;
+    const direction = getActiveWorldDirection();
+    // The world's share as the focus left it (the segment works both out together).
+    const worldShare = Number.isFinite(Number(variables?.playerFocusWorldShare))
+      ? Number(variables.playerFocusWorldShare)
+      : direction?.worldShare;
+    const directionDirective = buildWorldDirectionDirective(
+      direction ? { ...direction, worldShare } : direction,
+      {
+        playerPolity: normalizeString(variables?.playerPolity),
+        spanDays: computeSimulatedDays(variables) || 30,
+      },
+    );
     if (directionDirective) systemPrompt = `${systemPrompt}\n\n${directionDirective}`;
   }
 
@@ -2781,12 +2905,13 @@ const GM_REMINDER_TASKS = new Set([
   "timelineCurator",
   "unitDirector",
   "territoryDirector",
+  "structureDirector",
   "projects",
   "gameMaster",
   "actions",
   "idleDiplomacy",
-  "catalystCreation",
-  "catalystExecutor",
+  "interactiveCreation",
+  "interactiveExecutor",
   "spyIntercept",
   "chatActions",
 ]);
@@ -3130,7 +3255,7 @@ const runJsonTask = async (taskKey, {
       // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
       // envelope, a singular event, synonym keys, doubled impacts wrappers —
       // rewritten to the canonical shape before the schema sees them.
-      // It also drops the `catalyst` a time skip no longer proposes.
+      // It also drops the `interactive event` a time skip no longer proposes.
       parsed = normalizeGameplayPayload(taskKey, parsed);
       // Same idea for markerOps. The engine has always accepted `found`/`destroy`
       // as aliases and a build written flat, but the schema only ever allowed the
@@ -3647,7 +3772,7 @@ const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], r
     ...jumpTaskOptions(requests, "review"),
     userMessage:
       `These events have just been simulated. Move the board to match them, and return `
-      + `{"projectOps":[]} if nothing on it genuinely moved.${hiddenNote}\n\n${eventList}${doubtBlock}`,
+      + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${hiddenNote}\n\n${eventList}${doubtBlock}`,
     variables,
     // No fallback: an empty board is exactly what a failed call should leave
     // behind, and runJsonTask throwing is what lets the caller tell the player
@@ -3933,7 +4058,7 @@ const mergePolityCatalog = (countryCatalog, world) => {
 // ---- Simulation busy lock ---------------------------------------------------
 // The idle diplomacy drip (maybeSendIdleDiplomacy below) must never run - and
 // above all never WRITE chat state - while a jump, game-master command, or
-// catalyst stage is in flight: those read the full state bundle at entry and
+// interactive event stage is in flight: those read the full state bundle at entry and
 // write it all back at the end, so a concurrent chat write would be silently
 // clobbered (or worse, interleave with the rollback snapshot). Every simulation
 // entry point wraps itself in beginSimulation/endSimulation; the drip checks
@@ -6311,7 +6436,8 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
     });
   }
 
-  // No scene: a time skip no longer proposes one (Catalyst mode starts them).
+  // No scene: a time skip no longer writes one (a skip offers an interactive
+  // event instead, runtime/interactiveOffer.js).
   return {
     clearActions: true,
     events,
@@ -6389,7 +6515,7 @@ export const loadRollbackSnapshots = async () => {
 // snapshot.
 //
 // Wrapped in the same beginSimulation/endSimulation busy-lock every jump,
-// game-master and catalyst call already uses — without it, the idle pulse (on
+// game-master and interactive event call already uses — without it, the idle pulse (on
 // its own real-time timer) could read chat.json mid-rollback, then write its own
 // read-modify-write back AFTER this function's restore, resurrecting the
 // pre-rollback chat history with its own new note landed on top.
@@ -6581,6 +6707,8 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
       ...(reaction ? { reactions: { [recipient.name]: { emoji: reaction, code: recipient.code || "" } } } : {}),
     };
     const leaderMessage = {
+      // Set here so a demand this reply makes can be attached to it.
+      id: mintDemandId("msg"),
       role: "leader", speaker: recipient.name, code: recipient.code || "", text: reply, time: gameDate,
       ...(memorySummary ? { memorySummary } : {}),
     };
@@ -6594,10 +6722,30 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
     });
     if (!built) throw new Error("Could not build the message.");
 
-    const nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
+    let nextChats = foldGeneratedChatsIntoStorage(chats, [built], {});
     await writeChatsState(nextChats);
 
-    const finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+    let finalChat = nextChats.find((chat) => chatParticipantKey(chat.countries) === recipientKey);
+
+    // The advisor's send button is a one-on-one exchange like the panel's, so a
+    // reply here can make, answer or settle a demand too (runtime/demandCheck.js).
+    // checkDemandReply returns at once, without a request, anywhere but the
+    // thread between the player and their own Overlord or Puppet.
+    const demandEvents = finalChat
+      ? await checkDemandReply({ chat: finalChat, speaker: recipient.name, reply, answering: trimmedText, messageId: leaderMessage.id, time: gameDate })
+        .catch(() => [])
+      : [];
+    if (demandEvents.length) {
+      const logged = normalizeChats([{
+        ...finalChat,
+        events: [...(finalChat.events?.length ? finalChat.events : eventsFromLegacyChat(finalChat)), ...demandEvents],
+      }])[0];
+      if (logged) {
+        nextChats = nextChats.map((chat) => (chat === finalChat ? logged : chat));
+        await writeChatsState(nextChats);
+        finalChat = logged;
+      }
+    }
     return { chat: finalChat, reply };
   } finally {
     endSimulation();
@@ -6613,7 +6761,7 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
 // Everything the board could need is settled by then and nothing is written yet,
 // so a failure still means "nothing happened" and the turn can be held and
 // retried. Callers that own the board through their own impacts
-// (applyGameMasterCommand) or have no board story (advanceActiveCatalyst)
+// (applyGameMasterCommand) or have no board story (advanceActiveInteractive)
 // simply omit it and are unchanged.
 // Ledger records reference the events that caused them by id. When a
 // post-processor drops an event, every record bound only to it is dropped too;
@@ -6653,7 +6801,7 @@ const applySimulationResult = async ({
   baseWorld,
   result,
 }) => {
-  // Only a jump keeps one: a resolved catalyst comes through here too, and it is
+  // Only a jump keeps one: a resolved interactive event comes through here too, and it is
   // not an answer the simulator will be asked to build on. Every call below is a
   // no-op on null. A copy, because a turn held on its projects pass runs this
   // function a second time with the same arguments, and the tally must not count
@@ -6716,6 +6864,17 @@ const applySimulationResult = async ({
   // canon, and deterministic gates (hard mechanical consequences, retrieved
   // prior matches, saturation) decide what those judgments may remove. The
   // default is KEEP, and any failure of the analysis keeps everything.
+  // What the player has going on this period (playerFocus.js): the events that
+  // answer one of their orders or a Project date due now are spared by the
+  // filler gates below, because removing one leaves the order or the milestone
+  // with nothing on the timeline to show for it.
+  const applyFocus = await readPlayerFocusContext({ game: baseGame, world: baseWorld });
+  const focusMaterial = playerMaterialFor(
+    { actions: baseActions, chats: baseChats, events: baseEvents, world: baseWorld },
+    applyFocus,
+    { originDate: baseGame.gameDate, targetDate: normalizeString(result.stopDate) || baseGame.gameDate },
+  );
+  const spareForFocus = createSpareTest(focusMaterial);
   const mainCuration = await curateGeneratedEventsWithHidden({
     events: dedupedEvents,
     priorEvents,
@@ -6724,6 +6883,7 @@ const applySimulationResult = async ({
     actions: baseActions,
     mode: result.mode,
     analyzeBatch: curatorAnalyzeBatch,
+    isSparedFromFiller: spareForFocus,
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
@@ -6772,6 +6932,7 @@ const applySimulationResult = async ({
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
+      isSparedFromFiller: spareForFocus,
       events: repairScreened.events,
       priorEvents: [...priorEvents, ...curatedEvents],
       game: baseGame,
@@ -6809,6 +6970,7 @@ const applySimulationResult = async ({
   const keptWarUpdates = filterBoundLedgerUpdatesToKeptEvents(result.warUpdates, dedupedEvents, curatedEvents);
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
+  const keptPuppetUpdates = filterBoundLedgerUpdatesToKeptEvents(result.puppetUpdates, dedupedEvents, curatedEvents);
   const keptStorylineUpdates = filterBoundLedgerUpdatesToKeptEvents(result.storylineUpdates, dedupedEvents, curatedEvents);
 
   // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
@@ -6824,6 +6986,7 @@ const applySimulationResult = async ({
   const warUpdates = remapLedgerEventIds(normalizeArray(keptWarUpdates), canonicalEventIdentity.idMap);
   const relationUpdates = remapLedgerEventIds(normalizeArray(keptRelationUpdates), canonicalEventIdentity.idMap);
   const agreementUpdates = remapLedgerEventIds(normalizeArray(keptAgreementUpdates), canonicalEventIdentity.idMap);
+  const puppetUpdates = remapLedgerEventIds(normalizeArray(keptPuppetUpdates), canonicalEventIdentity.idMap);
   const storylineUpdates = remapLedgerEventIds(normalizeArray(keptStorylineUpdates), canonicalEventIdentity.idMap);
   let nextGame = normalizeGameData({
     ...baseGame,
@@ -6831,10 +6994,28 @@ const applySimulationResult = async ({
     round: (baseGame.round || 1) + 1,
   });
   const plannedActionSnapshot = normalizeActions(baseActions).filter((action) => action.status === "planned");
-  let nextActions = normalizeActions(baseActions).map((action) => ({
-    ...action,
-    status: action.status === "planned" && result.clearActions ? "resolved" : action.status,
-  }));
+  // An order is resolved by the event that answered it, not by the turn having
+  // run (AI/playerFocus.js settleOrders). One the skip passed over stays queued
+  // and is marked overdue, so the next skip is told to answer it first — the
+  // whole queue used to be cleared either way, and an ignored order simply
+  // vanished. Only when the skip resolved the queue at all: a scene or a check
+  // that leaves the orders planned has not answered them.
+  let nextActions = result.clearActions
+    ? settleOrders(normalizeActions(baseActions), freshEvents)
+    : normalizeActions(baseActions);
+  // An order the skip narrated but never CITED stays queued, because nothing in
+  // the answer says it was carried out. The model is told at the top of its next
+  // turn, where the same orders are listed as overdue — a model that forgets
+  // actionIds once should not leave a player's queue growing quietly.
+  const carriedOrders = nextActions.filter((action) => action.status === "planned" && action.overdue === true).length;
+  if (carriedOrders) {
+    noteReceipt(
+      receipt,
+      "short",
+      `${carriedOrders} of the player's queued order${carriedOrders === 1 ? " was" : "s were"} left without an outcome and ${carriedOrders === 1 ? "is" : "are"} carried over as overdue. `
+        + "Answer each of them this period, in an event that lists that order's id in actionIds — an event that tells the story without naming the id does not resolve it.",
+    );
+  }
   let nextChats = [...normalizeChats(baseChats)];
   // Chats this turn CREATED, kept apart from the pre-turn snapshot. A turn takes a
   // while to generate and the player can edit the chat list while it runs, so the
@@ -6857,14 +7038,15 @@ const applySimulationResult = async ({
     motion: { originDate: baseGame.gameDate, round: nextGame.round, tick: 0 },
     world: {
       ...baseWorld,
-      activeCatalyst: result.catalyst ?? null,
+      // Whatever comes through here ends a scene: a skip is refused while one is
+      // in progress and clears a leftover one, and a scene resolving is this.
+      activeInteractive: null,
       actionSuggestions: [],
       lastJumpMode: normalizeString(result.mode),
       lastJumpSummary: normalizeString(result.summary),
       lastJumpTargetDate: nextGame.gameDate,
       simulationHistory: [
         {
-          catalyst: result.catalyst ? cloneValue(result.catalyst) : null,
           date: nextGame.gameDate,
           eventIds: freshEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
@@ -6951,8 +7133,12 @@ const applySimulationResult = async ({
   // advancing them again here would move them twice for the same elapsed time.
   const movedThisTurn = freshEvents.flatMap((event) =>
     normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  // A deployment the player asked for and this skip resolved without removing
+  // it has been accepted (gameState.js confirmResolvedDeployments). Only when the
+  // skip resolved the planned actions: a scene or a check that leaves them
+  // planned has not answered the request yet.
   let worldWithImpacts = enforceUnitVolume(
-    advanceStandingOrders(
+    confirmResolvedDeployments(advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
       // were issued, which would leave every dormant patrol already expired.
       // Give them the rest of their life from here before advancing anything.
@@ -6966,7 +7152,7 @@ const applySimulationResult = async ({
         round: nextGame.round,
         skipUnitIds: movedThisTurn,
       },
-    ),
+    ), result.clearActions ? plannedActionSnapshot : []),
     { playerCode: baseGame.country },
   );
 
@@ -7084,19 +7270,50 @@ const applySimulationResult = async ({
     });
   });
 
+  // THE ONE DETERMINISTIC LOYALTY RULE: a demand the Puppet REFUSED costs a
+  // fixed amount, once. A demand is a record in its thread's log
+  // (chatThreads.js), answered from the demand card by the player or read off
+  // an AI's reply by the demandCheck task (runtime/demandCheck.js). Collected
+  // here, off the saved threads, rather than charged when it happened, because a
+  // world write from the chat panel would race the turn's. chargeRefusals owns
+  // the rest — once per refused demand, recorded in world.chargedRefusals where
+  // no chat writer can erase it — and is where it can be tested.
+  // With the system off nothing is collected and nothing is marked charged: a
+  // game that switches back on has not silently spent the refusals it made
+  // while the feature was away.
+  const puppetStates = isActiveFeatureEnabled("puppetStates");
+  const refusalCharge = puppetStates
+    ? chargeRefusals(nextChats, worldWithImpacts.chargedRefusals)
+    : { refusedDemands: [], charged: worldWithImpacts.chargedRefusals };
+  const refusedDemands = refusalCharge.refusedDemands;
+  worldWithImpacts = { ...worldWithImpacts, chargedRefusals: refusalCharge.charged };
+
   const diplomaticMerge = applyDiplomaticUpdates({
     world: worldWithImpacts,
     relationUpdates: [...relationUpdates, ...espionageRelationUpdates],
     agreementUpdates,
+    puppetUpdates,
+    refusedDemands,
+    puppetStates,
+    regionCatalog: await regionCatalogForPuppets(puppetUpdates, worldWithImpacts),
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
   });
-  worldWithImpacts = diplomaticMerge.world;
+  // Agents report on the ledger as this turn left it: an arrangement installed
+  // or ended this turn is what an agent inside either party now sees. After the
+  // merge, and after espionage has decided which agents are still in place.
+  worldWithImpacts = puppetStates
+    ? revealPuppetsToSpies(diplomaticMerge.world, nextGame.gameDate)
+    : diplomaticMerge.world;
   // Storylines last: they read the wars and relations as this turn left them.
+  // A Puppet whose Loyalty has collapsed is handed a hidden Storyline by the
+  // engine, not the model — a turn that forgot to open one would mean a decade
+  // of mistreatment silently never happened. The director decides WHEN anything
+  // comes of it, exactly as for every other ongoing situation.
   const storylineMerge = applyWorldStorylineUpdates({
     world: worldWithImpacts,
-    updates: normalizeArray(storylineUpdates),
+    updates: [...normalizeArray(storylineUpdates), ...normalizeArray(diplomaticMerge.puppetStorylineSeeds)],
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
@@ -7257,7 +7474,8 @@ const applySimulationResult = async ({
       // player sees after this write is the one the model moved. Only the project
       // ops are replayed: the events' other impacts were applied when the world
       // was first impacted, and must not run twice. A Hidden event's carrier is
-      // never stamped into an entry's activity, which lists timeline events only.
+      // never stamped into an entry's activity, which lists timeline events only;
+      // nor is a fallback, which names no event of its own (stampsActivity).
       //
       // A provisional event is judged on the Board itself, before and after its
       // OWN ops: if nothing changed materially, its claim was never recorded, so
@@ -7283,7 +7501,7 @@ const applySimulationResult = async ({
         const event = carrier.onTimeline ? freshEvents[carrier.eventIndex] : boardHiddenEvents[carrier.hiddenIndex];
         if (!event) continue;
         const before = worldWithImpacts;
-        const stamped = carrier.onTimeline && !unbackedIds.has(event.id);
+        const stamped = carrier.stampsActivity && !unbackedIds.has(event.id);
         let after = applyCarrier(before, carrier, event, { stamped });
         const changed = materiallyChangedEntryIds(before.projects, after.projects);
         if (carrier.onTimeline && !carrier.fallback && provisionalIndexes.has(carrier.eventIndex) && !changed.length) {
@@ -7329,6 +7547,19 @@ const applySimulationResult = async ({
     phases?.enter("applying");
   }
 
+  // The structures this turn built for a Project, linked to it now that both
+  // the map and the board are final (nativeStructureDirector.js).
+  worldWithImpacts = linkStructuresToProjects(worldWithImpacts, result.structureLinks);
+
+  // A milestone whose date this skip passed with nothing said about it is late,
+  // not still pending (playerFocus.js): the Board says so, and the next skip is
+  // asked to answer it. After the board pass, so a milestone the model reached
+  // or missed this turn keeps the outcome it was given.
+  const slippedProjects = slipPassedMilestones(normalizeArray(worldWithImpacts.projects), { date: nextGame.gameDate });
+  if (slippedProjects.some((project, index) => project !== normalizeArray(worldWithImpacts.projects)[index])) {
+    worldWithImpacts = { ...worldWithImpacts, projects: slippedProjects };
+  }
+
   // The documents that changed hands this turn, delivered to the player the way
   // a government receives them (runtime/reportDelivery.js): a letter into the
   // thread with its sender (below, with the other notes), a copy stolen by an
@@ -7347,6 +7578,27 @@ const applySimulationResult = async ({
   }
   if (reportDeliveries.length) {
     logDebugEvent("turn", `Documents delivered: ${reportDeliveries.map((delivery) => `"${delivery.report.title}" by ${delivery.channel}`).join("; ")}.`, undefined, { verbose: true });
+  }
+
+  // Now and then a time skip offers one of its events to be played out as an
+  // interactive event (runtime/interactiveOffer.js). Chosen here, where the
+  // turn's events are final, and at no cost: no request is made until the player
+  // takes it up. Every skip replaces the last skip's offer, taken up or not.
+  if (result.mode === "jump" || result.mode === "auto") {
+    const offer = chooseInteractiveOffer({
+      events: freshEvents,
+      round: nextGame.round,
+      lastOfferRound: baseWorld?.lastInteractiveOfferRound,
+    });
+    worldWithImpacts = {
+      ...worldWithImpacts,
+      interactiveOffer: offer,
+      ...(offer ? { lastInteractiveOfferRound: offer.round } : {}),
+    };
+    if (offer) {
+      const offered = freshEvents.find((event) => event.id === offer.eventId);
+      logDebugEvent("turn", `Interactive event offered: "${normalizeString(offered?.title) || offer.eventId}" can be played out as a scene.`);
+    }
   }
 
   let nextWorld = worldWithImpacts;
@@ -7548,7 +7800,7 @@ const applySimulationResult = async ({
   // The turn's new state is now persisted. Web-mode encrypted sync listens for this
   // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
   // where nothing listens. Firing here — the single choke point every turn type runs
-  // through (jump, auto-jump, catalyst, game-master) — means the sync's full scan
+  // through (jump, auto-jump, interactive event, game-master) — means the sync's full scan
   // sees the committed round.
   if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
 
@@ -7561,7 +7813,7 @@ const applySimulationResult = async ({
   // there when the player opens the Spy tab, but never allowed to fail the turn.
   // While requests are being saved the reports came with the turn review, in its
   // one request, and are only filed here; a turn with no review (a resolved
-  // catalyst, a game-master command) waits for the next skip's. Otherwise each
+  // interactive event, a game-master command) waits for the next skip's. Otherwise each
   // agent makes its own request, as before.
   if (review) await fileReviewedAgentReports(review);
   else if (!savingRequests()) await refreshSpyIntercepts();
@@ -7573,7 +7825,7 @@ const applySimulationResult = async ({
   // Snapshot the state we just replaced so it can be rolled back to (best-effort),
   // with what this turn applied beside it, in the order the reveal shows it, so
   // the player can stop the round part-way (Intervene). Only a time skip is
-  // worth stopping: a resolved catalyst or a game-master command is one moment.
+  // worth stopping: a resolved interactive event or a game-master command is one moment.
   await captureRollbackSnapshot({
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
@@ -7595,7 +7847,6 @@ const applySimulationResult = async ({
         storylineUpdates,
         stopDate: nextGame.gameDate,
         summary: result.summary,
-        catalyst: result.catalyst,
         outreach: result.outreach,
         clearActions: result.clearActions,
         mode: result.mode,
@@ -8130,7 +8381,7 @@ const runTargetedWorldMotionRepair = async ({
     `You are the TARGETED ENDOGENOUS MOTION REPAIR for OpenHistoria.\n\n` +
     `Repair EXACTLY ONE already-existing persistent storyline: ${storylineId}.\n` +
     `The normal whole-world pass remains the sole source of visible timeline events. ` +
-    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, catalysts, Stats edits, or any other ledger mutation. ` +
+    `You CANNOT create events, wars, relations, agreements, territory changes, units, chats, interactive events, Stats edits, or any other ledger mutation. ` +
     `Return exactly one semantic storyline object through the dedicated repair tool.\n\n` +
     `This storyline ${repairCause}. Decide what is true about THIS process at ${targetDate}. ` +
     `Do not merely paraphrase the old equilibrium. Numeric pressure/momentum changes must follow the returned state. ` +
@@ -8637,6 +8888,7 @@ const runWorldBreadthRepair = async ({
     focusActors: actorNames,
     selectedStorylines: [],
     maxActors: 8,
+    puppetStates: isActiveFeatureEnabled("puppetStates"),
   });
   const recentHistory = compactBreadthRepairHistory(bundle) || "No recent canonical events are available.";
   const currentStorylineTitles = normalizeArray(bundle?.world?.storylines)
@@ -8750,6 +9002,7 @@ const runWorldBreadthRepair = async ({
     }
 
     parsed.clearActions = false;
+    // The scene field skips used to fill (gameplaySchemas.js normalizeGameplayPayload).
     delete parsed.catalyst;
     parsed.diplomaticOutreach = [];
 
@@ -11733,6 +11986,23 @@ export const runChatActionBatch = async ({
     ? `${knowledgeBlocks.join("\n\n")}\n\nEach block above belongs to ONE polity. What is in another polity's block is not known to this one: write each leader from its own cables alone.`
     : "";
 
+  // What each AI participant's country knows of who directs whom
+  // (runtime/puppets.js) — the group twin of the one-on-one leader's briefing,
+  // held to the same discipline as the cables above: one block per polity, and a
+  // polity knows only its own. Without it a covert Puppet at the table does not
+  // know to present itself as independent, nor that the demand it is refusing
+  // came from its own Overlord, so it cannot mark the refusal either. The room is
+  // every AI participant and the player, who is exactly who a covert Puppet most
+  // needs to deceive.
+  const briefingWorld = normalizeWorldState(bundle.world);
+  const inTheRoom = [...aiParticipants, player];
+  const subordinationBlocks = aiParticipants
+    .map((speaker) => describePuppetBriefing(puppetBriefingFor(briefingWorld, speaker, { present: inTheRoom }), speaker))
+    .filter(Boolean);
+  const subordinationKnowledge = subordinationBlocks.length
+    ? `${subordinationBlocks.join('\n\n')}\n\nEach subordinations block belongs to ONE polity, like the cables. A polity may not reveal a covert arrangement it is party to to anyone its block lists as not knowing, and never knows another polity's covert arrangements unless its own block says so.`
+    : "";
+
   const openPolls = projected.polls.filter((poll) => poll.options.length);
   const pollText = openPolls.length
     ? `\n[Polls open in this conversation]\n${openPolls.map((poll) => (
@@ -11805,7 +12075,9 @@ export const runChatActionBatch = async ({
     chatParticipants: rosterText,
     chatHistory: transcript || "(nothing said yet)",
     CHAT_OPEN_POLLS: pollText,
-    CROSS_CHAT_KNOWLEDGE: crossChatKnowledge ? `\n${crossChatKnowledge}` : "",
+    CROSS_CHAT_KNOWLEDGE: [crossChatKnowledge, subordinationKnowledge].some(Boolean)
+      ? `\n${[crossChatKnowledge, subordinationKnowledge].filter(Boolean).join('\n\n')}`
+      : "",
     CHAT_ACTION_FEEDBACK: normalizeString(chat?.actionFeedback) ? `\n${chat.actionFeedback}` : "",
   };
 
@@ -11861,7 +12133,12 @@ export const runChatActionBatch = async ({
     knownPolities: known,
     messageIds: shownMessages.map((message) => message.id),
     polls: projected.polls,
-  }, { time: turnTime, disallowMembershipChanges: Boolean(stored.institutionId) });
+  }, {
+    time: turnTime,
+    disallowMembershipChanges: Boolean(stored.institutionId),
+    // So a second turn on the same game day cannot mint the first one's ids.
+    takenIds: events.map((event) => event?.id),
+  });
 
   const memorySummary = normalizeString(payload?.memorySummary);
   if (memorySummary) {
@@ -11984,6 +12261,53 @@ export const runPostTurnInstitutionBallots = async ({
   return { attempted: scheduledWork.length, deferred: Math.max(0, work.length - scheduledWork.length), applied, results };
 };
 
+// What an AI's reply does about a demand, in the one-on-one thread between the
+// player and their own Overlord or Puppet (runtime/demandCheck.js): the events to
+// append to the thread's log — a demand made, answered, or settled — or none.
+//
+// One small request, and only there: every other reply in the game is never
+// checked. Its answer is a REQUIRED choice from a fixed list, which is the whole
+// point — the optional hidden line it replaces was left off by a model that had
+// plainly understood the refusal. A failed request records nothing: no card, no
+// charge, never a guess.
+//
+// `answering` is the message the reply answers, so the check can tell a refusal
+// from a reply to something else. The caller appends what comes back.
+const mintDemandId = (prefix) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+
+export const checkDemandReply = async ({ chat, speaker, reply, answering = "", messageId = "", time = "", signal = null } = {}) => {
+  if (!isActiveFeatureEnabled("puppetStates")) return [];
+  const stored = normalizeChats([chat])[0];
+  if (!stored || !normalizeString(reply)) return [];
+  const [world, game] = await Promise.all([readWorldState({ force: true }), readGameData({ force: true })]);
+  const context = demandCheckContext({
+    world,
+    speaker,
+    playerCountry: normalizeString(game?.country),
+    participants: stored.countries,
+  });
+  if (!context) return [];
+  // A Puppet answers the demand in play, or thinks better of one it refused;
+  // an Overlord acts on whatever is on the table. A Puppet's reply matters only
+  // while there is something for it to answer; an Overlord's always might,
+  // since any reply of its may make a demand.
+  const openDemand = context.role === "puppet" ? answerableDemandOf(stored) : openDemandOf(stored);
+  if (context.role === "puppet" && !openDemand) return [];
+
+  const { payload } = await runJsonTask("demandCheck", {
+    fallback: () => ({ outcome: "none", summary: "" }),
+    signal,
+    userMessage: demandCheckPrompt({ context, reply, openDemand, answering, demands: stored.demands }),
+    variables: {},
+    requestKind: BACKGROUND_REQUEST,
+  });
+  const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId, demands: stored.demands });
+  logDebugEvent("diplomacy",
+    `Demand check on ${speaker}'s reply (${context.role}): ${normalizeString(payload?.outcome) || "none"}${events.length ? ` — ${events.map((event) => event.kind === "demand_made" ? "demand made" : `demand ${event.answer}`).join(", ")}` : ""}.`,
+    { outcome: payload?.outcome, summary: payload?.summary, openDemand: openDemand?.id ?? null });
+  return events;
+};
+
 export const chooseNextDiplomaticSpeaker = async ({
   chat,
   excludeSpeaker = "",
@@ -12056,22 +12380,29 @@ export const consolidateHistoryNow = async () => {
   }
 };
 
-// ---- Catalyst mode: a moment played out as a scene ---------------------------
+// ---- Interactive events: a moment played out as a scene ---------------------
 //
-// A scene exists only once the player enters Catalyst mode and starts one
-// (GameUI/catalyst.jsx); a time skip no longer proposes them. The player may say
-// what scene they want, or leave it to the simulation. Starting is one request,
-// each beat one more, and the end — the beats written into the record as one
-// event — one more. A step that fails changes nothing: the canned text a task
-// falls back on is not a scene anyone asked for, so it is reported instead.
+// The player does not ask for one. Now and then a time skip offers one of its
+// own events to be played out (runtime/interactiveOffer.js, chosen in
+// applySimulationResult); the event's card says so, and the player takes it up
+// (GameUI/interactive.jsx) or lets it pass. Taking it up is one request, each
+// beat one more, and the end — the beats written into the record as one event —
+// one more. A step that fails changes nothing: the canned text a task falls back
+// on is not a scene anyone asked for, so it is reported instead.
 
-// What the creation task is told about the scene it is to open.
-const sceneRequestDirective = (request) => (request
-  ? "[THE PLAYER'S REQUESTED SCENE — BINDING]\n"
-    + `${request}\n`
-    + "Build the scene on exactly this request. Establish only the facts needed to begin it. Do not widen it, escalate it, reinterpret it or resolve it in advance, and do not invent relationships, motives, arrivals or backstory to make it more dramatic. Keep any ambiguity the player left, and open as close to the requested moment as you can."
-  : "[CHOOSING THE SCENE]\n"
-    + "The player asked for no particular scene. Choose the strongest one the current state, the player's recent orders and the latest events make ready: a moment where a decision by the player's leader matters now. Do not build it on a person, object or detail merely because it appears somewhere in older history.");
+// What the creation task is told about the moment it is to open: the offered
+// event, and the player's angle on it when they gave one.
+const offeredSceneDirective = (event, angle) => [
+  "[THE MOMENT TO PLAY OUT — BINDING]",
+  `The player chose to play out this event from the latest time skip as an interactive event:`,
+  `Date: ${normalizeString(event.date) || "(undated)"}`,
+  `Event: ${normalizeString(event.title)}`,
+  normalizeString(event.description),
+  "Open the scene inside this event: its decisive moment if it is still unfolding, or the moment its consequences reach the player's leadership and they must answer, as close to the current date as the event allows. What the event reports has happened; build on it, do not retell it, contradict it or resolve what it leaves open. Establish only the facts needed to begin, and do not invent relationships, motives, arrivals or backstory to make it more dramatic.",
+  ...(angle
+    ? ["", "[THE PLAYER'S ANGLE — BINDING]", angle, "Build the scene around this within the event above. Do not widen it, escalate it or reinterpret it, and keep any ambiguity the player left."]
+    : []),
+].join("\n");
 
 const sceneStepFailed = (generation, what) => {
   if (generation?.source !== "fallback") return null;
@@ -12079,7 +12410,9 @@ const sceneStepFailed = (generation, what) => {
   return new Error(`${what} (${reason}). Nothing changed; try again.`);
 };
 
-export const createCatalyst = async ({ request = "", force = true } = {}) => {
+// Take up the interactive event the last time skip offered: the scene opens on
+// that event, with the player's angle when they gave one. The offer is spent.
+export const createInteractive = async ({ eventId = "", angle = "", force = true } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before starting a scene.");
   beginSimulation();
   try {
@@ -12087,76 +12420,93 @@ export const createCatalyst = async ({ request = "", force = true } = {}) => {
     // events a reveal has not shown them yet (runtime/unseenEvents.js).
     const bundle = await readSeenGameStateBundle({ force });
     if (bundle.unseen?.size) throw new Error("Finish revealing the last time skip before starting a scene.");
-    if (hasSceneInProgress(bundle.world)) throw new Error("A scene is already in progress: end it or set it aside first.");
-    const asked = normalizeString(request).slice(0, 1200);
+    if (hasSceneInProgress(bundle.world)) throw new Error("An interactive event is already in progress: end it or set it aside first.");
+    const offer = normalizeWorldState(bundle.world).interactiveOffer;
+    const event = offer && (!eventId || offer.eventId === normalizeString(eventId))
+      ? offeredEvent({ offer, events: bundle.events })
+      : null;
+    if (!event) throw new Error("That interactive event has passed.");
+    const asked = normalizeString(angle).slice(0, 1200);
     const variables = await buildTemplateVariables(bundle, { lookups: true });
-    const { generation, payload } = await runJsonTask("catalystCreation", {
+    const { generation, payload } = await runJsonTask("interactiveCreation", {
       lookups: buildTaskLookups(bundle),
       fallback: () => ({ choices: [], opening: "", premise: "", title: "" }),
-      userMessage: [sceneRequestDirective(asked), "Design the scene as JSON only."].join("\n\n"),
+      userMessage: [offeredSceneDirective(event, asked), "Design the scene as JSON only."].join("\n\n"),
       variables,
     });
     const failed = sceneStepFailed(generation, "The scene could not be written");
     if (failed) throw failed;
 
     // Opened with its first opening kept, so a beat can be taken back to the very
-    // start (catalystRewind.js); marked as the player's, which is what makes it a
+    // start (interactiveRewind.js); marked as the player's, which is what makes it a
     // scene in progress rather than a leftover.
-    const catalyst = {
-      ...openCatalyst({
+    const interactive = {
+      ...openInteractive({
         choices: normalizeArray(payload?.choices).map((entry) => normalizeString(entry)).filter(Boolean),
         opening: normalizeString(payload?.opening),
         premise: normalizeString(payload?.premise),
         title: normalizeString(payload?.title),
       }),
       origin: "player",
+      fromEventId: event.id,
       ...(asked ? { request: asked } : {}),
       startedOn: normalizeString(bundle.game?.gameDate),
     };
 
     const world = normalizeWorldState(await readWorldState({ force: true }));
-    await writeWorldState({ ...world, activeCatalyst: catalyst });
-    logDebugEvent("turn", `Catalyst mode: scene "${catalyst.title || "untitled"}" opened${asked ? " as the player asked" : ""}.`);
-    return catalyst;
+    await writeWorldState({ ...world, activeInteractive: interactive, interactiveOffer: null });
+    logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" opened on "${normalizeString(event.title)}"${asked ? " from the player's angle" : ""}.`);
+    return interactive;
   } finally {
     endSimulation();
   }
 };
 
+// Let the offered interactive event pass: the offer is gone, nothing else
+// changes. No request.
+export const declineInteractiveOffer = async () => {
+  if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
+  const world = normalizeWorldState(await readWorldState({ force: true }));
+  if (!world.interactiveOffer) return { interactiveOffer: null };
+  await writeWorldState({ ...world, interactiveOffer: null });
+  logDebugEvent("turn", "Interactive event let pass.");
+  return { interactiveOffer: null };
+};
+
 // A scene the player is in the middle of. A scene a time skip proposed before
 // skips stopped proposing them is not one: the player never saw it.
-const hasSceneInProgress = (world) => isSceneInProgress(normalizeWorldState(world ?? {}).activeCatalyst);
+const hasSceneInProgress = (world) => isSceneInProgress(normalizeWorldState(world ?? {}).activeInteractive);
 
 // Set the scene aside: it ends with nothing written. No request.
-export const setAsideActiveCatalyst = async () => {
+export const setAsideActiveInteractive = async () => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
   const world = normalizeWorldState(await readWorldState({ force: true }));
-  if (!world.activeCatalyst) return { catalyst: null };
-  await writeWorldState({ ...world, activeCatalyst: null });
-  logDebugEvent("turn", `Catalyst mode: scene "${world.activeCatalyst.title || "untitled"}" set aside.`);
-  return { catalyst: null };
+  if (!world.activeInteractive) return { interactive: null };
+  await writeWorldState({ ...world, activeInteractive: null });
+  logDebugEvent("turn", `Interactive event: scene "${world.activeInteractive.title || "untitled"}" set aside.`);
+  return { interactive: null };
 };
 
 // The scene's beats written into the record as one event, and the scene closed:
 // how it resolves when the scene decides it has, and how the player ends it
 // early. The one request any resolution costs.
-const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, history }) => {
+const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history }) => {
   const summaryVariables = await buildTemplateVariables(bundle, {
-    catalystHistory: normalizeArray(history)
+    interactiveHistory: normalizeArray(history)
       .map((entry) => `${entry.choice}: ${entry.summary}`)
       .join("\n"),
-    catalystPremise: catalyst.premise || catalyst.title || "",
+    interactivePremise: interactive.premise || interactive.title || "",
   });
-  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("catalystSummary", {
+  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("interactiveSummary", {
     fallback: () => ({ description: "", importance: "major", title: "" }),
-    userMessage: "Summarize the finished catalyst into one campaign event as JSON only.",
+    userMessage: "Summarize the finished interactive event into one campaign event as JSON only.",
     variables: summaryVariables,
   });
   const failed = sceneStepFailed(summaryGeneration, "The scene could not be written into the record");
   if (failed) throw failed;
   const lastSummary = normalizeString(normalizeArray(history).at(-1)?.summary);
 
-  const catalystEvent = normalizeGeneratedEvent({
+  const interactiveEvent = normalizeGeneratedEvent({
     date: bundle.game.gameDate,
     description: normalizeString(summaryPayload?.description) || lastSummary,
     impacts: {
@@ -12165,10 +12515,10 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
       regionTransfers: [],
     },
     importance: normalizeString(summaryPayload?.importance) || "major",
-    kind: "catalyst",
+    kind: "interactive",
     notable: true,
     playerRelated: true,
-    title: normalizeString(summaryPayload?.title) || catalyst.title || "Catalyst resolved",
+    title: normalizeString(summaryPayload?.title) || interactive.title || "Interactive event resolved",
     source: summaryGeneration.source,
   });
 
@@ -12181,13 +12531,12 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
     baseGame: bundle.game,
     baseWorld: {
       ...bundle.world,
-      activeCatalyst: null,
+      activeInteractive: null,
     },
     result: {
-      catalyst: null,
       clearActions: false,
-      events: catalystEvent ? [catalystEvent] : [],
-      mode: "catalyst",
+      events: interactiveEvent ? [interactiveEvent] : [],
+      mode: "interactive",
       stopDate: bundle.game.gameDate,
       summary: normalizeString(summaryPayload?.description) || lastSummary,
       generation: summaryGeneration,
@@ -12195,51 +12544,51 @@ const resolveCatalystScene = async ({ bundle, baseColors, campaignId, catalyst, 
   });
 };
 
-// End the scene where it stands (Catalyst mode's End the scene). With no beat
+// End the scene where it stands (the panel's End the scene). With no beat
 // played there is nothing to record, and it is simply set aside.
-export const endActiveCatalyst = async () => {
+export const endActiveInteractive = async () => {
   beginSimulation();
   try {
     const bundle = await readGameStateBundle({ force: true });
-    const catalyst = normalizeWorldState(bundle.world).activeCatalyst;
-    if (!catalyst) throw new Error("No scene is in progress.");
-    if (!normalizeArray(catalyst.history).length) {
+    const interactive = normalizeWorldState(bundle.world).activeInteractive;
+    if (!interactive) throw new Error("No scene is in progress.");
+    if (!normalizeArray(interactive.history).length) {
       const world = normalizeWorldState(await readWorldState({ force: true }));
-      await writeWorldState({ ...world, activeCatalyst: null });
+      await writeWorldState({ ...world, activeInteractive: null });
       return { resolved: false };
     }
     const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
-    const applied = await resolveCatalystScene({ bundle, baseColors, campaignId: activeCampaignId(), catalyst, history: catalyst.history });
-    logDebugEvent("turn", `Catalyst mode: scene "${catalyst.title || "untitled"}" ended by the player after ${catalyst.history.length} beat(s).`);
+    const applied = await resolveInteractiveScene({ bundle, baseColors, campaignId: activeCampaignId(), interactive, history: interactive.history });
+    logDebugEvent("turn", `Interactive event: scene "${interactive.title || "untitled"}" ended by the player after ${interactive.history.length} beat(s).`);
     return { resolved: true, ...applied };
   } finally {
     endSimulation();
   }
 };
 
-// Take back beat `beatIndex` of the scene in progress (D6, catalystRewind.js):
+// Take back beat `beatIndex` of the scene in progress (D6, interactiveRewind.js):
 // the scene returns to exactly how it stood when that beat was about to be
 // chosen. Nothing outside the scene has changed before it resolves, so the
 // rewind itself asks nothing of a model; with `choice` the beat is chosen again
 // at once, which is the one request any beat costs.
-export const rewindActiveCatalyst = async ({ beatIndex, choice = "" } = {}) => {
+export const rewindActiveInteractive = async ({ beatIndex, choice = "" } = {}) => {
   if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish before changing the scene.");
   const world = normalizeWorldState(await readWorldState({ force: true }));
-  const catalyst = world.activeCatalyst;
-  if (!catalyst) throw new Error("No catalyst scene is in progress.");
-  const rewound = rewindCatalyst(catalyst, Number(beatIndex));
+  const interactive = world.activeInteractive;
+  if (!interactive) throw new Error("No interactive event is in progress.");
+  const rewound = rewindInteractive(interactive, Number(beatIndex));
   if (!rewound) {
-    throw new Error(canRewindCatalystTo(catalyst, Number(beatIndex))
+    throw new Error(canRewindInteractiveTo(interactive, Number(beatIndex))
       ? "That beat cannot be returned to."
       : "That beat was played before the scene kept what was on screen at each beat, so it cannot be returned to; a later one can.");
   }
-  await writeWorldState({ ...world, activeCatalyst: rewound });
-  logDebugEvent("turn", `Catalyst scene "${rewound.title || "untitled"}": beat ${Number(beatIndex) + 1} taken back${normalizeString(choice) ? " and chosen again" : ""}.`);
-  if (normalizeString(choice)) return advanceActiveCatalyst(normalizeString(choice));
-  return { catalyst: rewound };
+  await writeWorldState({ ...world, activeInteractive: rewound });
+  logDebugEvent("turn", `Interactive event "${rewound.title || "untitled"}": beat ${Number(beatIndex) + 1} taken back${normalizeString(choice) ? " and chosen again" : ""}.`);
+  if (normalizeString(choice)) return advanceActiveInteractive(normalizeString(choice));
+  return { interactive: rewound };
 };
 
-export const advanceActiveCatalyst = async (choiceText) => {
+export const advanceActiveInteractive = async (choiceText) => {
   beginSimulation();
   try {
   const bundle = await readGameStateBundle({ force: true });
@@ -12247,27 +12596,27 @@ export const advanceActiveCatalyst = async (choiceText) => {
   const campaignId = activeCampaignId();
   const baseColors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
   const world = normalizeWorldState(bundle.world);
-  const catalyst = world.activeCatalyst;
+  const interactive = world.activeInteractive;
 
-  if (!catalyst) {
-    throw new Error("No active catalyst is available.");
+  if (!interactive) {
+    throw new Error("No interactive event is in progress.");
   }
 
-  const catalystHistoryText = normalizeArray(catalyst.history)
+  const interactiveHistoryText = normalizeArray(interactive.history)
     .map((entry) => `${entry.choice}: ${entry.summary}`)
     .join("\n");
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
-    catalystChoice: choiceText,
-    catalystHistory: catalystHistoryText,
-    catalystOpening: catalyst.opening || "",
-    catalystPremise: catalyst.premise || catalyst.title || "",
+    interactiveChoice: choiceText,
+    interactiveHistory: interactiveHistoryText,
+    interactiveOpening: interactive.opening || "",
+    interactivePremise: interactive.premise || interactive.title || "",
   });
 
-  const { generation, payload } = await runJsonTask("catalystExecutor", {
+  const { generation, payload } = await runJsonTask("interactiveExecutor", {
     lookups: buildTaskLookups(bundle),
     fallback: () => ({ nextChoices: [], resolved: false, summary: "" }),
-    userMessage: "Continue the catalyst scene as JSON only.",
+    userMessage: "Continue the interactive event as JSON only.",
     variables,
   });
   const failed = sceneStepFailed(generation, "The scene did not go on");
@@ -12279,8 +12628,8 @@ export const advanceActiveCatalyst = async (choiceText) => {
   };
 
   // The beat keeps what the player was shown when they chose it, so it can be
-  // taken back and chosen differently (catalystRewind.js).
-  const nextCatalyst = recordCatalystBeat(catalyst, {
+  // taken back and chosen differently (interactiveRewind.js).
+  const nextInteractive = recordInteractiveBeat(interactive, {
     choice: choiceText,
     summary: historyEntry.summary,
     nextChoices: normalizeArray(payload?.nextChoices).map((entry) => normalizeString(entry)).filter(Boolean),
@@ -12289,21 +12638,21 @@ export const advanceActiveCatalyst = async (choiceText) => {
   if (!payload?.resolved) {
     const nextWorld = {
       ...world,
-      activeCatalyst: nextCatalyst,
+      activeInteractive: nextInteractive,
     };
     await writeWorldState(nextWorld);
     return {
-      catalyst: nextCatalyst,
+      interactive: nextInteractive,
       world: nextWorld,
     };
   }
 
-  return resolveCatalystScene({
+  return resolveInteractiveScene({
     bundle,
     baseColors,
     campaignId,
-    catalyst,
-    history: [...normalizeArray(catalyst.history), historyEntry],
+    interactive,
+    history: [...normalizeArray(interactive.history), historyEntry],
   });
   } finally {
     endSimulation();
@@ -12320,6 +12669,68 @@ export const advanceActiveCatalyst = async (choiceText) => {
 // finished segments are kept, and the player decides whether to retry the one
 // that failed or discard the turn. Half a round of real events followed by half
 // a round of canned ones is never on the table.
+// ---- Player focus ----------------------------------------------------------
+//
+// How much of a jump belongs to the player, chosen per Game and kept in game
+// data (playerFocus.js holds every rule; this is where the campaign's data is
+// gathered for them).
+//
+// The counter has to know the player's TERRITORY, not just their name: an
+// empire's internal events name a city or a province, or the country a province
+// used to be, and counting those as the wider world is how unrest in Lahore
+// became somebody else's news. Each region the player holds contributes its own
+// name and the country it belongs to on the map.
+const playerTerritoryNames = async (world, playerNames) => {
+  const keys = new Set(normalizeArray(playerNames).map((name) => normalizeString(name).toLowerCase()).filter(Boolean));
+  if (!keys.size) return [];
+  // Who holds a region, by the one rule the rest of the engine uses
+  // (lookupTools.js ownerOf): the campaign's override where there is one, then
+  // the region's own owner, then the country it belongs to on the stock map.
+  // Reading the overrides ALONE would find nothing for a player who has annexed
+  // nothing, which is most players — their home provinces were never transferred.
+  const overrides = normalizeWorldState(world).regionOwnershipOverrides ?? {};
+  const names = new Set();
+  for (const row of normalizeArray(await loadRegionCatalog().catch(() => []))) {
+    const owner = normalizeString(overrides[normalizeString(row?.id)] ?? row?.owner ?? row?.country);
+    if (!owner || !keys.has(owner.toLowerCase())) continue;
+    for (const value of [row?.name, row?.country]) {
+      const name = normalizeString(value);
+      if (name && !keys.has(name.toLowerCase())) names.add(name);
+    }
+  }
+  return [...names];
+};
+
+// The focus, the player's names and the test the counter uses, once per jump.
+const readPlayerFocusContext = async (bundle) => {
+  const playerName = normalizeString(bundle?.game?.country);
+  const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
+  const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
+  // The scenario's default under this game's own choice (gameFeatures.js).
+  return {
+    focus: normalizePlayerFocus(getActivePlayerFocus()),
+    playerName,
+    playerNames,
+    territoryNames,
+    isPlayerEvent: createPlayerEventTest({ playerNames, territoryNames }),
+  };
+};
+
+// What the player has going on over one window, from this campaign's own state.
+const playerMaterialFor = (bundle, focusContext, { originDate, targetDate }) => collectPlayerMaterial({
+  playerNames: focusContext.playerNames,
+  isPlayerEvent: focusContext.isPlayerEvent,
+  originDate,
+  targetDate,
+  actions: normalizeArray(bundle?.actions),
+  projects: normalizeArray(bundle?.world?.projects),
+  storylines: normalizeArray(bundle?.world?.storylines),
+  wars: normalizeArray(bundle?.world?.wars),
+  relations: normalizeArray(bundle?.world?.relations),
+  chats: normalizeArray(bundle?.chats),
+  recentEvents: normalizeArray(bundle?.events),
+});
+
 const runJumpSegments = async ({ context, onEvents, onProgress, signal, state }) => {
   const {
     bundle,
@@ -12369,6 +12780,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
   // Empty on a campaign's first jump and after a turn that predates receipts, and
   // then the message is byte-for-byte what it always was.
   const lastTurnReceipt = renderLastTurnReceipt(normalizeWorldState(bundle.world).simulationHistory);
+  // The player's focus for this Game (playerFocus.js): what counts as a Player
+  // event, gathered once, and per segment what the player has going on.
+  const focusContext = await readPlayerFocusContext(bundle);
   // And what the Game Master changed by hand since then (runtime/gmChanges.js):
   // the changes made in the round this skip starts from. Once, because the round
   // moves on when the skip lands — and again after a rollback, because the skip
@@ -12423,7 +12837,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       };
       const worldInitiative = await buildWorldInitiativeContextBackground(
         segmentBundle,
-        { targetDate: segmentTarget },
+        { targetDate: segmentTarget, playerFocus: focusContext.focus, puppetStates: isActiveFeatureEnabled("puppetStates") },
         signal,
       );
       console.info(
@@ -12436,8 +12850,26 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         analysis: worldInitiative.analysis,
         playerPolity: normalizeString(bundle.game?.country),
       });
+      // What the player has going on across THIS segment's window, and the
+      // block that tells the simulator about it (playerFocus.js). Written with
+      // the code-appended directives, where an author's guidance cannot reach it.
+      const playerMaterial = playerMaterialFor(
+        { ...bundle, events: segmentBundle.events },
+        focusContext,
+        { originDate: state.segmentOrigin, targetDate: segmentTarget },
+      );
+      // The two minimums, settled here where both are known: the player's focus
+      // wins where they overlap (docs/adr/0003).
+      const segmentShares = combinedShares({ focus: focusContext.focus, worldShare: direction?.worldShare });
       const segmentVariables = {
         ...variables,
+        playerFocusWorldShare: segmentShares.world,
+        playerFocusDirective: buildPlayerFocusDirective({
+          focus: focusContext.focus,
+          worldShare: direction?.worldShare,
+          material: playerMaterial,
+          playerName: focusContext.playerName,
+        }),
         worldInitiativeContext: worldInitiative.text,
         ...(segmentCount > 1 ? { targetDate: segmentTarget, targetDateReadable: formatDateReadable(segmentTarget) } : {}),
         ...(segmentIndex > 0 ? {
@@ -12445,6 +12877,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           canonicalDiplomaticContext: buildBoundedDiplomaticContext(ledgerWorld, {
             playerPolity: normalizeString(bundle.game.country),
             maxActors: 8,
+            puppetStates: isActiveFeatureEnabled("puppetStates"),
           }).text,
         } : {}),
       };
@@ -12520,11 +12953,25 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // (worldDirection.js). Never a rejection, on any attempt: a lopsided
           // period is still a period, asking again is a whole second request, and
           // the simulator is told at the top of its next turn.
-          const playerName = normalizeString(bundle.game.country);
-          const shareShortfall = worldShareShortfall(candidate?.events, direction?.worldShare, {
-            playerNames: [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))],
+          // The player's focus outranks the author's world share (docs/adr/0003):
+          // when the two ask for more than the whole period, the world keeps what
+          // is left. Both are counted the same way — never a rejection, said at
+          // the top of the next turn.
+          const shareShortfall = worldShareShortfall(candidate?.events, segmentShares.world, {
+            // The player's TERRITORY counts as the player here too. Without it an
+            // event inside the player's own empire satisfies the world's share,
+            // which is how unrest in a player-held province came to be filed as
+            // news from the wider world.
+            playerNames: [...focusContext.playerNames, ...focusContext.territoryNames],
           });
           if (shareShortfall) noteReceipt(draft, "short", shareShortfall.text);
+          const focusShortfall = playerFocusShortfall(candidate?.events, {
+            focus: focusContext.focus,
+            isPlayerEvent: focusContext.isPlayerEvent,
+            material: playerMaterial,
+            playerName: focusContext.playerName,
+          });
+          if (focusShortfall) noteReceipt(draft, "short", focusShortfall.text);
           // Each segment is checked against ITS OWN span, so an event dated outside
           // the segment is caught while the model can still fix it rather than at the
           // end of the whole round.
@@ -12671,10 +13118,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     if (segmentCount <= 1) {
       console.warn(`[ai] the jump failed (${reason}) — falling back for the whole period.`);
       logDebugEvent("warn", "[turn] The jump failed; it falls back.", { reason });
-      // Off the panel now, so the player is not reading events already thrown away.
-      showEvents?.([]);
       state.segmentPayloads.length = 0;
-      state.segmentPayloads.push(await fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }));
+      const canned = await fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate });
+      state.segmentPayloads.push(canned);
+      showEvents?.(normalizeArray(canned?.events));
       state.nextSegment = segmentCount;
       state.generation = {
         source: "fallback",
@@ -12775,7 +13222,14 @@ const reportJumpRequests = (requests) => {
 // a reason, every enabled check with something to look at rides along — it is
 // the same request either way.
 const UNIT_DIRECTOR_INSTRUCTION =
-  "Advance the supplied military events through the existing persistent units. Return one eventOrders entry only where a real unit operation is warranted; leaving an event untouched is a valid answer. Return JSON only.";
+  "Reconcile EVERY supplied military event against the existing persistent units. When an event clearly changes an identifiable supplied formation's location, posture, strength or existence, emit the matching unit operation; do not leave that event untouched. "
+  // Said here as well as in the rules: a live run wrote "HMS Dauntless
+  // Commissioned at Portsmouth" and "No. 12 Squadron Stands Up at RAF
+  // Lossiemouth" and returned no ops at all for either, because the wording
+  // that makes a ship or a squadron a NEW formation sat only in the system
+  // prompt. It is the last thing the model reads before answering.
+  + "A ship, submarine or squadron COMMISSIONED, delivered, stood up or entering service is a new formation that does not exist yet: spawn it for the power that commissioned it, at its named port or base, even when that power already has units. "
+  + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
 const TIMELINE_CURATOR_INSTRUCTION =
@@ -12804,6 +13258,36 @@ const territoryDirectorUnavailable = () => ({
   eventOrders: [],
   summary: "Territory director unavailable; existing legal/control impacts preserved.",
 });
+
+const STRUCTURE_DIRECTOR_INSTRUCTION =
+  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. Return JSON only.";
+const structureDirectorUnavailable = () => ({ eventOrders: [], summary: "Structure director unavailable; no structures added." });
+
+const structureDirectorVariables = (input, game) => ({
+  structureDirectorCandidates: JSON.stringify(input.candidates, null, 2),
+  structureDirectorStructures: input.structures.length ? JSON.stringify(input.structures, null, 2) : "None yet.",
+  structureDirectorProjects: input.projects.length ? JSON.stringify(input.projects, null, 2) : "None.",
+  structureDirectorGameDate: normalizeString(game?.gameDate),
+  structureDirectorBudget: String(input.budget),
+});
+
+// Same as the unit director's: every `at` becomes coordinates before the
+// director's rules, which need a point, look at the structures.
+const placeStructureOrders = async (payload, world, events) => {
+  const orders = normalizeArray(payload?.eventOrders);
+  if (!orders.length) return payload;
+  const containers = orders.map((order, index) => ({
+    event: normalizeArray(events)[Number(order?.eventIndex)] ?? null,
+    impacts: { markerOps: normalizeArray(order?.structures).map((marker) => ({ op: "build", marker })) },
+    path: `$.eventOrders[${index}]`,
+  }));
+  try {
+    await resolvePlacements(containers, world, { receipt: null });
+  } catch (error) {
+    console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
+  }
+  return payload;
+};
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
   judgments: normalizeArray(candidates).map((event, index) => ({
@@ -12871,6 +13355,11 @@ const boardEventList = (events, hidden) => [
     `[${events.length + index}] ${event.date || "undated"} — ${event.title} (kept off the timeline)\n${event.description}`),
 ].join("\n\n");
 
+// Every running entry needs dates to be paced against: Player focus asks the
+// skip to answer a milestone whose date it passes (playerFocus.js), and an entry
+// with no milestones at all can never come due.
+const BOARD_MILESTONE_NOTE = " Any running entry with no milestones at all gets two or three dated checkpoints on its way to its target date, so its progress has something to be measured against; a standing effort with no end (an agent in place, a permanent patrol) gets none.";
+
 const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, but were too routine to show the player as a card. "
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
@@ -12913,6 +13402,16 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     reasons.push(`${territoryInput.candidates.length} event(s) may change who holds land`);
     await addJob({ key: "territory", taskKey: "territoryDirector", title: "occupied and disputed land", instruction: TERRITORY_DIRECTOR_INSTRUCTION },
       await territoryDirectorVariables(territoryInput, bundle.world));
+  }
+
+  // --- structures ---
+  const structureInput = wants("structures")
+    ? buildStructureDirectorInput({ events: merged.events, world: bundle.world, playerCountry })
+    : null;
+  if (structureInput) {
+    reasons.push(`${structureInput.candidates.length} event(s) may have built something`);
+    await addJob({ key: "structures", taskKey: "structureDirector", title: "new structures", instruction: STRUCTURE_DIRECTOR_INSTRUCTION },
+      structureDirectorVariables(structureInput, { ...bundle.game, gameDate: stopDate }));
   }
 
   // --- timeline ---
@@ -12995,7 +13494,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
       taskKey: "projects",
       title: "the Projects board",
       instruction: `These events have just been simulated. Move the board to match them, and return `
-        + `{"projectOps":[]} if nothing on it genuinely moved.${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
+        + `{"projectOps":[]} if nothing on it genuinely moved.${BOARD_MILESTONE_NOTE}${segmentHidden.length ? BOARD_HIDDEN_NOTE : ""}\n\n`
         + `${boardEventList(candidates, segmentHidden)}${doubtBlock}`,
     }, await buildTemplateVariables(boardBundle, { taskKey: "projects" }));
   }
@@ -13214,10 +13713,43 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     territoryEvents = directedEvents;
   }
 
+  // Third: the structures the events built (nativeStructureDirector.js), which
+  // the simulator almost never puts on the map by itself. Each one that belongs
+  // to a Project is linked to it once the turn is written (structureLinks).
+  let builtEvents = territoryEvents;
+  let structureLinks = [];
+  try {
+    const built = await directGeneratedStructureOps({
+      events: territoryEvents,
+      world: bundle.world,
+      playerCountry: normalizeString(bundle.game?.country),
+      analyzeBatch: review
+        ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
+        : requestSettings.reviewSection("structures")
+          ? async (input) => {
+            const answer = await runJsonTask("structureDirector", {
+              lookups: buildTaskLookups(bundle),
+              fallback: structureDirectorUnavailable,
+              signal,
+              userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
+              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }),
+              ...jumpTaskOptions(state.requests, "review"),
+            });
+            return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
+          }
+          : null,
+    });
+    builtEvents = built.events;
+    structureLinks = built.links;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn("[OH structure director] pass failed; the events keep the structures they had.", error);
+  }
+
   const result = {
-    catalyst: merged.catalyst,
     clearActions: merged.clearActions,
-    events: territoryEvents,
+    events: builtEvents,
+    structureLinks,
     mode,
     outreach: merged.diplomaticOutreach,
     stopDate: merged.stopDate,
@@ -13303,10 +13835,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (safeDays <= 0) {
     throw new Error("Choose a time-skip amount greater than zero.");
   }
-  // Time stands still while the player is in a scene (Catalyst mode): the scene
-  // is a moment, and a skip would leave it half played at a date long gone.
+  // Time stands still while the player is in an interactive event: the scene is
+  // a moment, and a skip would leave it half played at a date long gone.
   if (hasSceneInProgress(bundle.world)) {
-    throw new Error("A scene is in progress in Catalyst mode: end it or set it aside before skipping time.");
+    throw new Error("An interactive event is in progress: end it or set it aside before skipping time.");
   }
   // One rule for where a skip lands, shared with the timeline's labels
   // (runtime/jumpDates.js), so a label never promises a date the jump misses.
@@ -13719,7 +14251,8 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
   return linked(candidate?.countryStatPatches)
     || linked(candidate?.warUpdates)
     || linked(candidate?.relationUpdates)
-    || linked(candidate?.agreementUpdates);
+    || linked(candidate?.agreementUpdates)
+    || linked(candidate?.puppetUpdates);
 };
 
 const validateGameMasterChronology = (candidate, game) => {
@@ -14251,6 +14784,27 @@ const validateGameMasterPreviewPayload = async (candidate, {
   }, { world });
   if (diplomaticError) return `[canonical diplomatic-state] ${diplomaticError}`;
 
+  // Subordinations, tried against the live world exactly as Apply will run
+  // them: every change must apply, or the preview is refused with the reason.
+  // A skip may drop a bad line; the GM may not, because a player who asks for
+  // a puppet and silently gets none is the bug this closes.
+  const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(candidate.puppetUpdates), normalizedEvents);
+  if (puppetUpdates.length && !isActiveFeatureEnabled("puppetStates")) {
+    return "[canonical subordination-state] Puppet states are switched off for this game, so no country can be made another's protectorate, puppet or client. Turn the feature back on in the scenario or game editor (Features) if you want this change.";
+  }
+  if (puppetUpdates.length) {
+    const trial = applyPuppetUpdates({
+      world,
+      updates: puppetUpdates,
+      regionCatalog: await regionCatalogForPuppets(puppetUpdates, world),
+      events: normalizedEvents,
+      stopDate: normalizeString(game?.gameDate || game?.startDate),
+      round: Number(game?.round) || 0,
+    });
+    const [first] = normalizeArray(trial.dropped);
+    if (first) return `[canonical subordination-state] puppetUpdates[${first.index}]: ${first.reason}`;
+  }
+
   const storylineError = await validateGameMasterStorylineUpdates(candidate, { mode, world, game, request });
   if (storylineError) return `[canonical storyline-state] ${storylineError}`;
 
@@ -14404,6 +14958,7 @@ const gameMasterTransactionCandidate = (transaction) => ({
   warUpdates: cloneValue(normalizeArray(transaction?.warUpdates)),
   relationUpdates: cloneValue(normalizeArray(transaction?.relationUpdates)),
   agreementUpdates: cloneValue(normalizeArray(transaction?.agreementUpdates)),
+  puppetUpdates: cloneValue(normalizeArray(transaction?.puppetUpdates)),
   diplomaticOutreach: cloneValue(normalizeArray(transaction?.diplomaticOutreach)),
 });
 
@@ -14437,6 +14992,7 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
     count(transaction?.agreementUpdates, "agreement", "agreements"),
+    count(transaction?.puppetUpdates, "subordination", "subordinations"),
     count(transaction?.storylineUpdates, "storyline", "storylines"),
     count(transaction?.diplomaticOutreach, "diplomatic note", "diplomatic notes"),
   ].filter(Boolean);
@@ -14468,6 +15024,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
   normalizeArray(transaction?.warUpdates).forEach((entry, index) => labels.push(`war:${index}:${normalizeString(entry?.id)}`));
   normalizeArray(transaction?.relationUpdates).forEach((entry, index) => labels.push(`relation:${index}:${relationPairKeyForHistory(entry?.a, entry?.b)}`));
   normalizeArray(transaction?.agreementUpdates).forEach((entry, index) => labels.push(`agreement:${index}:${normalizeString(entry?.id)}`));
+  normalizeArray(transaction?.puppetUpdates).forEach((entry, index) => labels.push(`puppet:${index}:${normalizeString(entry?.op)}:${normalizeString(entry?.overlord)}->${normalizeString(entry?.puppet)}`));
   normalizeArray(transaction?.diplomaticOutreach).forEach((_, index) => labels.push(`outreach:${index}`));
   return labels.filter(Boolean).slice(0, 128);
 };
@@ -14478,7 +15035,6 @@ const gameMasterHistoryEntry = ({ transaction, game, eventIds, summary, transact
   const fromDate = dates[0] || fallbackDate;
   const toDate = dates.at(-1) || fallbackDate;
   return {
-    catalyst: null,
     date: toDate,
     eventIds,
     fallbackReason: "",
@@ -14582,6 +15138,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), events);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), events);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), events);
+    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), events);
     const countryStatPatches = normalizeGameMasterStatPatches(payload?.countryStatPatches, bundle.world);
 
     return {
@@ -14602,6 +15159,7 @@ export const previewGameMasterCommand = async (requestText, { mode = "world-inte
         warUpdates,
         relationUpdates,
         agreementUpdates,
+        puppetUpdates,
         diplomaticOutreach: normalizeArray(payload?.diplomaticOutreach),
       },
       generation,
@@ -14800,21 +15358,36 @@ export const applyGameMasterPreview = async (preview) => {
 
     const relationUpdatesForApply = normalizeArray(transaction.relationUpdates);
     const agreementUpdatesForApply = normalizeArray(transaction.agreementUpdates);
-    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length
+    // Subordinations ride the same merge as relations and agreements, so a
+    // puppet the GM makes is a ledger row like any other: the country panel
+    // shows it, the advisor is briefed on it, and a refusal later charges it.
+    // With the system off the GM cannot install one either: the transaction is
+    // validated against the same rule, so this is the belt to that braces.
+    const puppetUpdatesForApply = isActiveFeatureEnabled("puppetStates")
+      ? normalizeArray(transaction.puppetUpdates)
+      : [];
+    const diplomaticMerge = relationUpdatesForApply.length || agreementUpdatesForApply.length || puppetUpdatesForApply.length
       ? applyDiplomaticUpdates({
           world: nextWorld,
           relationUpdates: relationUpdatesForApply,
           agreementUpdates: agreementUpdatesForApply,
+          puppetUpdates: puppetUpdatesForApply,
+          puppetStates: isActiveFeatureEnabled("puppetStates"),
+          regionCatalog: await regionCatalogForPuppets(puppetUpdatesForApply, nextWorld),
           events,
           stopDate: bundle.game.gameDate || bundle.game.startDate || "",
           round: bundle.game.round || 0,
         })
-      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [] };
+      : { world: nextWorld, appliedRelationIds: [], appliedAgreementIds: [], appliedPuppetIds: [], droppedPuppetUpdates: [] };
     if (diplomaticMerge.appliedRelationIds.length !== relationUpdatesForApply.length) {
       throw new Error("A canonical relation operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
     }
     if (diplomaticMerge.appliedAgreementIds.length !== agreementUpdatesForApply.length) {
       throw new Error("A canonical agreement operation failed during the in-memory apply. Nothing was persisted; regenerate the preview.");
+    }
+    if (normalizeArray(diplomaticMerge.appliedPuppetIds).length !== puppetUpdatesForApply.length) {
+      const [first] = normalizeArray(diplomaticMerge.droppedPuppetUpdates);
+      throw new Error(`A subordination change failed during the in-memory apply${first ? `: ${first.reason}` : ""}. Nothing was persisted; regenerate the preview.`);
     }
     nextWorld = diplomaticMerge.world;
 
@@ -15737,6 +16310,7 @@ export const maybeGeneratePregameHistory = async () => {
     const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
     const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), bootstrapEvents);
+    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), bootstrapEvents);
     const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), bootstrapEvents);
     const warMerge = applyWarUpdates({
       world: currentWorld,
@@ -15749,6 +16323,8 @@ export const maybeGeneratePregameHistory = async () => {
       world: warMerge.world,
       relationUpdates,
       agreementUpdates,
+      puppetUpdates,
+      puppetStates: isActiveFeatureEnabled("puppetStates"),
       events: bootstrapEvents,
       stopDate: startDate,
       round: 1,
@@ -15773,7 +16349,6 @@ export const maybeGeneratePregameHistory = async () => {
     const summary = normalizeString(payload?.summary);
     bootstrapWorld.simulationHistory = [
       {
-        catalyst: null,
         date: startDate,
         eventIds: bootstrapEvents.map((event) => event.id),
         fallbackReason: "",

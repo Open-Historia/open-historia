@@ -56,9 +56,18 @@ export const isProjectClosed = (project) => !isProjectOpen(project);
 // (normalizeProjectEntry already derived it from the milestone list on the way
 // in, so it is the authoritative answer) and only falls back to scanning when a
 // project arrived without one.
+// A checkpoint nobody has settled yet. "slipped" is late — its date passed with
+// nothing said (AI/playerFocus.js) — but late is not reached, so it is still the
+// one the Board shows next and the one the next skip is asked to answer. Shared
+// with gameState.js, which derives the same answer on the way in.
+export const isMilestoneOutstanding = (milestone) => {
+  const status = asText(milestone?.status) || "pending";
+  return status === "pending" || status === "slipped";
+};
+
 export const deriveNextMilestone = (project) => {
   if (project?.nextMilestone && asText(project.nextMilestone.title)) return project.nextMilestone;
-  const pending = asArray(project?.milestones).filter((entry) => entry?.status === "pending");
+  const pending = asArray(project?.milestones).filter(isMilestoneOutstanding);
   if (pending.length === 0) return null;
   const dated = pending.filter((entry) => asText(entry.date)).sort((a, b) => compareGameDates(a.date, b.date));
   const next = dated[0] || pending[0];
@@ -77,7 +86,7 @@ export const deriveNextMilestone = (project) => {
 // Returns, for one project:
 //   overdue     - target date is behind us and the project is still running
 //   dueSoon     - the next milestone lands within DUE_SOON_DAYS
-//   milestoneMissed - a milestone's date passed while it was still pending
+//   milestoneMissed - a milestone's date passed while it was still pending, or it slipped
 //   stale       - explicitly stalled, or untouched for STALE_ROUNDS rounds
 //   daysToTarget / daysToMilestone - signed, null when undateable
 export const deriveProjectFlags = (project, gameDate, round = 0) => {
@@ -91,7 +100,8 @@ export const deriveProjectFlags = (project, gameDate, round = 0) => {
   // `overdue`, which is about the whole programme: a slipped milestone on a
   // project with a year still to run is a warning, not a failure.
   const milestoneMissed = asArray(project?.milestones).some((entry) => {
-    if (entry?.status !== "pending" || !asText(entry.date)) return false;
+    if (asText(entry?.status) === "slipped") return true;
+    if (!isMilestoneOutstanding(entry) || !asText(entry.date)) return false;
     const delta = signedDaysBetween(gameDate, entry.date);
     return delta !== null && delta < 0;
   });
@@ -729,7 +739,8 @@ export const boardEntriesConcernedByEvent = (event, board, { playerCountry = "" 
 // An op that names no usable event keeps the board pass's long-standing
 // fallback, riding on the last visible event — but in a carrier of its own,
 // after that event's, so it can never be what proves that event changed a Board
-// entry (see materiallyChangedEntryIds).
+// entry (see materiallyChangedEntryIds), nor put that event in the entry's
+// activity (stampsActivity).
 
 const withoutAddress = ({ eventIndex, ...op }) => op;
 
@@ -746,6 +757,11 @@ export const boardPassCarriers = ({ ops, visibleEvents = [], hiddenEvents = [] }
         eventIndex: onTimeline ? index : null,
         hiddenIndex: onTimeline ? null : index,
         fallback,
+        // Whether applying these ops puts the event in each moved entry's
+        // activity. A fallback rides on an event it did not come from — usually
+        // the turn's last, often an espionage one — so it moves the entry but
+        // never claims that event as the entry's history.
+        stampsActivity: onTimeline && !fallback,
         date: asText(event?.date),
         // Visible events first, in their own order, then Hidden ones: the tie-break
         // for events on the same day, and for undated ones.
