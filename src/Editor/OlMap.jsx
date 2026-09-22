@@ -37,7 +37,7 @@ import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
-import { BORDER_CLEANUP, bucketRegions, planTopologyChunks, yieldToBrowser } from "./topologySweep.js";
+import { BORDER_CLEANUP, findEnclosedGaps, planTopologyChunks, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1057,14 +1057,16 @@ const OlMap = ({
     // it touches most (the larger region on ties); a hole touching nothing is
     // dropped. Neighbours come from the spatial index, limited to the pass's
     // regions and sorted by their order so proposals are deterministic.
-    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, nextId }) => {
+    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
       for (const row of holes) {
         const ext = expandExtent(row.geom.getExtent(), Math.max(4, width * 1.5));
         const neighbors = regionSource
           .getFeaturesInExtent(ext)
-          .filter((feature) => selectedSet.has(feature))
+          // The save-time sweep never fills a gap into a region too heavy to
+          // union (BORDER_CLEANUP.maxUnionVertices); a lighter neighbour takes it.
+          .filter((feature) => selectedSet.has(feature) && vertexCountOf(feature.getGeometry()) <= maxTargetVertices)
           .sort((a, b) => featureOrder.get(a) - featureOrder.get(b));
         let target = null;
         let bestScore = -1;
@@ -1092,7 +1094,7 @@ const OlMap = ({
     // Narrow overlaps between feats[from, to) and their later-ordered extent
     // neighbours. R2.4: the VectorSource spatial index is asked only for the
     // regions whose extents can actually meet A, never every pair.
-    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, onPair, minWidth = 0 } = {}) => {
+    const findNarrowOverlaps = (feats, width, { featureOrder, areaOf, nextId }, { from = 0, to = feats.length, onPair, minWidth = 0, maxPairVertices = Infinity, onSkip } = {}) => {
       const items = [];
       for (let i = from; i < to; i += 1) {
         const a = feats[i];
@@ -1105,6 +1107,13 @@ const OlMap = ({
 
         for (const { feature: b } of nearby) {
           onPair?.();
+          // Two regions together heavier than one call can safely be handed
+          // (the save-time sweep's BORDER_CLEANUP.maxUnionVertices) are left
+          // uncompared, rather than risk the page's memory on them.
+          if (vertexCountOf(a.getGeometry()) + vertexCountOf(b.getGeometry()) > maxPairVertices) {
+            onSkip?.();
+            continue;
+          }
           let pieces = [];
           try {
             pieces = overlapGeoms(a.getGeometry(), b.getGeometry(), { maxWidth: width, minWidth });
@@ -1313,6 +1322,10 @@ const OlMap = ({
       clearTopologyDiagnostics();
       const totals = { gaps: 0, overlaps: 0, gapsFound: 0, overlapsFound: 0 };
       let passes = 0;
+      // What a detailed map could only be checked as: the parts its gap search
+      // read it in, and the overlap pairs too heavy to compare.
+      let parts = 1;
+      let skippedPairs = 0;
       if (regionCount < 2) {
         report({ phase: "done" });
         return { changed: false, gaps: 0, overlaps: 0, affectedRegions: 0, regionCount, gapsFound: 0, overlapsFound: 0, passes };
@@ -1325,28 +1338,41 @@ const OlMap = ({
         // Areas change as regions are trimmed, so the context is rebuilt per pass.
         const context = topologyContext(feats);
 
-        const buckets = bucketRegions(plan, feats, (f) => f.getGeometry().getExtent());
-        report({ chunkCount: buckets.length });
-        const partials = [];
-        for (let index = 0; index < buckets.length; index += 1) {
-          const unioned = unionAllGeoms(buckets[index].map((f) => f.getGeometry()));
-          if (unioned) partials.push(unioned);
-          report({ chunkIndex: index + 1 });
-          await yieldToBrowser();
-        }
-        const holes = enclosedGapsOfUnion(unionAllGeoms(partials), { maxWidth: width, minWidth: floor });
-        const gaps = assignGapTargets(holes, width, context);
+        // No union here is handed more than BORDER_CLEANUP.maxUnionVertices: a
+        // detailed map is read in parts rather than asked for more heap than the
+        // page has (topologySweep.js findEnclosedGaps).
+        const search = await findEnclosedGaps(feats, {
+          plan,
+          geometryOf: (f) => f.getGeometry(),
+          union: unionAllGeoms,
+          gapsOf: enclosedGapsOfUnion,
+          isCovered: (point) => regionSource.getFeaturesAtCoordinate(point).length > 0,
+          maxWidth: width,
+          minWidth: floor,
+          onChunks: (chunkCount) => report({ chunkCount }),
+          onChunk: (chunkIndex) => report({ chunkIndex }),
+        });
+        parts = Math.max(parts, search.parts);
+        const gaps = assignGapTargets(search.holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices });
         report({ gapsFound: gaps.length });
         await yieldToBrowser();
 
         const overlapsFound = [];
+        let skippedThisPass = 0;
         report({ phase: "overlaps", regionsChecked: 0 });
         for (let from = 0; from < regionCount; from += BORDER_CLEANUP.overlapBatch) {
           const to = Math.min(regionCount, from + BORDER_CLEANUP.overlapBatch);
-          overlapsFound.push(...findNarrowOverlaps(feats, width, context, { from, to, minWidth: floor }));
+          overlapsFound.push(...findNarrowOverlaps(feats, width, context, {
+            from,
+            to,
+            minWidth: floor,
+            maxPairVertices: BORDER_CLEANUP.maxUnionVertices,
+            onSkip: () => { skippedThisPass += 1; },
+          }));
           report({ regionsChecked: to, overlapsFound: overlapsFound.length });
           await yieldToBrowser();
         }
+        skippedPairs = Math.max(skippedPairs, skippedThisPass);
         totals.gapsFound += gaps.length;
         totals.overlapsFound += overlapsFound.length;
 
@@ -1383,6 +1409,8 @@ const OlMap = ({
         gapsFound: totals.gapsFound,
         overlapsFound: totals.overlapsFound,
         passes,
+        parts,
+        skippedPairs,
       };
     };
 
