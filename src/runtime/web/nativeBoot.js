@@ -6,10 +6,13 @@
 // a website in a shell, and it made the player confirm something they had already
 // confirmed by tapping the app icon.
 //
-// This replaces it there (and only there). The app connects to a content node on
-// its own while a boot screen is up, then goes straight into the game. The website
-// keeps its home page — a browser tab genuinely is arriving from nowhere and has a
-// download to offer; an installed app does not.
+// This replaces it there (and only there). A boot screen is up while the library
+// is seeded — and, on a build that still streams its map from a content node,
+// while the node is found — then the app goes straight into the game. The
+// website keeps its home page — a browser tab genuinely is arriving from nowhere
+// and has a download to offer; an installed app does not. The Android app since
+// 2026-09 has the whole world inside the APK, so its screen only waits on the
+// seeding and says so.
 //
 // Deliberately free of imports, including Vite's `import.meta.env`, so it stays
 // loadable outside a bundler and its policy can be tested. The connection itself
@@ -39,6 +42,7 @@ export const isNativeApp = () => typeof window !== "undefined" && Boolean(window
 // an error — the game is perfectly playable on it.
 export const bootStatusText = (connection) => {
   if (!connection) return "Finding the closest community node…";
+  if (connection.local) return "Everything is on this device";
   if (connection.origin) return "Connected to the main server";
   const parts = [connection.id || "a community node"];
   if (connection.region) parts.push(connection.region);
@@ -90,7 +94,9 @@ const css = `
 // Paints the boot screen immediately and returns a handle. Synchronous on purpose:
 // it is called before the library is seeded so the phone shows something within a
 // frame of the WebView loading, rather than a white gap where the native splash was.
-export const showNativeBoot = () => {
+// `local` is the Android app with the map inside the APK: nothing is being
+// looked for, so the first line says what is actually happening.
+export const showNativeBoot = ({ local = false } = {}) => {
   if (typeof document === "undefined") return { settle: () => {} };
   const existing = document.getElementById(BOOT_ID);
   if (existing) return { settle: () => {} }; // already up; do not stack two
@@ -101,7 +107,7 @@ export const showNativeBoot = () => {
 
   const status = document.createElement("div");
   status.className = "oh-boot-status";
-  status.textContent = bootStatusText(null);
+  status.textContent = local ? "Getting the world ready…" : bootStatusText(null);
 
   const track = document.createElement("div");
   track.className = "oh-boot-track";

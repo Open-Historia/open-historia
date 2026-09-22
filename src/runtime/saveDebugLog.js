@@ -26,28 +26,18 @@ import {
     isDebugLogEnabled,
     subscribeToDebugLog,
 } from "./debugLog.js";
-import { isNativeApp } from "./web/nativeBoot.js";
+import { saveBlobToDisk } from "./saveFile.js";
 
 // Resolves to "saved", "copied" (the clipboard fallback) or "failed". The file
 // carries the Desktop log too, where there is one (see buildLoggingFile).
 export const saveDebugLogFile = async ({ incident } = {}) => {
     const report = await buildLoggingFile({ incident });
-    if (!isNativeApp()) {
-        try {
-            const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = debugLogFilename(incident?.kind);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            // Revoked on the next tick, not immediately: Firefox cancels a
-            // download whose blob URL is revoked in the same task as the click.
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            return "saved";
-        } catch { /* fall through to the clipboard */ }
-    }
+    // runtime/saveFile.js: a download in a browser, the Filesystem + share sheet
+    // in the Android app. Either failing falls through to the clipboard below.
+    try {
+        const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+        return await saveBlobToDisk(blob, debugLogFilename(incident?.kind));
+    } catch { /* fall through to the clipboard */ }
     return (await copyToClipboard(report)) ? "copied" : "failed";
 };
 

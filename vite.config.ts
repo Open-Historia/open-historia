@@ -40,6 +40,9 @@ const EDITOR_SEEDS = [
   'assets/cities-seed.json',
 ]
 
+// The Android bundle drops both sets as well: mobile/scripts/stage-www.mjs lays
+// the trimmed archives and the web-sized seeds under www/assets itself, from the
+// pinned map-data release, never from whatever a developer's public/ holds.
 const dropMapBinaries = (isWeb) => {
   // Take outDir from the resolved config rather than assuming: --outDir varies
   // (dist for the desktop, dist-web for build:web/build:site).
@@ -87,8 +90,10 @@ const emitWebVersion = (isWeb: boolean) => {
 }
 
 // https://vite.dev/config/
-// `--mode web` (npm run build:web / build:site / dev:web) builds the website; any
-// other mode builds the local/desktop app that ships in "Download for Windows".
+// `--mode web` (npm run build:web / build:site / dev:web) builds the website,
+// `--mode android` (npm run build:android) the Android app's bundle — the web
+// build with the world map inside the APK; any other mode builds the
+// local/desktop app that ships in "Download for Windows".
 export default defineConfig(({ mode }) => ({
   define: {
     // Empty off the web, which is what keeps the banner inert on desktop/dev.
@@ -101,7 +106,12 @@ export default defineConfig(({ mode }) => ({
     // generated seed files on any machine that hasn't run a web build first (e.g.
     // a fresh "Download for Windows" extract). Boolean is safe: every use site is
     // a plain truthiness check.
-    'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web'),
+    'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web' || mode === 'android'),
+    // The Android app is the web build with everything on the device: the map
+    // under /assets instead of a content node, native file saving, native HTTP
+    // for a model on the LAN. A second compile-time literal, so those branches
+    // are stripped from the website exactly as the web ones are from desktop.
+    'import.meta.env.VITE_OH_NATIVE': JSON.stringify(mode === 'android'),
   },
   // PTR placement runs in a module worker whose dependency graph can be
   // split into multiple chunks. Vite's default worker output is IIFE, which
@@ -116,7 +126,7 @@ export default defineConfig(({ mode }) => ({
         plugins: [['babel-plugin-react-compiler']],
       },
     }),
-    dropMapBinaries(mode === 'web'),
+    dropMapBinaries(mode === 'web' || mode === 'android'),
     emitWebVersion(mode === 'web'),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's

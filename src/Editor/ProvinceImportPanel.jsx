@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
+import { saveBlobToDisk } from "../runtime/saveFile.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
@@ -19,17 +20,9 @@ const buttonStyle = (active = false) => ({
   background: active ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.06)",
 });
 
-const downloadGeoJSON = (fc, filename) => {
-  const blob = new Blob([JSON.stringify(fc)], { type: "application/geo+json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+// runtime/saveFile.js: a download in a browser, the share sheet in the app.
+const downloadGeoJSON = (fc, filename) =>
+  saveBlobToDisk(new Blob([JSON.stringify(fc)], { type: "application/geo+json" }), filename);
 
 const safeStamp = () => {
   const d = new Date();

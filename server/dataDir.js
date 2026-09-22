@@ -5,9 +5,10 @@
 // pings). Defaults to server/data — the layout desktop and Termux have always
 // used, so those builds are byte-identical.
 //
-// An EMBEDDED server (the Android app runs server.js in-process via nodejs-mobile)
-// sets OH_DATA_DIR to a writable sandbox path, because the server/data that ships
-// inside the APK is READ-ONLY. The app seeds first-run defaults into that dir.
+// An EMBEDDED server — the desktop app runs server.js in-process under Electron —
+// sets OH_DATA_DIR to a writable user-data path, because the server/data that
+// ships inside the app archive is READ-ONLY. (The Android app has no server at
+// all: its library is the web backend's IndexedDB; see docs/mobile.md.)
 import path from "path";
 import url from "url";
 

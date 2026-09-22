@@ -15,7 +15,7 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 | `build` | `vite build` | `dist/` | *(default/desktop)* | `/` | The desktop/local app bundle. Served by the Express server (`server/server.js`) and copied into the Android app. |
 | `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`). Used by `WEB-DEPLOY.md`'s manual path. |
 | `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`. This is what actually deploys to production. |
-| `build:mobile-server` | `node scripts/build-mobile-server.mjs` | `mobile/nodejs-project/` | — | — | Assembles the embedded Node server for the APK. Runs *after* `build`. |
+| `build:android` | `node scripts/seed-web-defaults.mjs && vite build --mode android --outDir dist-android --emptyOutDir` | `dist-android/` | `VITE_OH_WEB` + `VITE_OH_NATIVE` | `.env.android` | The Android app's bundle. `mobile/scripts/stage-www.mjs` then lays the verified map data under `www/assets`. |
 | `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts:87`). |
 
 **The map-binary trap** (`vite.config.ts:10-60`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
@@ -95,18 +95,18 @@ Runs on **every** push to `main`/`beta` so the download never goes stale. The zi
 
 ### 4.2 `android-apk.yml` — stable Android APK
 
-`.github/workflows/android-apk.yml`. Builds the thin Android client (`mobile/`) with an **in-process** `nodejs-mobile` server and attaches the APK to the rolling `android` release.
+`.github/workflows/android-apk.yml`. Builds the Android app (`mobile/`) — the `--mode android` web bundle with the world map inside the APK — and attaches the APK and its update manifest to the rolling `android` release.
 
 | Aspect | Detail |
 |---|---|
 | Triggers | `workflow_dispatch`; push tag `android-v*` |
-| Toolchain | Node 20, Temurin Java 21 |
-| Build number | `sed` stamps `${{ github.run_number }}` into `mobile/www/index.html` over `__APP_BUILD__`. The boot screen compares this against `Build: N` in the release notes to decide whether to self-update (`.github/workflows/android-apk.yml:32`) |
-| Build | `npm ci` → `npm run build` (produces `dist/`) → `node scripts/build-mobile-server.mjs` (assembles the embedded server) → in `mobile/`: `npm ci` → `npx cap sync android` → `./gradlew assembleDebug --no-daemon` |
-| Collect | copies `app-debug.apk` → `open-historia.apk` |
-| Publish | `gh release create android … || gh release edit android`; `gh release upload android open-historia.apk --clobber`; notes end with `Build: ${{ github.run_number }}` |
+| Toolchain | Node 24, Temurin Java 21 |
+| Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode`/`versionName`; the update banner compares the bundle's number against `latest.json` |
+| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data, cached on the manifest hash) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
+| Collect | copies the APK → `open-historia.apk` |
+| Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `latest.json` (`{ build, apk, notes }`) with `--clobber` |
 
-The embedded server must be assembled **before** `cap sync` copies it into the native app — that ordering is why `build-mobile-server.mjs` runs between `npm run build` and the Gradle step.
+The map data must be staged **before** `cap sync` copies `www/` into the native project — that ordering is why `npm run map` and `npm run www` run between the bundle build and the Gradle step. One keystore for the life of the app: a fresh debug keystore on each runner is a different certificate, and Android refuses to install over a package signed with another one.
 
 ### 4.3 `android-apk-beta.yml` — experimental Android beta *(off-main)*
 
@@ -269,20 +269,16 @@ When a map file changes: upload the new asset to the `map-data` Release, then up
 
 ---
 
-## 9. Mobile embedded-server assembly (`build-mobile-server.mjs`)
+## 9. Android staging (`mobile/scripts/`)
 
-`scripts/build-mobile-server.mjs` populates `mobile/nodejs-project/` with everything `nodejs-mobile` needs to run the real Express server in-process inside the APK. It runs **after** `vite build` (it needs `dist/`) and is idempotent (wipes and rebuilds copied dirs, leaving the committed `main.js` / `fetchMapAssets.mjs` alone).
+The Android app has no server of its own: it is the `--mode android` web bundle, and the world map ships **inside** the APK. Two scripts in `mobile/scripts/` put it together; both are idempotent.
 
-| Step | What it copies/does |
+| Script | What it does |
 |---|---|
-| 1 | `server/` verbatim; `dist/` **minus** heavy map files (`copyLight` strips `*.pmtiles`, `*.geojson`, `cities-seed.json`) |
-| 2 | `public/lang/` (the server's read-only lang fallback); `public/assets` pmtiles intentionally excluded |
-| 3 | `seed/` = default scenarios + `scenario-manifest.json` + `game-manifest.json`, minus heavy map files |
-| 4 | `scripts/map-assets.json` → the first-run map fetch manifest |
-| 5 | Writes a minimal `package.json` whose only runtime dep is `express`, pinned to the root's version so the phone runs the same Express as desktop |
-| 6 | `npm install --omit=dev` into the project so the APK bundles `node_modules` (skip with `--no-install`) |
+| `stage-map-assets.mjs` (`npm run map`) | Downloads the six files in `mobile/map-assets.android.json` from the `map-data` release into `mobile/map-cache/` and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the 12.8 MB `default-regions.geojson`, `regions-seed.geojson` and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
+| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap, the signed node directory), and lays `map-cache/*` under `www/assets/`. |
 
-The ~200 MB map binaries deliberately never ship in the APK — the app downloads them on first run (`mobile/nodejs-project/fetchMapAssets.mjs`).
+`build.gradle` stores `*.pmtiles` uncompressed (`androidResources { noCompress 'pmtiles' }`) so a Range read never inflates from byte 0; `versionCode`/`versionName` come from `OH_ANDROID_BUILD`; the `release` type signs with `OH_ANDROID_KEYSTORE` when set and the debug key otherwise. See [mobile.md](mobile.md).
 
 ---
 
@@ -328,7 +324,7 @@ Key asymmetries a newcomer should internalize:
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
 - **The Android `appId` must never change.** The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
-- **Assemble the mobile server before `cap sync`** — `android-apk.yml` runs `build-mobile-server.mjs` between `npm run build` and Gradle.
+- **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
 - **`--branch=main` / `--branch=<BRANCH>` is what makes a Pages upload production** — omit it and the live domain keeps the old build while the deploy still reports success.
