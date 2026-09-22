@@ -458,6 +458,38 @@ const attachEditingContextMenu = (win) => {
   });
 };
 
+// --- a page that stops -------------------------------------------------------
+
+// The page under the window can die: out of memory, most often. Nothing used to
+// answer that, and the window stayed on its own background colour, dark grey
+// with no logo and no words, until the player closed the app. That is what a
+// Workshop save that ran the page out of memory looked like. Now the reason goes
+// to the diagnostics log, the player is told, and Reload brings the game back.
+let quitting = false;
+
+const pageGoneWording = (reason, name) => ({
+  message: reason === "oom" ? `${name} ran out of memory.` : `${name}'s page stopped unexpectedly.`,
+  detail: `The game's page closed (${reason}). Reload to go back to the game; everything saved before this is kept.`,
+});
+
+const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => {
+  const reason = String(details?.reason || "unknown");
+  if (reason === "clean-exit" || isQuitting || !win || win.isDestroyed()) return false;
+  logMain("error", "window.pageGone", `The game's page stopped (${reason}).`, { reason, exitCode: details?.exitCode });
+  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const { message, detail } = pageGoneWording(reason, name);
+  dialog
+    .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
+    .then(({ response }) => {
+      if (win.isDestroyed()) return;
+      if (response === 0) win.webContents.reload();
+      else app.quit();
+    })
+    .catch(() => {});
+  return true;
+};
+// --- end of a page that stops
+
 const createMainWindow = () => {
   const win = new BrowserWindow({
     width: 1440,
@@ -508,6 +540,7 @@ const createMainWindow = () => {
     if (openableExternally(targetUrl)) shell.openExternal(targetUrl);
   });
   attachEditingContextMenu(win);
+  win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
   win.once("ready-to-show", () => win.show());
   return win;
 };
@@ -666,5 +699,8 @@ if (!app.requestSingleInstanceLock()) {
   });
   app.whenReady().then(boot).catch(reportFatalBootError);
   app.on("window-all-closed", () => app.quit());
+  app.on("before-quit", () => {
+    quitting = true;
+  });
   ipcMain.handle("setup:cancel", () => app.quit());
 }

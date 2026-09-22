@@ -28,6 +28,21 @@
 // five decimals, about a metre, which leaves centimetre slivers along every
 // repaired border on reload — without a floor those would be "repaired" again
 // on every save, moving hundreds of regions by centimetres each time.
+//
+// And no single call may be too big. polygon-clipping refuses any operation
+// past 1,000,000 queued segment endpoints (about 500,000 segments) with
+// "Infinite loop when putting segment endpoints in a priority queue", and it
+// says so only after building the queue: 0.8 GB of heap for the stock GADM
+// world's chunk results (1.25 million vertices), in one synchronous call. A
+// page on a machine with 8 GB of RAM gets about 2 GB of heap, much of it
+// already held by the game and the Workshop's own copy of the map, so on a
+// detailed map that one call could need more than the page had left; a page
+// that runs out dies, and the desktop window is left on its dark grey
+// background. So no union is handed more than maxUnionVertices: a heavy chunk
+// is split until its pieces fit, the chunk results are merged pairwise within
+// the budget, and a map that cannot be merged into one piece is read in parts.
+// A hole in one part that a region of another part fills (an enclave grouped
+// elsewhere) is not a crack, and is dropped.
 
 export const BORDER_CLEANUP = Object.freeze({
   // Metres in the map projection: the Topology panel's default tolerance.
@@ -42,6 +57,10 @@ export const BORDER_CLEANUP = Object.freeze({
   targetRegionsPerChunk: 300,
   // Regions per overlap batch between repaints.
   overlapBatch: 200,
+  // The most vertices one polygon-clipping call is handed (see above), half its
+  // own ceiling. The stock 4,848-region map is 236,003 vertices in all, so it
+  // is always one union, exactly as before.
+  maxUnionVertices: 250_000,
 });
 
 const count = (value) => Number(value) || 0;
@@ -104,18 +123,170 @@ export const yieldToBrowser = () =>
     }
   });
 
+// Vertices in an OpenLayers geometry: what a union's cost grows with.
+export const vertexCountOf = (geom) => {
+  const flat = geom?.getFlatCoordinates?.();
+  if (!flat) return 0;
+  return flat.length / (geom.getStride?.() || 2);
+};
+
+// A bucket too heavy for one union, split into pieces that are not: halved at
+// the median of its regions' extent centres along the longer side, again and
+// again, so each piece is a compact patch of neighbours. A single region
+// heavier than the budget is a piece of its own. Pieces come out in the order
+// of the halving, so neighbouring patches sit next to each other.
+export const splitByVertexBudget = (regions, { verticesOf, extentOf, budget = BORDER_CLEANUP.maxUnionVertices }) => {
+  const pieces = [];
+  const stack = [regions.slice()];
+  while (stack.length) {
+    const group = stack.pop();
+    let total = 0;
+    for (const region of group) total += count(verticesOf(region));
+    if (group.length < 2 || total <= budget) {
+      if (group.length) pieces.push(group);
+      continue;
+    }
+    const rows = group.map((region, index) => {
+      const e = extentOf(region);
+      return { region, index, x: (e[0] + e[2]) / 2, y: (e[1] + e[3]) / 2 };
+    });
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const row of rows) {
+      minX = Math.min(minX, row.x);
+      maxX = Math.max(maxX, row.x);
+      minY = Math.min(minY, row.y);
+      maxY = Math.max(maxY, row.y);
+    }
+    const axis = maxX - minX >= maxY - minY ? "x" : "y";
+    rows.sort((a, b) => a[axis] - b[axis] || a.index - b.index);
+    const half = Math.ceil(rows.length / 2);
+    // The second half goes on the stack first, so the first half is split next.
+    stack.push(rows.slice(half).map((row) => row.region));
+    stack.push(rows.slice(0, half).map((row) => row.region));
+  }
+  return pieces;
+};
+
+// The chunk results merged back into one union without ever handing a single
+// call more than the budget. When they fit together, that is the one call the
+// sweep always made. When they do not, neighbours are merged in pairs, round
+// after round, until one union is left or no neighbouring pair fits; what is
+// left is the map in parts.
+export const mergeWithinBudget = async (parts, { union, verticesOf = vertexCountOf, budget = BORDER_CLEANUP.maxUnionVertices, between } = {}) => {
+  let level = parts.filter(Boolean);
+  if (level.length < 2) return level;
+  let total = 0;
+  for (const part of level) total += count(verticesOf(part));
+  if (total <= budget) {
+    const whole = union(level);
+    return whole ? [whole] : [];
+  }
+  let merged = true;
+  while (merged && level.length > 1) {
+    const next = [];
+    merged = false;
+    let i = 0;
+    while (i < level.length) {
+      const a = level[i];
+      const b = level[i + 1];
+      if (b !== undefined && count(verticesOf(a)) + count(verticesOf(b)) <= budget) {
+        const joined = union([a, b]);
+        if (joined) next.push(joined);
+        merged = true;
+        i += 2;
+        if (between) await between();
+      } else {
+        next.push(a);
+        i += 1;
+      }
+    }
+    level = next;
+  }
+  return level;
+};
+
+// When the map was read in parts, a hole in one part's union can be land that
+// a region of another part holds: a narrow enclave whose own region was grouped
+// elsewhere. A crack is a hole no region covers, so a hole with a region under
+// its interior point is not one. (A union of the whole map never has such a
+// hole, and is not asked.)
+export const dropCoveredHoles = (holes, isCovered) =>
+  holes.filter((hole) => !isCovered(hole.geom.getInteriorPoint().getCoordinates().slice(0, 2)));
+
+const byWidthThenArea = (a, b) => a.width - b.width || a.area - b.area;
+
+// One pass's gap search: the regions bucketed by the grid, heavy buckets split
+// to fit the budget, each piece unioned, the pieces merged within the budget,
+// and the holes of what is left read at the sweep's tolerances. `union` and
+// `gapsOf` are geometry.js's unionAllGeoms and enclosedGapsOfUnion, handed in
+// so this module stays import-free; `isCovered(point)` asks the map whether a
+// region lies under a point. Returns the holes, narrowest first, and how many
+// parts the map was read in (1: one union of everything, as it always was).
+export const findEnclosedGaps = async (regions, {
+  plan,
+  geometryOf,
+  union,
+  gapsOf,
+  isCovered = () => false,
+  maxWidth = BORDER_CLEANUP.maxWidth,
+  minWidth = BORDER_CLEANUP.minWidth,
+  budget = BORDER_CLEANUP.maxUnionVertices,
+  onChunks,
+  onChunk,
+  between = yieldToBrowser,
+}) => {
+  const verticesOf = (region) => vertexCountOf(geometryOf(region));
+  const extentOf = (region) => geometryOf(region).getExtent();
+  const pieces = bucketRegions(plan, regions, extentOf)
+    .flatMap((bucket) => splitByVertexBudget(bucket, { verticesOf, extentOf, budget }));
+  onChunks?.(pieces.length);
+  const partials = [];
+  for (let index = 0; index < pieces.length; index += 1) {
+    const piece = pieces[index];
+    // A region heavier than the budget goes in as it is: the union of one
+    // polygon is that polygon, and handing it to polygon-clipping alone is the
+    // very call the budget exists to avoid.
+    const heavyAlone = piece.length === 1 && verticesOf(piece[0]) > budget;
+    const unioned = heavyAlone ? geometryOf(piece[0]) : union(piece.map(geometryOf));
+    if (unioned) partials.push(unioned);
+    onChunk?.(index + 1);
+    await between();
+  }
+  const merged = await mergeWithinBudget(partials, { union, budget, between });
+  const holes = merged.flatMap((part) => gapsOf(part, { maxWidth, minWidth }));
+  if (merged.length < 2) return { holes, parts: merged.length };
+  return { holes: dropCoveredHoles(holes, isCovered).sort(byWidthThenArea), parts: merged.length };
+};
+
 const plural = (n, word) => `${formatCount(n)} ${word}${count(n) === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
+
+// What a heavy map's sweep could not look at, said after the result.
+const describeCleanupLimits = (result) => {
+  let note = "";
+  if (count(result.parts) > 1) {
+    note += ` The map is too detailed to check in one piece, so it was checked in ${formatCount(result.parts)} parts.`;
+  }
+  const skipped = count(result.skippedPairs);
+  if (skipped > 0) {
+    note += ` ${plural(skipped, "pair")} of very large neighbouring regions ${skipped === 1 ? "was" : "were"} not compared.`;
+  }
+  return note;
+};
 
 // The one-line result shown after the save (and inside the loading screen
 // while the scenario is being written).
 export const describeCleanupResult = (result, error = "") => {
   if (error) return `Border cleanup was skipped (${error}); the map was saved as it is.`;
   if (!result) return "";
+  const limits = describeCleanupLimits(result);
   if (!result.changed) {
-    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across ${plural(result.regionCount, "region")}.`;
+    return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across ${plural(result.regionCount, "region")}.${limits}`;
   }
   const passes = count(result.passes) > 1 ? ` in ${plural(result.passes, "pass")}` : "";
-  return `Borders cleaned${passes}: ${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}.`;
+  return `Borders cleaned${passes}: ${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}.${limits}`;
 };
 
 // What the loading screen shows for a progress state from
