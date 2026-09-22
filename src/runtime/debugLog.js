@@ -953,16 +953,34 @@ const mergeWithDesktop = (pageEntries, desktop) => {
     return merged.concat(desktopEntries.slice(next));
 };
 
+// The time of day of an ISO stamp on this computer's clock — the clock the
+// game's own messages use ("is busy; skipped until 23:26"). The file used to
+// print UTC beside them, so in a report from a player two hours east of UTC a
+// ten-minute pause read as two hours and ten minutes.
+export const localClock = (iso) => {
+    const ms = Date.parse(iso ?? "");
+    if (!Number.isFinite(ms)) return "";
+    const at = new Date(ms);
+    return [at.getHours(), at.getMinutes(), at.getSeconds()].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+// "UTC+02:00": this computer's offset, said once in the header.
+export const utcOffsetLabel = (date = new Date()) => {
+    const minutes = -date.getTimezoneOffset();
+    const size = Math.abs(minutes);
+    return `UTC${minutes < 0 ? "-" : "+"}${String(Math.floor(size / 60)).padStart(2, "0")}:${String(size % 60).padStart(2, "0")}`;
+};
+
 // One entry as a line of the file.
 const renderEntry = (entry) => {
-    const time = entry.at?.slice(11, 19) || "--:--:--";
+    const time = localClock(entry.at) || "--:--:--";
     const date = entry.gameDate ? ` {${entry.gameDate}}` : "";
     const detail = entry.detail ? `\n        ${entry.detail}` : "";
     // "×48 over 12s" says storm; the same line with no marker says it happened
     // once. Both matter to a reader deciding whether an error is the bug or the
     // weather.
     const repeat = entry.repeat > 1
-        ? ` (×${entry.repeat}, last ${entry.lastAt?.slice(11, 19) || "?"})`
+        ? ` (×${entry.repeat}, last ${localClock(entry.lastAt) || "?"})`
         : "";
     return `[${time}]${date} [${entry.category}] ${entry.message}${repeat}${detail}`;
 };
@@ -999,6 +1017,7 @@ const composeLoggingFile = ({ incident, desktop, settings } = {}) => {
     const header = [
         "OPEN HISTORIA — DIAGNOSTICS LOG",
         `Generated: ${new Date().toISOString()}`,
+        `Clock: the times below are this computer's local time (${utcOffsetLabel()}), the clock the game's own messages use.`,
         contextLine("Build", context.build),
         contextLine("Platform", typeof navigator !== "undefined" ? navigator.userAgent : ""),
         contextLine("Language", context.language),

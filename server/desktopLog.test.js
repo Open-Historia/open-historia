@@ -178,6 +178,24 @@ describe("the Desktop log routes", () => {
     assert.deepEqual(left, []);
   });
 
+  // A player's diagnostics log carried "http.404: Asset not found: stats" with a
+  // full stack eight times a turn: the client asks for a scenario's optional
+  // stats sheet on every read and uses the default when there is none. A
+  // missing optional asset is an answer; a scenario that is not there is still
+  // an error, and still logged.
+  test("an asset a scenario does not have is a quiet 404; a scenario that is not there is logged", async () => {
+    fs.rmSync(path.dirname(serverLog()), { recursive: true, force: true });
+    const missing = await fetch(local("/api/scenarios/default/assets/stats"));
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error, "Asset not found: stats", "the built-in scenario exists and simply has no stats sheet");
+    const unknown = await fetch(local("/api/scenarios/no-such-scenario/assets/stats"));
+    assert.equal(unknown.status, 404);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const logged = fs.existsSync(serverLog()) ? fs.readFileSync(serverLog(), "utf8") : "";
+    assert.equal(logged.includes("Asset not found"), false, "the missing optional asset is not logged");
+    assert.equal(logged.includes("Scenario not found"), true, "the missing scenario is");
+  });
+
   test("another device cannot clear it", async (t) => {
     const lan = lanAddress();
     if (!lan) {

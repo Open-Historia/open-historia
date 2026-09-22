@@ -11,8 +11,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyWarUpdates,
+  decodeWarUpdates,
+  eventNarratesHardCombat,
   normalizeWorldWarEventLinks,
+  reconcileCombatWarState,
   repairWarLedgerPayload,
+  validateCanonicalWarEvents,
   validateWarLedgerPayload,
 } from "../src/Game/AI/nativeWarLedger.js";
 
@@ -76,7 +81,7 @@ test("repair: the record's own number declares the link, so its event is stamped
   assert.match(validateWarLedgerPayload(candidate, { world }), /missing event\.warId/);
 
   const repair = repairWarLedgerPayload(candidate, { world });
-  assert.deepEqual(repair, { stamped: 1, droppedIds: [], strippedEvents: 0, residual: "" });
+  assert.deepEqual(repair, { stamped: 1, anchored: 0, droppedIds: [], strippedEvents: 0, residual: "" });
   assert.equal(candidate.events[0].warId, "mexican-pacification-2016");
   assert.equal(candidate.warUpdates.length, 1, "the war record is kept");
   assert.equal(validateWarLedgerPayload(candidate, { world }), "");
@@ -143,4 +148,144 @@ test("repair: an event of a war that already exists keeps its binding when anoth
   assert.equal(candidate.events[0].warId, "old-war", "the existing war's event keeps its warId");
   assert.deepEqual(candidate.events[0].combatants, ["Ruritania", "Borduria"]);
   assert.equal(candidate.events[1].warId, "");
+});
+
+// A player's diagnostics log (beta 0.0.50, 2026-09-22) shows two wars the
+// player had just declared thrown away by this repair. The payloads are not in
+// the log; these are the shapes its messages allow. Albania: "Albania
+// recognises the serbian advance as an offical declaration of war" and "occupy
+// the city of prizen" came back with the assault listed ahead of the event the
+// war was started on — "Event "1st Albanian Motorized Brigade Assaults
+// Prizren" references warId war-albania-serbia-2016, but no such canonical war
+// exists at that point in the timeline" — and the war was dropped. Sweden: "we
+// move troops into norway" came back as "Swedish Armed Forces Cross the
+// Norwegian Border in Shock Mobilization", with the start on a later event,
+// and the same message dropped that war too.
+
+const albania = () => ({
+  events: [
+    event("e1", "1st Albanian Motorized Brigade Assaults Prizren", {
+      description: "Albanian armour and infantry storm Serbian positions around Prizren; heavy fighting continues into the night.",
+      warId: "war-albania-serbia-2016",
+      combatants: ["Albania", "Serbia"],
+    }),
+    event("e2", "Albania Declares War on Serbia", {
+      kind: "diplomacy",
+      description: "Tirana answers the Serbian advance with a formal declaration of war.",
+      warId: "war-albania-serbia-2016",
+    }),
+  ],
+  warUpdates: record("war-albania-serbia-2016", "start", "Albania", "Serbia", "2", "Serbian advance answered"),
+});
+
+test("a war whose first battle is listed before its declaration is kept by the repair, not dropped", () => {
+  const candidate = albania();
+  assert.deepEqual(reconcileCombatWarState(candidate, { world }).unresolved, [], "the assault names its war and both sides");
+  normalizeWorldWarEventLinks(candidate);
+  assert.match(
+    validateWarLedgerPayload(candidate, { world }),
+    /references warId war-albania-serbia-2016, but no such canonical war exists at that point in the timeline/,
+    "the strict pass still reads the order as written, and says so while a retry remains",
+  );
+
+  const repair = repairWarLedgerPayload(candidate, { world });
+  assert.deepEqual(repair.droppedIds, [], "the war the player declared is kept");
+  assert.equal(repair.strippedEvents, 0);
+  assert.equal(repair.residual, "");
+  assert.equal(candidate.events[0].warId, "war-albania-serbia-2016", "the assault stays part of it");
+
+  const merge = applyWarUpdates({ world, updates: decodeWarUpdates(candidate.warUpdates), events: candidate.events, stopDate: "2016-03-08", round: 7 });
+  assert.deepEqual(merge.appliedIds, ["war-albania-serbia-2016"]);
+  assert.equal(merge.wars[0].status, "active");
+  assert.deepEqual(merge.wars[0].sideA, ["Albania"]);
+  assert.deepEqual(merge.wars[0].sideB, ["Serbia"]);
+});
+
+test("the merged-turn check reads a round as one period, so it does not flag what the repair kept", () => {
+  const candidate = albania();
+  normalizeWorldWarEventLinks(candidate);
+  const updates = decodeWarUpdates(candidate.warUpdates);
+  assert.match(validateCanonicalWarEvents({ events: candidate.events, updates, world }), /no such canonical war exists at that point/);
+  assert.equal(validateCanonicalWarEvents({ events: candidate.events, updates, world, startsInForce: true }), "");
+});
+
+test("a start sitting on an event that cannot open a war moves to the event of that war that can", () => {
+  const candidate = {
+    events: [
+      event("e1", "Swedish Armed Forces Cross the Norwegian Border in Shock Mobilization", {
+        description: "Mechanised brigades roll out of Jämtland before dawn.",
+        warId: "war-sweden-norway-2016",
+      }),
+      event("e2", "Norway Mobilises Its Home Guard", {
+        description: "Oslo calls up reservists across Trøndelag.",
+        warId: "war-sweden-norway-2016",
+      }),
+    ],
+    warUpdates: record("war-sweden-norway-2016", "start", "Sweden", "Norway", "2", "Swedish incursion"),
+  };
+  normalizeWorldWarEventLinks(candidate);
+  assert.match(validateWarLedgerPayload(candidate, { world }), /no such canonical war exists at that point in the timeline/);
+
+  const repair = repairWarLedgerPayload(candidate, { world });
+  assert.equal(repair.anchored, 1, "the start moved onto the crossing");
+  assert.deepEqual(repair.droppedIds, [], "and the war was kept");
+  assert.equal(repair.residual, "");
+  assert.deepEqual(decodeWarUpdates(candidate.warUpdates)[0].eventIndexes, [0]);
+
+  const merge = applyWarUpdates({ world, updates: decodeWarUpdates(candidate.warUpdates), events: candidate.events, stopDate: "2016-01-08", round: 2 });
+  assert.deepEqual(merge.appliedIds, ["war-sweden-norway-2016"]);
+});
+
+test("a start the batch cannot open anywhere is still dropped, with its events kept as narrative", () => {
+  const candidate = {
+    events: [
+      event("e1", "Swedish and Norwegian staffs hold joint readiness talks", { warId: "war-sweden-norway-2016" }),
+      event("e2", "Norway Mobilises Its Home Guard", { warId: "war-sweden-norway-2016" }),
+    ],
+    warUpdates: record("war-sweden-norway-2016", "start", "Sweden", "Norway", "2"),
+  };
+  const repair = repairWarLedgerPayload(candidate, { world });
+  assert.equal(repair.anchored, 0);
+  assert.deepEqual(repair.droppedIds, ["war-sweden-norway-2016"], "no event narrates the opening, so no war is made");
+  assert.equal(candidate.events.length, 2);
+  assert.equal(candidate.events[0].warId, "");
+});
+
+test("the words that open a war include their other forms and a border crossing; a battle is still a battle", () => {
+  const opens = (title, description = "") => validateWarLedgerPayload({
+    events: [event("e1", title, { description, warId: "w" })],
+    warUpdates: record("w", "start", "Ruritania", "Borduria", "1"),
+  }, { world });
+  for (const [title, description] of [
+    ["Ruritanian Brigade Assaults Bordurian Positions", ""],
+    ["Ruritania Breaks with Borduria", "Ruritania declared war on Borduria at dawn."],
+    ["Ruritanian Troops Invaded Borduria Overnight", ""],
+    ["Ruritanian Army Crosses the Bordurian Frontier", ""],
+    ["Ruritanian columns pour across the border", ""],
+    ["Ruritanian aircraft carry out airstrikes on Bordurian depots", ""],
+  ]) {
+    assert.equal(opens(title, description), "", title);
+  }
+  assert.match(opens("Ruritanian and Bordurian staffs agree a deployment plan"), /cannot create a canonical war/, "cooperation is still no war");
+  assert.match(opens("Ruritanian Army holds combat-readiness drills near the border"), /cannot create a canonical war/, "a drill near a border is not a crossing");
+
+  // The detector that decides whether an event must belong to a war at all is
+  // not loosened: a government that "battles wildfires" fights no one.
+  assert.equal(eventNarratesHardCombat({ kind: "domestic", title: "Government battles wildfires in the north", description: "" }), false);
+});
+
+test("a unit called a Combat Wing or a battle group is a formation, not a battle", () => {
+  // Transcribed from the same log: an Ecuadorian air wing changing bases was
+  // flagged as combat needing a war, on two turns running.
+  assert.equal(eventNarratesHardCombat({
+    kind: "military",
+    title: "FAE 21st Combat Wing Redeploys to Quito Amid Border Strains with Colombia",
+    description: "The wing moves its aircraft to Mariscal Sucre airport.",
+  }), false);
+  assert.equal(eventNarratesHardCombat({ kind: "military", title: "EU battle group deploys to Bamako", description: "" }), false);
+  assert.equal(eventNarratesHardCombat({
+    kind: "military",
+    title: "Ecuadorian and Colombian troops locked in combat near Ipiales",
+    description: "",
+  }), true, "real combat still reads as combat");
 });

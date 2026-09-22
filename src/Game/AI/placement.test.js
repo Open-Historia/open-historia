@@ -17,6 +17,7 @@
 // and east of 38 E is open sea. "North Korea" is a fifth region far away, there
 // to prove a name that starts with a direction is still a name.
 
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -295,4 +296,50 @@ test("a gazetteer that throws on one odd region costs that reading, not the plac
     const brittle = { ...gazetteer, regionAt: (point) => { if (point[0] > 100) throw new Error("bad polygon"); return gazetteer.regionAt(point); } };
     assert.equal(resolvePlacement("Midburg", brittle).regionId, "wm-n");
     assert.ok(resolvePlacement("North Korea", brittle).error);
+});
+
+// --- a border with no first place named ---
+//
+// A player's diagnostics log (beta 0.0.50): Ecuador mobilised a brigade and the
+// model placed it at "northern frontier with Colombia", then, told that was not
+// a place, at "northern border with Colombia". Both named no first place, so
+// neither was read, and the brigade never appeared — twice.
+
+test("a border with no first place named is the unit's own side of it", () => {
+    for (const phrase of ["northern frontier with Eastland", "northern border with Eastland", "along the border with Eastland", "the Eastland border", "Eastland frontier"]) {
+        const spot = resolvePlacement(phrase, gazetteer, { seedText: "1st Brigade", owner: "Westmark" });
+        assert.equal(spot.error, undefined, phrase);
+        assert.ok(["wm-n", "wm-s"].includes(spot.regionId), `${phrase}: landed in ${spot.regionId}, not on Westmark's side`);
+        assert.ok(spot.lng > 33, `${phrase}: should hug the 34 E border, was ${spot.lng}`);
+    }
+    // Eastland's own unit at "the border with Westmark" is on Eastland's side.
+    const theirs = resolvePlacement("the border with Westmark", gazetteer, { seedText: "2nd Brigade", owner: "Eastland" });
+    assert.ok(["el-n", "el-s"].includes(theirs.regionId), String(theirs.regionId));
+    assert.ok(theirs.lng < 35, String(theirs.lng));
+    // Without an owner there is no side to put it on, so no such reading is offered.
+    assert.equal(readPlacement("northern frontier with Eastland").some((reading) => reading.kind === "facing"), false);
+});
+
+test("words for a kind of ground after a name are tried without them, after the phrase as written", () => {
+    const readings = readPlacement("near Putumayo jungle frontier");
+    assert.deepEqual(readings.find((reading) => reading.kind === "near" && reading.name === "Putumayo"), { kind: "near", name: "Putumayo" });
+    const asWritten = readings.findIndex((reading) => reading.kind === "near" && reading.name === "Putumayo jungle frontier");
+    const stripped = readings.findIndex((reading) => reading.kind === "near" && reading.name === "Putumayo");
+    assert.ok(asWritten >= 0 && asWritten < stripped, "the phrase as written is tried first");
+    assert.ok(readPlacement("Northern Region").some((reading) => reading.name === "Northern Region" && reading.kind === "place"), "a real name ending in one is still tried whole");
+    assert.equal(readPlacement("Midburg").length, 1, "a bare name is one reading");
+});
+
+test("the Workshop-free pipeline: a new formation nothing places is raised in its owner's own territory", () => {
+    // resolvePlacements lives in gameplay.js, which does not load under bare
+    // node; its fallback is the owner's own name, resolved here exactly as it is
+    // resolved there, and the wiring is checked in its source.
+    const home = resolvePlacement("Westmark", gazetteer, { seedText: "Ecuadorian 1st Infantry Brigade" });
+    assert.equal(home.error, undefined);
+    assert.ok(["wm-n", "wm-s"].includes(home.regionId));
+    const source = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("const resolvePlacements = async"), source.indexOf("// The system prompt a task is sent"));
+    assert.ok(body.includes("owner: entry.owner"), "the unit's owner reaches the phrase reader");
+    assert.ok(body.includes("entry.spawn && entry.owner") && body.includes("resolvePlacement(entry.owner, gazetteer"), "a spawn with nowhere to go is raised at home");
+    assert.ok(body.includes("rather than left off the map"), "and the receipt says where it went");
 });
