@@ -12,11 +12,10 @@
 // data URL), or the same flag dedupes on the download and duplicates on the website.
 
 import { STORES, idbGetAll, idbPut, idbDelete } from "./idb.js";
-
-const sha256Hex = async (str) => {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(str)));
-  return Array.from(new Uint8Array(buf)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-};
+// The shared SHA-256 (runtime/sha256.js): WebCrypto on the website, pure JS in
+// the Android app, whose http origin has no crypto.subtle — a flag upload
+// there used to throw right here.
+import { sha256Hex } from "../sha256.js";
 
 const slug = (raw, fallback = "flag") =>
   String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;

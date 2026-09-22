@@ -6,10 +6,12 @@ name: Build Android APK
 # machine. Run it from the Actions tab (workflow_dispatch) after changing mobile/
 # or the client, or push an android-v* tag.
 #
-# The app IS the web build: it packages the same bundle openhistoria.com serves
-# and connects to a community content node on its own. It used to be a thin
-# WebView pointed at a server the player had to run themselves (Termux on the
-# phone, or a host on their network), which is why this now builds the client.
+# The app is the web bundle built with `--mode android`, with the world map
+# INSIDE the APK: the library lives on the phone, the three pmtiles archives and
+# the regions GeoJSON ride under www/assets, and nothing is streamed from a
+# content node any more. The community hub and the player's own AI provider are
+# the only network use. It used to be the website's bundle verbatim, and before
+# that a thin WebView pointed at a server the player ran themselves.
 
 on:
   workflow_dispatch:
@@ -38,41 +40,77 @@ jobs:
 
       # VITE_APP_BUILD is what makes the in-app update banner take its APK path:
       # it compares this number against the one in the release manifest and offers
-      # the new APK. The web router answers /api/app-update for it, since this
-      # build has no on-device server to proxy the manifest any more.
-      - name: Build the web client
+      # the new APK. The web router answers /api/app-update for it from the
+      # latest.json this workflow publishes below.
+      - name: Build the Android bundle
         env:
           VITE_APP_BUILD: ${{ github.run_number }}
           VITE_APP_TRACK: stable
         run: |
           npm ci
-          npm run build:web
+          npm run build:android
+
+      # The six map files are pinned by sha256 in mobile/map-assets.android.json;
+      # a cache hit skips ~70 MB of downloads and the verify still runs.
+      - name: Restore the map data
+        uses: actions/cache@v4
+        with:
+          path: mobile/map-cache
+          key: android-map-data-${{ hashFiles('mobile/map-assets.android.json') }}
 
       - name: Build the APK
+        env:
+          # versionCode/versionName come from the run number, so every build is
+          # an upgrade over the last one (Android refuses a lower versionCode).
+          OH_ANDROID_BUILD: ${{ github.run_number }}
+          # One keystore across builds, or an APK cannot install over its
+          # predecessor (each fresh debug keystore is a different certificate).
+          # Without the secrets the build falls back to debug signing.
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd mobile
           npm ci
+          npm run map
           npm run www
           npx cap sync android
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Collect
-        run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk open-historia.apk
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/release.keystore
+            export OH_ANDROID_KEYSTORE="$PWD/app/release.keystore"
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../../open-historia.apk
+          else
+            echo "No ANDROID_KEYSTORE_B64 secret: debug-signed build (cannot upgrade in place over a build signed with another key)."
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../../open-historia.apk
+          fi
 
       - uses: actions/upload-artifact@v6
         with:
           name: open-historia.apk
           path: open-historia.apk
 
+      # latest.json is what the app's update banner reads (src/runtime/web/router.js
+      # answers /api/app-update from it). The asset name open-historia.apk is
+      # contractual: the site and the banner both link to it by name.
       - name: Publish to the rolling "android" release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NOTES="Open Historia for Android. Download open-historia.apk below and open it to install (allow installs from your browser when Android asks). Nothing else to set up: the app connects to a community content node on its own, the same way openhistoria.com does, and streams the world map from it. No server on your phone, no Termux. It updates itself when a newer build is published here.
+          cat > latest.json <<EOF
+          {
+            "build": ${{ github.run_number }},
+            "apk": "https://github.com/${{ github.repository }}/releases/download/android/open-historia.apk",
+            "notes": "Build ${{ github.run_number }}: the whole game on your phone — saves, scenarios, the workshop and the world map — with the community hub and your AI provider as the only network use."
+          }
+          EOF
+          NOTES="Open Historia for Android. Download open-historia.apk below and open it to install (allow installs from your browser when Android asks). Everything is on the device: your saves and scenarios, the scenario workshop, and the world map — it plays in airplane mode from the first launch. The community hub and your own AI provider are the only things that use the network. It updates itself when a newer build is published here.
 
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
             || gh release edit android --notes "$NOTES"
-          gh release upload android open-historia.apk --clobber
+          gh release upload android open-historia.apk latest.json --clobber

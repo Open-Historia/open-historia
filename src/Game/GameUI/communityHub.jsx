@@ -17,6 +17,7 @@ import {
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
 import { DISCORD_URL } from "../../runtime/communityLinks.js";
+import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
@@ -220,16 +221,6 @@ export const downloadHubBundle = async (bundleUrl) => {
   return bundle;
 };
 
-const saveBlobToDisk = (blob, fileName) => {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-};
 
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
@@ -282,7 +273,7 @@ const searchInputStyle = {
   padding: "0 0.9rem",
 };
 
-const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.png";
+const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
 const handleScenarioCoverError = (event) => {
   const image = event.currentTarget;

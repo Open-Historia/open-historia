@@ -38,7 +38,7 @@ An asset can be resolved from up to four places. Which one wins depends on the b
 
 | Source | What lives there | Which builds |
 |---|---|---|
-| **App bundle** (`public/assets/`, or `dist/assets/` in a built app) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` | Desktop / Termux |
+| **App bundle** (`public/assets/`, or `dist/assets/` in a built app; `www/assets/` inside the Android APK) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` (the Android app ships the z8 trims and the web-sized seeds, pinned in `mobile/map-assets.android.json`) | Desktop / Termux / Android |
 | **`OH_DATA_DIR`** (`server/data/…`, or a writable sandbox on Android) | Per-scenario overrides, per-game state, and — on the embedded server — the downloaded pmtiles under `<DATA_DIR>/assets/` | All node-server builds |
 | **`map-data` GitHub Release** | Canonical copies of every heavy binary, checksum-pinned | Fetched at install/update time |
 | **Cloudflare / content-node swarm** | Byte-identical pmtiles served over HTTP range requests, hash-verified | Web build only |
@@ -51,7 +51,7 @@ An asset can be resolved from up to four places. Which one wins depends on the b
 DATA_DIR = process.env.OH_DATA_DIR ? resolve(OH_DATA_DIR) : <server>/data
 ```
 
-Desktop and Termux leave `OH_DATA_DIR` unset → `server/data` (byte-identical layout). The **Android** app runs `server.js` in-process via nodejs-mobile and sets `OH_DATA_DIR` to a writable sandbox, because the `server/data` shipped inside the APK is read-only. `server/libraryStore.js:20` derives `DIST_DIR`, `PUBLIC_DIR`, and `DATA_ASSETS_DIR` (`= <DATA_DIR>/assets`, `:32`) from it.
+Desktop and Termux leave `OH_DATA_DIR` unset → `server/data` (byte-identical layout). The **Android** app has no server and no data dir: its library is the web backend's IndexedDB, and its map data is read from the APK (see [mobile.md](mobile.md)). `server/libraryStore.js:20` derives `DIST_DIR`, `PUBLIC_DIR`, and `DATA_ASSETS_DIR` (`= <DATA_DIR>/assets`, `:32`) from it.
 
 ### PMTiles resolution order (server)
 
@@ -140,14 +140,9 @@ That is **134.9 MB off the 288.7 MB** a player pulls on first launch. Shipping i
 
 Two things a trimmed archive still says about itself: the metadata blob is preserved verbatim, so `vector_layers[0].maxzoom` and `tilestats` still describe z10 (MapLibre reads the header, not these, so rendering is unaffected — `tippecanoe-decode` and friends would be misled), and `centerZoom` is carried across as it was.
 
-### Embedded (Android) variant
+### Android variant
 
-`mobile/nodejs-project/fetchMapAssets.mjs` uses the **same** release + checksums but routes every asset into the writable `OH_DATA_DIR` instead of the read-only APK bundle (`fetchMapAssets.mjs:25` `targetFor`):
-
-- `server/data/<x>` → `<DATA_DIR>/<x>` (scenario geojson)
-- `public/assets/<x>` → `<DATA_DIR>/assets/<x>` (the pmtiles)
-
-This is why `resolveRuntimeBinaryAsset` checks `<DATA_DIR>/assets` before the bundle (§2).
+The Android app ships its map data **inside the APK**: `mobile/scripts/stage-map-assets.mjs` downloads the six files pinned in `mobile/map-assets.android.json` from the same `map-data` release (the z8-trimmed archives, `cities.pmtiles`, and the web-sized `default-regions.geojson`, `regions-seed.geojson`, `cities-seed.json`), verifies each sha256, and `stage-www.mjs` lays them under `www/assets/`. The interceptor's `/api/runtime/pmtiles/<key>` becomes a Range read of `/assets/<key>.pmtiles` on Capacitor's local server. Nothing is downloaded at first run and nothing is streamed from a content node.
 
 ---
 

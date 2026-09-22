@@ -11,6 +11,7 @@
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle, zipBundle } from "./bundleZip.js";
+import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
 // background.json file bytes; plain atob/btoa mangle non-Latin1 vector data).
@@ -321,16 +322,8 @@ export const installCommunityBasemap = async (post) => {
   });
 };
 
-const downloadFile = (blob, fileName) => {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-};
+// runtime/saveFile.js: a download in a browser, the share sheet in the app.
+const downloadFile = (blob, fileName) => saveBlobToDisk(blob, fileName);
 
 const safeName = (name) =>
   (name || "basemap").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "basemap";
