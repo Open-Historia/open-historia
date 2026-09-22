@@ -227,13 +227,13 @@ export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => fals
 // A queued entry no event could ever cite is settled by the engine instead: a
 // Deploy request, which the unit engine accepts, and a chat request, which is
 // answered by the conversation opening. Only an ordinary order needs an event.
-const needsAnEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
+export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
 
 export const settleOrders = (actions, events) => {
   const answered = new Set(asArray(events).flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
   return asArray(actions).map((action) => {
     if (asText(action?.status) !== "planned") return action;
-    if (!needsAnEvent(action)) {
+    if (!actionNeedsEvent(action)) {
       const { overdue: _overdue, ...rest } = action;
       return { ...rest, status: "resolved" };
     }
