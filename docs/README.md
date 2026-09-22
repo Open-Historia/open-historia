@@ -35,7 +35,7 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 
 ### Web & Mobile
 - [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, PMTiles Worker-proxy/content-node trust chain, magic-link/Google accounts + E2E sync.
-- [Android App (Embedded Server)](mobile.md) — The Capacitor + nodejs-mobile Android app: boot shell, first-run map fetch, self-update, the `android` release channel, and build pipeline.
+- [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build.
 
 ### Delivery
 - [The Player Wiki](wiki.md) — Maintaining openhistoria.com/wiki/: the markdown-to-HTML generator, `npm run wiki:check` for spotting when it has gone stale, the screenshot harness, and the main-vs-beta rules.

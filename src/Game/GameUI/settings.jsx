@@ -85,7 +85,6 @@ import {
 } from "../../runtime/debugLog.js";
 import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
-import { isNativeApp } from "../../runtime/web/nativeBoot.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
@@ -1621,8 +1620,9 @@ const DiagnosticsPanel = () => {
 
         {/* The save itself as a second file, for a report a maintainer has to
             reproduce: the log fingerprints the prompts, the game is what a prompt
-            can be rebuilt from. */}
-        {!isNativeApp() && (
+            can be rebuilt from. Offered in the Android app too since files save
+            through the share sheet there (runtime/saveFile.js). */}
+        {(
         <button
         type="button"
         className="oh-tap-row"

@@ -1,4 +1,5 @@
 /*! Open Historia — web-mode store utilities © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+import { sha256Hex } from "../sha256.js";
 // Shared helpers for the web-mode store handlers. Mirrors the small utilities in
 // server/libraryStore.js / mapEditorStore.js / basemapStore.js so the browser
 // port produces byte-compatible ids, hashes and response envelopes.
@@ -43,14 +44,12 @@ export const ensureUniqueId = async (requestedId, exists) => {
   return candidate;
 };
 
-// SHA-256 hex of a string — identical to sha256Hex in basemapLibrary.js:43 and
+// SHA-256 hex of a string — identical to sha256Hex in basemapLibrary.js and
 // hashPayload in basemapStore.js so local + community dedup stays consistent.
-export const sha256Hex = async (str) => {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(str)));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-};
+// One implementation for all of them (runtime/sha256.js): WebCrypto where the
+// origin is a secure context, pure JS where it is not (the Android app's
+// http://app.paxhistoria has no crypto.subtle, and this used to throw there).
+export { sha256Hex };
 
 // --- Response builders (return real Response objects the intercepted fetch
 // hands back to the unchanged client code) ---

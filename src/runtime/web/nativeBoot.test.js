@@ -75,3 +75,11 @@ test("showNativeBoot is inert without a document, and settling it is still safe"
   assert.doesNotThrow(() => boot.settle(null));
   assert.doesNotThrow(() => boot.settle({ origin: true }));
 });
+
+// The Android app since 2026-09 has the world inside the APK: its boot screen
+// settles on {local: true} the moment the library is seeded, and says so.
+test("an app with the map on the device settles locally, and says so", () => {
+  assert.equal(bootStatusText({ local: true }), "Everything is on this device");
+  const boot = showNativeBoot({ local: true });
+  assert.doesNotThrow(() => boot.settle({ local: true }));
+});

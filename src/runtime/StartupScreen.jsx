@@ -10,7 +10,7 @@ const LOADING_IMAGES = [
   "/loading_screen_2.jpg",
   "/loading_screen_3.jpg",
   "/loading_screen_4.jpg",
-  "/loading_screen_5.png",
+  "/loading_screen_5.webp",
 ];
 const IMAGE_ROTATE_MS = 4500;
 

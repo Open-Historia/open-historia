@@ -6,6 +6,8 @@
 // Client helpers for persisting map-editor documents to the server
 // (/api/mapeditor/documents) plus a local JSON export/download.
 
+import { saveBlobToDisk } from "../runtime/saveFile.js";
+
 const BASE = "/api/mapeditor/documents";
 
 export const listDocuments = async () => {
@@ -46,11 +48,6 @@ export const deleteDocument = async (id) => {
 export const downloadJson = (doc) => {
   const name = (doc.name || doc.metadata?.name || "map").replace(/[^a-z0-9]+/gi, "-");
   const blob = new Blob([JSON.stringify(doc)], { type: "application/json" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${name}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(a.href);
+  // runtime/saveFile.js: a download in a browser, the share sheet in the app.
+  return saveBlobToDisk(blob, `${name}.json`);
 };

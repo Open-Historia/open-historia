@@ -34,7 +34,7 @@ All three run the identical `src/` client. What changes is (a) the `VITE_OH_WEB`
 |---|---|---|---|---|
 | **Desktop download** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/` | Local Express server `server/server.js` on `localhost:3000` | Files under `server/data/` (JSON manifests + binary assets) | Zip + launcher scripts (`Launch Open Historia.*`) |
 | **Web build** (the hosted website `openhistoria.com/play/`) | `npm run build:web` / `build:site` → `dist-web/` | **No server** — a `fetch()` interceptor answers `/api/*` from IndexedDB | IndexedDB in the browser; map tiles from the registry Worker / content nodes | Cloudflare Pages |
-| **Android app** | client from `dist/` inside APK; server via `npm run build:mobile-server` | Embedded Express (`server/server.js`) run in-process by **nodejs-mobile**, bound to `127.0.0.1` | Files in a writable sandbox dir (`OH_DATA_DIR`) | Capacitor APK (`mobile/`) |
+| **Android app** | client from `dist-android/` (`npm run build:android`) inside the APK, with the world map under `www/assets` | None — the web backend (`src/runtime/web/*`) answers `/api/*` in the page | IndexedDB `open-historia-web`; map data read from the APK by HTTP Range | Capacitor APK (`mobile/`) — see [mobile.md](mobile.md) |
 
 ### How the compile-time flag selects the variant
 
@@ -58,7 +58,7 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 | `build` | desktop client → `dist/` |
 | `build:web` | seeds, then `vite build --mode web --outDir dist-web` |
 | `build:site` | `build:web` with `--base /play/` + `scripts/assemble-site.mjs` (bolts the marketing `site/` around `/play/`) |
-| `build:mobile-server` | `scripts/build-mobile-server.mjs` — bundles `server/` into `mobile/nodejs-project/` |
+| `build:android` | `seed-web-defaults.mjs` + `vite build --mode android` → `dist-android/` (the Android app's bundle; `mobile/scripts/stage-www.mjs` adds the map data) |
 | `test` | `node --test server/**/*.test.js` (server unit tests only) |
 
 ---
@@ -158,7 +158,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 |---|---|
 | `fetch-map-assets.mjs` / `map-assets.json` | Pull map binaries from the map-data Release |
 | `seed-web-defaults.mjs` | Generate web-build seed data (default scenario) |
-| `build-mobile-server.mjs` | Bundle `server/` into the APK's nodejs-project |
+| `mobile/scripts/stage-map-assets.mjs` | Fetch + sha256-verify the six map files the APK ships (`mobile/map-assets.android.json`) |
 | `extract-regions.mjs` / `extract-cities.mjs` / `build-default-map.mjs` | Build the PMTiles/geojson map data |
 | `build-content-manifest.mjs` / `sign-release.mjs` / `gen-signing-key.mjs` | Content-node manifest signing (Ed25519) |
 | `generate-country-*.mjs`, `generate-lang-packs.mjs`, `fetch-fmg.mjs`, `populate-node.mjs`, `node-updater.mjs` | Data/tooling generation |

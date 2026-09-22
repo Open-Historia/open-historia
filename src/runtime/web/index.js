@@ -15,7 +15,9 @@ import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
 
 // Everything the player owns lives in this origin's storage: the games and
-// scenarios in IndexedDB, and the ~215MB of map archives in the preload Cache.
+// scenarios in IndexedDB, and — on the website — the ~215MB of map archives in
+// the preload Cache. (The Android app carries the map inside the APK instead,
+// and its http origin has no Cache Storage to begin with.)
 // By default that is "best-effort" storage, which the browser or the OS may
 // evict under pressure — losing saved games outright, and turning the next
 // launch into a full re-download of the world map.
@@ -39,7 +41,7 @@ export const installWebBackend = async () => {
   // native splash comes down the moment the WebView has a document, and a white
   // gap where it was is most of the difference between an app and a web page in a
   // shell. Everything after this point is the same on both.
-  const boot = isNativeApp() ? showNativeBoot() : null;
+  const boot = isNativeApp() ? showNativeBoot({ local: Boolean(import.meta.env.VITE_OH_NATIVE) }) : null;
 
   // Seed the default scenario before any /api call, then intercept.
   try {
@@ -62,7 +64,14 @@ export const installWebBackend = async () => {
       // never settles is handled by the boot screen's own deadline, so a bad
       // network delays the game rather than withholding it.
       markEntered();
-      connectBestNode().then((node) => boot.settle(node)).catch(() => boot.settle(null));
+      if (import.meta.env.VITE_OH_NATIVE) {
+        // The app has the whole world under /assets: there is no node to find
+        // and nothing to wait for. The screen still holds its minimum, so a fast
+        // phone does not flash it.
+        boot.settle({ local: true });
+      } else {
+        connectBestNode().then((node) => boot.settle(node)).catch(() => boot.settle(null));
+      }
     } else if (shouldShowHome()) showHomePage();
     else connectBestNode().catch(() => {});
   } catch (error) {

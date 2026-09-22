@@ -93,7 +93,7 @@ export const useGameLoading = () => {
 // The card image the library shows for a scenario with no cover of its own
 // (libraryBar.jsx DEFAULT_SCENARIO_COVER): the screen keeps the same shape
 // whether or not the scenario brought a picture.
-const DEFAULT_COVER = "/scenario-placeholder.png";
+const DEFAULT_COVER = "/scenario-placeholder.webp";
 const textShadow = "0 2px 14px rgba(0,0,0,0.7)";
 
 // The scenario's cover, full bleed, with the logo turning in the bottom corner
