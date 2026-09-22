@@ -932,11 +932,21 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         recordMapTrace("camera:zoom-end", { zoom: mapInstance.getZoom?.() ?? 0 });
       };
       const onLost = (event) => {
-        if (perf.active) perf.webglLosses += 1;
-        recordMapTrace("gpu:webgl-lost", { status: event?.statusMessage ?? "" });
-        console.warn(
-          `[OH PERF GPU] WebGL context lost${event?.statusMessage ? ` · ${event.statusMessage}` : ""}`,
-        );
+        // map.remove() loses its own context on purpose — every game switch and
+        // every unmount does — and MapLibre marks the map removed only after.
+        // That is teardown, not the GPU dropping the map, and it was logged as a
+        // warning for every game a player opened. Decided a task later, once the
+        // removal has finished.
+        const status = event?.statusMessage ?? "";
+        setTimeout(() => {
+          if (mapInstance?._removed || !canvas.isConnected) {
+            recordMapTrace("gpu:webgl-released", { status });
+            return;
+          }
+          if (perf.active) perf.webglLosses += 1;
+          recordMapTrace("gpu:webgl-lost", { status });
+          console.warn(`[OH PERF GPU] WebGL context lost${status ? ` · ${status}` : ""}`);
+        }, 0);
       };
       const onRestored = () => {
         recordMapTrace("gpu:webgl-restored");

@@ -31,6 +31,7 @@ const {
     installDebugLogCapture,
     isDebugLogEnabled,
     isDebugLogVerbose,
+    localClock,
     logDebugEvent,
     logSettingChange,
     redactSecrets,
@@ -38,6 +39,7 @@ const {
     setDebugLogContext,
     setDebugLogEnabled,
     setDebugLogVerbose,
+    utcOffsetLabel,
     withConsoleCaptureMuted,
 } = await import("./debugLog.js");
 
@@ -685,7 +687,8 @@ test("D4 a storm of identical Desktop log entries folds into one line", () => {
         return buildDebugLogReport({ desktop: { status: "included", entries: storm } });
     });
     assert.equal(logSection(report).split("Flag not found").length - 1, 1);
-    assert.match(report, /Flag not found \(×30, last 10:00:30\)/);
+    // The stamps are this computer's clock (K1 below), so the expected time is too.
+    assert.ok(report.includes(`Flag not found (×30, last ${localClock(new Date(T0 + 30_000).toISOString())})`), report);
 });
 
 test("D5 an oversized Desktop log entry is trimmed like a page entry", () => {
@@ -977,4 +980,35 @@ test("I7 the filename says what the log was saved for", () => {
     assert.match(debugLogFilename("turn-fallback"), /^open-historia-log-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-turn-fallback\.txt$/);
     assert.match(debugLogFilename(), /^open-historia-log-[\dT-]+\.txt$/);
     assert.match(debugLogFilename("Advisor error!"), /-advisor-error\.txt$/);
+});
+
+// ---- The file's clock -------------------------------------------------------
+// A player's report printed its line stamps in UTC beside the game's own
+// "is busy; skipped until 23:26" in local time, so a ten-minute pause read as
+// two hours and ten minutes. The stamps are local now, and the header says the
+// offset.
+
+const clockOf = (iso) => {
+    const at = new Date(iso);
+    return [at.getHours(), at.getMinutes(), at.getSeconds()].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+test("K1 line stamps are this computer's local time, and the header says which offset that is", () => {
+    reset();
+    logDebugEvent("turn", "a stamped line");
+    const entry = getDebugLogEntries().at(-1);
+    const report = buildDebugLogReport();
+    assert.ok(report.includes(`[${clockOf(entry.at)}] [turn] a stamped line`), "the line carries the local time of day");
+    assert.match(report, /^Clock: the times below are this computer's local time \(UTC[+-]\d\d:\d\d\)/m);
+    assert.equal(localClock("2026-09-22T21:16:38.000Z"), clockOf("2026-09-22T21:16:38.000Z"));
+    assert.equal(localClock("not a time"), "");
+    assert.equal(localClock(undefined), "");
+});
+
+test("K2 the offset is written the way a person reads it", () => {
+    const at = (minutes) => ({ getTimezoneOffset: () => minutes });
+    assert.equal(utcOffsetLabel(at(-120)), "UTC+02:00", "two hours east");
+    assert.equal(utcOffsetLabel(at(240)), "UTC-04:00", "four hours west");
+    assert.equal(utcOffsetLabel(at(0)), "UTC+00:00");
+    assert.equal(utcOffsetLabel(at(-330)), "UTC+05:30", "and half hours");
 });

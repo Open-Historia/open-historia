@@ -889,7 +889,9 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     // bindings, and the events stay as narrative (repairWarLedgerPayload).
     const first = warError;
     const repair = repairWarLedgerPayload(candidate, { world });
-    const summary = `stamped warId on ${repair.stamped} event(s), dropped ${repair.droppedIds.length} war record(s)`
+    const summary = `stamped warId on ${repair.stamped} event(s)`
+      + `${repair.anchored ? `, moved ${repair.anchored} war start(s) onto the event that opens the war` : ""}`
+      + `, dropped ${repair.droppedIds.length} war record(s)`
       + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""}, unbound ${repair.strippedEvents} event(s)`;
     console.warn(
       `[ai] war ledger salvage after the model failed its corrective retry: ${summary}; keeping the segment. `
@@ -898,6 +900,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     logDebugEvent("warn", "[turn] War ledger salvage on the final attempt: the segment is kept, its canonical war changes repaired or dropped.", {
       firstRejection: first,
       stamped: repair.stamped,
+      anchored: repair.anchored,
       droppedWarIds: repair.droppedIds,
       unboundEvents: repair.strippedEvents,
       residual: repair.residual,
@@ -2024,9 +2027,10 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
+        const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path, owner: normalizeString(mover?.ownerCode) });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2059,11 +2063,24 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
     // operation that gives only an id it is the whole answer. It used to be
     // ignored, so such an operation was dropped for having no coordinates: the
     // exact move a model reaches for after being told its `at` was not on the map.
-    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name }) : null;
+    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner }) : null;
     const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
       ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
       : null;
     const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    const givenLng = Number(target[lngKey]); const givenLat = Number(target[latKey]);
+    const hasCoordinates = target[lngKey] != null && target[latKey] != null
+      && Number.isFinite(givenLng) && Number.isFinite(givenLat) && !(givenLng === 0 && givenLat === 0);
+    // A NEW formation that nothing places — no phrase the map knows, no region
+    // id, no coordinates of its own — is raised in its owner's own territory
+    // rather than not at all. The receipt that told the model to name a place
+    // did not stop a player's Ecuador losing the same brigade on consecutive
+    // turns, to "northern frontier with Colombia" and then "northern border with
+    // Colombia". A moved unit is not treated so: a move that cannot be placed
+    // leaves the unit where it stands.
+    const homeland = !resolved && !hasCoordinates && entry.spawn && entry.owner
+      ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
+      : null;
     if (resolved) {
       // A phrase that failed still gets said: the model wrote it, and next turn
       // it should know which of the two the engine went with.
@@ -2076,8 +2093,21 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       target[latKey] = resolved.lat;
       if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
       placed += 1;
+    } else if (homeland && !homeland.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+        : byRegion?.error
+          ? `could not be placed in region "${entry.regionId}" — ${byRegion.error}`
+          : "came with no place and no coordinates";
+      noteReceipt(receipt, "adjusted",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}. `
+        + `It was raised in ${homeland.regionName || entry.owner}, inside ${entry.owner}'s own territory, rather than left off the map. `
+        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.");
+      target[lngKey] = homeland.lng;
+      target[latKey] = homeland.lat;
+      if (homeland.regionId) target.regionId = homeland.regionId;
+      placed += 1;
     } else if (byPhrase?.error || byRegion?.error) {
-      const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
       const tried = byPhrase?.error
         ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
           + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
@@ -7021,8 +7051,10 @@ const applySimulationResult = async ({
   });
   worldWithImpacts = storylineMerge.world;
   // Each segment was checked on its own; this is the merged round. A finished
-  // turn is never lost to this check, but its verdict is worth a report.
-  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld });
+  // turn is never lost to this check, but its verdict is worth a report. Read
+  // as the one period it is (startsInForce), as the last attempt's repair
+  // reads it: a war the round starts is in force for all of the round.
+  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld, startsInForce: true });
   if (canonicalWarError) {
     console.warn(`[ai] canonical war-state check on the merged turn: ${canonicalWarError}`);
     logDebugEvent("warn", "[turn] The canonical war-state check flagged the merged turn.", { error: canonicalWarError });
