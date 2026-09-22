@@ -110,6 +110,15 @@ const statsEditorControlCss = `
     border-color: rgba(255,255,255,0.13) !important;
     color-scheme: dark;
   }
+
+  .oh-stats-stat-editor > * {
+    min-width: 0;
+  }
+
+  .oh-stats-sheet-editor code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 `;
 
 const deepCloneDefinition = (definition) => ({
@@ -161,24 +170,24 @@ const compactPreviewValue = (stat) => {
 };
 
 const StatPreview = ({ stat }) => (
-  <div style={{ flex: 1, minWidth: 0 }}>
-    <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0 }}>
-      <span aria-hidden="true" style={{ fontSize: "0.9rem", width: "1.15rem" }}>{stat.icon || "◆"}</span>
-      <span style={{ color: "rgba(255,255,255,0.91)", fontSize: "0.76rem", fontWeight: 780, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.label}</span>
-      <span style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.58rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.key}</span>
-      <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.64rem", fontWeight: 800, marginLeft: "auto", whiteSpace: "nowrap" }}>{compactPreviewValue(stat)}</span>
+  <div style={{ flex: "1 1 0", maxWidth: "100%", minWidth: 0, overflow: "hidden" }}>
+    <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0, overflow: "hidden" }}>
+      <span aria-hidden="true" style={{ flex: "0 0 auto", fontSize: "0.9rem", width: "1.15rem" }}>{stat.icon || "◆"}</span>
+      <span style={{ color: "rgba(255,255,255,0.91)", flex: "1 1 8rem", fontSize: "0.76rem", fontWeight: 780, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.label}</span>
+      <span style={{ color: "rgba(255,255,255,0.28)", flex: "0 1 7rem", fontFamily: "monospace", fontSize: "0.58rem", maxWidth: "35%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.key}</span>
+      <span style={{ color: "rgba(255,255,255,0.45)", flex: "0 1 auto", fontSize: "0.64rem", fontWeight: 800, marginLeft: "auto", maxWidth: "40%", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{compactPreviewValue(stat)}</span>
     </div>
     {stat.kind === "index" && (
       <div style={{ background: "rgba(255,255,255,0.09)", borderRadius: "999px", height: "5px", marginTop: "0.4rem", overflow: "hidden" }}>
         <div style={{ background: stat.color || "rgba(255,255,255,0.22)", borderRadius: "999px", height: "100%", width: "67%" }} />
       </div>
     )}
-    {stat.description && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.34rem" }}>{stat.description}</div>}
+    {stat.description && <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.34rem", overflowWrap: "anywhere" }}>{stat.description}</div>}
   </div>
 );
 
 const StatEditor = ({ stat, onPatch }) => (
-  <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: "0.58rem", gridTemplateColumns: "minmax(0,1fr) 7rem 4.3rem 4.7rem", marginTop: "0.62rem", paddingTop: "0.62rem" }}>
+  <div className="oh-stats-stat-editor" style={{ borderTop: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: "0.58rem", gridTemplateColumns: "repeat(auto-fit, minmax(min(7rem, 100%), 1fr))", marginTop: "0.62rem", maxWidth: "100%", minWidth: 0, paddingTop: "0.62rem", width: "100%" }}>
     <div>
       <label style={labelStyle}>Name</label>
       <input value={stat.label} maxLength={60} onChange={(event) => onPatch({ label: event.target.value })} style={inputStyle} />
@@ -235,7 +244,7 @@ const StatEditor = ({ stat, onPatch }) => (
       <label style={labelStyle}>What it tracks / AI guidance</label>
       <textarea value={stat.description || ""} maxLength={360} rows={2} onChange={(event) => onPatch({ description: event.target.value })} placeholder="Explain what this value means in this scenario and what kinds of events should move it." style={{ ...inputStyle, resize: "vertical" }} />
     </div>
-    <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.6rem", gridColumn: "1 / -1" }}>
+    <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.6rem", gridColumn: "1 / -1", minWidth: 0, overflowWrap: "anywhere" }}>
       Machine key: <code>{stat.key}</code>{stat.isNew ? " · follows the name until the scenario is saved, then freezes" : " · frozen so renaming does not break campaign history"}
     </div>
   </div>
@@ -409,7 +418,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
   const totalStats = flattenStatSheetRows({ custom: true, sections }).length;
 
   return (
-    <div className="oh-stats-sheet-editor" style={{ display: "grid", gap: "0.8rem" }}>
+    <div className="oh-stats-sheet-editor" style={{ display: "grid", gap: "0.8rem", maxWidth: "100%", minWidth: 0, width: "100%" }}>
       <style>{statsEditorControlCss}</style>
       <div style={{ background: "rgba(59,130,246,0.07)", border: "1px solid rgba(96,165,250,0.15)", borderRadius: "12px", color: "rgba(219,234,254,0.74)", fontSize: "0.7rem", lineHeight: 1.5, padding: "0.72rem 0.78rem" }}>
         The standard sheet is Open Historia&apos;s modern audited economy/statistics model. Customize it to make the entire National Stats panel scenario-defined: add, remove and reorder sections and values for any era. Custom sheets use general-purpose persistent numeric stats, so a medieval scenario can track timber, silver, grain, ships or legitimacy without being forced to generate modern GDP or unemployment.
@@ -443,9 +452,9 @@ const StatsSheetEditor = ({ value, onChange }) => {
               }
               setDragItem(null);
             }}
-            style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${dragItem?.sectionKey === section.key ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.08)"}`, borderRadius: "13px", overflow: "hidden" }}
+            style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${dragItem?.sectionKey === section.key ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.08)"}`, borderRadius: "13px", maxWidth: "100%", minWidth: 0, overflow: "hidden", width: "100%" }}
           >
-            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", display: "flex", gap: "0.5rem", padding: "0.62rem 0.65rem" }}>
+            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", display: "flex", gap: "0.5rem", maxWidth: "100%", minWidth: 0, padding: "0.62rem 0.65rem" }}>
               <button
                 type="button"
                 draggable
@@ -459,15 +468,15 @@ const StatsSheetEditor = ({ value, onChange }) => {
                   event.dataTransfer.setData("text/plain", JSON.stringify(item));
                 }}
                 onDragEnd={() => setDragItem(null)}
-                style={{ ...buttonStyle(false), cursor: "grab", minWidth: "2rem", padding: 0 }}
+                style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
               >☰</button>
               <span style={{ fontSize: "0.9rem" }}>{section.icon || "◆"}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.06em", textTransform: "uppercase" }}>{section.label}</div>
-                <div style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.56rem", marginTop: "0.1rem" }}>{section.key} · {section.stats.length} stat{section.stats.length === 1 ? "" : "s"}</div>
+                <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.06em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{section.label}</div>
+                <div style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.56rem", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{section.key} · {section.stats.length} stat{section.stats.length === 1 ? "" : "s"}</div>
               </div>
-              <button type="button" title="Edit section" onClick={() => setEditingSectionKey(sectionEditing ? "" : section.key)} style={{ ...buttonStyle(false), minWidth: "2rem", padding: 0 }}>✎</button>
-              <button type="button" title={sections.length <= 1 ? "A custom sheet needs at least one section" : "Delete section"} disabled={sections.length <= 1} onClick={() => removeSection(section.key)} style={{ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: sections.length <= 1 ? 0.4 : 1, padding: 0 }}>🗑</button>
+              <button type="button" title="Edit section" onClick={() => setEditingSectionKey(sectionEditing ? "" : section.key)} style={{ ...buttonStyle(false), flex: "0 0 auto", minWidth: "2rem", padding: 0 }}>✎</button>
+              <button type="button" title={sections.length <= 1 ? "A custom sheet needs at least one section" : "Delete section"} disabled={sections.length <= 1} onClick={() => removeSection(section.key)} style={{ ...buttonStyle(false), color: "#fca5a5", flex: "0 0 auto", minWidth: "2rem", opacity: sections.length <= 1 ? 0.4 : 1, padding: 0 }}>🗑</button>
             </div>
 
             {sectionEditing && (
@@ -484,7 +493,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
               </div>
             )}
 
-            <div style={{ display: "grid", gap: "0.48rem", padding: "0.58rem" }}>
+            <div style={{ display: "grid", gap: "0.48rem", maxWidth: "100%", minWidth: 0, padding: "0.58rem" }}>
               {section.stats.map((stat) => {
                 const editing = editingStatKey === stat.key;
                 return (
@@ -503,9 +512,9 @@ const StatsSheetEditor = ({ value, onChange }) => {
                       }
                       setDragItem(null);
                     }}
-                    style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${dragItem?.statKey === stat.key ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.07)"}`, borderRadius: "11px", padding: "0.6rem" }}
+                    style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${dragItem?.statKey === stat.key ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.07)"}`, borderRadius: "11px", maxWidth: "100%", minWidth: 0, padding: "0.6rem" }}
                   >
-                    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem" }}>
+                    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", maxWidth: "100%", minWidth: 0 }}>
                       <button
                         type="button"
                         draggable
@@ -519,10 +528,10 @@ const StatsSheetEditor = ({ value, onChange }) => {
                           event.dataTransfer.setData("text/plain", JSON.stringify(item));
                         }}
                         onDragEnd={() => setDragItem(null)}
-                        style={{ ...buttonStyle(false), cursor: "grab", minWidth: "2rem", padding: 0 }}
+                        style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
                       >☰</button>
                       <StatPreview stat={stat} />
-                      <div style={{ display: "flex", gap: "0.32rem" }}>
+                      <div style={{ display: "flex", flex: "0 0 auto", gap: "0.32rem" }}>
                         <button type="button" aria-label={`Edit ${stat.label}`} title="Edit" onClick={() => setEditingStatKey(editing ? "" : stat.key)} style={{ ...buttonStyle(false), minWidth: "2rem", padding: 0 }}>✎</button>
                         <button type="button" aria-label={`Delete ${stat.label}`} title={totalStats <= 1 ? "A custom sheet needs at least one statistic" : "Delete"} disabled={totalStats <= 1} onClick={() => removeStat(section.key, stat.key)} style={{ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: totalStats <= 1 ? 0.4 : 1, padding: 0 }}>🗑</button>
                       </div>
