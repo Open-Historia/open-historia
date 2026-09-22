@@ -6,9 +6,12 @@
 // a crack sitting on a chunk boundary that no single chunk encloses — and what
 // the loading screen says at each phase.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
+import GeoJSON from "ol/format/GeoJSON.js";
 import Polygon from "ol/geom/Polygon.js";
+import VectorSource from "ol/source/Vector.js";
 
 import { enclosedGapGeoms, enclosedGapsOfUnion, overlapGeoms, unionAllGeoms } from "./geometry.js";
 import {
@@ -17,7 +20,11 @@ import {
   chunkIndexFor,
   describeCleanupProgress,
   describeCleanupResult,
+  findEnclosedGaps,
+  mergeWithinBudget,
   planTopologyChunks,
+  splitByVertexBudget,
+  vertexCountOf,
   yieldToBrowser,
 } from "./topologySweep.js";
 
@@ -136,4 +143,170 @@ test("yielding resolves on its own (a macrotask here, a frame plus a macrotask i
   const started = Date.now();
   await yieldToBrowser();
   assert.ok(Date.now() - started < 1000);
+});
+
+// The budget. polygon-clipping refuses any call past 1,000,000 queued segment
+// endpoints, and says so only after spending close to a gigabyte building the
+// queue; on a detailed map the old whole-map union was such a call, and on a
+// machine with less memory that was enough to kill the page mid-save.
+const spyUnion = (budget) => {
+  const calls = [];
+  const union = (geoms) => {
+    const vertices = geoms.reduce((sum, geom) => sum + vertexCountOf(geom), 0);
+    calls.push(vertices);
+    assert.ok(vertices <= budget, `a union was handed ${vertices} vertices, over the ${budget} budget`);
+    return unionAllGeoms(geoms);
+  };
+  return { union, calls };
+};
+const noWait = async () => {};
+
+test("vertices are counted from the geometry itself", () => {
+  assert.equal(vertexCountOf(square(0, 0)), 5, "a square ring is five points, closing point included");
+  assert.equal(vertexCountOf(null), 0);
+  assert.equal(vertexCountOf({}), 0);
+  assert.ok(BORDER_CLEANUP.maxUnionVertices >= 100000 && BORDER_CLEANUP.maxUnionVertices <= 400000, "well under polygon-clipping's ~500,000-segment ceiling");
+});
+
+test("a bucket too heavy for one union is split into compact pieces that each fit", () => {
+  const verticesOf = (region) => vertexCountOf(region.geom);
+  const extentOf = (region) => region.geom.getExtent();
+  const pieces = splitByVertexBudget(grid, { verticesOf, extentOf, budget: 20 });
+  assert.equal(pieces.flat().length, grid.length, "every region is in exactly one piece");
+  assert.equal(new Set(pieces.flat()).size, grid.length);
+  for (const piece of pieces) {
+    assert.ok(piece.reduce((sum, region) => sum + verticesOf(region), 0) <= 20, "each piece fits the budget");
+    const xs = piece.map((region) => extentOf(region)[0]);
+    const ys = piece.map((region) => extentOf(region)[1]);
+    assert.ok(Math.max(...xs) - Math.min(...xs) < 1100 && Math.max(...ys) - Math.min(...ys) < 1100, "a piece is a 2x2 patch of neighbours, not a scatter (square 2,2 reaches 30 m west)");
+  }
+  assert.deepEqual(splitByVertexBudget(grid, { verticesOf, extentOf, budget: 1000 }), [grid], "a bucket that fits stays whole");
+  const heavy = { geom: square(0, 0) };
+  assert.deepEqual(splitByVertexBudget([heavy], { verticesOf, extentOf, budget: 2 }), [[heavy]], "a single region over the budget is a piece of its own");
+  assert.deepEqual(splitByVertexBudget([], { verticesOf, extentOf, budget: 2 }), []);
+});
+
+test("merging stays within the budget: one union when it fits, pairs of neighbours when it does not", async () => {
+  const geoms = grid.map((region) => region.geom);
+  const whole = spyUnion(1000);
+  const one = await mergeWithinBudget(geoms, { union: whole.union, budget: 1000 });
+  assert.equal(one.length, 1);
+  assert.equal(whole.calls.length, 1, "everything fits: the one call the sweep always made");
+  assert.deepEqual(enclosedGapsOfUnion(one[0], { maxWidth: 500 }).map(key), enclosedGapGeoms(geoms, { maxWidth: 500 }).map(key));
+
+  const tight = spyUnion(12);
+  const parts = await mergeWithinBudget(geoms, { union: tight.union, budget: 12, between: noWait });
+  assert.ok(parts.length > 1, "a budget too small for the whole map leaves it in parts");
+  assert.ok(tight.calls.length > 0 && tight.calls.every((vertices) => vertices <= 12));
+  assert.deepEqual(await mergeWithinBudget([], { union: tight.union }), []);
+});
+
+test("read in parts, a hole that another part's region fills is not a crack", async () => {
+  // A 1 km square with a 40 m slot through it, and a region that exactly fills
+  // the slot: one union of both has no hole at all. Split into two parts, the
+  // square's union alone shows the slot as a 37.5 m "crack" that must not be
+  // filled, because the enclave's own region is under it.
+  const host = new Polygon([
+    [[0, 0], [1000, 0], [1000, 1000], [0, 1000], [0, 0]],
+    [[400, 200], [400, 800], [440, 800], [440, 200], [400, 200]],
+  ]);
+  const enclave = new Polygon([[[400, 200], [440, 200], [440, 800], [400, 800], [400, 200]]]);
+  const regions = [{ geom: host }, { geom: enclave }];
+  const options = {
+    plan: null,
+    geometryOf: (region) => region.geom,
+    gapsOf: enclosedGapsOfUnion,
+    isCovered: (point) => regions.some((region) => region.geom.intersectsCoordinate(point)),
+    between: noWait,
+  };
+  const together = await findEnclosedGaps(regions, { ...options, union: unionAllGeoms });
+  assert.equal(together.parts, 1);
+  assert.equal(together.holes.length, 0, "one union of both has nothing to fill");
+
+  const split = await findEnclosedGaps(regions, { ...options, union: spyUnion(12).union, budget: 12 });
+  assert.equal(split.parts, 2, "10 + 5 vertices do not fit a budget of 12, so the two stay apart");
+  assert.equal(split.holes.length, 0, "the slot is under the enclave, so it is dropped");
+  const unguarded = await findEnclosedGaps(regions, { ...options, union: unionAllGeoms, budget: 12, isCovered: () => false });
+  assert.equal(unguarded.holes.length, 1, "without the check the enclave would read as a crack");
+  assert.ok(unguarded.holes[0].width > 30 && unguarded.holes[0].width < 45);
+});
+
+test("the gap search on the grid finds the crack on the chunk boundary, and never invents one in parts", async () => {
+  const options = {
+    plan: planTopologyChunks([0, 0, 4000, 4000], grid.length, { targetRegionsPerChunk: 4 }),
+    geometryOf: (region) => region.geom,
+    gapsOf: enclosedGapsOfUnion,
+    isCovered: (point) => grid.some((region) => region.geom.intersectsCoordinate(point)),
+    maxWidth: 500,
+    minWidth: 0,
+    between: noWait,
+  };
+  const direct = enclosedGapGeoms(grid.map((region) => region.geom), { maxWidth: 500 }).map(key);
+  let chunks = 0;
+  let done = 0;
+  const whole = await findEnclosedGaps(grid, { ...options, union: unionAllGeoms, onChunks: (n) => { chunks = n; }, onChunk: (i) => { done = i; } });
+  assert.equal(whole.parts, 1);
+  assert.deepEqual(whole.holes.map(key), direct, "the same crack as one union of everything");
+  assert.equal(chunks, 4);
+  assert.equal(done, 4, "progress reaches the last chunk");
+  for (const budget of [6, 12, 30]) {
+    const found = await findEnclosedGaps(grid, { ...options, union: spyUnion(budget).union, budget });
+    for (const hole of found.holes) assert.ok(direct.includes(key(hole)), `budget ${budget} found a hole one union does not have`);
+  }
+});
+
+test("the built-in map: exactly the gaps the one-union sweep found, and within a small budget nothing false and no call over it", async () => {
+  const text = fs.readFileSync(new URL("../../server/seed/default/regions.geojson", import.meta.url), "utf8");
+  const features = new GeoJSON().readFeatures(JSON.parse(text), { featureProjection: "EPSG:3857" }).filter((f) => f.getGeometry());
+  const source = new VectorSource({ features });
+  const plan = planTopologyChunks(source.getExtent(), features.length);
+  const tolerances = { maxWidth: BORDER_CLEANUP.maxWidth, minWidth: BORDER_CLEANUP.minWidth };
+  // The sweep as it was: one union per chunk, then one union of the chunk results.
+  const partials = bucketRegions(plan, features, (f) => f.getGeometry().getExtent())
+    .map((bucket) => unionAllGeoms(bucket.map((f) => f.getGeometry())))
+    .filter(Boolean);
+  const before = enclosedGapsOfUnion(unionAllGeoms(partials), tolerances).map(key);
+  assert.ok(before.length > 50, `the stock map has its known cracks (${before.length})`);
+  const options = {
+    plan,
+    geometryOf: (f) => f.getGeometry(),
+    gapsOf: enclosedGapsOfUnion,
+    isCovered: (point) => source.getFeaturesAtCoordinate(point).length > 0,
+    ...tolerances,
+    between: noWait,
+  };
+  const now = await findEnclosedGaps(features, { ...options, union: spyUnion(BORDER_CLEANUP.maxUnionVertices).union });
+  assert.equal(now.parts, 1, "236,003 vertices fit the budget: one union, as always");
+  assert.deepEqual(now.holes.map(key), before, "and the very same cracks, crack by crack");
+
+  const tight = spyUnion(20000);
+  const parts = await findEnclosedGaps(features, { ...options, union: tight.union, budget: 20000 });
+  assert.ok(parts.parts > 1, `a 20,000-vertex budget reads the map in parts (${parts.parts})`);
+  assert.ok(Math.max(...tight.calls) <= 20000);
+  assert.ok(parts.holes.length > 0, "most cracks lie inside one part and are still found");
+  for (const hole of parts.holes) assert.ok(before.includes(key(hole)), "a crack found in parts is one the whole map has");
+});
+
+test("the Workshop's save runs this search, with the budget on overlaps and gap targets too", () => {
+  const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
+  const sweep = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
+  assert.ok(sweep.includes("await findEnclosedGaps(feats, {"), "the save-time sweep uses the budgeted gap search");
+  assert.ok(!sweep.includes("unionAllGeoms(partials)"), "no unbounded union of every chunk result is left");
+  assert.ok(sweep.includes("maxPairVertices: BORDER_CLEANUP.maxUnionVertices"), "overlap pairs are budgeted");
+  assert.ok(sweep.includes("maxTargetVertices: BORDER_CLEANUP.maxUnionVertices"), "gap targets are budgeted");
+  assert.ok(sweep.includes("parts,") && sweep.includes("skippedPairs,"), "the result says what a detailed map could only be checked as");
+});
+
+test("the note after a save says when a map was too detailed to check in one piece", () => {
+  const base = { changed: true, gaps: 3, overlaps: 1, affectedRegions: 4, passes: 1 };
+  assert.equal(describeCleanupResult({ ...base, parts: 1, skippedPairs: 0 }), "Borders cleaned: 3 cracks filled and 1 sliver trimmed across 4 regions.");
+  assert.equal(
+    describeCleanupResult({ ...base, parts: 3, skippedPairs: 0 }),
+    "Borders cleaned: 3 cracks filled and 1 sliver trimmed across 4 regions. The map is too detailed to check in one piece, so it was checked in 3 parts.",
+  );
+  assert.equal(
+    describeCleanupResult({ changed: false, regionCount: 12, parts: 1, skippedPairs: 1 }),
+    `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across 12 regions. 1 pair of very large neighbouring regions was not compared.`,
+  );
+  assert.ok(describeCleanupResult({ ...base, skippedPairs: 4 }).endsWith(" 4 pairs of very large neighbouring regions were not compared."));
 });
