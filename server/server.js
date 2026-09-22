@@ -233,6 +233,20 @@ const sendError = (res, statusCode, error) => {
   res.status(statusCode).json({ error: reported });
 };
 
+// An optional asset a scenario or game simply does not have — its stats sheet,
+// flags, tags — is an answer, not a failure: the client asks for each on every
+// read and falls back to the default. Logged as a warning with a stack, the
+// stats sheet alone put eight entries a turn into a player's diagnostics log.
+// Anything else (an unknown scenario, an unsupported key) is still an error.
+const sendAssetMissing = (res, error) => {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (/^Asset not found: /.test(message)) {
+    res.status(404).json({ error: message });
+    return;
+  }
+  sendError(res, 404, error);
+};
+
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
 // The CORS allowlist above lets the Android connect screen (on the WebView's own
 // origin) *probe* this server — a GET. Without this guard, any web page the
@@ -615,7 +629,7 @@ app.get("/api/scenarios/:scenarioId/assets/:assetKey", (req, res) => {
       : resolveScenarioUploadAsset(req.params.scenarioId, req.params.assetKey);
     streamBinaryFile(req, res, asset.sourcePath, asset.contentType);
   } catch (error) {
-    sendError(res, 404, error);
+    sendAssetMissing(res, error);
   }
 });
 
@@ -722,7 +736,7 @@ app.get("/api/games/:gameId/assets/:assetKey", (req, res) => {
     const asset = resolveGameUploadAsset(req.params.gameId, req.params.assetKey);
     streamBinaryFile(req, res, asset.sourcePath, asset.contentType);
   } catch (error) {
-    sendError(res, 404, error);
+    sendAssetMissing(res, error);
   }
 });
 

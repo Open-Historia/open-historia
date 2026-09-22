@@ -37,7 +37,8 @@ import { fromExtent as polygonFromExtent } from "ol/geom/Polygon";
 import Feature from "ol/Feature";
 import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
-import { BORDER_CLEANUP, findEnclosedGaps, planTopologyChunks, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import RBush from "ol/structs/RBush.js";
+import { BORDER_CLEANUP, findEnclosedGaps, hotspotsOf, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -1011,23 +1012,42 @@ const OlMap = ({
       return [];
     };
 
-    const boundaryTouchScore = (gapGeom, regionGeom, epsilon) => {
+    // A region's boundary segments in an R-tree, so the touch score below can
+    // ask for the segments near a point instead of walking every segment of
+    // the region for every point — a 40,000-vertex sea zone is a neighbour of
+    // every crack on its coast, and used to be walked whole for each one.
+    const buildBoundaryIndex = (regionGeom) => {
+      const extents = [];
+      const segments = [];
+      for (const ring of geometryRings(regionGeom)) {
+        for (let j = 1; j < ring.length; j += 1) {
+          const a = ring[j - 1];
+          const b = ring[j];
+          extents.push([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]);
+          segments.push([a, b]);
+        }
+      }
+      const index = new RBush();
+      if (segments.length) index.load(extents, segments);
+      return index;
+    };
+
+    // How many of up to 80 points along the gap's ring lie within epsilon of
+    // the region's boundary: the neighbour that touches the gap most takes it.
+    const boundaryTouchScore = (gapGeom, boundaryIndex, epsilon) => {
       const gapRing = geometryRings(gapGeom)[0] || [];
-      const rings = geometryRings(regionGeom);
-      if (!gapRing.length || !rings.length) return 0;
+      if (!gapRing.length || !boundaryIndex || boundaryIndex.isEmpty()) return 0;
       const step = Math.max(1, Math.floor(gapRing.length / 80));
       let score = 0;
       for (let i = 0; i < gapRing.length; i += step) {
         const p = gapRing[i];
-        let best = Infinity;
-        for (const ring of rings) {
-          for (let j = 1; j < ring.length; j += 1) {
-            best = Math.min(best, pointSegmentDistance(p, ring[j - 1], ring[j]));
-            if (best <= epsilon) break;
+        const near = boundaryIndex.getInExtent([p[0] - epsilon, p[1] - epsilon, p[0] + epsilon, p[1] + epsilon]);
+        for (const [a, b] of near) {
+          if (pointSegmentDistance(p, a, b) <= epsilon) {
+            score += 1;
+            break;
           }
-          if (best <= epsilon) break;
         }
-        if (best <= epsilon) score += 1;
       }
       return score;
     };
@@ -1049,15 +1069,26 @@ const OlMap = ({
         if (!areaCache.has(feature)) areaCache.set(feature, planarGeometryArea(feature.getGeometry()));
         return areaCache.get(feature);
       };
+      // Each region's boundary index, built on first use and kept for the
+      // pass (the context is rebuilt per pass, as geometries change).
+      const boundaryIndexes = new globalThis.Map();
+      const boundaryIndexOf = (feature) => {
+        let index = boundaryIndexes.get(feature);
+        if (!index) {
+          index = buildBoundaryIndex(feature.getGeometry());
+          boundaryIndexes.set(feature, index);
+        }
+        return index;
+      };
       let serial = 0;
-      return { selectedSet, featureOrder, areaOf, nextId: () => ++serial };
+      return { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId: () => ++serial };
     };
 
     // Each enclosed hole becomes a gap filled into the neighbour whose boundary
     // it touches most (the larger region on ties); a hole touching nothing is
     // dropped. Neighbours come from the spatial index, limited to the pass's
     // regions and sorted by their order so proposals are deterministic.
-    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
+    const assignGapTargets = (holes, width, { selectedSet, featureOrder, areaOf, boundaryIndexOf, nextId }, { maxTargetVertices = Infinity } = {}) => {
       const items = [];
       const epsilon = Math.max(4, width * 0.08);
       for (const row of holes) {
@@ -1071,7 +1102,7 @@ const OlMap = ({
         let target = null;
         let bestScore = -1;
         for (const f of neighbors) {
-          const score = boundaryTouchScore(row.geom, f.getGeometry(), epsilon);
+          const score = boundaryTouchScore(row.geom, boundaryIndexOf(f), epsilon);
           if (score > bestScore || (score === bestScore && areaOf(f) > areaOf(target))) {
             target = f;
             bestScore = score;
@@ -1230,6 +1261,24 @@ const OlMap = ({
         return false;
       }
     };
+    // Every crack of one target filled in a single union: the same result as
+    // one by one (union is associative) at one sweep over the target instead
+    // of one per crack, which is what matters when a large region takes many.
+    // Falls back to one by one if the one call is refused.
+    const fillGaps = (targetId, items, remember) => {
+      const target = regionSource.getFeatureById(targetId);
+      if (!target || !items.length) return 0;
+      if (items.length === 1) return fillGap(items[0], remember) ? 1 : 0;
+      remember(target);
+      try {
+        target.setGeometry(unionGeoms([target.getGeometry(), ...items.map((item) => item.geom)]));
+        target.set("edited", true);
+        return items.length;
+      } catch (e) {
+        console.warn("[editor] topology gap repair failed for a batch; filling one by one:", e);
+        return items.reduce((filled, item) => filled + (fillGap(item, remember) ? 1 : 0), 0);
+      }
+    };
     const finishTopologyEdit = ({ before }) => {
       if (!before.size) {
         clearTopologyDiagnostics();
@@ -1293,18 +1342,38 @@ const OlMap = ({
     // the save rounds coordinates to five decimals, about a metre, which
     // leaves centimetre slivers along every repaired border that would be
     // "repaired" again on every save. Repairs are applied in one go — a
-    // repaint between them redraws the whole world each time — and a thrown
-    // error leaves the caller to save the map as it is.
-    const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress } = {}) => {
+    // repaint between them redraws the whole world each time.
+    //
+    // Two things bound how long it takes. A follow-up pass looks only around
+    // the previous pass's repairs (topologySweep.js hotspotsOf): the first
+    // pass saw the whole map, and a repair can only expose something inside
+    // its own footprint. And the search stops at BORDER_CLEANUP.maxMillis, or
+    // when the player presses "Save now" on the loading screen; what it found
+    // by then is applied (until maxApplyMillis) and the note after the save
+    // says so. An error inside a phase ends the search the same way, keeping
+    // the repairs already made, rather than throwing the whole cleanup away.
+    const repairTopologyEverywhere = async ({ maxWidth = BORDER_CLEANUP.maxWidth, onProgress, stopRequested } = {}) => {
       const width = Math.max(1, Number(maxWidth) || BORDER_CLEANUP.maxWidth);
       const floor = Math.min(width, BORDER_CLEANUP.minWidth);
       const feats = regionSource.getFeatures().filter((f) => f.getGeometry?.());
       const regionCount = feats.length;
+      const startedAt = Date.now();
+      const elapsed = () => Date.now() - startedAt;
+      let stopped = "";
+      let error = "";
+      const shouldStop = () => {
+        if (!stopped) {
+          if (stopRequested?.()) stopped = "user";
+          else if (elapsed() > BORDER_CLEANUP.maxMillis) stopped = "time";
+        }
+        return Boolean(stopped);
+      };
       const progress = {
         phase: "gaps",
         pass: 1,
         maxPasses: BORDER_CLEANUP.maxPasses,
         regionCount,
+        passRegions: regionCount,
         chunkIndex: 0,
         chunkCount: 0,
         gapsFound: 0,
@@ -1314,93 +1383,23 @@ const OlMap = ({
         repairCount: 0,
         gapsFilled: 0,
         overlapsTrimmed: 0,
+        startedAt,
+        elapsedMs: 0,
       };
       const report = (patch) => {
-        Object.assign(progress, patch);
+        Object.assign(progress, patch, { elapsedMs: elapsed() });
         onProgress?.({ ...progress });
       };
       clearTopologyDiagnostics();
       const totals = { gaps: 0, overlaps: 0, gapsFound: 0, overlapsFound: 0 };
       let passes = 0;
       // What a detailed map could only be checked as: the parts its gap search
-      // read it in, and the overlap pairs too heavy to compare.
+      // read it in, the overlap pairs too heavy to compare, and the repairs
+      // found but not applied before the time ran out.
       let parts = 1;
       let skippedPairs = 0;
-      if (regionCount < 2) {
-        report({ phase: "done" });
-        return { changed: false, gaps: 0, overlaps: 0, affectedRegions: 0, regionCount, gapsFound: 0, overlapsFound: 0, passes };
-      }
-      const edit = beginTopologyEdit();
-      const plan = planTopologyChunks(regionSource.getExtent(), regionCount);
-      while (passes < BORDER_CLEANUP.maxPasses) {
-        passes += 1;
-        report({ pass: passes, phase: "gaps", chunkIndex: 0, chunkCount: 0, gapsFound: 0, regionsChecked: 0, overlapsFound: 0, repairsDone: 0, repairCount: 0 });
-        // Areas change as regions are trimmed, so the context is rebuilt per pass.
-        const context = topologyContext(feats);
-
-        // No union here is handed more than BORDER_CLEANUP.maxUnionVertices: a
-        // detailed map is read in parts rather than asked for more heap than the
-        // page has (topologySweep.js findEnclosedGaps).
-        const search = await findEnclosedGaps(feats, {
-          plan,
-          geometryOf: (f) => f.getGeometry(),
-          union: unionAllGeoms,
-          gapsOf: enclosedGapsOfUnion,
-          isCovered: (point) => regionSource.getFeaturesAtCoordinate(point).length > 0,
-          maxWidth: width,
-          minWidth: floor,
-          onChunks: (chunkCount) => report({ chunkCount }),
-          onChunk: (chunkIndex) => report({ chunkIndex }),
-        });
-        parts = Math.max(parts, search.parts);
-        const gaps = assignGapTargets(search.holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices });
-        report({ gapsFound: gaps.length });
-        await yieldToBrowser();
-
-        const overlapsFound = [];
-        let skippedThisPass = 0;
-        report({ phase: "overlaps", regionsChecked: 0 });
-        for (let from = 0; from < regionCount; from += BORDER_CLEANUP.overlapBatch) {
-          const to = Math.min(regionCount, from + BORDER_CLEANUP.overlapBatch);
-          overlapsFound.push(...findNarrowOverlaps(feats, width, context, {
-            from,
-            to,
-            minWidth: floor,
-            maxPairVertices: BORDER_CLEANUP.maxUnionVertices,
-            onSkip: () => { skippedThisPass += 1; },
-          }));
-          report({ regionsChecked: to, overlapsFound: overlapsFound.length });
-          await yieldToBrowser();
-        }
-        skippedPairs = Math.max(skippedPairs, skippedThisPass);
-        totals.gapsFound += gaps.length;
-        totals.overlapsFound += overlapsFound.length;
-
-        const repairs = [
-          ...overlapsFound.map((item) => ({ kind: "overlap", item })),
-          ...gaps.map((item) => ({ kind: "gap", item })),
-        ];
-        report({ phase: "apply", repairCount: repairs.length, repairsDone: 0 });
-        if (!repairs.length) break;
-        await yieldToBrowser();
-        let gapsFilled = 0;
-        let overlapsTrimmed = 0;
-        for (const { kind, item } of repairs) {
-          if (kind === "overlap") {
-            if (trimOverlap(item, edit.remember)) overlapsTrimmed += 1;
-          } else if (fillGap(item, edit.remember)) {
-            gapsFilled += 1;
-          }
-        }
-        totals.gaps += gapsFilled;
-        totals.overlaps += overlapsTrimmed;
-        report({ repairsDone: repairs.length, gapsFilled: totals.gaps, overlapsTrimmed: totals.overlaps });
-        await yieldToBrowser();
-        if (!gapsFilled && !overlapsTrimmed) break;
-      }
-      const affectedRegions = finishTopologyEdit(edit);
-      report({ phase: "done" });
-      return {
+      let repairsLeft = 0;
+      const outcome = (affectedRegions) => ({
         changed: affectedRegions > 0,
         gaps: totals.gaps,
         overlaps: totals.overlaps,
@@ -1411,7 +1410,147 @@ const OlMap = ({
         passes,
         parts,
         skippedPairs,
-      };
+        stopped,
+        error,
+        elapsedMs: elapsed(),
+        repairsLeft,
+      });
+      if (regionCount < 2) {
+        report({ phase: "done" });
+        return outcome(0);
+      }
+      const edit = beginTopologyEdit();
+      // After the first pass: the padded footprints of the last pass's repairs
+      // and the regions it changed. The next pass reads only around those.
+      let hotspots = null;
+      let changedLast = new Set();
+      try {
+        while (passes < BORDER_CLEANUP.maxPasses && !shouldStop()) {
+          passes += 1;
+          const local = hotspots !== null;
+          // The regions this pass reads: every one the first time, then those
+          // reaching a hotspot, the changed ones first so the overlap walk can
+          // stop after them (a new overlap always involves a changed region).
+          let passFeats = feats;
+          let walk = regionCount;
+          if (local) {
+            const around = new Set();
+            for (const spot of hotspots) for (const f of regionSource.getFeaturesInExtent(spot)) around.add(f);
+            const changed = feats.filter((f) => changedLast.has(f));
+            const others = feats.filter((f) => around.has(f) && !changedLast.has(f));
+            passFeats = [...changed, ...others];
+            walk = changed.length;
+          }
+          report({ pass: passes, phase: "gaps", passRegions: passFeats.length, chunkIndex: 0, chunkCount: 0, gapsFound: 0, regionsChecked: 0, overlapsFound: 0, repairsDone: 0, repairCount: 0 });
+          // Areas change as regions are trimmed, so the context is rebuilt per pass.
+          const context = topologyContext(passFeats);
+
+          // No union here is handed more than BORDER_CLEANUP.maxUnionVertices: a
+          // detailed map is read in parts rather than asked for more heap than the
+          // page has (topologySweep.js findEnclosedGaps).
+          let passExtent = regionSource.getExtent();
+          if (local && passFeats.length) {
+            passExtent = passFeats[0].getGeometry().getExtent().slice();
+            for (const f of passFeats) {
+              const e = f.getGeometry().getExtent();
+              passExtent = [Math.min(passExtent[0], e[0]), Math.min(passExtent[1], e[1]), Math.max(passExtent[2], e[2]), Math.max(passExtent[3], e[3])];
+            }
+          }
+          const search = passFeats.length < 2 ? { holes: [], parts: 1, stopped: false } : await findEnclosedGaps(passFeats, {
+            plan: planTopologyChunks(passExtent, passFeats.length),
+            geometryOf: (f) => f.getGeometry(),
+            union: unionAllGeoms,
+            gapsOf: enclosedGapsOfUnion,
+            isCovered: (point) => regionSource.getFeaturesAtCoordinate(point).length > 0,
+            maxWidth: width,
+            minWidth: floor,
+            partial: local,
+            shouldStop,
+            onChunks: (chunkCount) => report({ chunkCount }),
+            onChunk: (chunkIndex) => report({ chunkIndex }),
+          });
+          parts = Math.max(parts, search.parts);
+          const holes = local ? search.holes.filter((hole) => touchesHotspot(hole.geom.getExtent(), hotspots)) : search.holes;
+          const gaps = assignGapTargets(holes, width, context, { maxTargetVertices: BORDER_CLEANUP.maxUnionVertices });
+          report({ gapsFound: gaps.length });
+          await yieldToBrowser();
+
+          const overlapsFound = [];
+          let skippedThisPass = 0;
+          report({ phase: "overlaps", regionsChecked: 0 });
+          for (let from = 0; from < walk && !shouldStop(); from += BORDER_CLEANUP.overlapBatch) {
+            const to = Math.min(walk, from + BORDER_CLEANUP.overlapBatch);
+            overlapsFound.push(...findNarrowOverlaps(passFeats, width, context, {
+              from,
+              to,
+              minWidth: floor,
+              maxPairVertices: BORDER_CLEANUP.maxUnionVertices,
+              onSkip: () => { skippedThisPass += 1; },
+            }));
+            report({ regionsChecked: to, overlapsFound: overlapsFound.length });
+            await yieldToBrowser();
+          }
+          skippedPairs = Math.max(skippedPairs, skippedThisPass);
+          totals.gapsFound += gaps.length;
+          totals.overlapsFound += overlapsFound.length;
+
+          // Overlaps first (the loser trimmed to the winner's boundary), then
+          // the cracks, every crack of one target in one union. Past
+          // maxApplyMillis the rest are left for the next save.
+          const repairCount = overlapsFound.length + gaps.length;
+          report({ phase: "apply", repairCount, repairsDone: 0 });
+          if (!repairCount) break;
+          await yieldToBrowser();
+          const overApplyBudget = () => elapsed() > BORDER_CLEANUP.maxApplyMillis;
+          const applied = [];
+          const changed = new Set();
+          let gapsFilled = 0;
+          let overlapsTrimmed = 0;
+          let attempted = 0;
+          for (const item of overlapsFound) {
+            if (attempted % 25 === 0 && overApplyBudget()) break;
+            attempted += 1;
+            if (trimOverlap(item, edit.remember)) {
+              overlapsTrimmed += 1;
+              applied.push(item);
+              changed.add(regionSource.getFeatureById(item.loserId));
+            }
+          }
+          const byTarget = new globalThis.Map();
+          for (const item of gaps) {
+            if (!byTarget.has(item.targetId)) byTarget.set(item.targetId, []);
+            byTarget.get(item.targetId).push(item);
+          }
+          for (const [targetId, items] of byTarget) {
+            if (overApplyBudget()) break;
+            attempted += items.length;
+            const filled = fillGaps(targetId, items, edit.remember);
+            if (filled) {
+              gapsFilled += filled;
+              applied.push(...items);
+              changed.add(regionSource.getFeatureById(targetId));
+            }
+          }
+          if (attempted < repairCount) {
+            repairsLeft += repairCount - attempted;
+            if (!stopped) stopped = "time";
+          }
+          totals.gaps += gapsFilled;
+          totals.overlaps += overlapsTrimmed;
+          report({ repairsDone: attempted, gapsFilled: totals.gaps, overlapsTrimmed: totals.overlaps });
+          await yieldToBrowser();
+          if (!gapsFilled && !overlapsTrimmed) break;
+          hotspots = hotspotsOf(applied, width * BORDER_CLEANUP.hotspotPad);
+          changedLast = changed;
+        }
+      } catch (e) {
+        console.warn("[editor] border cleanup stopped early; keeping the repairs made so far:", e);
+        stopped = "error";
+        error = e?.message || String(e);
+      }
+      const affectedRegions = finishTopologyEdit(edit);
+      report({ phase: "done" });
+      return outcome(affectedRegions);
     };
 
     const summarize = (f) => ({

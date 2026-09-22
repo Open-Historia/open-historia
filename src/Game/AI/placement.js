@@ -205,11 +205,26 @@ const partOfBox = ([west, south, east, north], direction) => {
 const DIRECTION_PATTERN = "(north|south|east|west|n|s|e|w)(?:[\\s-]?(east|west|e|w))?";
 const stripArticle = (text) => asText(text).replace(/^(?:the|a|an)\s+/i, "");
 
+// Words for a kind of ground after a place name — "Putumayo jungle frontier",
+// "the Donbas region" — which no map spells as part of the name.
+const GROUND_WORDS = /\s+(?:jungles?|frontiers?|borders?|borderlands?|regions?|areas?|sectors?|front|zones?|countryside|hinterland|outskirts)$/i;
+const stripGround = (text) => {
+    let out = asText(text);
+    for (let guard = 0; guard < 4; guard += 1) {
+        const next = out.replace(GROUND_WORDS, "");
+        if (next === out || !next) break;
+        out = next;
+    }
+    return out;
+};
+
 const COORDINATES = /^[[(]?\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*[\])]?$/;
 
 // Every reading of the phrase that its words allow, most specific first. The
 // resolver takes the first whose names are on the map.
-export const readPlacement = (phrase) => {
+// `owner`: whose unit is being placed, when the caller knows — what "the border
+// with Colombia" is measured from.
+export const readPlacement = (phrase, { owner = "" } = {}) => {
     const text = asText(phrase).replace(/\s+/g, " ").replace(/[.;]+$/, "");
     if (!text) return [];
     const coordinates = text.match(COORDINATES);
@@ -232,6 +247,22 @@ export const readPlacement = (phrase) => {
     if ((match = text.match(/^(?:the )?(?:border|frontier) of (.+?) with (.+)$/i))) add({ kind: "facing", name: stripArticle(match[1]), toward: stripArticle(match[2]) });
     if ((match = text.match(/^(.+?),? (?:facing|toward|towards|opposite|on the border with|on the frontier with|bordering|border with|nearest to|nearest|closest to) (.+)$/i))) {
         add({ kind: "facing", name: stripArticle(match[1]), toward: stripArticle(match[2]) });
+    }
+    // "the northern frontier with Colombia", "along the border with Russia",
+    // "the Colombia border": a border with no first place named. To a person it
+    // is the unit's own side of it, so given the owner it reads as "<owner>
+    // facing <the other place>". A player's Ecuador lost the brigade it had just
+    // mobilised, twice, to "northern frontier with Colombia" and "northern border
+    // with Colombia", which named no first place for the grammar above.
+    const home = asText(owner);
+    if (home) {
+        const lead = "^(?:on |along |at |near |by |to |toward |towards |into |onto )?(?:the )?";
+        if ((match = text.match(new RegExp(`${lead}(?:${DIRECTION_PATTERN}(?:ern)? )?(?:border|frontier|boundary|borderlands?|border (?:area|region|zone)) (?:with|facing|toward|towards|against) (.+)$`, "i")))) {
+            add({ kind: "facing", name: home, toward: stripArticle(match[3]) });
+        }
+        if ((match = text.match(new RegExp(`${lead}(.+?) (?:border|frontier|borderlands?)$`, "i")))) {
+            add({ kind: "facing", name: home, toward: stripArticle(match[1]) });
+        }
     }
 
     // "east of Kharkiv", "north-west of Lviv", "just south of the Don".
@@ -262,6 +293,22 @@ export const readPlacement = (phrase) => {
         add({ kind: "near", name: stripArticle(match[1]) });
     }
     if ((match = text.match(/^(?:at|in|inside|within|on|into|to) (.+)$/i))) add({ kind: "place", name: stripArticle(match[1]) });
+    // "near Putumayo jungle frontier": every reading is tried again with the
+    // words for a kind of ground taken off its names, after every reading as
+    // written — so a real name that ends in one ("Northern Region") still wins.
+    for (const reading of [...readings]) {
+        const bare = { ...reading };
+        let changed = false;
+        for (const key of ["name", "toward", "first", "second"]) {
+            if (typeof reading[key] !== "string") continue;
+            const stripped = stripGround(reading[key]);
+            if (stripped && stripped !== reading[key]) {
+                bare[key] = stripped;
+                changed = true;
+            }
+        }
+        if (changed) add(bare);
+    }
     // Where the words could be grammar, the whole phrase is a name only as the
     // map spells it; a phrase that can be nothing else may be matched loosely.
     if (readings.length > 1) readings[0].exact = true;
@@ -474,8 +521,8 @@ const resolveReading = (reading, gazetteer, seed) => {
 
 // { lng, lat, regionId, regionName, how, label } — or { error } saying what could
 // not be found, in words the model can act on next turn.
-export const resolvePlacement = (phrase, gazetteer, { seedText = "" } = {}) => {
-    const readings = readPlacement(phrase);
+export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
+    const readings = readPlacement(phrase, { owner });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
     const seed = hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
     for (const reading of readings) {
@@ -520,7 +567,7 @@ export const PLACEMENT_DIRECTIVE = [
     "- \"Kharkiv\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
     "- \"near Kharkiv\" — beside it. \"east of Kharkiv\" — a short way off in that direction. \"toward Kharkiv\" — a move's objective; it gets as far as the days allow.",
     "- \"eastern Ukraine\", \"Donetsk Oblast, north\" — that part of a country or region.",
-    "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison.",
+    "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
     "- \"coast of Crimea\" — on land at the sea's edge. \"off Sevastopol\" — AT SEA, for fleets.",
     "- \"between Kyiv and Kharkiv\" — halfway.",
     "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
