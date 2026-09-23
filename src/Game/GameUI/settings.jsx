@@ -1510,8 +1510,8 @@ const DiagnosticsPanel = () => {
         setTimeout(() => setCopyState("idle"), 2500);
     };
 
-    // The same save the failure buttons use. Where no file can be saved (the
-    // Android app) it copies instead, and says so on the Copy button beside it.
+    // The same save the failure buttons use. Where the save fails it copies
+    // instead, and says so on the Copy button beside it.
     const handleDownload = async () => {
         if (await saveDebugLogFile() !== "copied") return;
         setCopyState("copied");
@@ -1520,9 +1520,8 @@ const DiagnosticsPanel = () => {
 
     // Two files, deliberately, and the .txt first. GitHub and Discord both preview
     // a .txt inline, so a maintainer reads the log without downloading anything;
-    // a log zipped in beside the game would be a file nobody opens. Hidden on
-    // Android, where the WebView cannot save a file at all (saveDebugLog.js) and
-    // a 4 MB zip has no clipboard to fall back to.
+    // a log zipped in beside the game would be a file nobody opens. In the
+    // Android app both go out through the share sheet (runtime/saveFile.js).
     const handleAttachGame = async () => {
         const { activeGame, activeGameId: gameId } = getLibraryState();
         if (!gameId) {

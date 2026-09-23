@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The game's page background (index.html theme-color), shown in the
+         system bars around it. -->
+    <color name="oh_background">#131315</color>
+</resources>
