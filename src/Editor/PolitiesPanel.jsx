@@ -10,6 +10,7 @@ import { ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
+import { POLITY_ROLE_PLACEHOLDER } from "../../server/polityRole.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -595,6 +596,23 @@ const PolitiesPanel = ({
           <div>
             <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}>Tags</div>
             <TagField value={tags?.[current.key] || []} suggestions={TAG_SUGGESTIONS} onChange={(next) => setTags?.(current.key, next)} />
+          </div>
+
+          <div>
+            <div
+              style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}
+              title="What this power IS, in your own words — a country claiming land as its own, a terrorist organisation, a gang, one side of a civil war. The game's AI reads it wherever this polity appears."
+            >
+              What it is
+            </div>
+            <input
+              value={current.record?.role || ""}
+              placeholder={POLITY_ROLE_PLACEHOLDER}
+              onChange={(e) => upsertPolity?.(current.key, current.record
+                ? { role: e.target.value }
+                : { name: current.key, code: current.key, aliases: [current.key], status: "active", note: "", role: e.target.value })}
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            />
           </div>
 
           {current.record && (

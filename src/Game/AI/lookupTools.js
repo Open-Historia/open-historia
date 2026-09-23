@@ -14,6 +14,7 @@
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
@@ -25,6 +26,24 @@ import {
 
 const clean = (value) => String(value ?? "").trim();
 const array = (value) => (Array.isArray(value) ? value : []);
+
+// What each named power is, when its record says (server/polityRole.js), as
+// { name: role } — given beside a list of names that stays exact, so a name is
+// always one to copy into an operation as it stands.
+const rolesFor = (polities, names) => {
+  const roles = {};
+  for (const name of array(names)) {
+    const key = clean(name);
+    if (!key || roles[key]) continue;
+    const role = polityRoleOf(polities, key);
+    if (role) roles[key] = role;
+  }
+  return roles;
+};
+const withRoles = (field, polities, names) => {
+  const roles = rolesFor(polities, names);
+  return Object.keys(roles).length ? { [field]: roles } : {};
+};
 const clampInt = (value, min, max, fallback) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -510,7 +529,7 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
         ...(candidate.kind === "city" || row.name !== candidate.label ? { region: row.name } : {}),
         controller: row.owner || "unowned",
         ...(row.sovereign && row.sovereign !== row.owner ? { lawfulOwner: row.sovereign } : {}),
-        ...(claimants.length ? { claimants } : {}),
+        ...(claimants.length ? { claimants, ...withRoles("claimantRoles", context.polities, claimants) } : {}),
       } : { region: "not on this map" }),
     });
   }
@@ -672,7 +691,10 @@ export const executeLookup = (context, name, args = {}) => {
     case "list_powers": {
       const query = foldRegionKey(a.query);
       const powers = [...context.ownerRows.entries()]
-        .map(([label, rows]) => ({ name: label, regions: rows.length, ...(label === context.player ? { player: true } : {}) }))
+        .map(([label, rows]) => {
+          const role = polityRoleOf(context.polities, label);
+          return { name: label, regions: rows.length, ...(role ? { role } : {}), ...(label === context.player ? { player: true } : {}) };
+        })
         .filter((power) => !query || foldRegionKey(power.name).includes(query))
         .sort((x, y) => y.regions - x.regions || x.name.localeCompare(y.name));
       return { count: powers.length, powers: powers.slice(0, 250) };
@@ -727,10 +749,12 @@ export const executeLookup = (context, name, args = {}) => {
     case "region_info": {
       const row = context.byId.get(clean(a.regionId));
       if (!row) return { error: `No region with id "${clean(a.regionId)}". Use find_region or list_regions to get ids.` };
+      const claimants = array(context.claimants[row.id]).map(clean).filter(Boolean);
       return {
         ...regionBrief(row),
         sovereign: row.sovereign || row.owner || "unowned",
-        claimants: array(context.claimants[row.id]).map(clean).filter(Boolean),
+        claimants,
+        ...withRoles("claimantRoles", context.polities, claimants),
         cities: context.citiesInRegion(row).slice(0, 12).map((city) => ({ name: city.name, population: city.population, ...(city.capital ? { capital: city.capital } : {}) })),
         neighbours: context.neighboursOf(row).slice(0, 24).map(regionBrief),
       };
@@ -776,6 +800,7 @@ export const executeLookup = (context, name, args = {}) => {
       return {
         name: owner,
         regions: held.length,
+        ...(clean(record?.role) ? { role: clean(record.role) } : {}),
         ...(record?.note ? { description: clean(record.note).slice(0, 600) } : {}),
         ...(array(record?.tags).length ? { tags: array(record.tags).map(clean) } : {}),
         ...(Number.isFinite(Number(world.internationalReputation?.[owner])) ? { reputation: Number(world.internationalReputation[owner]) } : {}),
@@ -784,6 +809,7 @@ export const executeLookup = (context, name, args = {}) => {
         relations,
         claimsAsserted: claimsBy.slice(0, 20),
         claimsAgainstIt: claimsAgainst.slice(0, 20),
+        ...withRoles("claimantRoles", context.polities, claimsAgainst.slice(0, 20).flatMap((entry) => entry.claimants)),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
       };
@@ -797,8 +823,10 @@ export const executeLookup = (context, name, args = {}) => {
     }
     case "war_ledger": {
       const world = context.world ?? {};
+      const wars = array(world.wars).map(warBrief);
       return {
-        wars: array(world.wars).map(warBrief),
+        wars,
+        ...withRoles("participantRoles", context.polities, wars.flatMap((war) => war.participants)),
         agreements: array(world.agreements).slice(0, 40).map(agreementBrief),
       };
     }
@@ -846,7 +874,12 @@ export const executeLookup = (context, name, args = {}) => {
         if (!claimants.length && foldRegionKey(sovereign) === foldRegionKey(row.owner)) continue;
         rows.push({ ...regionBrief(row), sovereign: sovereign || "unowned", ...(claimants.length ? { claimants } : {}) });
       }
-      return { count: rows.length, regions: rows.slice(0, 120) };
+      const shown = rows.slice(0, 120);
+      return {
+        count: rows.length,
+        regions: shown,
+        ...withRoles("claimantRoles", context.polities, shown.flatMap((entry) => entry.claimants ?? [])),
+      };
     }
     case "list_projects": {
       const world = context.world ?? {};

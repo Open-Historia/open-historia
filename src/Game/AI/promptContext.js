@@ -1536,7 +1536,10 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
       // `note` is the polity's lore — the author's (or the faction creator's) own
       // description of who this power is. It was persisted but never reached the
       // model, so a player-written backstory did nothing. It steers the story now.
-      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}${entry.note ? ` — ${entry.note}` : ""}`,
+      // `role` is what the power IS ("a terrorist organisation", "the rebel side
+      // of the civil war"), in the map author's or the AI's own words — said
+      // after the name, never inside it, so the name stays one to copy exactly.
+      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}${entry.role ? ` — what it is: ${entry.role}` : ""}${entry.note ? ` — ${entry.note}` : ""}`,
     ).join("\n");
 
   // What each country IS: the map-maker's tags with the AI's own changes layered

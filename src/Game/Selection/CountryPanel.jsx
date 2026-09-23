@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
@@ -373,6 +374,15 @@ const CountryInfoPanel = () => {
                         {subordination.provenance}
                     </div>
                 )}
+            </div>
+        )}
+
+        {polityRoleOf(worldState?.polityOverrides, polityKey) && (
+            <div
+                style={{ marginTop: "0.45rem", color: "rgba(255,255,255,0.78)", fontSize: "0.8rem", lineHeight: 1.4 }}
+                title="What this power is — set by the map-maker or the AI, and read by the AI wherever it appears"
+            >
+                {polityRoleOf(worldState?.polityOverrides, polityKey)}
             </div>
         )}
 

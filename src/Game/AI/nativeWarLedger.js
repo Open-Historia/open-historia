@@ -10,6 +10,7 @@
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 
 export const WAR_LEDGER_VERSION = "0.1.4-adversarial-war-start";
 
@@ -1225,11 +1226,19 @@ export const buildCanonicalWarContext = (world) => {
       "Therefore no polity is currently authorized to fight a battlefield campaign merely because real history says it did.",
     ].join("\n");
   }
+  // What a side is, when its record says (server/polityRole.js): a war against
+  // "a terrorist organisation" is not fought like one against a state.
+  const rolesOfSides = (war) => [...war.sideA, ...war.sideB]
+    .map((name) => ({ name, role: polityRoleOf(world?.polityOverrides, name) }))
+    .filter((entry) => entry.role)
+    .map((entry) => `${entry.name} is ${entry.role}`);
   return [
-    ...current.map((war) =>
-      `- ${war.id} | ${war.status.toUpperCase()} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")} | started ${war.startedDate || "unknown"}` +
-      (war.note ? ` | latest: ${war.note}` : ""),
-    ),
+    ...current.map((war) => {
+      const roles = rolesOfSides(war);
+      return `- ${war.id} | ${war.status.toUpperCase()} | SIDE A: ${war.sideA.join(", ")} | SIDE B: ${war.sideB.join(", ")} | started ${war.startedDate || "unknown"}` +
+        (roles.length ? ` | ${roles.join("; ")}` : "") +
+        (war.note ? ` | latest: ${war.note}` : "");
+    }),
     "",
     "This ledger is authoritative belligerency. A storyline, alliance, mobilization, historical expectation, or tense relationship does NOT itself create a war.",
   ].join("\n");

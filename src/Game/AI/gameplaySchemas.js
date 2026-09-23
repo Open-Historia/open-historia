@@ -100,6 +100,11 @@ const regionClaimSchema = {
     regionId: regionIdSchema,
     regionName: regionNameSchema,
     claimantCode: textSchema("Claiming polity's FULL name (\"Spain\"), never a code."),
+    // What the claimant is, written onto its record as its role
+    // (server/polityRole.js) and shown wherever it appears. One line: the
+    // examples live in the actions reference and the GM rules, because this
+    // schema rides on every jump request (projectOpSchema.test.js).
+    claimantRole: textSchema("What the claimant IS in a few words (\"a terrorist organisation\"), when new or changed."),
     drop: {
       type: "boolean",
       description: "True to WITHDRAW the claim (renounced, traded away, given up in defeat). Unset asserts it.",
@@ -184,6 +189,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Defending controller's FULL name."),
         actorCode: nonEmptyTextSchema("Attacking polity's FULL name."),
+        actorRole: textSchema("What the attacker IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
       },
       required: ["op", "regionId", "fromCode", "actorCode"],
@@ -197,6 +203,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Previous controller's FULL name."),
         toCode: nonEmptyTextSchema("New controller's FULL name."),
+        toRole: textSchema("What the new controller IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
@@ -258,6 +265,7 @@ const polityChangeSchema = {
       "Defining traits after this change — ideology, alignment, posture (socialist, authoritarian, anti-nato). "
       + "Only when they change, and then the COMPLETE list, not a delta.",
     ),
+    role: textSchema("What this polity IS in a few words (\"a street gang\"), when new or changed."),
     note: textSchema("Brief reason."),
     stats: statsUpdateSchema,
   },

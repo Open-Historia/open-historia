@@ -88,7 +88,7 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 | `createdChats` | `createdChatSchema[]` | Diplomatic chats the event opens toward the player | no |
 | `polityChanges` | `polityChangeSchema[]` | Polity metadata changes (name/color/reputation/tags…) | no |
 | `regionTransfers` | `regionTransferSchema[]` | **Map ownership changes.** Required by prompt whenever narration says territory changed hands — one entry per region | no |
-| `regionClaims` | `regionClaimSchema[]` | **Territory claimed but not held.** Marks a region disputed (striped) *without* moving the border — an irredentist declaration, a proclaimed union, a contested frontier. `drop: true` withdraws a claim | no |
+| `regionClaims` | `regionClaimSchema[]` | **Territory claimed but not held.** Marks a region disputed (striped) *without* moving the border — an irredentist declaration, a proclaimed union, a contested frontier. `drop: true` withdraws a claim; `claimantRole` says what the claimant is (a country claiming the land as its own, a terrorist organisation, one side of a civil war) | no |
 | `unitOps` | `unitOpSchema[]` | Military unit mutations | no |
 | `markerOps` | `markerOpSchema[]` | Structures built/destroyed on the map | no |
 | `reports` | `reportOpSchema[]` | **Documents only some governments hold** — `create` (title, body, `visibleTo` of full polity names, optional `reportId`/`from`/`dateline`) or `share` (`reportId`, `visibleTo`, optional `from` — the holder who passed it on). `from` decides the thread and the speaker when a document reaches the player through diplomacy. Never carries impacts: what moved the map stays in the public event. See [reports](ai-overview.md#reports-what-only-some-governments-know) | no |
@@ -106,7 +106,9 @@ The heart of the map-mutating pipeline. Attached to events (`eventSchema.impacts
 
 `basis` also rides on the **`control`** variant of `regionControlOpSchema` (not on `contest`, which is already the middle state, nor on `clear_contest`, which moves nothing toward anyone). It is **optional on purpose**: an older payload, the Game Master console and a lenient local backend all answer without it, and an entry with no basis is applied exactly as before. A value outside the enum fails schema validation, so the in‑turn retry can name a real one. What the engine does with a `claim` — it becomes a `regionClaims` entry — is in [AI overview](ai-overview.md#strict--salvage-validation-discipline).
 
-> **The schema has a size budget.** `projectOpSchema.test.js` holds the serialized jump tool schema under 32,000 characters, because it rides on every request. That is why the definition of `basis` is stated once (on `regionTransfers`) and the control operation only points at it, and why the long explanation is a call‑time directive (`TERRITORY_BASIS_DIRECTIVE`) rather than a field description. At 31,372 characters there are about 600 to spare: a new impact family should follow the board's example and take its own call rather than join this contract.
+**What a side is.** `claimantRole` on a claim, `actorRole` on a contest and `toRole` on a control are one line of free text saying what that polity is — a terrorist organisation, a drug cartel, the rebel side of a civil war — when it is new or has changed. They are written to the polity's `role` (`server/polityRole.js`) and shown to the model beside its name from then on; `polityChangeSchema.role` does the same for any polity. All four are optional: an empty value keeps what is known, and a control flip whose basis is `claim` carries its `toRole` onto the claim it becomes (`screenTerritoryBasis`).
+
+> **The schema has a size budget.** `projectOpSchema.test.js` holds the serialized jump tool schema under 28,000 characters, because it rides on every request. That is why the definition of `basis` is stated once (on `regionTransfers`) and the control operation only points at it, why the long explanation is a call‑time directive (`TERRITORY_BASIS_DIRECTIVE`) rather than a field description, and why each role field is one line whose examples live in the actions reference and the Map Truth directive (the four cost 467 characters). At 27,165 characters there are about 800 to spare: a new impact family should follow the board's example and take its own call rather than join this contract.
 
 ### 4.3 `polityChangeSchema` (`:107`)
 
@@ -120,6 +122,7 @@ A creation/rename/recolor/metadata change. Only `code` is required; send other f
 | `aliases` | `string[]` | Alternative names | no |
 | `reputation` | number | International reputation 0–100, only when it changes (0 = pariah, 100 = universally trusted) | no |
 | `tags` | `string[]` | Complete new trait list (ideology/alignment/posture) — send the whole list, not a delta | no |
+| `role` | string | What the polity IS in a few words ("a street gang", "the rebel side of the civil war"), only when it is new or changes; written to `polityOverrides[code].role` and shown beside the name in every prompt | no |
 | `note` | string | Brief reason | no |
 
 > `reputation` is the canonical example of the [`additionalProperties: false` trap](#7-the-additionalpropertiesfalse-trap): the prompt asked for it and `gameState` clamped/wrote it, but it was **absent from `properties`** — so a strict `json_schema` provider could never emit it and reputation silently never moved. Declaring it (`:119`) is what connected the feature.

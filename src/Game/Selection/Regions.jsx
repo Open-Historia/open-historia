@@ -2,7 +2,9 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
-import { getNationFlags, resolveCountryDisplayName } from "../../runtime/assets.js";
+import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
+import { withMapClaims } from "../../runtime/mapClaims.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
@@ -276,7 +278,10 @@ const RegionPopup = () => {
             setWorldState(world);
             setPolities(world?.polityOverrides ?? {});
             setTerritoryState({
-                regionClaimants: world?.regionClaimants ?? {},
+                // The map file's own disputes too, as the map shows them
+                // (runtime/mapClaims.js): a dispute drawn in the Workshop was
+                // striped on the map with no claimant on this card.
+                regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
             });
@@ -312,7 +317,7 @@ const RegionPopup = () => {
             setWorldState(world);
             setPolities(world?.polityOverrides ?? {});
             setTerritoryState({
-                regionClaimants: world?.regionClaimants ?? {},
+                regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
             });
@@ -704,8 +709,17 @@ const RegionPopup = () => {
             {claimants.length > 0 && (
                 <>
                 <span style={{ color: "rgba(255,255,255,0.42)" }}>Claimants</span>
-                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
-                {claimants.map(displayPolity).join(", ")}
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word", display: "grid", gap: 2 }}>
+                {claimants.map((code) => {
+                    // What the claimant is, in the map author's or the AI's words.
+                    const role = polityRoleOf(worldState?.polityOverrides, code);
+                    return (
+                        <span key={code}>
+                        {displayPolity(code)}
+                        {role ? <span style={{ color: "rgba(255,255,255,0.55)" }}>{` — ${role}`}</span> : null}
+                        </span>
+                    );
+                })}
                 </span>
                 </>
             )}
