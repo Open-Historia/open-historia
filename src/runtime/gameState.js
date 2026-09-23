@@ -1,9 +1,11 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { withMapClaims } from "./mapClaims.js";
 import { enqueueContentStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
+import { normalizePolityRole } from "../../server/polityRole.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
@@ -810,8 +812,14 @@ const normalizeRegionClaim = (entry) => {
     return null;
   }
 
+  // What the claimant IS, when the claim says ("a terrorist organisation", "the
+  // rebel side of the civil war"): written onto the claimant's record as its
+  // role (server/polityRole.js), so it follows the claimant everywhere. Only
+  // present when given — a claim that says nothing leaves the role alone.
+  const claimantRole = normalizePolityRole(entry.claimantRole ?? entry.role ?? entry.claimantType);
   return {
     claimantCode,
+    ...(claimantRole ? { claimantRole } : {}),
     drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
     note: normalizeOptionalString(entry.note || entry.reason),
     regionId,
@@ -838,22 +846,27 @@ const normalizeRegionControlOp = (entry) => {
 
   if (!regionId) return null;
 
+  // What the contesting or newly controlling side is ("the rebel side of the
+  // civil war"): its role (server/polityRole.js), only when the op says.
   if (op === "contest") {
     const actorCode = toCountryName(normalizeOptionalString(entry.actorCode || entry.claimantCode || entry.toCode));
     if (!fromCode || !actorCode || fromCode.toLowerCase() === actorCode.toLowerCase()) return null;
-    return { op, regionId, regionName, fromCode, actorCode, note };
+    const actorRole = normalizePolityRole(entry.actorRole ?? entry.claimantRole ?? entry.role);
+    return { op, regionId, regionName, fromCode, actorCode, ...(actorRole ? { actorRole } : {}), note };
   }
 
   if (op === "control" || op === "control_flip") {
     const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
     if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
     const basis = normalizeTerritoryBasis(entry.basis);
+    const toRole = normalizePolityRole(entry.toRole ?? entry.role);
     return {
       op: "control",
       regionId,
       regionName,
       fromCode,
       toCode,
+      ...(toRole ? { toRole } : {}),
       note,
       ...(basis ? { basis } : {}),
       ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
@@ -915,6 +928,9 @@ const normalizePolityChange = (entry) => {
   const rawOperation = normalizeOptionalString(entry.operation || entry.op || entry.action).toLowerCase();
   const operation = POLITY_OPERATION_SET.has(rawOperation) ? rawOperation : "update";
 
+  // A new role replaces the old one; nothing (or an empty string, which a model
+  // fills optional fields with) keeps it.
+  const role = normalizePolityRole(entry.role ?? entry.polityRole);
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -924,6 +940,7 @@ const normalizePolityChange = (entry) => {
     note: normalizeOptionalString(entry.note || entry.reason),
     operation,
     reputation,
+    ...(role ? { role } : {}),
     stats,
     tags,
   };
@@ -3099,6 +3116,8 @@ const normalizePolityOverride = (key, value) => {
     ...(normalizeOptionalString(value.mapDistinctLabel) ? { mapDistinctLabel: normalizeOptionalString(value.mapDistinctLabel) } : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
+    // What this power is, in the author's or the AI's own words (server/polityRole.js).
+    ...(normalizePolityRole(value.role) ? { role: normalizePolityRole(value.role) } : {}),
     ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
     ...(value.verbatim === true ? { verbatim: true } : {}),
   };
@@ -3896,29 +3915,39 @@ export const buildActionDisplayText = (action) => {
 let worldViewRaw = null;
 let worldViewNormalized = null;
 
+let worldViewCatalog = null;
+
+// Both readers see the disputes the map file declares as well as the world's
+// own (runtime/mapClaims.js), from the region catalog the map has already
+// parsed; with no map loaded there is nothing to add.
 export const readWorldStateView = async ({ force = false } = {}) => {
   const raw = await readJson(JSON_URLS.world, {
     defaultValue: WORLD_DEFAULTS,
     force,
     clone: false,
   });
+  const catalog = getPrimedScenarioRegionCatalog();
 
-  if (!force && raw === worldViewRaw && worldViewNormalized) {
+  if (!force && raw === worldViewRaw && catalog === worldViewCatalog && worldViewNormalized) {
     return worldViewNormalized;
   }
 
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-  const normalized = normalizeWorldState(raw);
+  const normalized = withMapClaims(normalizeWorldState(raw), catalog);
   const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
   reportPerfOperation("normalize world read-only view", elapsed, { warnAt: 40 });
 
   worldViewRaw = raw;
+  worldViewCatalog = catalog;
   worldViewNormalized = normalized;
   return normalized;
 };
 
 export const readWorldState = async ({ force = false } = {}) =>
-  normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force }));
+  withMapClaims(
+    normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force })),
+    getPrimedScenarioRegionCatalog(),
+  );
 
 // Same-tab cache agreement after a country Stats commit.
 //
@@ -4244,6 +4273,20 @@ const writeRegionSovereign = (world, regionId, sovereign) => {
 
 const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
 
+// Writes a polity's role (server/polityRole.js) onto its record, found under any
+// case of its name; a polity with no record yet — a claimant the map knows only
+// from a claimant list, a real country the scenario never registered — gets one.
+const recordPolityRole = (world, name, role) => {
+  const text = normalizePolityRole(role);
+  const code = normalizeOptionalString(name);
+  if (!text || !code) return false;
+  if (!world.polityOverrides || typeof world.polityOverrides !== "object") world.polityOverrides = {};
+  const key = Object.keys(world.polityOverrides).find((entry) => samePolity(entry, code)) || code;
+  const current = world.polityOverrides[key] ?? { aliases: [], code: key, color: "", name: key, note: "", status: "active" };
+  world.polityOverrides[key] = { ...current, role: text };
+  return true;
+};
+
 const applyPolityAndTerritoryImpacts = ({
   colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
 }) => {
@@ -4299,6 +4342,9 @@ const applyPolityAndTerritoryImpacts = ({
     const claimant = resolveOwner(claim.claimantCode) || claim.claimantCode;
     // A claimant nobody knows becomes a landless polity rather than a phantom name.
     if (!claim.drop) foundPolityIfUnknown(world, colors, claimant);
+    // What the claimant is, when the claim says: onto its record, which a
+    // claimant known only from a claimant list gets now.
+    if (!claim.drop && claim.claimantRole) recordPolityRole(world, claimant, claim.claimantRole);
     const current = normalizeArray(world.regionClaimants[claim.regionId])
       .map((entry) => normalizeOptionalString(entry))
       .filter(Boolean);
@@ -4367,6 +4413,7 @@ const applyPolityAndTerritoryImpacts = ({
       const actor = resolveOwner(op.actorCode) || normalizeOptionalString(op.actorCode);
       if (!actor || samePolity(actor, currentController)) continue;
       foundPolityIfUnknown(world, colors, actor);
+      if (op.actorRole) recordPolityRole(world, actor, op.actorRole);
       const claimants = [...existing, actor];
       if (legalSovereign && currentController && !samePolity(legalSovereign, currentController)) claimants.push(legalSovereign);
       writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, currentController)));
@@ -4377,6 +4424,7 @@ const applyPolityAndTerritoryImpacts = ({
       const toCode = resolveOwner(op.toCode) || normalizeOptionalString(op.toCode);
       if (!toCode) continue;
       foundPolityIfUnknown(world, colors, toCode);
+      if (op.toRole) recordPolityRole(world, toCode, op.toRole);
       world.regionOwnershipOverrides[regionId] = toCode;
       writeRegionSovereign(world, regionId, legalSovereign);
       const claimants = existing.filter((name) => !samePolity(name, toCode));
@@ -4440,6 +4488,7 @@ const applyPolityAndTerritoryImpacts = ({
       ...(change.color ? { color: change.color } : {}),
       name: code,
       ...(change.note ? { note: change.note } : {}),
+      ...(change.role ? { role: change.role } : {}),
     };
 
     if (change.color) {

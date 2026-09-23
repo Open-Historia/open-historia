@@ -2424,6 +2424,12 @@ const LibraryTopBar = () => {
         // full current registry (landless polities included) before editing, so
         // merging here would resurrect deleted or renamed entries forever.
         polityOverrides: seed.world?.polityOverrides ?? {},
+        // The Workshop is authoritative for the disputes too (exportPreset.js):
+        // it opened with the world's rows stamped over the map file's, so the map
+        // it saves is the whole of them.
+        ...(seed.world?.regionClaimants
+          ? { regionClaimants: seed.world.regionClaimants, settledRegionClaims: seed.world.settledRegionClaims ?? [] }
+          : {}),
         ownerSchema: seed.world?.ownerSchema ?? currentWorld.ownerSchema,
         // Playable factions for the start-country picker.
         ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
@@ -3294,6 +3300,14 @@ const LibraryTopBar = () => {
                 name: scenario.name || "",
                 author: world.author || "",
                 ownershipOverrides: world.regionOwnershipOverrides || {},
+                // The world's disputes, stamped over the map file's as the game
+                // reads them, so the Workshop edits what the game shows.
+                claimOverrides: {
+                  claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
+                    ? world.regionClaimants
+                    : {},
+                  settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
+                },
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,

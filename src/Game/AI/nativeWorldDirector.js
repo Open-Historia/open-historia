@@ -13,6 +13,7 @@ import {
   createWorldActorResolver,
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
 
 // Native World Director (ported from kernely's Continuum branch).
@@ -744,6 +745,12 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
         controller ? `controller ${controller}` : "",
         sovereign ? `legal sovereign ${sovereign}` : "",
         contenderList.length ? `claimants/contenders ${contenderList.join(", ")}` : "",
+        // What those claimants are, when their records say (server/polityRole.js).
+        contenderList
+          .map((name) => ({ name, role: polityRoleOf(world?.polityOverrides, name) }))
+          .filter((entry) => entry.role)
+          .map((entry) => `${entry.name} is ${entry.role}`)
+          .join(", "),
       ].filter(Boolean).join("; "),
       ageDays: 0,
       trajectoryValue: 4,

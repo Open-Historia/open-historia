@@ -217,6 +217,8 @@ Claimants come from `world.regionClaimants[id]` first (how the modern-world scen
 - `custom-regions-disputed-vnext` — the worker's `disputedData` (every claimant-carrying region with its live owner and claimants), striped at `0.90` whenever `customActive && worldKnown`.
 - `regions-disputed` — the tile twin for GADM disputed regions (uses `disputedTileStops`, opacity `TILE_FILL_FADE`), excluding `editedStockIds`.
 
+The region popup (`Selection/Regions.jsx`) lists each claimant on its own line with what it is beside it, muted (the polity's `role`, `polityRoleOf` in `server/polityRole.js`). Its claimants are the world's as the game reads them, the map file's disputes included (`withMapClaims`, [World state](world-state.md)), so the popup, the stripes and the AI name the same claimants.
+
 `DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx:338`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
 
 ---

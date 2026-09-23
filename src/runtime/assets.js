@@ -1536,6 +1536,11 @@ export const primeCustomRegionCatalogEntries = (
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
       ...(isBox(raw?.bounds) ? { bounds: raw.bounds } : {}),
+      // The map file's own claimants: what the world is read with when it has
+      // no row for the region (runtime/mapClaims.js).
+      ...(Array.isArray(raw?.claimants) && raw.claimants.length
+        ? { claimants: raw.claimants.map((value) => String(value ?? "").trim()).filter(Boolean) }
+        : {}),
     });
   }
   primedCustomRegionCatalog = entries;
@@ -1631,6 +1636,7 @@ export const primeCustomRegionCatalog = (
       type: props?.type ?? "",
       adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
       bounds: geometryBounds(feature?.geometry),
+      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
     });
   }
   return primeCustomRegionCatalogEntries(rawEntries, options);
