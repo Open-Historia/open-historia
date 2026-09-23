@@ -6,9 +6,19 @@ import {
   appendCountryStatHistorySample,
   mergeCountryStatPatch,
 } from "../../runtime/countryStats.js";
+import { IO_CONFIG, createWorkerIoClient } from "./runtimeIoBridge.js";
 
 let cachedRegionUrl = "";
 let cachedScenarioCatalog = null;
+
+// On the website and in the Android app there is no server: /api/* is answered
+// by a patch on the PAGE's fetch, which this worker's own fetch never sees. The
+// page switches the bridge on with a `config` message, after which every
+// runtime read and write below travels through it (runtimeIoBridge.js). The
+// desktop's server answers a worker's fetch directly and never sends the config.
+const ioBridge = createWorkerIoClient((message) => self.postMessage(message));
+let bridgeRuntimeIo = false;
+const runtimeFetch = (url, init) => (bridgeRuntimeIo ? ioBridge.fetch(url, init) : fetch(url, init));
 
 const fetchRuntimeJson = async (url, { allowMissing = false } = {}) => {
   if (!url) {
@@ -16,7 +26,7 @@ const fetchRuntimeJson = async (url, { allowMissing = false } = {}) => {
     throw new Error("Stats worker runtime URL is missing.");
   }
 
-  const response = await fetch(url, {
+  const response = await runtimeFetch(url, {
     cache: "no-store",
     credentials: "same-origin",
   });
@@ -36,7 +46,7 @@ const persistRuntimeJson = async (url, value) => {
   const serializedAt =
     typeof performance !== "undefined" ? performance.now() : Date.now();
 
-  const response = await fetch(url, {
+  const response = await runtimeFetch(url, {
     method: "PUT",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
@@ -149,8 +159,13 @@ const loadScenarioCatalog = async (url) => {
 };
 
 self.onmessage = async (event) => {
-  const id = Number(event?.data?.id);
   const type = String(event?.data?.type || "");
+  if (type === IO_CONFIG) {
+    bridgeRuntimeIo = Boolean(event.data.bridgeRuntimeIo);
+    return;
+  }
+  if (ioBridge.handle(event?.data)) return;
+  const id = Number(event?.data?.id);
   if (!["prepare", "persist"].includes(type)) return;
 
   const startedAt =

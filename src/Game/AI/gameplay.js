@@ -95,6 +95,7 @@ import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
+import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   decodeGameMasterTransportPayload,
   decodePregameHistoryTransportPayload,
@@ -220,6 +221,14 @@ import {
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation } from "../../runtime/politicalBackground.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
+import {
+  ACTION_OUTCOME_ASSOCIATION_SCHEMA,
+  ACTION_OUTCOME_ASSOCIATION_TOOL,
+  applyActionOutcomeAssociations,
+  buildActionOutcomeAssociationPlan,
+  normalizeActionOutcomeAssociationAnswer,
+  validateQueuedActionIds,
+} from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
@@ -938,7 +947,9 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     // bindings, and the events stay as narrative (repairWarLedgerPayload).
     const first = warError;
     const repair = repairWarLedgerPayload(candidate, { world });
-    const summary = `stamped warId on ${repair.stamped} event(s), dropped ${repair.droppedIds.length} war record(s)`
+    const summary = `stamped warId on ${repair.stamped} event(s)`
+      + `${repair.anchored ? `, moved ${repair.anchored} war start(s) onto the event that opens the war` : ""}`
+      + `, dropped ${repair.droppedIds.length} war record(s)`
       + `${repair.droppedIds.length ? ` (${repair.droppedIds.join(", ")})` : ""}, unbound ${repair.strippedEvents} event(s)`;
     console.warn(
       `[ai] war ledger salvage after the model failed its corrective retry: ${summary}; keeping the segment. `
@@ -947,6 +958,7 @@ const validateSegmentLedgers = (candidate, { world, strict, segmentIndex = 0, re
     logDebugEvent("warn", "[turn] War ledger salvage on the final attempt: the segment is kept, its canonical war changes repaired or dropped.", {
       firstRejection: first,
       stamped: repair.stamped,
+      anchored: repair.anchored,
       droppedWarIds: repair.droppedIds,
       unboundEvents: repair.strippedEvents,
       residual: repair.residual,
@@ -2129,9 +2141,10 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path });
+        const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path, owner: normalizeString(mover?.ownerCode) });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2164,11 +2177,24 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
     // operation that gives only an id it is the whole answer. It used to be
     // ignored, so such an operation was dropped for having no coordinates: the
     // exact move a model reaches for after being told its `at` was not on the map.
-    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name }) : null;
+    const byPhrase = entry.phrase ? resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner }) : null;
     const byRegion = !(byPhrase && !byPhrase.error) && entry.regionId
       ? resolveRegionPlacement(entry.regionId, gazetteer, { seedText: entry.name })
       : null;
     const resolved = [byPhrase, byRegion].find((attempt) => attempt && !attempt.error) ?? null;
+    const givenLng = Number(target[lngKey]); const givenLat = Number(target[latKey]);
+    const hasCoordinates = target[lngKey] != null && target[latKey] != null
+      && Number.isFinite(givenLng) && Number.isFinite(givenLat) && !(givenLng === 0 && givenLat === 0);
+    // A NEW formation that nothing places — no phrase the map knows, no region
+    // id, no coordinates of its own — is raised in its owner's own territory
+    // rather than not at all. The receipt that told the model to name a place
+    // did not stop a player's Ecuador losing the same brigade on consecutive
+    // turns, to "northern frontier with Colombia" and then "northern border with
+    // Colombia". A moved unit is not treated so: a move that cannot be placed
+    // leaves the unit where it stands.
+    const homeland = !resolved && !hasCoordinates && entry.spawn && entry.owner
+      ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
+      : null;
     if (resolved) {
       // A phrase that failed still gets said: the model wrote it, and next turn
       // it should know which of the two the engine went with.
@@ -2181,8 +2207,21 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       target[latKey] = resolved.lat;
       if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
       placed += 1;
+    } else if (homeland && !homeland.error) {
+      const tried = byPhrase?.error
+        ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
+        : byRegion?.error
+          ? `could not be placed in region "${entry.regionId}" — ${byRegion.error}`
+          : "came with no place and no coordinates";
+      noteReceipt(receipt, "adjusted",
+        `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} ${tried}. `
+        + `It was raised in ${homeland.regionName || entry.owner}, inside ${entry.owner}'s own territory, rather than left off the map. `
+        + "Name a city, region, structure or unit as the map spells it — or \"the border with <country>\" for its own side of a border — to place it exactly.");
+      target[lngKey] = homeland.lng;
+      target[latKey] = homeland.lat;
+      if (homeland.regionId) target.regionId = homeland.regionId;
+      placed += 1;
     } else if (byPhrase?.error || byRegion?.error) {
-      const hasCoordinates = Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey]));
       const tried = byPhrase?.error
         ? `could not be placed at "${entry.phrase}" — ${byPhrase.error}`
           + (byRegion?.error ? `; and its regionId "${entry.regionId}" — ${byRegion.error}` : "")
@@ -5966,6 +6005,10 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // its accession, founding, response or withdrawal decision.
   playerCountry = "",
   institutionLifecycleAuthority = "npc",
+  // Current queued Actions, when this is a time skip. Exact actionIds are native
+  // references just like party/project ids: reject invented ids on a strict
+  // attempt and strip them on salvage, but never require full coverage here.
+  actions = null,
 } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
@@ -5977,6 +6020,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
       }];
   const titleAt = (path) => normalizeString(containers.find((container) => container.path === path)?.event?.title);
   const drop = (path, text) => noteReceipt(receipt, "dropped", `${titleAt(path) ? `Event "${titleAt(path)}": ` : ""}${text}`);
+
+  // actionIds are stable queue references, not prose hints. Do not guess missing
+  // links here; only ensure every link the model DID write points at a current
+  // planned action. The bounded semantic review later handles genuine omissions.
+  if (Array.isArray(candidate?.events) && Array.isArray(actions)) {
+    const actionRefs = validateQueuedActionIds(candidate.events, actions, { strict });
+    if (actionRefs.error) return actionRefs.error;
+    if (actionRefs.removed) {
+      noteReceipt(receipt, "dropped", `${actionRefs.removed} stale or unknown actionId reference${actionRefs.removed === 1 ? " was" : "s were"} removed from generated events; only exact ids of current queued Actions may resolve an order.`);
+    }
+  }
 
   // A transfer or control flip that says its own basis is a claim, a threat or a
   // raid moves no border (runtime/territoryBasis.js). Never an error and never a
@@ -6405,6 +6459,10 @@ const fallbackJumpSimulation = async ({ bundle, days, mode, targetDate }) => {
             ? `${bundle.game.country} opens a deliberate diplomatic channel tied to ${action.title.toLowerCase()}, forcing counterparts to weigh terms instead of guessing intent.`
             : `${bundle.game.country} begins implementing ${action.title.toLowerCase()}, producing immediate administrative and political consequences that other powers start to notice.`,
         impacts: {
+          // This event exists specifically because of this queued Action. The
+          // exact id is what settleOrders consumes; without it a provider
+          // fallback narrated the order and then carried it over as overdue.
+          actionIds: normalizeString(action.id) ? [normalizeString(action.id)] : [],
           createdChats:
             action.kind === "chat" && action.invitees.length > 0 && action.chatStarter
               ? [
@@ -7331,8 +7389,10 @@ const applySimulationResult = async ({
   });
   worldWithImpacts = storylineMerge.world;
   // Each segment was checked on its own; this is the merged round. A finished
-  // turn is never lost to this check, but its verdict is worth a report.
-  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld });
+  // turn is never lost to this check, but its verdict is worth a report. Read
+  // as the one period it is (startsInForce), as the last attempt's repair
+  // reads it: a war the round starts is in force for all of the round.
+  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld, startsInForce: true });
   if (canonicalWarError) {
     console.warn(`[ai] canonical war-state check on the merged turn: ${canonicalWarError}`);
     logDebugEvent("warn", "[turn] The canonical war-state check flagged the merged turn.", { error: canonicalWarError });
@@ -9347,7 +9407,17 @@ const getCountryStatsWorker = () => {
       { type: "module", name: "openhistoria-country-stats" },
     );
 
+    // Hosted builds (website, Android app) answer /api/* with a patch on THIS
+    // thread's fetch, which the worker never sees: its runtime reads and writes
+    // come here as `io` messages and go back as `io-result` (runtimeIoBridge.js).
+    // The desktop's server answers the worker directly, so it is never told.
+    if (import.meta.env.VITE_OH_WEB) worker.postMessage({ type: IO_CONFIG, bridgeRuntimeIo: true });
+
     worker.onmessage = (event) => {
+      if (event?.data?.type === IO_REQUEST) {
+        serveWorkerIo(event.data, fetch).then((reply) => { if (reply) worker.postMessage(reply); });
+        return;
+      }
       const id = Number(event?.data?.id);
       const pending = countryStatsWorkerPending.get(id);
       if (!pending) return;
@@ -13040,6 +13110,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             receipt: draft,
             requests: state.requests,
             playerCountry: bundle.game.country,
+            actions: bundle.actions,
           });
           if (worldChangeError) return worldChangeError;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
@@ -13436,6 +13507,18 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   const segmentHidden = normalizeArray(state.hiddenEvents)
     .map((entry, index) => normalizeGeneratedEvent(entry, index))
     .filter(Boolean);
+
+  // A narrated outcome with no actionId is not safe to settle natively by text,
+  // but it is cheap to repair semantically while this combined review request
+  // is already available. The plan exposes only exact current ids + numbered
+  // retained candidates; native code validates the returned pairings again.
+  const actionOutcomePlan = merged.clearActions === false ? null : buildActionOutcomeAssociationPlan({
+    actions: bundle.actions,
+    events: candidates,
+  });
+  review.actionOutcomePlan = actionOutcomePlan;
+  if (actionOutcomePlan) reasons.push(`${actionOutcomePlan.pendingActions.length} queued order(s) need exact outcome attribution`);
+
   const boardHasWork = wants("board") && board.length > 0 && (candidates.length > 0 || segmentHidden.length > 0);
   let pendingDoubts = [];
   if (boardHasWork) {
@@ -13490,6 +13573,16 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   // There is a reason to ask, so everything with something to look at rides along.
+  if (actionOutcomePlan) {
+    jobs.push({
+      key: "actions",
+      title: "queued order outcomes",
+      prompt: actionOutcomePlan.prompt,
+      instruction: `Return only exact associations supported by the candidate events. Empty is correct when none qualify.`,
+      schema: ACTION_OUTCOME_ASSOCIATION_SCHEMA,
+      actionOutcome: true,
+    });
+  }
   if (curatorInput) {
     await addJob({ key: "timeline", taskKey: "timelineCurator", title: "repeats and filler", instruction: TIMELINE_CURATOR_INSTRUCTION },
       curatorVariables(curatorInput));
@@ -13592,6 +13685,14 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
       logDebugEvent("turn", `Turn review: no usable "${job.key}" part; that check leaves the turn as written.`, undefined, { problem: true });
       continue;
     }
+    if (job.actionOutcome) {
+      const normalized = normalizeActionOutcomeAssociationAnswer(part, actionOutcomePlan);
+      if (normalized.removed) {
+        logDebugEvent("turn", `Turn review: ${normalized.removed} invalid queued-order association(s) were ignored; only exact current action ids and candidate indexes are accepted.`, undefined, { verbose: true });
+      }
+      review.parts[job.key] = { associations: normalized.associations };
+      continue;
+    }
     const normalized = normalizeGameplayPayload(job.taskKey, part);
     const salvaged = salvageBySchema(normalized, (candidate) => validateGameplayPayload(job.taskKey, candidate));
     if (!salvaged.valid) {
@@ -13604,6 +13705,69 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
     review.parts[job.key] = salvaged.value;
   }
   return review;
+};
+
+// With request-saving OFF the legacy directors still make their own calls, so
+// there is no combined turn-review request to piggyback on. Outcome attribution
+// gets one bounded request of its own only when a current order lacks a citation
+// and there are retained candidate events that might answer it. Failure is
+// deliberately fail-open: settleOrders will keep the order overdue.
+const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state }) => {
+  if (normalizeString(state.generation?.source) === "fallback") return null;
+  const candidates = reviewCandidateEvents(merged, context.bundle, state.generation);
+  const plan = merged.clearActions === false
+    ? null
+    : buildActionOutcomeAssociationPlan({ actions: context.bundle.actions, events: candidates });
+  if (!plan) return null;
+  if (!state.requests?.budget?.take("review")) return { plan, answer: null };
+
+  const tool = {
+    name: ACTION_OUTCOME_ASSOCIATION_TOOL,
+    description: "Link current queued player orders to the retained candidate events that genuinely give them an outcome.",
+    schema: ACTION_OUTCOME_ASSOCIATION_SCHEMA,
+  };
+  const controller = new AbortController();
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+  }
+  const idleMs = taskIdleTimeoutMs();
+  const idle = createIdleDeadline(
+    { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
+    () => controller.abort(new Error("Queued-order outcome attribution timed out: the model stopped answering.")),
+  );
+  state.phases?.enter("checking", { label: "queued order outcomes" });
+  logDebugEvent("turn", `Queued-order outcome attribution: ${plan.pendingActions.length} order(s), ${plan.candidates.length} candidate event(s).`, undefined, { verbose: true });
+
+  try {
+    idle.start();
+    const response = await callAI(plan.prompt, [{
+      role: "user",
+      parts: [{ text: `Check the exact queued orders against the numbered candidate events and call ${tool.name} once.` }],
+    }], {
+      deadline: idle.deadline,
+      onActivity: idle.note,
+      signal: controller.signal,
+      tool,
+      logLabel: `task "${TURN_REVIEW_TASK}:actions"`,
+      taskKey: TURN_REVIEW_TASK,
+      __debug: { taskKey: TURN_REVIEW_TASK, attempt: 1, maxAttempts: 1, simulatedDays: null },
+      onRequest: jumpTaskOptions(state.requests, "review").onRequest,
+    });
+    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+    const raw = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool.name);
+    const normalized = normalizeActionOutcomeAssociationAnswer(raw, plan);
+    if (normalized.removed) {
+      logDebugEvent("turn", `Queued-order outcome attribution ignored ${normalized.removed} invalid association(s).`, undefined, { verbose: true });
+    }
+    return { plan, answer: { associations: normalized.associations } };
+  } catch (error) {
+    if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
+    logDebugEvent("turn", "Queued-order outcome attribution failed; unanswered orders remain queued.", error, { problem: true });
+    return { plan, answer: null };
+  } finally {
+    idle.cancel();
+  }
 };
 
 // The agents' reports the review carried, filed once the turn is written — and
@@ -13650,6 +13814,22 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // place of the request it would have made. `review` is null when saving is off,
   // and each check makes its own request as before.
   const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+
+  // A current order whose outcome event omitted actionIds gets one bounded
+  // semantic association pass. Saving mode piggybacks on the combined review;
+  // legacy/non-saving mode asks only when needed. Native application accepts
+  // exact ids/indexes only, then the normal curator sees the repaired actionIds
+  // and protects a genuine order outcome from filler removal.
+  const standaloneActionReview = review ? null : await runStandaloneActionOutcomeReview({ context, merged, signal, state });
+  const actionPlan = review?.actionOutcomePlan ?? standaloneActionReview?.plan ?? null;
+  const actionAnswer = review?.parts?.actions ?? standaloneActionReview?.answer ?? null;
+  if (actionPlan && actionAnswer) {
+    const repaired = applyActionOutcomeAssociations({ events: merged.events, plan: actionPlan, answer: actionAnswer });
+    merged.events = repaired.events;
+    if (repaired.applied.length) {
+      logDebugEvent("turn", `Restored exact actionId attribution on ${repaired.applied.length} queued order outcome${repaired.applied.length === 1 ? "" : "s"}.`, repaired.applied, { verbose: true });
+    }
+  }
 
   // The surviving military events then make the persistent order of battle
   // move: the unit director proposes ops for existing units, native rules keep

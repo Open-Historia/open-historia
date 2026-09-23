@@ -61,6 +61,19 @@ export const BORDER_CLEANUP = Object.freeze({
   // own ceiling. The stock 4,848-region map is 236,003 vertices in all, so it
   // is always one union, exactly as before.
   maxUnionVertices: 250_000,
+  // The search's wall-clock budget in milliseconds, over every phase and
+  // pass. Past it the sweep stops looking, applies what it has found, and the
+  // note after the save says the map was too detailed to check fully within
+  // one save. Without one, a map with a single 41,000-vertex sea zone held the
+  // Workshop for tens of minutes: every one of its 4,800 regions was checked
+  // against the whole coastline, and then all of it twice more.
+  maxMillis: 60_000,
+  // Applying what was found may run on until this long after the start; the
+  // rest of the repairs are left for the next save.
+  maxApplyMillis: 90_000,
+  // A follow-up pass looks only around the previous pass's repairs: their
+  // footprints, padded by this many times maxWidth.
+  hotspotPad: 2,
 });
 
 const count = (value) => Number(value) || 0;
@@ -175,7 +188,7 @@ export const splitByVertexBudget = (regions, { verticesOf, extentOf, budget = BO
 // sweep always made. When they do not, neighbours are merged in pairs, round
 // after round, until one union is left or no neighbouring pair fits; what is
 // left is the map in parts.
-export const mergeWithinBudget = async (parts, { union, verticesOf = vertexCountOf, budget = BORDER_CLEANUP.maxUnionVertices, between } = {}) => {
+export const mergeWithinBudget = async (parts, { union, verticesOf = vertexCountOf, budget = BORDER_CLEANUP.maxUnionVertices, between, shouldStop = () => false } = {}) => {
   let level = parts.filter(Boolean);
   if (level.length < 2) return level;
   let total = 0;
@@ -193,6 +206,7 @@ export const mergeWithinBudget = async (parts, { union, verticesOf = vertexCount
       const a = level[i];
       const b = level[i + 1];
       if (b !== undefined && count(verticesOf(a)) + count(verticesOf(b)) <= budget) {
+        if (shouldStop()) return [...next, ...level.slice(i)];
         const joined = union([a, b]);
         if (joined) next.push(joined);
         merged = true;
@@ -237,6 +251,12 @@ export const findEnclosedGaps = async (regions, {
   onChunks,
   onChunk,
   between = yieldToBrowser,
+  // Asked before each union; true ends the search with no holes at all (the
+  // holes of a partial union are not trusted).
+  shouldStop = () => false,
+  // True when `regions` are a part of the map rather than all of it (a
+  // follow-up pass): a hole then always has to prove no region lies under it.
+  partial = false,
 }) => {
   const verticesOf = (region) => vertexCountOf(geometryOf(region));
   const extentOf = (region) => geometryOf(region).getExtent();
@@ -245,6 +265,7 @@ export const findEnclosedGaps = async (regions, {
   onChunks?.(pieces.length);
   const partials = [];
   for (let index = 0; index < pieces.length; index += 1) {
+    if (shouldStop()) return { holes: [], parts: 0, stopped: true };
     const piece = pieces[index];
     // A region heavier than the budget goes in as it is: the union of one
     // polygon is that polygon, and handing it to polygon-clipping alone is the
@@ -255,11 +276,28 @@ export const findEnclosedGaps = async (regions, {
     onChunk?.(index + 1);
     await between();
   }
-  const merged = await mergeWithinBudget(partials, { union, budget, between });
+  const merged = await mergeWithinBudget(partials, { union, budget, between, shouldStop });
+  // Stopped: nothing was checked, so no "checked in N parts" either.
+  if (shouldStop()) return { holes: [], parts: 0, stopped: true };
   const holes = merged.flatMap((part) => gapsOf(part, { maxWidth, minWidth }));
-  if (merged.length < 2) return { holes, parts: merged.length };
-  return { holes: dropCoveredHoles(holes, isCovered).sort(byWidthThenArea), parts: merged.length };
+  if (merged.length < 2 && !partial) return { holes, parts: merged.length, stopped: false };
+  return { holes: dropCoveredHoles(holes, isCovered).sort(byWidthThenArea), parts: merged.length, stopped: false };
 };
+
+// Where a follow-up pass looks. A repair changes the map only inside its own
+// footprint — the sliver a trim takes away, the crack a fill adds — so anything
+// it exposes (the hairline between the winner and a third region that the
+// trimmed sliver used to cover) lies within that footprint, and the first pass
+// has already seen everything else. The footprints, padded, are the hotspots:
+// the next pass reads the regions that reach one and keeps the holes that do.
+export const hotspotsOf = (repairs, pad) =>
+  repairs.map((repair) => {
+    const [minX, minY, maxX, maxY] = repair.geom.getExtent();
+    return [minX - pad, minY - pad, maxX + pad, maxY + pad];
+  });
+
+export const touchesHotspot = (extent, hotspots) =>
+  hotspots.some((spot) => !(extent[2] < spot[0] || extent[0] > spot[2] || extent[3] < spot[1] || extent[1] > spot[3]));
 
 const plural = (n, word) => `${formatCount(n)} ${word}${count(n) === 1 ? "" : word.endsWith("s") ? "es" : "s"}`;
 
@@ -278,15 +316,37 @@ const describeCleanupLimits = (result) => {
 
 // The one-line result shown after the save (and inside the loading screen
 // while the scenario is being written).
+// Why a sweep ended before it was done, when it did.
+const describeStop = (result) => {
+  const seconds = Math.max(1, Math.round(count(result.elapsedMs) / 1000));
+  switch (result.stopped) {
+    case "time":
+      return `stopped after ${seconds} s because the map is too detailed to check fully within one save`;
+    case "user":
+      return `stopped after ${seconds} s at your request`;
+    case "error":
+      return `stopped after ${seconds} s (${result.error || "an error"})`;
+    default:
+      return "";
+  }
+};
+
 export const describeCleanupResult = (result, error = "") => {
   if (error) return `Border cleanup was skipped (${error}); the map was saved as it is.`;
   if (!result) return "";
   const limits = describeCleanupLimits(result);
+  const stop = describeStop(result);
+  const left = count(result.repairsLeft) > 0
+    ? ` ${plural(result.repairsLeft, "repair")} it had found ${count(result.repairsLeft) === 1 ? "was" : "were"} left for the next save.`
+    : "";
   if (!result.changed) {
+    if (stop) return `Border cleanup ${stop}; nothing was changed.${left}${limits}`;
     return `Borders checked: no cracks or slivers between ${BORDER_CLEANUP.minWidth} m and ${BORDER_CLEANUP.maxWidth} m across ${plural(result.regionCount, "region")}.${limits}`;
   }
   const passes = count(result.passes) > 1 ? ` in ${plural(result.passes, "pass")}` : "";
-  return `Borders cleaned${passes}: ${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}.${limits}`;
+  const repairs = `${plural(result.gaps, "crack")} filled and ${plural(result.overlaps, "sliver")} trimmed across ${plural(result.affectedRegions, "region")}`;
+  if (stop) return `Borders partly cleaned${passes}: ${repairs}; the check ${stop}.${left}${limits}`;
+  return `Borders cleaned${passes}: ${repairs}.${limits}`;
 };
 
 // What the loading screen shows for a progress state from
@@ -296,6 +356,9 @@ export const describeCleanupResult = (result, error = "") => {
 export const describeCleanupProgress = (state) => {
   if (!state) return { fraction: 0, headline: "Preparing", detail: "" };
   const regions = count(state.regionCount);
+  // A follow-up pass walks only the regions around the last pass's repairs.
+  const walked = count(state.passRegions) || regions;
+  const scope = walked < regions ? `${plural(walked, "region")} around the last repairs` : plural(regions, "region");
   const share = (done, total) => (total > 0 ? Math.min(1, Math.max(0, done / total)) : 0);
   const pass = count(state.pass);
   const passLabel = pass > 1 ? `Pass ${pass} of up to ${count(state.maxPasses) || BORDER_CLEANUP.maxPasses}, checking the repairs left nothing behind — ` : "";
@@ -308,15 +371,15 @@ export const describeCleanupProgress = (state) => {
         fraction: 0.05 + 0.2 * share(chunkIndex, chunkCount),
         headline: `${passLabel}looking for cracks between regions`,
         detail: merging
-          ? `${plural(regions, "region")} · merging ${plural(chunkCount, "chunk")} into one map and reading every enclosed gap`
-          : `${plural(regions, "region")} · merging chunk ${Math.min(chunkIndex + 1, chunkCount)} of ${chunkCount}`,
+          ? `${scope} · merging ${plural(chunkCount, "chunk")} into one map and reading every enclosed gap`
+          : `${scope} · merging chunk ${Math.min(chunkIndex + 1, chunkCount)} of ${chunkCount}`,
       };
     }
     case "overlaps":
       return {
-        fraction: 0.25 + 0.5 * share(count(state.regionsChecked), regions),
+        fraction: 0.25 + 0.5 * share(count(state.regionsChecked), walked),
         headline: `${passLabel}looking for thin slivers where regions overlap`,
-        detail: `${formatCount(state.regionsChecked)} of ${plural(regions, "region")} checked · ${plural(state.overlapsFound, "sliver")} so far · ${plural(state.gapsFound, "crack")} found`,
+        detail: `${formatCount(state.regionsChecked)} of ${scope} checked · ${plural(state.overlapsFound, "sliver")} so far · ${plural(state.gapsFound, "crack")} found`,
       };
     case "apply": {
       const total = count(state.repairCount);

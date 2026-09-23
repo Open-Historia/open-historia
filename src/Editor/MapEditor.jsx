@@ -101,6 +101,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   // beside the buttons for a few seconds after a plain Save.
   const [borderCleanup, setBorderCleanup] = useState(null);
   const [cleanupNote, setCleanupNote] = useState("");
+  // Set by the screen's "Save now" button; the sweep reads it between steps.
+  const cleanupStopRef = useRef(false);
   useEffect(() => {
     if (!cleanupNote) return undefined;
     const timer = setTimeout(() => setCleanupNote(""), 9000);
@@ -345,10 +347,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // never blocks the save: the map is then written as it is.
     let cleanup = null;
     let cleanupError = "";
-    setBorderCleanup({ phase: "gaps", regionCount: 0, chunkIndex: 0, chunkCount: 0 });
+    cleanupStopRef.current = false;
+    setBorderCleanup({ phase: "gaps", regionCount: 0, chunkIndex: 0, chunkCount: 0, startedAt: Date.now() });
     await yieldToBrowser();
     try {
-      cleanup = (await api.repairTopologyEverywhere?.({ maxWidth: BORDER_CLEANUP.maxWidth, onProgress: setBorderCleanup })) ?? null;
+      cleanup = (await api.repairTopologyEverywhere?.({
+        maxWidth: BORDER_CLEANUP.maxWidth,
+        onProgress: setBorderCleanup,
+        stopRequested: () => cleanupStopRef.current,
+      })) ?? null;
     } catch (e) {
       console.warn("[editor] border cleanup before saving failed; saving the map as it is:", e);
       cleanupError = e?.message || String(e);
@@ -868,7 +875,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
@@ -934,7 +941,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
@@ -954,7 +961,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           style={{
             ...panelSurface,
             position: "fixed",
-            top: 58,
+            top: "var(--editor-toolbar-bottom, 58px)",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 31,
@@ -1219,7 +1226,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       />
 
       <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />
-      <BorderCleanupOverlay state={borderCleanup} />
+      <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
       <FmgPanel
         open={fmgOpen}

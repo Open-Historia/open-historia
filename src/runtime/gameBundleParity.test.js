@@ -17,7 +17,7 @@
 // existing test touches web/libraryStore.js). Nor whether web's `default`
 // scenario is the same world as desktop's — see .scratch/save-export-zip/spec.md §9.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import url from "node:url";
 import { test } from "node:test";
@@ -112,64 +112,69 @@ test("restore points are excluded from the bundle on both sides", () => {
 });
 
 // --- Platform guard --------------------------------------------------------
-// Android's WebView cannot save a file at all: its download listener hands every
-// URL to the system browser, and a blob: URL means nothing there (see
-// saveDebugLog.js). The Diagnostics log copes by falling back to the clipboard;
-// a 4 MB zip has no such fallback, so the two buttons that write one are hidden
-// there instead of failing in silence. Read as text, like the log guards,
-// because the thing being protected is an absence.
+// Every file the game writes goes through ONE door, runtime/saveFile.js: the
+// anchor with the deferred revoke in a browser, the Filesystem plugin plus the
+// share sheet in the Android app (runtime/native/fileSave.js). Until 2026-09 the
+// app's WebView had nowhere to save to, so the two buttons that write a zip were
+// hidden there behind isNativeApp(); now they are offered everywhere, and what
+// these guard is that nobody reaches for a private <a download> again — the
+// shape of the old bug, on the website (Firefox cancels a download whose object
+// URL is revoked in the same task as the click) and in the app (a blob: URL
+// means nothing to the system browser). Read as text, like the log guards.
 const readSource = (...parts) => readFileSync(path.join(HERE, "..", ...parts), "utf-8");
 
-test("saving the log with the game is hidden where no file can be saved", () => {
-  const settings = readSource("Game", "GameUI", "settings.jsx");
-  const open = settings.indexOf("{!isNativeApp() && (");
-  assert.notEqual(open, -1, "settings.jsx still gates something on !isNativeApp()");
-
-  // The branch runs to its closing `)}` at the same indentation it opened on.
-  const close = settings.indexOf("\n        )}", open);
-  assert.notEqual(close, -1, "the gated branch closes as expected");
-  const branch = settings.slice(open, close);
-
-  assert.ok(branch.includes("Save log file + game"), "the log-plus-game button sits inside the !isNativeApp() branch");
-  assert.ok(branch.includes("handleAttachGame"), "and it is that branch's button that runs it");
+test("the one file-saving door defers its revoke and knows the native path", () => {
+  const saveFile = readSource("runtime", "saveFile.js");
+  assert.match(saveFile, /setTimeout\(\(\) => URL\.revokeObjectURL/, "the browser path defers the revoke");
+  assert.match(saveFile, /native\/fileSave\.js/, "the app path goes through the Filesystem + share sheet");
+  const gameZip = readSource("runtime", "gameZip.js");
+  assert.match(gameZip, /saveGameZipToDisk = \(blob, fileName\) => saveBlobToDisk\(blob, fileName\)/, "gameZip.js hands every zip to that door");
 });
 
-test("every game zip is saved through the deferred-revoke helper", () => {
-  // Firefox cancels a download whose object URL is revoked in the same task as the
-  // click, which libraryBar's older saveBlobToDisk does. An earlier version of this
-  // test asserted only that gameZip.js CONTAINS a deferred revoke — which it did,
-  // while the Games tab went on calling the old helper, so the guard passed and the
-  // download stayed broken. Assert the call sites instead: what matters is which
-  // function the blob is handed to, not that a good one exists somewhere.
-  const gameZip = readSource("runtime", "gameZip.js");
-  assert.match(gameZip, /setTimeout\(\(\) => URL\.revokeObjectURL/, "gameZip.js defers the revoke");
+test("nothing outside the door creates its own download anchor", () => {
+  // Every former copy of the anchor dance — libraryBar, communityHub, telemetry,
+  // the editor's two exports, community basemaps, the diagnostics log — is gone.
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : walk(full);
+    return /\.(jsx?|mjs)$/.test(entry.name) && !/\.test\./.test(entry.name) ? [full] : [];
+  });
+  const offenders = walk(path.join(HERE, "..")).filter((file) => {
+    if (file.endsWith(path.join("runtime", "saveFile.js"))) return false;
+    const text = readFileSync(file, "utf-8");
+    return /\.download\s*=/.test(text) && /createObjectURL/.test(text);
+  });
+  assert.deepEqual(offenders.map((file) => path.relative(path.join(HERE, ".."), file)), [], "files saving with their own <a download>");
+});
 
+test("every game zip is saved through saveGameZipToDisk", () => {
+  // An earlier version of this test asserted only that gameZip.js CONTAINS a
+  // deferred revoke — which it did, while the Games tab went on calling an older
+  // helper, so the guard passed and the download stayed broken. Assert the call
+  // sites: what matters is which function the blob is handed to.
   for (const [where, ...parts] of [
     ["libraryBar.jsx", "Game", "GameUI", "libraryBar.jsx"],
     ["settings.jsx", "Game", "GameUI", "settings.jsx"],
   ]) {
     const text = readSource(...parts);
+    let seen = 0;
     for (const match of text.matchAll(/(\w+)\(blob, `\$\{[^}]+\}-game\.zip`\)/g)) {
-      assert.equal(
-        match[1],
-        "saveGameZipToDisk",
-        `${where} saves a game zip with ${match[1]}(), which must be saveGameZipToDisk`,
-      );
+      seen += 1;
+      assert.equal(match[1], "saveGameZipToDisk", `${where} saves a game zip with ${match[1]}(), which must be saveGameZipToDisk`);
     }
+    assert.ok(seen > 0, `${where} still saves a game zip somewhere`);
   }
 });
 
-test("Export is hidden where no file can be saved", () => {
-  // The Diagnostics half was gated from the start; the card's menu row was not, so
-  // Android offered an Export that cannot write a file. Both halves are checked
-  // now — a gate on one of two buttons is the shape of the bug, not the fix.
+test("Export and Save-log-with-game are offered on every build, the Android app included", () => {
+  // The gate that hid them from the app is gone with the reason for it; a build
+  // that cannot save would now fail loudly in saveFile.js rather than hide the row.
   const bar = readSource("Game", "GameUI", "libraryBar.jsx");
-  assert.match(bar, /isNativeApp/, "libraryBar consults the native-app gate");
-  assert.match(
-    bar,
-    /isNativeApp\(\)\s*\?\s*\[\]\s*:\s*\[\[/,
-    "the Export row is dropped from the card menu on a native build",
-  );
+  assert.doesNotMatch(bar, /isNativeApp/, "libraryBar no longer consults the native-app gate");
+  assert.match(bar, /\[exporting \? "Exporting…" : "Export", runExport, exporting\],/, "the Export row is unconditional");
+  const settings = readSource("Game", "GameUI", "settings.jsx");
+  assert.doesNotMatch(settings, /isNativeApp/, "settings.jsx no longer consults the native-app gate");
+  assert.match(settings, /handleAttachGame/, "and the log-plus-game button is still there");
 });
 
 test("settings.txt can never carry a key or a whole endpoint", () => {

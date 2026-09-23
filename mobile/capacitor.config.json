@@ -5,10 +5,11 @@
   "server": {
     "androidScheme": "http",
     "hostname": "app.paxhistoria",
-    "cleartext": true,
-    "allowNavigation": ["*"]
+    "cleartext": true
   },
-  "android": {
-    "allowMixedContent": true
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": false
+    }
   }
 }

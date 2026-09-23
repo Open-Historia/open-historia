@@ -668,7 +668,10 @@ const fetchWithPersistence = async (
   }
 
   const response = await fetch(url, {
-    cache: bypassPersistentCache ? "no-store" : "force-cache",
+    // The Android app has no Cache Storage (an http origin is not a secure
+    // context) and its archives come from inside the APK: nothing to keep a
+    // second copy of in the WebView's HTTP cache.
+    cache: bypassPersistentCache || import.meta.env.VITE_OH_NATIVE ? "no-store" : "force-cache",
     signal,
   });
   if (!response.ok) {
@@ -1301,7 +1304,10 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
     // against the signed content manifest. On any miss/failure we fall through to
     // the canonical origin below, so a node outage is invisible. This whole block
     // (and the content-trust module) is stripped from the local download.
-    if (import.meta.env.VITE_OH_WEB) {
+    // The Android app reads its archives from inside the APK and skips both the
+    // swarm and the manifest check: bytes that shipped with the app are not a
+    // download to verify, and its http origin has no crypto.subtle anyway.
+    if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
       try {
         const { fetchVerifiedBuffer } = await import("./web/contentTrust.js");
         buffer = await fetchVerifiedBuffer(url, { signal });
@@ -1319,7 +1325,7 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
       // than degrading quietly: the caller already handles a failed archive by
       // painting the procedural fallback, and a map that fails loudly beats a
       // map someone else chose.
-      if (import.meta.env.VITE_OH_WEB) {
+      if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
         const { verifyOriginBuffer } = await import("./web/contentTrust.js");
         const { checked, ok } = await verifyOriginBuffer(url, buffer);
         if (checked && !ok) {

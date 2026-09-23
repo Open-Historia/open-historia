@@ -56,7 +56,7 @@ import {
 import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
-import { isNativeApp } from "../../runtime/web/nativeBoot.js";
+import { saveBlobToDisk } from "../../runtime/saveFile.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -131,7 +131,7 @@ export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isM
 // widget, forces panel, editor drawer) starts at the screen edge.
 const TOP_BAR_OFFSET = "0.5rem";
 
-const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.png";
+const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
 const surfaceStyle = {
   background:
@@ -285,21 +285,10 @@ const buildGameEditorState = (details) => {
   };
 };
 
-// Scenario exports and JSON bundles only. It revokes the object URL in the same
-// task as the click, which Firefox treats as a cancelled download — a latent bug
-// in those two paths, left alone here because fixing them is not this change's
-// business. Anything NEW that saves a file should use saveGameZipToDisk in
-// runtime/gameZip.js, which defers the revoke.
-const saveBlobToDisk = (blob, fileName) => {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-};
+// Scenario exports and JSON bundles save through runtime/saveFile.js like every
+// other file: the anchor with the deferred revoke in a browser, the share sheet
+// in the Android app. (The copy that lived here revoked the object URL in the
+// same task as the click, which Firefox treats as a cancelled download.)
 
 const saveJsonBundleToDisk = (bundle, fileName) => {
   saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
@@ -799,12 +788,9 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    // Android's WebView cannot save a file at all — its download listener hands
-    // every URL to the system browser, where a blob: URL means nothing (see
-    // saveDebugLog.js). The Diagnostics log copes by falling back to the
-    // clipboard; a multi-megabyte zip has nothing to fall back to, so the row is
-    // not offered rather than failing in silence. Same gate as Settings.
-    ...(isNativeApp() ? [] : [[exporting ? "Exporting…" : "Export", runExport, exporting]]),
+    // Offered everywhere, the Android app included: runtime/saveFile.js writes
+    // the zip through the Filesystem plugin and opens the share sheet there.
+    [exporting ? "Exporting…" : "Export", runExport, exporting],
   ];
 
   return (
@@ -972,7 +958,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                         {label}
                       </button>
                     ))}
-                    {!isNativeApp() && (
+                    {(
                       <div
                         style={{
                           borderTop: "1px solid rgba(255,255,255,0.08)",

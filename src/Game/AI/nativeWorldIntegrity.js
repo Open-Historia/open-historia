@@ -1808,6 +1808,10 @@ const routineMilitaryNoDeltaReason = (event) => {
 
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
+  // An event explicitly bound to a queued player Action is the order's
+  // canonical answer. Hiding it here would make settleOrders carry the
+  // same order over as overdue even though the simulator cited it exactly.
+  if (normalizeArray(event?.impacts?.actionIds).length) return "";
   if (hardImpactKeysForEvent(event).length) return "";
 
   return "routine military continuation with no native material consequence";

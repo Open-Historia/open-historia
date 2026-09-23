@@ -148,9 +148,10 @@ const route = async (request, url) => {
   // GitHub proxy (GitHub attachments/release assets send no CORS headers, so the
   // browser can't download bundles directly). Listing still hits api.github.com
   // directly (it sends CORS) and passes through the interceptor untouched.
-  // The Android app is this same web build packaged with Capacitor, so it has no
-  // on-device server to answer /api/app-update — but it is the ONE build that can
-  // actually self-update (it ships as an APK). Answer it here instead.
+  // The Android app is this same web build packaged with Capacitor (with the map
+  // inside the APK), so it has no on-device server to answer /api/app-update —
+  // but it is the ONE build that can actually self-update (it ships as an APK).
+  // Answer it here instead, from the latest.json android-apk.yml publishes.
   //
   // Straight to the release manifest rather than through the registry Worker: a
   // Capacitor WebView can issue native HTTP that is not subject to CORS, and the

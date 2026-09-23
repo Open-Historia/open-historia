@@ -1,0 +1,12 @@
+{
+  "_comment": "What the Android app ships under www/assets/: the world map, trimmed to the z8 the map actually renders (scripts/trim-pmtiles.mjs), plus the web-sized regions GeoJSON and the editor seeds. Every file is a release asset of the map-data GitHub Release, pinned by size and sha256; mobile/scripts/stage-map-assets.mjs downloads and verifies them into mobile/map-cache/ and stage-www.mjs copies them into the bundle. The 55 MB desktop-only files are never shipped.",
+  "release": "map-data",
+  "assets": [
+    { "asset": "regions-z8.pmtiles", "path": "assets/regions.pmtiles", "bytes": 21106005, "sha256": "a89941c96f697a38c52e0016f6d9087e4fbb9142401fb9b70177269db2ba57e6" },
+    { "asset": "countries-z8.pmtiles", "path": "assets/countries.pmtiles", "bytes": 12580027, "sha256": "fa7d2ec57173898b231c21ba8ba14b45a72a31855677770aafedaaa04bc289b6" },
+    { "asset": "cities.pmtiles", "path": "assets/cities.pmtiles", "bytes": 1547924, "sha256": "41edf847114a0c1b04c9a11e9501fc97e680a105b2ec618f5caffca3df61e87a" },
+    { "asset": "default-regions.geojson", "path": "assets/default-regions.geojson", "bytes": 12818777, "sha256": "4e92b2f8210306b85c51a8affdb1a92bc0e3aa8ffb5dce137a66c08c71ccaa8a" },
+    { "asset": "regions-seed.geojson", "path": "assets/regions-seed.geojson", "bytes": 12708948, "sha256": "5c468ae1fc0607f90d1a30f22ea12a97acbc464f733b307fc2a1ad32ec660aca" },
+    { "asset": "cities-seed.json", "path": "assets/cities-seed.json", "bytes": 7857627, "sha256": "2138650914b87fa7036b065a9d18bd88cbb97ec6c67e9ec22f2be1a9f8bff101" }
+  ]
+}

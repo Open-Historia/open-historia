@@ -11,6 +11,7 @@ import { exportGameBundle, exportScenarioBundle, readGameSnapshotsText } from ".
 import { buildSettingsReport } from "./debugLog.js";
 import { zipBundle, unzipBundle } from "./bundleZip.js";
 import { restoreBundleFiles, splitBundleFiles } from "./bundleFiles.js";
+import { saveBlobToDisk } from "./saveFile.js";
 import {
   splitScenarioBundleImage,
   embedScenarioBundleImage,
@@ -22,19 +23,12 @@ const GAME_ZIP_SNAPSHOTS = "snapshots.json";
 const GAME_ZIP_SETTINGS = "settings.txt";
 const GAME_ZIP_SCENARIO = "scenario.json";
 
-// The deferred revoke matters: Firefox cancels a download whose object URL is
-// revoked in the same task as the click. Same fix as saveDebugLog.js — which is
-// why this lives here rather than reusing libraryBar's older copy.
-export const saveGameZipToDisk = (blob, fileName) => {
-  const url = URL.createObjectURL(blob);
-  const anchorEl = document.createElement("a");
-  anchorEl.href = url;
-  anchorEl.download = fileName;
-  document.body.appendChild(anchorEl);
-  anchorEl.click();
-  anchorEl.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-};
+// Every file the game saves goes through runtime/saveFile.js: the anchor with the
+// deferred revoke in a browser (Firefox cancels a download whose object URL is
+// revoked in the same task as the click), the Filesystem + share sheet in the
+// Android app. Kept as a named export because the game-bundle parity test holds
+// every zip save to this one door.
+export const saveGameZipToDisk = (blob, fileName) => saveBlobToDisk(blob, fileName);
 
 export const formatZipSize = (bytes) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";

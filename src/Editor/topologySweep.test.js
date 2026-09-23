@@ -21,9 +21,11 @@ import {
   describeCleanupProgress,
   describeCleanupResult,
   findEnclosedGaps,
+  hotspotsOf,
   mergeWithinBudget,
   planTopologyChunks,
   splitByVertexBudget,
+  touchesHotspot,
   vertexCountOf,
   yieldToBrowser,
 } from "./topologySweep.js";
@@ -290,11 +292,119 @@ test("the built-in map: exactly the gaps the one-union sweep found, and within a
 test("the Workshop's save runs this search, with the budget on overlaps and gap targets too", () => {
   const olMap = fs.readFileSync(new URL("./OlMap.jsx", import.meta.url), "utf8");
   const sweep = olMap.slice(olMap.indexOf("const repairTopologyEverywhere = async"), olMap.indexOf("const summarize = (f) =>"));
-  assert.ok(sweep.includes("await findEnclosedGaps(feats, {"), "the save-time sweep uses the budgeted gap search");
+  assert.ok(sweep.includes("await findEnclosedGaps(passFeats, {"), "the save-time sweep uses the budgeted gap search");
   assert.ok(!sweep.includes("unionAllGeoms(partials)"), "no unbounded union of every chunk result is left");
   assert.ok(sweep.includes("maxPairVertices: BORDER_CLEANUP.maxUnionVertices"), "overlap pairs are budgeted");
   assert.ok(sweep.includes("maxTargetVertices: BORDER_CLEANUP.maxUnionVertices"), "gap targets are budgeted");
   assert.ok(sweep.includes("parts,") && sweep.includes("skippedPairs,"), "the result says what a detailed map could only be checked as");
+  // Time: the search stops on the budget or on "Save now", a follow-up pass
+  // looks only around the last repairs, cracks are filled per target in one
+  // union, and an error keeps the repairs already made.
+  assert.ok(sweep.includes("stopRequested?.()") && sweep.includes("BORDER_CLEANUP.maxMillis"), "the search stops on request and on the budget");
+  assert.ok(sweep.includes("shouldStop,") && sweep.includes("partial: local,"), "the gap search is told to stop and that it reads a part");
+  assert.ok(sweep.includes("hotspotsOf(applied, width * BORDER_CLEANUP.hotspotPad)") && sweep.includes("touchesHotspot(hole.geom.getExtent(), hotspots)"), "follow-up passes are local");
+  assert.ok(sweep.includes("fillGaps(targetId, items, edit.remember)") && sweep.includes("BORDER_CLEANUP.maxApplyMillis"), "fills are batched per target and the apply has its own cap");
+  assert.ok(sweep.includes("stopped = \"error\";") && sweep.includes("finishTopologyEdit(edit)"), "an error ends the search but keeps and finishes the edit");
+  const mapEditor = fs.readFileSync(new URL("./MapEditor.jsx", import.meta.url), "utf8");
+  assert.ok(mapEditor.includes("stopRequested: () => cleanupStopRef.current") && mapEditor.includes("<BorderCleanupOverlay state={borderCleanup} onStop="), "the loading screen's Save now reaches the sweep");
+});
+
+// Time. A map with one 41,000-vertex sea zone held the old sweep for tens of
+// minutes: every region was checked against the whole coastline, then all of
+// it twice more, with no limit at all. Now the search stops at
+// BORDER_CLEANUP.maxMillis or on "Save now", a follow-up pass looks only
+// around the last pass's repairs, and the note says what happened.
+test("the budget and the hotspot padding are sane", () => {
+  assert.ok(BORDER_CLEANUP.maxMillis >= 30_000 && BORDER_CLEANUP.maxMillis <= 120_000, "a save waits well under two minutes for the search");
+  assert.ok(BORDER_CLEANUP.maxApplyMillis > BORDER_CLEANUP.maxMillis, "what was found is applied past the search's own budget");
+  assert.ok(BORDER_CLEANUP.hotspotPad >= 1);
+});
+
+test("a stop ends the gap search at the next union with no holes at all, and stops the merging too", async () => {
+  const options = {
+    plan: planTopologyChunks([0, 0, 4000, 4000], grid.length, { targetRegionsPerChunk: 4 }),
+    geometryOf: (region) => region.geom,
+    gapsOf: enclosedGapsOfUnion,
+    between: noWait,
+  };
+  let calls = 0;
+  const union = (geoms) => {
+    calls += 1;
+    return unionAllGeoms(geoms);
+  };
+  const stoppedEarly = await findEnclosedGaps(grid, { ...options, union, shouldStop: () => calls >= 2 });
+  assert.equal(stoppedEarly.stopped, true);
+  assert.deepEqual(stoppedEarly.holes, [], "the holes of a partial union are not trusted");
+  assert.equal(calls, 2, "no union after the stop");
+  calls = 0;
+  const never = await findEnclosedGaps(grid, { ...options, union, shouldStop: () => false });
+  assert.equal(never.stopped, false);
+  assert.equal(never.holes.length, 1);
+  const stopMerge = await mergeWithinBudget(grid.map((region) => region.geom), { union, budget: 12, between: noWait, shouldStop: () => true });
+  assert.equal(stopMerge.length, grid.length, "nothing is merged once told to stop");
+});
+
+test("a follow-up pass reads a part of the map: a hole under another region is dropped even in one piece", async () => {
+  const host = new Polygon([
+    [[0, 0], [1000, 0], [1000, 1000], [0, 1000], [0, 0]],
+    [[400, 200], [400, 800], [440, 800], [440, 200], [400, 200]],
+  ]);
+  const enclave = new Polygon([[[400, 200], [440, 200], [440, 800], [400, 800], [400, 200]]]);
+  const options = {
+    plan: null,
+    geometryOf: (region) => region.geom,
+    union: unionAllGeoms,
+    gapsOf: enclosedGapsOfUnion,
+    isCovered: (point) => enclave.intersectsCoordinate(point),
+    between: noWait,
+  };
+  const whole = await findEnclosedGaps([{ geom: host }], options);
+  assert.equal(whole.holes.length, 1, "read as the whole map in one piece, the slot is a crack: the check is not asked");
+  const part = await findEnclosedGaps([{ geom: host }], { ...options, partial: true });
+  assert.equal(part.holes.length, 0, "read as a part, the slot is under the enclave's region");
+});
+
+test("hotspots are the padded footprints of the repairs, and only what reaches one is looked at again", () => {
+  const spots = hotspotsOf([{ geom: square(1, 1) }, { geom: square(3, 3) }], 100);
+  assert.deepEqual(spots, [[900, 900, 2100, 2100], [2900, 2900, 4100, 4100]]);
+  assert.ok(touchesHotspot(square(2, 1).getExtent(), spots), "the neighbour across the padding is looked at");
+  assert.ok(!touchesHotspot(square(3, 0).getExtent(), spots), "a region 900 m from both is not");
+  assert.ok(!touchesHotspot([5000, 5000, 6000, 6000], spots));
+  assert.deepEqual(hotspotsOf([], 5), []);
+});
+
+test("the note says when the sweep stopped and why, and what it left for the next save", () => {
+  const base = { changed: true, gaps: 3, overlaps: 1, affectedRegions: 4, passes: 1, elapsedMs: 60_400 };
+  assert.equal(
+    describeCleanupResult({ ...base, stopped: "time" }),
+    "Borders partly cleaned: 3 cracks filled and 1 sliver trimmed across 4 regions; the check stopped after 60 s because the map is too detailed to check fully within one save.",
+  );
+  assert.equal(
+    describeCleanupResult({ ...base, stopped: "user", elapsedMs: 12_000, repairsLeft: 7 }),
+    "Borders partly cleaned: 3 cracks filled and 1 sliver trimmed across 4 regions; the check stopped after 12 s at your request. 7 repairs it had found were left for the next save.",
+  );
+  assert.equal(
+    describeCleanupResult({ changed: false, regionCount: 9, stopped: "time", elapsedMs: 61_000 }),
+    "Border cleanup stopped after 61 s because the map is too detailed to check fully within one save; nothing was changed.",
+  );
+  assert.equal(
+    describeCleanupResult({ changed: false, regionCount: 9, stopped: "error", error: "Unable to find segment", elapsedMs: 3_000 }),
+    "Border cleanup stopped after 3 s (Unable to find segment); nothing was changed.",
+  );
+  assert.equal(
+    describeCleanupResult({ ...base, passes: 2, stopped: "", parts: 2 }),
+    "Borders cleaned in 2 passes: 3 cracks filled and 1 sliver trimmed across 4 regions. The map is too detailed to check in one piece, so it was checked in 2 parts.",
+  );
+});
+
+test("the loading screen says when a pass walks only the regions around the last repairs", () => {
+  const local = describeCleanupProgress({ phase: "overlaps", pass: 2, maxPasses: 3, regionCount: 4848, passRegions: 231, regionsChecked: 100, overlapsFound: 0, gapsFound: 2 });
+  assert.match(local.detail, /^100 of 231 regions around the last repairs checked/);
+  assert.ok(local.fraction > 0.4 && local.fraction < 0.5, "the bar follows the pass's own walk");
+  const gaps = describeCleanupProgress({ phase: "gaps", pass: 2, regionCount: 4848, passRegions: 231, chunkIndex: 0, chunkCount: 1 });
+  assert.match(gaps.detail, /^231 regions around the last repairs · merging chunk 1 of 1/);
+  const whole = describeCleanupProgress({ phase: "overlaps", pass: 1, regionCount: 4848, passRegions: 4848, regionsChecked: 200 });
+  assert.match(whole.detail, /^200 of 4,848 regions checked/);
 });
 
 test("the note after a save says when a map was too detailed to check in one piece", () => {
