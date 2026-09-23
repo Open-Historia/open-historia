@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadScenarioDetails, saveScenario } from "../../runtime/library.js";
+import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { activeReferencePackIds, normalizeCanonContext, readScenarioCanon } from "../../runtime/scenarioCanon.js";
 import {
   POLITICAL_WORLD_GENERATION_MODES,
@@ -162,17 +163,11 @@ const safeFileToken = (value) => clean(value)
   .replace(/^-+|-+$/g, "")
   .slice(0, 80) || "scenario";
 
-const downloadJsonFile = (filename, value) => {
-  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-};
+// runtime/saveFile.js: a download in a browser, the share sheet in the app.
+// Callers do not wait on it, so a save that fails is logged, not thrown.
+const downloadJsonFile = (filename, value) =>
+  saveBlobToDisk(new Blob([JSON.stringify(value, null, 2)], { type: "application/json;charset=utf-8" }), filename)
+    .catch((error) => console.warn(`[political world] could not save ${filename}: ${error?.message || error}`));
 
 const restoreResultFromDiagnostic = (diagnostic, { scenarioId = "", scenarioDate = "" } = {}) => {
   if (!diagnostic || typeof diagnostic !== "object" || Array.isArray(diagnostic)) {
