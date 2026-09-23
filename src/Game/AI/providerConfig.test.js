@@ -20,11 +20,11 @@ globalThis.localStorage = {
 const config = await import("./providerConfig.js");
 const { clearDebugLog, getDebugLogEntries } = await import("../../runtime/debugLog.js");
 
-// Every test starts AFTER the one-time reset to the default Gemini list has
+// Every test starts AFTER the one-time switch to the default Gemini list has
 // run (resetToGeminiDefaultChain), the way an installed game has once it has
-// been opened once on this update; the two tests of the reset itself clear the
+// been opened once on this update; the tests of the switch itself clear the
 // marker to see it fire.
-test.beforeEach(() => { store.clear(); store.set("ai_gemini_default_chain_v2", "1"); });
+test.beforeEach(() => { store.clear(); store.set("ai_gemini_default_chain_v3", "1"); });
 
 // A one-entry list to start from, for the tests about how the list is worked:
 // a model the player chose is theirs alone. (With none — or with the old
@@ -110,24 +110,20 @@ test("a player with several providers, profiles and per-task models keeps all of
 test("a fresh install starts with an empty Gemini Connection and the default Gemini list", () => {
   const list = resolved();
   assert.deepEqual(list.map(({ model }) => model), [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-  ], "the newest Flash first, each older one its backup");
+  ], "Flash-Lite, the older Flash-Lite its backup: no Flash model, those are the ones most often busy");
   assert.deepEqual(config.GEMINI_DEFAULT_CHAIN, list.map(({ model }) => model));
   assert.deepEqual(list[0], {
     provider: "gemini",
     connectionName: "Gemini",
     apiKey: "",
     endpoint: "",
-    model: "gemini-3.8-flash",
+    model: "gemini-3.5-flash-lite",
     customParams: "",
     structuredMode: "auto",
     toolStrict: false,
-    label: "gemini-3.8-flash (Gemini)",
+    label: "gemini-3.5-flash-lite (Gemini)",
   });
   assert.equal(new Set(config.getFallbackList().map(({ connectionId }) => connectionId)).size, 1, "all on the one Gemini Connection");
   assert.equal(config.getConnections().length, 1);
@@ -176,41 +172,158 @@ test("an untouched default with a blank model becomes the list too, its model wr
   assert.equal(list.find(({ id }) => id === "entry_old").model, "gemini-3.5-flash-lite", "blank meant the old default, and still means it for this entry");
 });
 
-// This update resets every Gemini player's list to the default Gemini list —
-// the owner's call, so that a list shaped before calls fell through the list
-// on a spent allowance gets that behaviour too. Once; the old list is kept.
-test("with this update a Gemini list the player shaped becomes the default list once, keeping what it can", () => {
-  store.delete("ai_gemini_default_chain_v2");
-  storeFormerDefault("gemini-3.6-flash");
-  store.set("ai_task_picks", JSON.stringify({ actions: "entry_old" }));
-  const list = config.getFallbackList();
-  assert.deepEqual(list.map(({ model }) => model), [...config.GEMINI_DEFAULT_CHAIN], "a model they chose is replaced by the list");
-  assert.equal(list.find(({ model }) => model === "gemini-3.6-flash").id, "entry_old", "an entry already on a chain model keeps its id");
-  assert.ok(list.every(({ connectionId }) => connectionId === "conn_g"));
-  assert.equal(config.getTaskPick("actions"), "", "the per-task picks are cleared: every task starts at the top");
-  assert.deepEqual(JSON.parse(store.get("ai_fallback_list_before_gemini_reset")).map(({ model }) => model), ["gemini-3.6-flash"], "the old list is kept");
+// This update switches every Gemini player's list to the Flash-Lite default —
+// the owner's call, the Flash models being the ones most often busy. Once; the
+// old list and picks are kept, and other providers keep their places.
+const storeList = ({ connections, list, picks = {} }) => {
+  store.delete("ai_gemini_default_chain_v3");
+  store.set("ai_connections", JSON.stringify(connections));
+  store.set("ai_fallback_list", JSON.stringify(list));
+  store.set("ai_task_picks", JSON.stringify(picks));
+};
 
-  // Once only: cut back to one entry afterwards, it stays as they left it.
-  config.clearFallbackList();
-  config.addEntry({ connectionId: "conn_g", model: "gemini-3.6-flash" });
-  assert.equal(config.getFallbackList().length, 1);
+test("with this update every Gemini model in the list becomes the default list once, keeping what it can", () => {
+  storeList({
+    connections: [{ id: "conn_g", provider: "gemini", name: "Gemini", apiKey: "AIzaPLAYERKEY" }],
+    list: [
+      { id: "e38", connectionId: "conn_g", model: "gemini-3.8-flash" },
+      { id: "e36", connectionId: "conn_g", model: "gemini-3.6-flash" },
+      { id: "e35l", connectionId: "conn_g", model: "gemini-3.5-flash-lite" },
+      { id: "e31l", connectionId: "conn_g", model: "gemini-3.1-flash-lite" },
+    ],
+    picks: { actions: "e36" },
+  });
+  store.set("ai_fallback_states", JSON.stringify({ e35l: { spentUntil: 9e15 } }));
+  const list = config.getFallbackList();
+  assert.deepEqual(list.map(({ model }) => model), ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"], "no Flash model is left");
+  assert.deepEqual(list.map(({ id }) => id), ["e35l", "e31l"], "an entry already on a default model keeps its id");
+  assert.equal(config.fallbackStateStore.get("e35l").spentUntil, 9e15, "and its mark stays with it");
+  assert.equal(config.getTaskPick("actions"), "", "a pick on a Gemini entry is cleared: the task starts at the top");
+  assert.deepEqual(JSON.parse(store.get("ai_fallback_list_before_gemini_lite_reset")).map(({ id }) => id), ["e38", "e36", "e35l", "e31l"], "the old list is kept");
+  assert.deepEqual(JSON.parse(store.get("ai_task_picks_before_gemini_lite_reset")), { actions: "e36" }, "and so are the old picks");
+
+  // Once only: a Flash model the player puts back afterwards stays.
+  config.addEntry({ connectionId: "conn_g", model: "gemini-3.8-flash" });
+  assert.equal(config.getFallbackList().length, 3);
 });
 
-test("the reset leaves a list on another provider alone, and a list already on the default untouched", () => {
-  store.delete("ai_gemini_default_chain_v2");
-  store.set("ai_connections", JSON.stringify([{ id: "conn_o", provider: "openai-compatible", name: "Local", endpoint: "http://localhost:1234/v1" }]));
-  store.set("ai_fallback_list", JSON.stringify([{ id: "entry_local", connectionId: "conn_o", model: "" }]));
-  assert.equal(config.getFallbackList().length, 1, "another provider");
-  assert.equal(store.get("ai_fallback_list_before_gemini_reset"), undefined, "nothing was backed up because nothing was changed");
+test("the six-model Flash list the last update put in becomes the default pair on the same Connection", () => {
+  // What the _v2 reset left: the whole old default on one Gemini Connection.
+  const flash = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+  storeList({
+    connections: [{ id: "conn_g", provider: "gemini", name: "Gemini", apiKey: "AIzaPLAYERKEY" }],
+    list: flash.map((model, index) => ({ id: `e${index}`, connectionId: "conn_g", model })),
+  });
+  const list = config.getResolvedFallbackList();
+  assert.deepEqual(list.map(({ label }) => label), ["gemini-3.5-flash-lite (Gemini)", "gemini-3.1-flash-lite (Gemini)"]);
+  assert.deepEqual(list.map(({ id }) => id), ["e4", "e5"]);
+  assert.ok(list.every(({ apiKey }) => apiKey === "AIzaPLAYERKEY"), "on the key the player already had");
+});
+
+test("a player whose calls go to another provider first keeps it first; only their Gemini entries change", () => {
+  // The start-of-game prompt for OpenAI puts its entry above the key-less Gemini
+  // Connection a first launch made, and leaves that Connection's list below it.
+  storeList({
+    connections: [
+      { id: "conn_blank", provider: "gemini", name: "Gemini", apiKey: "" },
+      { id: "conn_o", provider: "openai", name: "OpenAI", apiKey: "sk-PLAYER" },
+      { id: "conn_local", provider: "openai-compatible", name: "Local", endpoint: "http://localhost:1234/v1" },
+    ],
+    list: [
+      { id: "o1", connectionId: "conn_o", model: "gpt-5.6-luna" },
+      { id: "g1", connectionId: "conn_blank", model: "gemini-3.8-flash" },
+      { id: "g2", connectionId: "conn_blank", model: "gemini-3.7-flash" },
+      { id: "local1", connectionId: "conn_local", model: "qwen3" },
+      { id: "g3", connectionId: "conn_blank", model: "gemini-3.1-flash-lite" },
+    ],
+    picks: { advisor: "o1", actions: "g2" },
+  });
+  const list = config.getResolvedFallbackList();
+  assert.deepEqual(list.map(({ provider, model }) => `${provider}:${model}`), [
+    "openai:gpt-5.6-luna",
+    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.1-flash-lite",
+    "openai-compatible:qwen3",
+  ], "OpenAI still answers first, the default pair takes the Gemini entries' place, the local model stays");
+  assert.equal(list[0].id, "o1");
+  assert.equal(list[2].id, "g3", "the key-less Connection's Flash-Lite entry keeps its id");
+  assert.equal(list[3].id, "local1");
+  assert.equal(config.getTaskPick("advisor"), "o1", "a pick on another provider's entry stays");
+  assert.equal(config.getTaskPick("actions"), "", "a pick on a Gemini entry goes");
+});
+
+test("two keyed Gemini Connections both keep answering, model first; a key-less one gives way to them", () => {
+  storeList({
+    connections: [
+      { id: "conn_blank", provider: "gemini", name: "Gemini", apiKey: "" },
+      { id: "conn_free", provider: "gemini", name: "Free Google", apiKey: "AIzaFREE" },
+      { id: "conn_paid", provider: "gemini", name: "Paid Google", apiKey: "AIzaPAID" },
+      { id: "conn_or", provider: "openai-compatible", name: "OpenRouter", apiKey: "sk-or-v1-KEY", endpoint: "https://openrouter.ai/api/v1" },
+    ],
+    list: [
+      { id: "b1", connectionId: "conn_blank", model: "gemini-3.8-flash" },
+      { id: "f1", connectionId: "conn_free", model: "gemini-3.8-flash" },
+      { id: "p1", connectionId: "conn_paid", model: "gemini-3.8-flash" },
+      { id: "f2", connectionId: "conn_free", model: "gemini-3.7-flash" },
+      { id: "p2", connectionId: "conn_paid", model: "gemini-3.5-flash-lite" },
+      { id: "x1", connectionId: "conn_or", model: "deepseek/deepseek-v4" },
+    ],
+  });
+  const list = config.getResolvedFallbackList();
+  assert.deepEqual(list.map(({ label }) => label), [
+    "gemini-3.5-flash-lite (Free Google)",
+    "gemini-3.5-flash-lite (Paid Google)",
+    "gemini-3.1-flash-lite (Free Google)",
+    "gemini-3.1-flash-lite (Paid Google)",
+    "deepseek/deepseek-v4 (OpenRouter)",
+  ]);
+  assert.equal(list[1].id, "p2", "the paid key's Flash-Lite entry keeps its id");
+  assert.equal(list[4].id, "x1");
+});
+
+test("the switch leaves a list with no Gemini entry alone, a list already on the default untouched, and gives an empty one the default", () => {
+  storeList({
+    connections: [
+      { id: "conn_blank", provider: "gemini", name: "Gemini", apiKey: "" },
+      { id: "conn_o", provider: "openai-compatible", name: "Local", endpoint: "http://localhost:1234/v1" },
+    ],
+    list: [{ id: "entry_local", connectionId: "conn_o", model: "" }],
+  });
+  assert.deepEqual(config.getFallbackList().map(({ id }) => id), ["entry_local"], "another provider, and a Gemini Connection it never uses");
+  assert.equal(store.get("ai_fallback_list_before_gemini_lite_reset"), undefined, "nothing was backed up because nothing was changed");
 
   store.clear();
-  store.delete("ai_gemini_default_chain_v2");
-  storeFormerDefault("gemini-3.5-flash-lite");
-  store.set("ai_task_picks", JSON.stringify({ actions: "entry_old" }));
+  storeList({
+    connections: [{ id: "conn_g", provider: "gemini", name: "Gemini", apiKey: "AIzaKEY" }],
+    list: [{ id: "a", connectionId: "conn_g", model: "gemini-3.5-flash-lite" }, { id: "b", connectionId: "conn_g", model: "gemini-3.1-flash-lite" }],
+    picks: { actions: "b" },
+  });
   config.getFallbackList();
-  assert.equal(config.getTaskPick("actions"), "entry_old", "a list the old upgrade already made the default keeps its picks");
-  assert.equal(store.get("ai_fallback_list_before_gemini_reset"), undefined);
+  assert.equal(config.getTaskPick("actions"), "b", "a list already on the default keeps its picks");
+  assert.equal(store.get("ai_fallback_list_before_gemini_lite_reset"), undefined);
+
+  store.clear();
+  storeList({ connections: [{ id: "conn_g", provider: "gemini", name: "Gemini", apiKey: "AIzaKEY" }], list: [] });
+  assert.deepEqual(config.getFallbackList().map(({ model, connectionId }) => `${model}@${connectionId}`), ["gemini-3.5-flash-lite@conn_g", "gemini-3.1-flash-lite@conn_g"], "an empty list gets the default");
 });
+
+test("a list migrated in the same read is this version's own: the harness keeps the model it was given", () => {
+  // open-historia-harness writes old-style settings into a fresh storage and
+  // never sets the marker. The earlier reset replaced its model with the Flash
+  // list on the first read.
+  store.clear();
+  store.set("api_provider", "gemini");
+  store.set("gemini_api_key", "AIzaHARNESSKEY1234567890");
+  store.set("gemini_model", "gemini-3.5-flash");
+  assert.deepEqual(config.getFallbackList().map(({ model }) => model), ["gemini-3.5-flash"]);
+  assert.equal(store.get("ai_gemini_default_chain_v3"), "1", "the switch is marked done, not run");
+  assert.equal(store.get("ai_fallback_list_before_gemini_lite_reset"), undefined);
+
+  // And a first launch with nothing stored starts on the default pair.
+  store.clear();
+  assert.deepEqual(config.getFallbackList().map(({ model }) => model), [...config.GEMINI_DEFAULT_CHAIN]);
+});
+
 test("Fill goes model first across the ticked Connections, appends, and never duplicates", () => {
   store.set("gemini_api_key", "AIzaFIRSTKEY1234567890");
   store.set("gemini_model", "gemini-3.7-flash");
@@ -405,7 +518,7 @@ test("recent models: newest first, no duplicates, capped at ten", () => {
 
 test("quick setup completes the migrated key-less connection and its entry answers first", () => {
   store.set("api_provider", "gemini"); // migrated: one Gemini connection, no key, the default list
-  assert.equal(config.getResolvedFallbackList().length, 6);
+  assert.equal(config.getResolvedFallbackList().length, config.GEMINI_DEFAULT_CHAIN.length);
   assert.equal(config.isFallbackListConfigured(), false);
 
   const { connectionId, entryId } = config.applyQuickAiSetup({ provider: "gemini", apiKey: " AIzaQUICK123 ", model: " gemini-3.5-flash " });
@@ -417,12 +530,15 @@ test("quick setup completes the migrated key-less connection and its entry answe
   assert.ok(list.every(({ apiKey }) => apiKey === "AIzaQUICK123"), "the key reaches every entry of the Connection");
   assert.deepEqual(list.map(({ model }) => model), [
     "gemini-3.5-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-  ], "the typed model goes first, the rest stay behind it, and it is not asked twice");
+  ], "the typed model takes the first entry, and the backup stays behind it");
   assert.equal(config.isFallbackListConfigured(), true);
+});
+
+test("quick setup with the backup's model typed does not ask it twice", () => {
+  store.set("api_provider", "gemini");
+  config.applyQuickAiSetup({ provider: "gemini", apiKey: "AIzaTWICE", model: "gemini-3.1-flash-lite" });
+  assert.deepEqual(config.getResolvedFallbackList().map(({ model }) => model), ["gemini-3.1-flash-lite"]);
 });
 
 test("quick setup with no model keeps the whole default list, the key on all of it", () => {
@@ -441,8 +557,9 @@ test("quick setup that adds a new Gemini connection gives it the default list, a
   const list = config.getResolvedFallbackList();
   assert.equal(config.getConnections().length, 2, "a second Gemini connection");
   assert.equal(list[0].id, entryId);
-  assert.deepEqual(list.slice(0, 6).map(({ model, connectionId: id }) => `${model}@${id === connectionId ? "new" : "old"}`), config.GEMINI_DEFAULT_CHAIN.map((model) => `${model}@new`));
-  assert.equal(list[6].id, before.id, "the old entry follows the new list");
+  const size = config.GEMINI_DEFAULT_CHAIN.length;
+  assert.deepEqual(list.slice(0, size).map(({ model, connectionId: id }) => `${model}@${id === connectionId ? "new" : "old"}`), config.GEMINI_DEFAULT_CHAIN.map((model) => `${model}@new`));
+  assert.equal(list[size].id, before.id, "the old entry follows the new list");
 });
 
 test("quick setup with no model keeps the entry's model", () => {
