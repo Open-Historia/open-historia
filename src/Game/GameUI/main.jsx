@@ -450,6 +450,7 @@ const Main = ({
   // (runtime/backToClose.js; with a mouse nothing changes).
   useBackToClose(Boolean(activeBottomPanel), () => setActiveBottomPanel(null));
   useBackToClose(isAdvisorOpen, () => setIsAdvisorOpen(false));
+  useBackToClose(isCountryOpen, () => setIsCountryOpen(false));
   useBackToClose(isForcesOpen, () => setIsForcesOpen(false));
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
@@ -462,8 +463,9 @@ const Main = ({
   // On a phone a map card and a bottom panel take turns (runtime/mobileUi.js):
   // both sit at the bottom of the screen, and a card opened by a tap on the
   // strip of map above an open panel came up underneath it, unseen. A panel
-  // opening also puts away the screen-sized sheets (the advisor, a country's
-  // panel): a diplomacy toast, which shows above them, opens the chat, and
+  // opening also puts away the screen-sized sheets (the advisor, the country
+  // drawer, a country's panel): a diplomacy toast, which shows above them,
+  // opens the chat, and
   // the chat came up underneath them.
   useEffect(() => {
     if (!isMobile || !activeBottomPanel) return undefined;
@@ -472,6 +474,7 @@ const Main = ({
     dismissFeaturePopup();
     openCountryPanel(null);
     setIsAdvisorOpen(false);
+    setIsCountryOpen(false);
     const onCardOpened = () => setActiveBottomPanel(null);
     window.addEventListener(MAP_CARD_OPENED, onCardOpened);
     return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);

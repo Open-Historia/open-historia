@@ -3,6 +3,7 @@ import React, { useCallback, useState } from "react";
 import StatsPane from "./stats.jsx";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 
 const COUNTRY_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
 
@@ -32,16 +33,23 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
 
   return (
     <div style={{
+      // Pinned to the top and the bottom, as the advisor is (advisor.jsx): a
+      // 100vh drawer anchored at the bottom ran off the top of a phone's
+      // screen while its address bar showed, and took the ✕ with it.
       position: "fixed",
+      top: 0,
       bottom: 0,
       right: 0,
       transform: open ? "translateX(0)" : "translateX(100%)",
-      width: width || COUNTRY_PANEL_WIDTH,
-      height: "100vh",
+      // A phone: the whole screen, clear of the notch and the home indicator.
+      // Otherwise a drawer, grown by a right-hand notch's inset and padded
+      // clear of it (every inset is 0 on a desktop).
+      ...(isMobile
+        ? { left: 0, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, boxSizing: "border-box" }
+        : { width: `calc(${width || COUNTRY_PANEL_WIDTH} + ${SAFE_RIGHT})`, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingRight: SAFE_RIGHT, boxSizing: "border-box", borderLeft: "1px solid rgba(255,255,255,0.1)" }),
       backgroundColor: "rgba(24, 24, 27, 0.95)",
       backdropFilter: "blur(8px)",
       zIndex: isMobile ? 10040 : 9997,
-      borderLeft: "1px solid rgba(255,255,255,0.1)",
       boxShadow: open ? "-4px 0 24px rgba(0,0,0,0.4)" : "none",
       transition: `transform ${ADVISOR_SLIDE}, box-shadow ${ADVISOR_SLIDE}`,
       display: "flex",
@@ -50,7 +58,8 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
       fontFamily: "sans-serif",
       overflow: "hidden",
     }}>
-      {typeof onResize === "function" && (
+      {/* Not on a phone, where it is the whole screen. */}
+      {typeof onResize === "function" && !isMobile && (
         <div
           onPointerDown={handleResizeStart}
           onPointerEnter={() => setHandleHover(true)}
@@ -81,6 +90,7 @@ const CountryPanel = ({ open, onClose, width, onResize, onResizeEnd }) => {
         <div style={{ flex: 1 }} />
         <button
           type="button"
+          className="oh-tap"
           onClick={onClose}
           title="Close country panel"
           aria-label="Close country panel"
