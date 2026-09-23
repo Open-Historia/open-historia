@@ -31,8 +31,8 @@ const TUTORIAL_EMBED_URL = `https://www.youtube-nocookie.com/embed/${TUTORIAL_VI
 const AI_STUDIO_KEY_URL = "https://aistudio.google.com/app/apikey";
 
 const MODEL_PLACEHOLDERS = {
-  // Blank keeps the default list: the newest Flash first, the older ones behind it.
-  gemini: `Blank: ${GEMINI_DEFAULT_CHAIN[0]}, older Flash models as backups`,
+  // Blank keeps the default list: the default model first, its backup behind it.
+  gemini: `Blank: ${GEMINI_DEFAULT_CHAIN[0]}, ${GEMINI_DEFAULT_CHAIN[1]} as backup`,
   anthropic: "claude-haiku-4-5",
   "anthropic-compatible": "claude-haiku-4-5",
   openai: `Blank: ${OPENAI_DEFAULT_MODEL}`,
