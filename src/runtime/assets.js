@@ -5,6 +5,8 @@ import { resolveRegionName } from "./regionNameFixes.js";
 import { logDebugEvent } from "./debugLog.js";
 import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
+import { WholeFileSource } from "./wholeFileSource.js";
+import { isNativeBuild } from "./native/bridge.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
@@ -222,6 +224,16 @@ const isMutableRuntimeJsonUrl = (url) =>
   url === JSON_URLS.world;
 
 const pmtilesProtocol = new Protocol();
+// MapLibre asks this protocol for archives by URL, and one it has not been
+// handed yet it opens itself — as a FetchSource, over Range, which the Android
+// app cannot serve (see wholeFileSource.js). There, every archive MapLibre asks
+// for is opened through getPmtilesArchive instead, so it is read whole.
+// Guarded: `tiles` is internal to the pmtiles package.
+if (isNativeBuild() && pmtilesProtocol.tiles instanceof Map) {
+  const opened = pmtilesProtocol.tiles;
+  const lookup = opened.get.bind(opened);
+  opened.get = (url) => lookup(url) ?? getPmtilesArchive(url);
+}
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
 let nationColorsPromiseKey = "";
@@ -702,10 +714,24 @@ class MemorySource {
   }
 }
 
+// The Android app never range-reads an archive: Capacitor's local server
+// ignores the end of a Range (see wholeFileSource.js). Its reads wait for the
+// one whole-file load the warm makes and slice that.
+const loadWholeArchive = async (url) => {
+  await warmPmtilesArchive(url);
+  const buffer = binaryValueCache.get(url);
+  // Swept by a runtime-token change (a game switch) mid-read: fail the read
+  // rather than hand pmtiles an empty archive.
+  if (!buffer) throw new Error(`${url} was released while it was being read.`);
+  return buffer;
+};
+
 const createPmtilesArchive = (url) => {
   const source = binaryValueCache.has(url)
     ? new MemorySource(url, binaryValueCache.get(url))
-    : url;
+    : import.meta.env.VITE_OH_NATIVE
+      ? new WholeFileSource(url, loadWholeArchive)
+      : url;
 
   return new PMTiles(source, pmtilesCache);
 };

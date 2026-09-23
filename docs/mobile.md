@@ -10,7 +10,8 @@ It has been three different things. First a thin WebView that asked for the addr
 |---|---|---|
 | Client | `dist-android/` → `mobile/www/` | `npm run build:android` = `seed-web-defaults.mjs` + `vite build --mode android`. Defines both `VITE_OH_WEB` and `VITE_OH_NATIVE` as compile-time literals (`vite.config.ts`). |
 | Backend | `src/runtime/web/*` in the page | `installWebApiRouter()` patches `window.fetch`; every same-origin `/api/*` is answered from IndexedDB `open-historia-web` (scenarios, games, editor docs, basemaps, flags, settings). The same code serves openhistoria.com. |
-| Map data | `www/assets/` inside the APK | `regions.pmtiles` (z8, 21.1 MB), `countries.pmtiles` (z8, 12.6 MB), `cities.pmtiles`, `default-regions.geojson` (12.8 MB), `regions-seed.geojson`, `cities-seed.json`. Pinned by sha256 in `mobile/map-assets.android.json`; fetched and verified by `mobile/scripts/stage-map-assets.mjs` into `mobile/map-cache/`; laid into the bundle by `stage-www.mjs`. `/api/runtime/pmtiles/<key>` → `/assets/<key>.pmtiles` (the interceptor's `/assets` fallback, since `VITE_OH_PMTILES_URL` is unset in `.env.android`), read by HTTP Range from Capacitor's local server; `noCompress 'pmtiles'` in `build.gradle` keeps the archives stored, so a range read never inflates from byte 0. |
+| Map data | `www/assets/` inside the APK | `regions.pmtiles` (z8, 21.1 MB), `countries.pmtiles` (z8, 12.6 MB), `cities.pmtiles`, `default-regions.geojson` (12.8 MB), `regions-seed.geojson`, `cities-seed.json`. Pinned by sha256 in `mobile/map-assets.android.json`; fetched and verified by `mobile/scripts/stage-map-assets.mjs` into `mobile/map-cache/`; laid into the bundle by `stage-www.mjs`. `/api/runtime/pmtiles/<key>` → `/assets/<key>.pmtiles` (the interceptor's `/assets` fallback, since `VITE_OH_PMTILES_URL` is unset in `.env.android`), read **whole, once**, and sliced in memory (`src/runtime/wholeFileSource.js`). Never by Range: Capacitor's local server answers `Range: bytes=a-b` with a 206 and the right headers but a body that runs from `a` to the end of the file — on Android 15 a 16 KB read of the regions archive returned 16 MB, and every tile read before the archive had warmed failed to decompress (no country labels, no cities). `noCompress 'pmtiles'` in `build.gradle` keeps the archives stored in the APK. |
+| Screen | `capacitor.config.json` `android.adjustMarginsForEdgeToEdge: "auto"`, `res/values/styles.xml` | Android 15 draws every app edge to edge; without margins the game's top bar sat under the status-bar clock and icons. The WebView gets margins for the system bars and the display cutout, and the bars show the game's own background (`#131315`) with light icons. |
 | Boot | `src/runtime/web/nativeBoot.js` | The boot screen waits only on the library seeding, then settles on `{ local: true }` ("Everything is on this device"). No node directory, no heartbeat. |
 | Files out | `src/runtime/saveFile.js` → `native/fileSave.js` | Every export, log and editor download goes through one door: `Filesystem.writeFile` into the app cache + `Share.share`. Export and "Save log file + game" are offered in the app. |
 | Files in | `<input type="file">` | Capacitor's WebChromeClient opens the system picker; imports work unchanged. |
@@ -41,8 +42,19 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 ## Size
 
-About 56 MB: the bundle (~14 MB compressed once the website-only images are pruned), 35 MB of pmtiles stored as-is, and ~33 MB of JSON that deflates to roughly 8 MB. The 55 MB desktop-only GeoJSON variants never ship; the web-sized ones do.
+About 61 MB (the debug build measured 61.4 MB on 2026-09-22): the bundle (~14 MB compressed once the website-only images are pruned), 35 MB of pmtiles stored as-is, and ~33 MB of JSON that deflates to roughly 8 MB. The 55 MB desktop-only GeoJSON variants never ship; the web-sized ones do.
 
 ## Verification
 
-Fresh install, airplane mode on: the boot screen reads "Everything is on this device" and comes down within a couple of seconds; the built-in scenario opens with borders past z6.5 and country labels; the Scenario Workshop opens with stock regions and cities; a scenario and a game export through the share sheet and import back through the picker; the diagnostics log saves. Airplane mode off: a jump with a cloud key streams; a jump against Ollama on the LAN answers (buffered); the hub lists and downloads; the update banner appears when `latest.json` carries a higher build.
+Checked on 2026-09-22 on the Android 15 emulator (x86_64 Google APIs image, WebView 124, 4 GB), driven over the WebView's DevTools socket (`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`), with the network off — airplane mode and Wi-Fi and mobile data, because airplane mode alone leaves the emulator's network up:
+
+- A wiped install shows "Everything is on this device" after about 4 s and the library after about 15 s; later launches take about as long (the startup preload is about 7 s of it).
+- A new game on Modern Day draws borders, curved country labels and cities, with region outlines at z7. Each archive is read exactly once, whole; no Range request leaves the page.
+- The Workshop opens in about 3 s with 4,848 regions, 202 countries and 2,527 features.
+- A scenario (489 KB) and a game (23 KB) export through the share sheet and import back through the system picker.
+- An update installed over the app keeps its library (same signing key).
+- With the network on, `CapacitorHttp` reaches a stand-in with no CORS headers on the host (a plain fetch to it fails, as against stock Ollama) and brings back a 2 MB reply after 8 s intact.
+- With a game and the Workshop open the JS heap is about 230 MB.
+- Offline, the ESRI ocean basemap and the terrain tiles do not load; the sea is plain dark.
+
+Not checked yet: a physical phone, a turn with a real cloud key, the community hub, the update banner against a published `latest.json`, and a release-signed build from CI.

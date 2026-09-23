@@ -162,7 +162,9 @@ const STARTUP_TASKS = [
     // getPmtilesArchive serves over range reads while the full archive warms in
     // the background; waiting for the whole thing would put 60 MB in front of a
     // 40 KB read. The archive is registered under its URL either way, so whichever
-    // source is live when this runs answers with the same bytes.
+    // source is live when this runs answers with the same bytes. (Not on Android:
+    // its APK assets cannot be range-read, so there the read waits for the whole
+    // file — see wholeFileSource.js.)
     deps: [],
     run: () => loadCountryNames(),
   },

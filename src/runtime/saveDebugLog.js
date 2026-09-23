@@ -13,10 +13,10 @@
 //   * Logging turned off. There is no log to send, so the buttons go back to
 //     copying the failure on its own (copyIncidentReport) under their old
 //     labels, and switch over live if logging is turned back on.
-//   * The Android app. Its WebView cannot save a file — its download listener
-//     hands every URL to the system browser, and a blob: URL means nothing
-//     there — so the same report goes to the clipboard instead, and the button
-//     says so. Anything else that stops the download falls back the same way.
+//   * A save that fails. The file goes out through runtime/saveFile.js — a
+//     download in a browser, the share sheet in the Android app — and if that
+//     throws, the same report goes to the clipboard instead, and the button says
+//     so.
 import { useState, useSyncExternalStore } from "react";
 import { copyToClipboard } from "./clipboard.js";
 import {
