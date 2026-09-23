@@ -16,6 +16,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { isBrowserOnline } from "../../runtime/networkStatus.js";
 
 const codeToColor = (code) => {
   let h = 0;
@@ -108,6 +109,11 @@ const buildBaseLayer = (customBackground) => {
       }),
     });
   }
+  // No network at all: the game's bundled relief (public/offline-relief), dimmed
+  // toward the dark canvas, instead of tile requests that can only fail.
+  if (!isBrowserOnline()) {
+    return new TileLayer({ source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3, wrapX: false }), opacity: 0.4 });
+  }
   return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
 };
 
@@ -146,6 +152,14 @@ const CountryPickerMap = ({
   const hoveredRegionRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
+  // A coarse primary pointer = a touch screen, where focus opens the keyboard.
+  const [touchFirst] = useState(() => {
+    try {
+      return typeof window !== "undefined" && Boolean(window.matchMedia?.("(pointer: coarse)").matches);
+    } catch {
+      return false;
+    }
+  });
 
   // Refs the once-created map's handlers read at click time — so switching mode or
   // toggling a region never rebuilds the map.
@@ -377,7 +391,9 @@ const CountryPickerMap = ({
         </div>
       ) : (
         <input
-          autoFocus
+          // On a touch screen focusing raises the keyboard over the picker it
+          // is meant to help with; there the player taps the box to search.
+          autoFocus={!touchFirst}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search countries…"

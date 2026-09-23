@@ -17,6 +17,7 @@ import TileLayer from "ol/layer/Tile";
 import OSM from "ol/source/OSM";
 import XYZ from "ol/source/XYZ";
 import { editorBasemapById, esriXyzUrl } from "./basemaps.js";
+import { useBrowserOnline } from "../runtime/networkStatus.js";
 import VectorLayer from "ol/layer/Vector";
 import VectorImageLayer from "ol/layer/VectorImage";
 import VectorSource from "ol/source/Vector";
@@ -2820,6 +2821,10 @@ const OlMap = ({
     pointLayerRef.current?.changed();
   }, [featureSelectionIds]);
 
+  // No network at all: the ESRI services cannot answer, so the editor draws the
+  // game's bundled relief instead (public/offline-relief, levels 0-3).
+  const online = useBrowserOnline();
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -2832,7 +2837,12 @@ const OlMap = ({
     const customActive = customBackground?.kind === "image" || customBackground?.kind === "vector";
     const esri = customActive ? null : editorBasemapById(basemap);
     let base = null;
-    if (esri) {
+    if (esri && !online) {
+      base = new TileLayer({
+        source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3 }),
+        opacity: 0.72,
+      });
+    } else if (esri) {
       base = new TileLayer({
         source: new XYZ({ url: esriXyzUrl(esri.service), maxZoom: esri.maxZoom, crossOrigin: "anonymous" }),
         opacity: Number.isFinite(esri.editorOpacity) ? esri.editorOpacity : 1,
@@ -2851,7 +2861,7 @@ const OlMap = ({
         ? "#0b1a2b"
         : esri?.editorBackground || BASEMAP_BG[basemap] || "#131315";
     }
-  }, [basemap, customBackground]);
+  }, [basemap, customBackground, online]);
 
   // Custom uploaded background: a georeferenced vector/raster layer beneath the
   // regions, or a plain image placed with a draggable/resizable frame.
