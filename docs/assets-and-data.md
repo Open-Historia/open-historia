@@ -142,7 +142,7 @@ Two things a trimmed archive still says about itself: the metadata blob is prese
 
 ### Android variant
 
-The Android app ships its map data **inside the APK**: `mobile/scripts/stage-map-assets.mjs` downloads the six files pinned in `mobile/map-assets.android.json` from the same `map-data` release (the z8-trimmed archives, `cities.pmtiles`, and the web-sized `default-regions.geojson`, `regions-seed.geojson`, `cities-seed.json`), verifies each sha256, and `stage-www.mjs` lays them under `www/assets/`. The interceptor's `/api/runtime/pmtiles/<key>` becomes a Range read of `/assets/<key>.pmtiles` on Capacitor's local server. Nothing is downloaded at first run and nothing is streamed from a content node.
+The Android app ships its map data **inside the APK**: `mobile/scripts/stage-map-assets.mjs` downloads the six files pinned in `mobile/map-assets.android.json` from the same `map-data` release (the z8-trimmed archives, `cities.pmtiles`, and the web-sized `default-regions.geojson`, `regions-seed.geojson`, `cities-seed.json`), verifies each sha256, and `stage-www.mjs` lays them under `www/assets/`. The interceptor's `/api/runtime/pmtiles/<key>` becomes one whole-file read of `/assets/<key>.pmtiles` from Capacitor's local server, sliced in memory — that server ignores the end of a Range, so the app never sends one (`src/runtime/wholeFileSource.js`). Nothing is downloaded at first run and nothing is streamed from a content node.
 
 ---
 
