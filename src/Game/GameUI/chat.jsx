@@ -2832,6 +2832,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     // (runtime/backToClose.js). Only while the panel shows: a closed panel keeps
     // this view, and its picker, mounted off-screen.
     useBackToClose(panelOpen && choosing, () => setChoosing(false));
+    // On a phone the panel is one narrow column: the intelligence grids drop
+    // to fewer columns there, and the countries list sits over the dossier.
+    const isMobile = useIsMobile();
 
     useEffect(() => { void refreshRuntimeState(["world", "intercepts"]); }, []);
     useEffect(() => { void ensureCountryAssessed(playerCountry, { reason: "intelligence workspace" }); }, [playerCountry]);
@@ -2997,19 +3000,19 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         <div data-intelligence-workspace="restored" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", gap: ".35rem", alignItems: "center", padding: ".65rem 1rem .55rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
                 {navItems.map(([key, label]) => (
-                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
+                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
                 ))}
             </div>
 
             {section === "overview" && (
                 <div data-intelligence-section="overview" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".8rem 1rem", display: "flex", flexDirection: "column", gap: ".75rem" }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: ".55rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".55rem" }}>
                         <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="purple" />
                         <IntelligenceStatCard label="Active networks" value={spies.length} hint={`${MAX_ACTIVE_SPIES - spies.length} field slots available`} tone="green" />
                         <IntelligenceStatCard label="Current reports" value={currentReportCount} hint="Latest political assessments retained" />
                         <IntelligenceStatCard label="Counterintel alerts" value={visibleForeign.length} hint="Detected or turned foreign agents" tone={visibleForeign.length ? "amber" : "neutral"} />
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: ".65rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "1fr 1fr", gap: ".65rem" }}>
                         <div style={{ ...panel, padding: ".7rem .8rem" }}>
                             <div style={{ fontSize: ".75rem", fontWeight: 750 }}>Strategic warnings</div>
                             <div style={{ marginTop: ".55rem", display: "flex", flexDirection: "column", gap: ".3rem" }}>
@@ -3032,7 +3035,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
             )}
 
             {section === "countries" && (
-                <div data-intelligence-section="countries" style={{ flex: 1, minHeight: 0, display: "grid", gridTemplateColumns: "minmax(16rem, .95fr) minmax(0, 1.9fr)", gap: ".65rem", padding: ".65rem" }}>
+                <div data-intelligence-section="countries" style={{ flex: 1, minHeight: 0, display: "grid", ...(isMobile ? { gridTemplateColumns: "minmax(0, 1fr)", gridTemplateRows: "minmax(0, 14rem) minmax(0, 1fr)" } : { gridTemplateColumns: "minmax(16rem, .95fr) minmax(0, 1.9fr)" }), gap: ".65rem", padding: ".65rem" }}>
                     <div style={{ ...panel, minHeight: 0, padding: ".55rem", display: "flex", flexDirection: "column" }}>
                         <input value={countryQuery} onChange={(e) => setCountryQuery(e.target.value)} placeholder="Search countries" style={{ ...inputStyle, marginBottom: ".45rem" }} />
                         <div style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", display: "flex", flexDirection: "column", gap: ".25rem" }}>
@@ -3050,7 +3053,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                     </div>
                     <div style={{ ...panel, minHeight: 0, padding: ".8rem", overflowY: "auto", scrollbarWidth: "none" }}>
                         <IntelligenceCountryHeader country={selectedCountryRecord} subtitle={selectedSpy ? `Active network · since ${selectedSpy.deployedAt || "an earlier date"}` : "No active network · public sources only"} />
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: ".45rem", marginTop: ".75rem" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".45rem", marginTop: ".75rem" }}>
                             <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone={selectedSpy ? "purple" : "neutral"} />
                             <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone={selectedKnowledge?.level !== "public" ? "purple" : "neutral"} />
                             <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone={selectedSpy ? "purple" : "neutral"} />
@@ -3643,7 +3646,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 0.5rem, then its own); and a 10rem floor, as 24rem is taller
                 than a phone held sideways. Every inset is 0 on a desktop. */}
             <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
-                ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 8rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
+                ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
@@ -3688,6 +3691,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} panelOpen={isOpen} />
                 ) : currentView === "institutions" ? (
                     <InstitutionsWorkspace
+                        panelOpen={isOpen}
                         world={worldSnapshot}
                         playerCountry={playerCountry}
                         gameDate={gameDate}
