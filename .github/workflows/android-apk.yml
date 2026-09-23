@@ -110,6 +110,8 @@ jobs:
           EOF
           NOTES="Open Historia for Android. Download open-historia.apk below and open it to install (allow installs from your browser when Android asks). Everything is on the device: your saves and scenarios, the scenario workshop, and the world map — it plays in airplane mode from the first launch. The community hub and your own AI provider are the only things that use the network. It updates itself when a newer build is published here.
 
+          Had the older Open Historia app (from before 23 September 2026)? Uninstall it first. This app is signed with a new key, and Android will not install it over the old one. Uninstalling deletes the old app's saves on that phone. From here on, updates install over the app and keep your saves.
+
           Build: ${{ github.run_number }}"
           gh release create android --title "Android app" --notes "$NOTES" 2>/dev/null \
             || gh release edit android --notes "$NOTES"
