@@ -1594,17 +1594,18 @@ const LibraryTopBar = () => {
     // the remounted menu must come up closed, over the new game.
     setMenuOpen(false);
     try {
+      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+      // startDate/gameDate/round (the "Undated" bug). It rides on the create
+      // itself: patched in a second request, after `setActive` had switched to
+      // the game, the opening cover and the HUD named the scenario's default
+      // country until it landed.
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       const details = await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
+        ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
-      // startDate/gameDate/round (the "Undated" bug).
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
-      if (Object.keys(gamePatch).length) {
-        await saveGame(details.game.id, { gamePatch });
-      }
       await openGameEditor(details.game.id);
     } catch (nextError) {
       setMenuOpen(true);
@@ -1627,6 +1628,10 @@ const LibraryTopBar = () => {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
         scenarioId: scenario.id,
+        // The faction's name from the first moment the game is active (the
+        // opening cover reads it); the save below writes it again once the
+        // faction is in the world it resolves against.
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
       const gameId = details.game.id;
@@ -2524,12 +2529,10 @@ const LibraryTopBar = () => {
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
+      ...(seed.game?.country ? { gamePatch: { country: seed.game.country } } : null),
       setActive: true,
     });
     const newGameId = gameDetails.game.id;
-    if (seed.game?.country) {
-      await saveGame(newGameId, { gamePatch: { country: seed.game.country } });
-    }
 
     // Tear down all the library UI so the freshly-activated game is visible.
     setIsMapEditorOpen(false);

@@ -13,6 +13,7 @@ import {
 } from "./assets.js";
 import { warmCountryLabelCollections } from "./countryLabels.js";
 import { logDebugEvent } from "./debugLog.js";
+import { isBrowserOnline } from "./networkStatus.js";
 
 export const STARTUP_TIME_BUDGET_MS = 30_000;
 const INITIAL_VIEWPORT = {
@@ -129,6 +130,9 @@ const STARTUP_TASKS = [
       // world.json was already warmed into cache by the "state" task above.
       const world = await readJson(JSON_URLS.world, { defaultValue: {} }).catch(() => ({}));
       if (world?.background?.kind) return undefined;
+      // No network at all: the map draws its bundled relief (World.jsx), and
+      // every one of these requests would only fail.
+      if (!isBrowserOnline()) return undefined;
       return warmRemoteResources(
         [
           ...buildGlobalTextureUrls(esriTileTemplate(selectedBasemapId()), 2),

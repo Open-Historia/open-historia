@@ -9,6 +9,7 @@ import {
   getRecentModels,
   providerSetupRequirement,
 } from "../AI/providerConfig.js";
+import { useBrowserOnline } from "../../runtime/networkStatus.js";
 
 // Shown when a game starts and the selected AI provider has nothing to call
 // with — no key for a hosted provider, no endpoint for a self-hosted one. The
@@ -119,6 +120,9 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
   const [model, setModel] = useState("");
   const [error, setError] = useState("");
   const [showTutorial, setShowTutorial] = useState(true);
+  // Offline the embed is the WebView's own "Webpage not available" page; say
+  // what the video needs instead, and show it when the network is back.
+  const online = useBrowserOnline();
   const modelListId = useId();
   const selfHosted = providerSetupRequirement(provider) === "endpoint";
   const meta = getProviderMeta(provider);
@@ -202,16 +206,22 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
           </div>
           {showTutorial ? (
             <div style={{ marginTop: "0.7rem" }}>
-              <div style={{ aspectRatio: "16 / 9", background: "rgba(0,0,0,0.5)", borderRadius: "10px", overflow: "hidden", width: "100%" }}>
-                <iframe
-                  title="How to get a Gemini API key (tutorial)"
-                  src={TUTORIAL_EMBED_URL}
-                  allow="accelerometer; encrypted-media; picture-in-picture; web-share"
-                  allowFullScreen
-                  referrerPolicy="strict-origin-when-cross-origin"
-                  style={{ border: 0, display: "block", height: "100%", width: "100%" }}
-                />
-              </div>
+              {online ? (
+                <div style={{ aspectRatio: "16 / 9", background: "rgba(0,0,0,0.5)", borderRadius: "10px", overflow: "hidden", width: "100%" }}>
+                  <iframe
+                    title="How to get a Gemini API key (tutorial)"
+                    src={TUTORIAL_EMBED_URL}
+                    allow="accelerometer; encrypted-media; picture-in-picture; web-share"
+                    allowFullScreen
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    style={{ border: 0, display: "block", height: "100%", width: "100%" }}
+                  />
+                </div>
+              ) : (
+                <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: "10px", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem", lineHeight: 1.45, padding: "0.8rem 0.9rem" }}>
+                  The video needs an internet connection. It plays here as soon as you are back online, and so does getting a key.
+                </div>
+              )}
               <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", justifyContent: "space-between", marginTop: "0.4rem" }}>
                 <a href={TUTORIAL_VIDEO_URL} target="_blank" rel="noopener noreferrer" style={{ color: "rgba(147,197,253,0.9)", fontSize: "0.7rem" }}>
                   Watch on YouTube ↗

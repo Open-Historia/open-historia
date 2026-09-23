@@ -89,6 +89,26 @@ const emitWebVersion = (isWeb: boolean) => {
   }
 }
 
+// The Android app does not report to the website's Google Analytics: its
+// players never saw the site that set it up, a store listing would have to
+// declare it, and on a device with no network it was one more failed request
+// per start. index.html keeps the tag for the website (and the desktop, as
+// before); the android build drops it, and fails if any of it survives — a
+// reworded snippet must not ship silently.
+const GOOGLE_TAG = /[ \t]*<!-- Google tag \(gtag\.js\) -->[\s\S]*?<\/script>\s*<script>[\s\S]*?<\/script>\r?\n?/
+const dropWebAnalytics = (isAndroid: boolean) => ({
+  name: 'oh-drop-web-analytics',
+  apply: 'build' as const,
+  transformIndexHtml(html: string) {
+    if (!isAndroid) return html
+    const stripped = html.replace(GOOGLE_TAG, '')
+    if (/googletagmanager|gtag\(/.test(stripped)) {
+      throw new Error('oh-drop-web-analytics: the Google tag is still in the Android index.html')
+    }
+    return stripped
+  },
+})
+
 // https://vite.dev/config/
 // `--mode web` (npm run build:web / build:site / dev:web) builds the website,
 // `--mode android` (npm run build:android) the Android app's bundle — the web
@@ -128,6 +148,7 @@ export default defineConfig(({ mode }) => ({
     }),
     dropMapBinaries(mode === 'web' || mode === 'android'),
     emitWebVersion(mode === 'web'),
+    dropWebAnalytics(mode === 'android'),
   ],
   // Proxy API calls to the Express server during `npm run dev` so the map editor's
   // save/load (and the game's runtime endpoints) work with hot-reload too.
