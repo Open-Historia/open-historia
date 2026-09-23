@@ -1,5 +1,8 @@
 /*! Open Historia — country info panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useMemo, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
@@ -34,6 +37,23 @@ const surface = {
     boxShadow: "-4px 0 24px rgba(0,0,0,0.45)",
     color: "white",
     fontFamily: "sans-serif",
+};
+
+// On a phone the panel is the whole screen, inset like the card it is. Docked
+// under the date bar it left the date bar (and, when short, the toolbar)
+// showing, and the timeline or chat they opened (9998) came up underneath it.
+// It sits at 10039, under the phone advisor sheet and the API-setup prompt
+// (10040), where desktop's 10042 would cover them: whatever opens one of those
+// while the panel is showing expects it on top. The reverse cannot happen: the
+// panel opens only from the map's region card, which both of them cover.
+const PHONE_PLACEMENT = {
+    top: `calc(0.5rem + ${SAFE_TOP})`,
+    bottom: `calc(0.5rem + ${SAFE_BOTTOM})`,
+    left: `calc(0.5rem + ${SAFE_LEFT})`,
+    right: `calc(0.5rem + ${SAFE_RIGHT})`,
+    width: "auto",
+    maxHeight: "none",
+    zIndex: 10039,
 };
 
 const pillStyle = {
@@ -76,6 +96,7 @@ const eventInvolvesCountry = (event, code, name) => {
 };
 
 const CountryInfoPanel = () => {
+    const isMobile = useIsMobile();
     const [country, setCountry] = useState(null); // { code, name, flagUrl, flagEmoji }
     const [events, setEvents] = useState([]);
     const [aliases, setAliases] = useState([]);
@@ -225,6 +246,11 @@ const CountryInfoPanel = () => {
         });
     }, [events, filterIndex, search]);
 
+    // Back on a phone closes the flag picker, then the panel
+    // (runtime/backToClose.js). The picker only renders once the world is read.
+    useBackToClose(Boolean(country), () => setCountry(null));
+    useBackToClose(Boolean(country && worldState) && flagPickerOpen, () => setFlagPickerOpen(false));
+
     if (!country) return null;
 
     const currentFlag = resolvePolityFlag({
@@ -259,13 +285,14 @@ const CountryInfoPanel = () => {
             ...surface,
             display: "flex",
             flexDirection: "column",
-            maxHeight: "calc(100vh - 5.75rem)",
+            maxHeight: `calc(${APP_HEIGHT} - 5.75rem)`,
             overflow: "hidden",
             position: "fixed",
             right: "0.5rem",
             top: "4.75rem",
             width: "min(28rem, calc(100vw - 1rem))",
             zIndex: 10042,
+            ...(isMobile ? PHONE_PLACEMENT : null),
         }}
         >
         {/* Header */}
@@ -280,9 +307,11 @@ const CountryInfoPanel = () => {
         <span style={{ flex: 1, fontSize: "1.15rem", fontWeight: 800, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {displayName || country.name}
         </span>
-        <button type="button" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.68rem", fontWeight: 700, padding: "0.3rem 0.45rem" }}>Flag</button>
+        <button type="button" className="oh-tap" onClick={() => setFlagPickerOpen(true)} title="Change flag" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 7, color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.68rem", fontWeight: 700, padding: "0.3rem 0.45rem" }}>Flag</button>
         <button
         type="button"
+        className="oh-tap"
+        aria-label="Close country panel"
         onClick={() => setCountry(null)}
         style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "1.15rem", lineHeight: 1, padding: "0.2rem" }}
         >
@@ -305,6 +334,7 @@ const CountryInfoPanel = () => {
         />
         <button
         type="button"
+        className="oh-tap-row"
         onClick={() => setFilterIndex((filterIndex + 1) % FILTER_MODES.length)}
         title="Filter by importance"
         style={{ ...footerButtonStyle, borderRadius: 8, flex: "none", fontSize: "0.78rem", padding: "0.45rem 0.7rem" }}
@@ -401,7 +431,9 @@ const CountryInfoPanel = () => {
         )}
 
         <div style={{ fontSize: "1rem", fontWeight: 800, marginTop: "0.5rem" }}>Details</div>
-        <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.4fr)" }}>
+        {/* One column on a phone: side by side, the first list got about 130 px
+            and a long name wrapped over three lines. */}
+        <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(0, 1.4fr)" }}>
         <div>
         <div style={{ fontSize: "0.85rem", fontWeight: 700, marginBottom: "0.35rem" }}>Alternative Names</div>
         {aliases.length === 0 ? (
@@ -430,7 +462,7 @@ const CountryInfoPanel = () => {
         </div>
 
         {(controlledForeignRegions.length > 0 || occupiedSovereignRegions.length > 0) && (
-            <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", marginTop: "0.45rem" }}>
+            <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) minmax(0, 1fr)", marginTop: "0.45rem" }}>
             <div>
             <div style={{ fontSize: "0.8rem", fontWeight: 700, marginBottom: "0.35rem" }}>Controlled, Not Sovereign ({controlledForeignRegions.length})</div>
             {controlledForeignRegions.length === 0 ? (
@@ -478,10 +510,10 @@ const CountryInfoPanel = () => {
 
         {/* Footer */}
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
-        <button type="button" onClick={runAdvisorReport} style={footerButtonStyle}>
+        <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={footerButtonStyle}>
         Advisor Report
         </button>
-        <button type="button" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
+        <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
         Open Diplomacy
         </button>
         </div>

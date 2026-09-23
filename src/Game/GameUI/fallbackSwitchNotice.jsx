@@ -11,6 +11,7 @@
 // will blame the game; that is the whole reason this exists.
 
 import React, { useEffect, useState } from "react";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const SHOW_MS = 12000;
 
@@ -36,8 +37,18 @@ const noticeStyle = {
   pointerEvents: "auto",
 };
 
+// On a phone. Centred from left: 50%, the notice could only be half the screen
+// wide, which squeezed the message into a narrow column; there it is as wide as
+// its words, up to the screen. And it drops below the game-menu button, whose
+// bottom edge it covered.
+const phoneNoticeStyle = {
+  top: "4.75rem",
+  width: "max-content",
+};
+
 export const FallbackSwitchNotice = () => {
   const [notices, setNotices] = useState([]); // [{ id, message }]
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     const timers = new Set();
@@ -61,13 +72,14 @@ export const FallbackSwitchNotice = () => {
 
   if (!notices.length) return null;
   return (
-    <div role="status" aria-live="polite" style={{ ...noticeStyle, flexDirection: "column" }}>
+    <div role="status" aria-live="polite" style={{ ...noticeStyle, flexDirection: "column", ...(isMobile ? phoneNoticeStyle : null) }}>
       {notices.map((notice) => (
         <div key={notice.id} style={{ display: "flex", gap: "0.6rem", alignItems: "flex-start", width: "100%" }}>
           <span aria-hidden="true" style={{ color: "#93c5fd", fontWeight: 800 }}>↓</span>
           <span style={{ flex: 1 }}>{notice.message}</span>
           <button
             type="button"
+            className="oh-tap"
             aria-label="Dismiss"
             onClick={() => setNotices((current) => current.filter((item) => item.id !== notice.id))}
             style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "0.9rem", lineHeight: 1, padding: 0 }}

@@ -10,6 +10,8 @@
 // opens a prefilled hub post where the author drags the bundle in.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 import {
   exportScenarioBundle,
   importScenarioBundle,
@@ -222,6 +224,10 @@ export const downloadHubBundle = async (bundleUrl) => {
 };
 
 
+// Never wider than the phone it is on: at 320 px a 19rem card pushed the
+// search results sideways off the screen.
+const CARD_WIDTH = "min(19rem, calc(100vw - 2rem))";
+
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
   border: "1px solid rgba(255,255,255,0.09)",
@@ -229,12 +235,12 @@ const cardSurface = {
   color: "#fff",
   display: "flex",
   flexDirection: "column",
-  flex: "0 0 19rem",
+  flex: `0 0 ${CARD_WIDTH}`,
   gap: "0.55rem",
-  maxWidth: "19rem",
+  maxWidth: CARD_WIDTH,
   minWidth: 0,
   padding: "0.9rem",
-  width: "19rem",
+  width: CARD_WIDTH,
 };
 
 const pillButton = {
@@ -252,6 +258,11 @@ const pillButton = {
   minHeight: "2rem",
   padding: "0 0.85rem",
 };
+
+// On a touch screen .oh-tap-row (styles.css) makes a pill a finger's 44 px
+// tall, but the pill's inline min-height would beat the class, so there it is
+// left out; with a mouse the style is returned untouched.
+const touchFit = (style, touch) => (touch ? { ...style, minHeight: undefined } : style);
 
 const rowTitleStyle = {
   color: "rgba(255,255,255,0.9)",
@@ -312,7 +323,7 @@ const ScenarioCover = ({ post, borderRadius = "10px", marginBottom }) => (
   </div>
 );
 
-const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
+const ScenarioCard = ({ post, busy, onImport, onSelect, touch, isMobile }) => (
   <div
     style={{ ...cardSurface, cursor: "pointer" }}
     onClick={() => onSelect(post)}
@@ -352,7 +363,9 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
     <div style={{ color: "rgba(244,244,246,0.72)", flex: 1, fontSize: "0.8rem", lineHeight: 1.5 }}>
       {post.description || "No description."}
     </div>
-    <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+    {/* On a phone the card can be narrower than the counts and both pills,
+        so a pill that does not fit drops to a line of its own, on the right. */}
+    <div style={{ alignItems: "center", display: "flex", flexWrap: isMobile ? "wrap" : undefined, gap: "0.5rem", justifyContent: isMobile ? "flex-end" : undefined }}>
       {post.installs != null && (
         <span title="Times this scenario has been imported" style={{ color: "rgba(255,255,255,0.65)", fontSize: "0.76rem" }}>⬇ {post.installs}</span>
       )}
@@ -363,25 +376,27 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
         href={post.url}
         target="_blank"
         rel="noopener noreferrer"
+        className="oh-tap-row"
         onClick={(event) => event.stopPropagation()}
         title="Open the GitHub post to 👍 like or 💬 comment"
-        style={{ ...pillButton, minHeight: "1.8rem", textDecoration: "none" }}
+        style={touchFit({ ...pillButton, minHeight: "1.8rem", textDecoration: "none" }, touch)}
       >
         👍 Like ↗
       </a>
       <button
         type="button"
+        className="oh-tap-row"
         disabled={!post.bundleUrl || busy}
         onClick={(event) => { event.stopPropagation(); onImport(post); }}
         title={post.bundleUrl ? "Import into your Scenarios" : "This post has no scenario file attached"}
-        style={{
+        style={touchFit({
           ...pillButton,
           minHeight: "1.8rem",
           background: post.bundleUrl ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
           borderColor: post.bundleUrl ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.08)",
           color: post.bundleUrl ? "#fff" : "rgba(255,255,255,0.35)",
           cursor: post.bundleUrl && !busy ? "pointer" : "default",
-        }}
+        }, touch)}
       >
         {busy ? "Importing…" : "Import"}
       </button>
@@ -389,7 +404,7 @@ const ScenarioCard = ({ post, busy, onImport, onSelect }) => (
   </div>
 );
 
-const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll" }) => (
+const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layout = "scroll", touch, isMobile }) => (
   <div style={{ marginBottom: "1.15rem" }}>
     <div style={rowTitleStyle}>{title}</div>
     {posts.length === 0 ? (
@@ -399,13 +414,13 @@ const ScenarioRow = ({ title, posts, busyId, onImport, onSelect, emptyText, layo
     ) : layout === "grid" ? (
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.8rem", paddingBottom: "0.35rem" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} />
         ))}
       </div>
     ) : (
       <div style={{ display: "flex", gap: "0.8rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
         {posts.map((post) => (
-          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} />
+          <ScenarioCard key={post.id} post={post} busy={busyId === post.id} onImport={onImport} onSelect={onSelect} touch={touch} isMobile={isMobile} />
         ))}
       </div>
     )}
@@ -431,12 +446,13 @@ const StatusBanner = ({ notice, error }) => (
   </>
 );
 
-const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
+const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) => (
   <div style={{ color: "#fff" }}>
     <button
       type="button"
+      className="oh-tap-row"
       onClick={onBack}
-      style={{ ...pillButton, marginBottom: "0.9rem" }}
+      style={touchFit({ ...pillButton, marginBottom: "0.9rem" }, touch)}
     >
       ← Back
     </button>
@@ -470,9 +486,11 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
       {post.description || "No description."}
     </p>
 
-    <div style={{ display: "flex", gap: "0.6rem" }}>
+    {/* Wraps on a phone, where the two side by side are wider than the screen. */}
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
       <button
         type="button"
+        className="oh-tap-row"
         disabled={!post.bundleUrl || busy}
         onClick={() => onImport(post)}
         style={{
@@ -491,7 +509,7 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
       >
         {busy ? "Importing…" : "▶ Import & Play"}
       </button>
-      <a href={post.url} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
+      <a href={post.url} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, textDecoration: "none" }, touch)}>
         👍 Like / 💬 Comment ↗
       </a>
     </div>
@@ -500,6 +518,8 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error }) => (
 
 const CommunityPanel = ({ fullPage = false, onImported }) => {
   const { scenarios } = useLibraryState();
+  const touch = useTouchPrimary();
+  const isMobile = useIsMobile();
   const [posts, setPosts] = useState(null);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -743,7 +763,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
   return (
     // As the main menu's Community tab (fullPage) the surrounding page owns
     // scrolling; as a floating panel it caps its own height and scrolls itself.
-    <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: "calc(100vh - 11rem)", overflowY: "auto", paddingRight: "0.2rem" }) }}>
+    <div style={{ color: "#fff", ...(fullPage ? {} : { maxHeight: `calc(${APP_HEIGHT} - 11rem)`, overflowY: "auto", paddingRight: "0.2rem" }) }}>
       {selectedPost ? (
         <ScenarioDetail
           post={selectedPost}
@@ -752,6 +772,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           onBack={backToGrid}
           notice={notice}
           error={error}
+          touch={touch}
         />
       ) : (
         <>
@@ -763,26 +784,28 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             <div style={{ flex: 1 }} />
             <input
               type="text"
+              className="oh-tap-row"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search scenarios…"
               aria-label="Search community scenarios"
               style={searchInputStyle}
             />
-            <button type="button" onClick={() => load(true)} style={pillButton}>Refresh</button>
+            <button type="button" className="oh-tap-row" onClick={() => load(true)} style={touchFit(pillButton, touch)}>Refresh</button>
             <button
               type="button"
+              className="oh-tap-row"
               onClick={() => setPublishPickerOpen((open) => !open)}
-              style={{ ...pillButton, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.25)" }}
+              style={touchFit({ ...pillButton, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.25)" }, touch)}
             >
               ⬆ Publish to Hub
             </button>
-            <a href={HUB_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, textDecoration: "none" }}>
+            <a href={HUB_URL} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, textDecoration: "none" }, touch)}>
               Open Hub ↗
             </a>
             {/* The one coloured control on this page, on purpose: it is the brand's
                 own blue, and the corner is where a newcomer looks for the door. */}
-            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" style={{ ...pillButton, background: DISCORD_BLURPLE, borderColor: "#6d78f5", color: "#fff", fontWeight: 700, gap: "0.45rem", textDecoration: "none" }}>
+            <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, background: DISCORD_BLURPLE, borderColor: "#6d78f5", color: "#fff", fontWeight: 700, gap: "0.45rem", textDecoration: "none" }, touch)}>
               <DiscordMark size="1.05rem" />
               Join the Discord
             </a>
@@ -796,7 +819,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                 {scenarios.map((scenario) => (
-                  <button key={scenario.id} type="button" onClick={() => handlePublish(scenario)} style={pillButton}>
+                  <button key={scenario.id} type="button" className="oh-tap-row" onClick={() => handlePublish(scenario)} style={touchFit(pillButton, touch)}>
                     {scenario.name}
                   </button>
                 ))}
@@ -822,6 +845,8 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                 onSelect={selectPost}
                 emptyText="No scenarios match your search."
                 layout="grid"
+                touch={touch}
+                isMobile={isMobile}
               />
             ) : (
               <>
@@ -834,11 +859,13 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                     busyId={busyId}
                     onImport={handleImport}
                     onSelect={selectPost}
+                    touch={touch}
+                    isMobile={isMobile}
                   />
                 )}
-                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
-                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
-                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} />
+                <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
+                <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
+                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
               </>
             )
           )}

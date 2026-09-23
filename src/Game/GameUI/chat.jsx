@@ -1,5 +1,8 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
@@ -447,6 +450,10 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
     const votes = poll?.votes ?? {};
     const mine = Object.entries(votes).find(([voter]) => voter.toLowerCase() === String(playerCountry ?? "").toLowerCase())?.[1] ?? "";
     const total = Object.keys(votes).length;
+    // Who voted for what is each option's tooltip, and a touch screen has no
+    // hover to show it: there it is written under the option instead.
+    const canHover = useCanHover();
+    const isTouch = useTouchPrimary();
     return (
         <div style={{
             background: "rgba(59,130,246,0.08)",
@@ -470,10 +477,14 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                     <button
                         key={option.id}
                         type="button"
+                        className="oh-tap-row"
                         disabled={Boolean(mine)}
                         onClick={() => onVote?.(option.id)}
                         title={voters.length ? voters.join(", ") : "No vote yet"}
                         style={{
+                            // Centred, not stretched, once a thumb-high row is
+                            // taller than its text.
+                            ...(isTouch ? { alignItems: "center" } : {}),
                             background: `linear-gradient(to right, rgba(96,165,250,0.28) ${share}%, rgba(255,255,255,0.05) ${share}%)`,
                             border: chosen ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
                             borderRadius: "8px",
@@ -487,7 +498,12 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                             textAlign: "left",
                         }}
                     >
-                        <span>{option.label}{chosen ? " ✓" : ""}</span>
+                        <span>
+                            {option.label}{chosen ? " ✓" : ""}
+                            {!canHover && voters.length > 0 && (
+                                <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", display: "block", fontSize: "0.68rem", marginTop: "0.15rem" }}>{voters.join(", ")}</span>
+                            )}
+                        </span>
                         <span data-no-translate style={{ color: "rgba(255,255,255,0.55)" }}>{option.votes}</span>
                     </button>
                 );
@@ -504,7 +520,13 @@ const ReactionChip = ({ emoji, members, flagUrlMap }) => {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
+    const tooltipRef = useRef(null);
     const names = members.map((member) => member.country);
+    // Who reacted is said by this label (the chip shows only flags), and a
+    // touch screen has no hover to show it: there a tap shows it, for a few
+    // seconds or until the thread scrolls (the label is pinned to the screen,
+    // not to the chip).
+    const canHover = useCanHover();
 
     const handleMouseEnter = () => {
         if (anchorRef.current) {
@@ -514,8 +536,30 @@ const ReactionChip = ({ emoji, members, flagUrlMap }) => {
         setHovered(true);
     };
 
+    useEffect(() => {
+        if (canHover || !hovered) return undefined;
+        const hide = () => setHovered(false);
+        const timer = setTimeout(hide, 2500);
+        window.addEventListener("scroll", hide, true);
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener("scroll", hide, true);
+        };
+    }, [canHover, hovered]);
+
+    // Reactions on the player's own lines sit at the right of the thread, and
+    // on a phone that is the right edge of the screen: a label centred on the
+    // chip ran off it. Measured once drawn and moved back on, before paint.
+    useLayoutEffect(() => {
+        const tip = tooltipRef.current;
+        if (canHover || !hovered || !tip) return;
+        const half = tip.offsetWidth / 2;
+        const edge = 8;
+        tip.style.left = `${Math.min(Math.max(pos.x, edge + half), window.innerWidth - edge - half)}px`;
+    }, [canHover, hovered, pos.x]);
+
     const tooltip = hovered ? ReactDOM.createPortal(
-        <div style={{
+        <div ref={tooltipRef} style={{
             position: "fixed", left: pos.x, top: pos.y - 5, transform: "translate(-50%, -100%)",
             background: "rgba(18,18,21,.98)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8,
             boxShadow: "0 8px 24px rgba(0,0,0,.35)", padding: ".34rem .48rem", zIndex: 99999, pointerEvents: "none",
@@ -534,7 +578,11 @@ const ReactionChip = ({ emoji, members, flagUrlMap }) => {
     return (
         <>
         {tooltip}
-        <div ref={anchorRef} onMouseEnter={handleMouseEnter} onMouseLeave={() => setHovered(false)} title={names.join(", ")} style={{
+        <div ref={anchorRef}
+            onMouseEnter={canHover ? handleMouseEnter : undefined}
+            onMouseLeave={canHover ? () => setHovered(false) : undefined}
+            onClick={canHover ? undefined : () => (hovered ? setHovered(false) : handleMouseEnter())}
+            title={names.join(", ")} style={{
             minHeight: "1.55rem", padding: ".18rem .42rem", borderRadius: 999,
             border: "1px solid rgba(255,255,255,.12)", background: "rgba(31,31,35,.94)",
             display: "inline-flex", alignItems: "center", gap: ".28rem", lineHeight: 1, cursor: "default",
@@ -621,6 +669,7 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
     const button = (label, onClick, tone = "neutral") => (
         <button
             type="button"
+            className="oh-tap-row"
             disabled={busy}
             onClick={onClick}
             style={{
@@ -722,6 +771,16 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
     const flagUrl  = useCountryFlagUrl(isPlayer || isError ? {} : { code: msg.code, name: msg.speaker });
     const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
+    const isMobile = useIsMobile();
+    // The copy button comes with the pointer over the message, and nothing
+    // hovers on a touch screen: there a tap on the message shows it, until a
+    // second tap or a few seconds on, rather than one drawn beside every line.
+    const canHover = useCanHover();
+    useEffect(() => {
+        if (canHover || !hovered) return undefined;
+        const timer = setTimeout(() => setHovered(false), 4000);
+        return () => clearTimeout(timer);
+    }, [canHover, hovered]);
 
     const copyMessage = async () => {
         try {
@@ -736,7 +795,10 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
         <div style={{ position: "relative", maxWidth: isError ? "82%" : "min(70%, 42rem)", overflow: "visible" }}>
 
         {!isPlayer && !compact && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".34rem", fontSize: ".7rem", color: "rgba(255,255,255,.46)", marginBottom: ".28rem", whiteSpace: "nowrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".34rem", fontSize: ".7rem", color: "rgba(255,255,255,.46)", marginBottom: ".28rem",
+                // A phone's bubble is narrower than a long polity name on one
+                // line, which pushed the whole thread sideways.
+                whiteSpace: isMobile ? "normal" : "nowrap" }}>
             {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size=".95em" /><strong style={{ fontWeight: 650, color: "rgba(255,255,255,.58)" }}>{msg.speaker}</strong></>}
             </span>
         )}
@@ -747,7 +809,9 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
             </div>
         )}
 
-        <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)} style={{ position: "relative" }}>
+        <div onMouseEnter={canHover ? () => setHovered(true) : undefined} onMouseLeave={canHover ? () => setHovered(false) : undefined}
+            onClick={canHover || isError ? undefined : (event) => { if (!event.target.closest?.("a, button")) setHovered((shown) => !shown); }}
+            style={{ position: "relative" }}>
             <div data-no-translate={isPlayer ? "" : undefined} style={{
                 padding: ".62rem .82rem",
                 borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
@@ -760,7 +824,7 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
             {isPlayer ? msg.text : <Markdown className="chat-markdown">{msg.text}</Markdown>}
             </div>
             {!isError && hovered && (
-                <button type="button" onClick={copyMessage} title={copied ? "Copied" : "Copy message"} aria-label="Copy message" style={{
+                <button type="button" className="oh-tap" onClick={copyMessage} title={copied ? "Copied" : "Copy message"} aria-label="Copy message" style={{
                     position: "absolute", top: ".2rem", [isPlayer ? "right" : "left"]: "calc(100% + .35rem)",
                     width: "1.6rem", height: "1.6rem", borderRadius: 7, border: "1px solid rgba(255,255,255,.09)",
                     background: "rgba(24,24,27,.94)", color: copied ? "#86efac" : "rgba(255,255,255,.46)",
@@ -774,7 +838,7 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
         <ReactionStrip reactions={msg.reactions} align={isPlayer ? "right" : "left"} />
 
         {isError && onRetry && (
-            <button onClick={onRetry}
+            <button className="oh-tap-row" onClick={onRetry}
             style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.4rem", padding: "0.3rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: "0.75rem", fontWeight: 600, fontFamily: "sans-serif", cursor: "pointer", transition: "all 0.12s ease" }}
             onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.22)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.6)"; e.currentTarget.style.color = "#fecaca"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "rgba(239,68,68,0.12)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; e.currentTarget.style.color = "#fca5a5"; }}>
@@ -854,7 +918,7 @@ const LifecycleOutcomePanel = ({ cases = [], institution = null, concluded = fal
                     <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "#ddd6fe" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
                     {concluded && institution?.status && <div style={{ marginTop: ".14rem", fontSize: ".51rem", color: "rgba(255,255,255,.4)" }}>{institution.name || "Institution"} is now {String(institution.status).replace(/[-_]/g, " ")}.</div>}
                 </div>
-                {concluded && onViewInstitution && <button type="button" onClick={onViewInstitution} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ede9fe", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
+                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ede9fe", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: ".3rem", marginTop: ".45rem" }}>
                 {cases.map((entry) => {
@@ -953,7 +1017,7 @@ const CountrySelectorModal = ({
         <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
         <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
         </div>
-        <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
+        <button className="oh-tap" aria-label="Close" onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
         </div>
@@ -982,10 +1046,10 @@ const CountrySelectorModal = ({
         ))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+        <button className="oh-tap-row" onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
         onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
         onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
-        <button onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
+        <button className="oh-tap-row" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
         style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
@@ -1001,10 +1065,30 @@ const CountrySelectorModal = ({
 // 12rem at the default 16px root, matching the composer's max-height below.
 const COMPOSER_MAX_HEIGHT = 192;
 
+// Deleting a chat takes two presses (the list row, the conversation header),
+// and the first disarms again when the pointer leaves or the button loses focus,
+// so a half-pressed delete never sits waiting to catch a later click. A finger
+// does neither dependably: nothing hovers to leave, and iOS Safari never focuses
+// a tapped button. On a touch screen the first press disarms itself after a few
+// seconds instead, as the advisor's 🗑 does.
+const useTouchDisarm = (armed, setArmed) => {
+    const canHover = useCanHover();
+    useEffect(() => {
+        if (canHover || !armed) return undefined;
+        const timer = setTimeout(() => setArmed(false), 4000);
+        return () => clearTimeout(timer);
+    }, [armed, canHover, setArmed]);
+};
+
 const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, embeddedInstitution = false }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
+    useTouchDisarm(confirmingDelete, setConfirmingDelete);
+    // A finger is the pointer: the header's buttons and the send button are
+    // thumb-sized (the oh-tap classes), and the header trims its own padding
+    // so the thread keeps the height it had.
+    const isTouch = useTouchPrimary();
     const countries = useMemo(
         () => Array.isArray(chat?.countries)
             ? chat.countries.filter((country) => country && (country.name || country.code))
@@ -1183,7 +1267,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         requestAnimationFrame(() => {
             const el = composerRef.current;
             if (!el) return;
-            el.focus();
+            // Not on a touch screen: focus there raises the keyboard, which
+            // covers the letter the player is meant to read over first. A tap
+            // on the box brings it up when they want to edit.
+            if (!isTouchPrimary()) el.focus();
             // Caret at the end, so a stray keystroke appends rather than landing
             // in the middle of the letter — but scrolled to the TOP, because a
             // long letter is there to be read from its opening line.
@@ -1814,7 +1901,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <>
                 {/* Institutional councils are canonical records and intentionally expose no delete control. */}
                 <div style={{ display: "flex", alignItems: "center", gap: ".75rem", padding: ".75rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", flexShrink: 0 }}>
-                    <button onClick={onBack} aria-label="Back to institution" style={{ background: "none", border: 0, color: "rgba(255,255,255,.55)", cursor: "pointer", display: "flex", padding: ".22rem", borderRadius: 6 }}><BackIcon /></button>
+                    <button className="oh-tap" onClick={onBack} aria-label="Back to institution" style={{ background: "none", border: 0, color: "rgba(255,255,255,.55)", cursor: "pointer", display: "flex", padding: ".22rem", borderRadius: 6 }}><BackIcon /></button>
                     {institution && <InstitutionEmblem institution={institution} size={48} />}
                     <div style={{ minWidth: 0, flex: 1 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: ".45rem" }}>
@@ -1825,7 +1912,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                             {String(institution?.kind || "institution").replace(/[-_]/g, " ")}{institution?.shortName ? ` · ${institution.shortName}` : ""}{institution?.foundedDate ? ` · founded ${institution.foundedDate}` : ""}
                         </div>
                     </div>
-                    <button onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(147,197,253,.78)", padding: ".3rem", borderRadius: 6 }}><EnvelopeIcon filled={unread} /></button>
+                    <button className="oh-tap" onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(147,197,253,.78)", padding: ".3rem", borderRadius: 6 }}><EnvelopeIcon filled={unread} /></button>
                 </div>
                 {institutionView && <div style={{ padding: ".55rem 1rem", flexShrink: 0 }}><InstitutionFacts view={institutionView} /></div>}
                 <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: ".15rem", padding: "0 .7rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
@@ -1836,16 +1923,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ["charter", "Charter"],
                         ["members", "Members"],
                         ["documents", "Documents"],
-                    ].map(([key, label]) => <button key={key} onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(139,92,246,.95)" : "transparent"}`, background: "transparent", color: key === "council" ? "#ede9fe" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
+                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(139,92,246,.95)" : "transparent"}`, background: "transparent", color: key === "council" ? "#ede9fe" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
                 </div>
-                {institutionPendingActions > 0 && <button type="button" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
+                {institutionPendingActions > 0 && <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
                     <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{institutionPendingBallots ? `${institutionPendingBallots} ballot${institutionPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{institutionPendingBallots && institutionPendingAmendments ? " · " : ""}{institutionPendingAmendments ? `${institutionPendingAmendments} amendment review${institutionPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
                     <strong style={{ fontSize: ".6rem" }}>Review agenda →</strong>
                 </button>}
                 </>
             ) : null) : (
-                <div data-diplomacy-header="modern" style={{ display: "flex", alignItems: "center", gap: ".72rem", padding: ".72rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", background: "rgba(15,15,18,.26)", flexShrink: 0 }}>
-                <button onClick={onBack} aria-label="Back to diplomacy" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.58)", display: "flex", padding: ".26rem", borderRadius: 7 }}><BackIcon /></button>
+                <div data-diplomacy-header="modern" style={{ display: "flex", alignItems: "center",
+                    // On touch the gaps close up too: four thumb-sized buttons
+                    // .72rem apart left a phone's thread title under 60px.
+                    gap: isTouch ? ".35rem" : ".72rem", padding: isTouch ? ".35rem 1rem" : ".72rem 1rem", borderBottom: "1px solid rgba(255,255,255,.07)", background: "rgba(15,15,18,.26)", flexShrink: 0 }}>
+                <button className="oh-tap" onClick={onBack} aria-label="Back to diplomacy" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.58)", display: "flex", padding: ".26rem", borderRadius: 7 }}><BackIcon /></button>
                 <div style={{ display: "inline-flex", alignItems: "center", minWidth: headerCountries.length > 1 ? "2.5rem" : "1.55rem", paddingRight: headerCountries.length > 1 ? ".2rem" : 0, flexShrink: 0 }}>
                     {headerCountries.map((country, index) => (
                         <span key={`${country.name}-${country.code || index}`} style={{ display: "inline-flex", marginLeft: index ? "-.38rem" : 0, zIndex: headerCountries.length - index, filter: "drop-shadow(0 1px 2px rgba(0,0,0,.45))" }}>
@@ -1859,9 +1949,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         {isLifecycleConversation ? (lifecycleNegotiationConcluded ? "Institution membership negotiation · concluded" : "Institution membership negotiation") : isGroup ? `${participantCount}-party diplomatic channel` : "Direct diplomatic channel"}
                     </div>
                 </div>
-                <button onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,.7)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}><EnvelopeIcon filled={unread} /></button>
-                <button title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"} aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"} onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }} onBlur={() => setConfirmingDelete(false)} style={{ display: "flex", alignItems: "center", gap: ".3rem", background: confirmingDelete ? "rgba(239,68,68,.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,.62)", fontSize: ".72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? ".25rem .5rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>{confirmingDelete ? "Delete?" : <TrashIcon />}</button>
-                <button onClick={onBack} aria-label="Close conversation" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.4)", fontSize: "1rem", lineHeight: 1, padding: ".28rem .34rem", borderRadius: 7 }}>✕</button>
+                <button className="oh-tap" onClick={() => onToggleRead?.()} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"} style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,.7)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}><EnvelopeIcon filled={unread} /></button>
+                <button className="oh-tap" title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"} aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"} onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }} onBlur={() => setConfirmingDelete(false)} style={{ display: "flex", alignItems: "center", gap: ".3rem", background: confirmingDelete ? "rgba(239,68,68,.18)" : "none", border: `1px solid ${confirmingDelete ? "rgba(239,68,68,.55)" : "transparent"}`, cursor: "pointer", color: confirmingDelete ? "#fca5a5" : "rgba(239,68,68,.62)", fontSize: ".72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirmingDelete ? ".25rem .5rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>{confirmingDelete ? "Delete?" : <TrashIcon />}</button>
+                <button className="oh-tap" onClick={onBack} aria-label="Close conversation" style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,.4)", fontSize: "1rem", lineHeight: 1, padding: ".28rem .34rem", borderRadius: 7 }}>✕</button>
                 </div>
             )}
 
@@ -1874,6 +1964,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             {hiddenMessageCount > 0 && (
                 <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => setVisibleMessageLimit((current) => current + CHAT_RENDER_WINDOW_STEP)}
                     style={{
                         alignSelf: "center",
@@ -1945,12 +2036,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 </p>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
+                className="oh-tap-row"
                 onClick={handleSpeakInstead}
                 style={{ flex: 1, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.11)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
                 onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
                 >{isInstitutionCouncil ? "Speak instead" : "Speak"}</button>
                 <button
+                className="oh-tap-row"
                 onClick={handleLetSpeak}
                 style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
@@ -1966,22 +2059,23 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
-                    <button type="button" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
+                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
                 </div>}
                 {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleTerminal || lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
                 {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid rgba(167,139,250,.16)", borderRadius: 9, background: "rgba(139,92,246,.055)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
                     <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "#ddd6fe" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
                     {playerLifecycleCase ? <div data-player-lifecycle-chat-controls="true" style={{ display: "flex", gap: ".28rem", flexWrap: "wrap" }}>
-                        <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
-                        <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ddd6fe", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
-                        <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
-                        <button type="button" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
-                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ddd6fe", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
+                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
                 </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canDemand && (
                         <button
                         type="button"
+                        className="oh-tap"
                         onClick={() => setMakeDemand((on) => !on)}
                         aria-pressed={makeDemand}
                         title={makeDemand ? "This message is a demand. Click to send it as an ordinary message." : `Make this message a demand of ${countries[0]?.name}`}
@@ -1995,12 +2089,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     onChange={e => setPlayerInput(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
                     onInput={fitComposer}
-                    style={{ flex: 1, backgroundColor: isInstitutionCouncil ? "rgba(0,0,0,0.2)" : "rgba(9,9,12,.58)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", color: "white", fontSize: "0.875rem", padding: ".62rem .78rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", boxShadow: "inset 0 1px 0 rgba(255,255,255,.025)", transition: "border-color 0.2s, background-color .2s" }}
+                    // On a touch screen the keyboard takes up to half the screen,
+                    // and the panel shrinks with it: a composer grown to 12rem then
+                    // pushed the send button out of the bottom. There it stops at a
+                    // quarter of the visible height (never under one line) and
+                    // scrolls past that.
+                    style={{ flex: 1, backgroundColor: isInstitutionCouncil ? "rgba(0,0,0,0.2)" : "rgba(9,9,12,.58)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", color: "white", fontSize: "0.875rem", padding: ".62rem .78rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", boxShadow: "inset 0 1px 0 rgba(255,255,255,.025)", transition: "border-color 0.2s, background-color .2s" }}
                     onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(139,92,246,.65)" : "rgba(59,130,246,0.6)"}
                     onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                     />
-                    <button onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "rgba(91,33,182,.85)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(91,33,182,.28)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid rgba(167,139,250,.26)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    {/* An inline min-width beats the class's, so the icon-only
+                        button is widened to a thumb here, not by oh-tap. */}
+                    <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "rgba(91,33,182,.85)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(91,33,182,.28)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid rgba(167,139,250,.26)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
                 <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
@@ -2415,6 +2516,12 @@ const usePuppetMarkers = () => {
 const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
     const [hovered, setHovered] = React.useState(false);
     const [confirming, setConfirming] = React.useState(false);
+    useTouchDisarm(confirming, setConfirming);
+    // The row's own buttons appear on hover, and nothing hovers on a touch
+    // screen: there they are always drawn, and the row's text stops short of
+    // them rather than running underneath.
+    const canHover = useCanHover();
+    const showActions = hovered || !canHover;
     const counterparts = diplomaticCounterparts(chat?.countries, playerCountry);
     const previewCountries = counterparts.slice(0, 4);
     const flagUrlMap = useCountryFlagUrls(previewCountries);
@@ -2429,7 +2536,7 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
         <button data-diplomacy-thread-row="modern" onClick={onClick} style={{
-            width: "100%", padding: ".76rem 3rem .76rem .9rem", borderRadius: 12,
+            width: "100%", padding: canHover ? ".76rem 3rem .76rem .9rem" : ".76rem 6.7rem .76rem .9rem", borderRadius: 12,
             border: `1px solid ${hovered ? "rgba(255,255,255,.13)" : unread ? "rgba(96,165,250,.15)" : "rgba(255,255,255,.07)"}`,
             background: hovered ? "rgba(255,255,255,.065)" : unread ? "rgba(59,130,246,.035)" : "rgba(255,255,255,.025)",
             display: "flex", alignItems: "center", gap: ".78rem", cursor: "pointer",
@@ -2457,14 +2564,14 @@ const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, un
             </div>
         </button>
         <div style={{ position: "absolute", top: "50%", right: ".72rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: ".28rem" }}>
-            {!hovered && <span aria-hidden="true" style={{ color: "rgba(255,255,255,.2)", fontSize: "1rem", lineHeight: 1 }}>›</span>}
-            {hovered && (
+            {!showActions && <span aria-hidden="true" style={{ color: "rgba(255,255,255,.2)", fontSize: "1rem", lineHeight: 1 }}>›</span>}
+            {showActions && (
                 <>
-                <button onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
+                <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }} title={unread ? "Mark as read" : "Mark as unread"} aria-label={unread ? "Mark as read" : "Mark as unread"}
                 style={{ display: "flex", alignItems: "center", background: "rgba(24,24,27,.86)", border: "1px solid rgba(255,255,255,.08)", cursor: "pointer", color: "rgba(96,165,250,.78)", padding: ".3rem", borderRadius: 7, lineHeight: 1 }}>
                     <EnvelopeIcon filled={unread} />
                 </button>
-                <button onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
+                <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) onDelete(); else setConfirming(true); }} title={confirming ? "Click again to delete this chat" : "Delete chat"} aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
                 style={{ display: "flex", alignItems: "center", gap: ".28rem", background: confirming ? "rgba(239,68,68,.18)" : "rgba(24,24,27,.86)", border: `1px solid ${confirming ? "rgba(239,68,68,.55)" : "rgba(255,255,255,.08)"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,.68)", fontSize: ".68rem", fontWeight: 650, padding: confirming ? ".3rem .48rem" : ".3rem", borderRadius: 7, lineHeight: 1 }}>
                     {confirming ? "Delete?" : <TrashIcon />}
                 </button>
@@ -2546,7 +2653,7 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
     return (
         <>
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-        <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
+        <button className="oh-tap" onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
         <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>🕵 {target} ↔ {exchange.counterpart}</div>
         <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</div>
@@ -2708,7 +2815,7 @@ const WorkspaceTabIcon = ({ type, size = 14 }) => {
     return <svg {...common}><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z" /><path d="M8 9h8M8 13h5" /></svg>;
 };
 
-const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
+const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
     const unseen                      = useUnseenEventIds();
@@ -2721,6 +2828,10 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
     const [countryQuery, setCountryQuery] = useState("");
     const [selectedCountry, setSelectedCountry] = useState("");
     const [expandedReport, setExpandedReport] = useState("");
+    // On a phone, Back closes the target picker before the panel under it
+    // (runtime/backToClose.js). Only while the panel shows: a closed panel keeps
+    // this view, and its picker, mounted off-screen.
+    useBackToClose(panelOpen && choosing, () => setChoosing(false));
 
     useEffect(() => { void refreshRuntimeState(["world", "intercepts"]); }, []);
     useEffect(() => { void ensureCountryAssessed(playerCountry, { reason: "intelligence workspace" }); }, [playerCountry]);
@@ -2862,8 +2973,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                         {spy.status === "discovered" ? "agent in custody — decide what to do" : `double agent since ${spy.turnedAt || "capture"} — ${spy.owner} still trusts them`}
                     </div>
                 </div>
-                {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
-                {spy.status === "discovered" && <button onClick={() => handleTurn(spy)} style={spyBtn(true)}>{storyOf(spy) ? "Turn & plant story" : "Turn"}</button>}
+                {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+                {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleTurn(spy)} style={spyBtn(true)}>{storyOf(spy) ? "Turn & plant story" : "Turn"}</button>}
             </div>
             {spy.status !== "exposed" && (
                 <div style={{ marginTop: ".5rem", display: "flex", gap: ".4rem", alignItems: "center" }}>
@@ -2871,7 +2982,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                     {spy.status === "turned" && (() => {
                         const unchanged = storyOf(spy) === spy.coverStory;
                         const justSaved = savedFlash === spy.id;
-                        return <button onClick={() => handleStory(spy)} disabled={unchanged && !justSaved} style={{ ...spyBtn(true), ...(unchanged && !justSaved ? { opacity: .45, cursor: "default" } : {}) }}>{justSaved ? "Saved ✓" : "Save"}</button>;
+                        return <button className="oh-tap-row" onClick={() => handleStory(spy)} disabled={unchanged && !justSaved} style={{ ...spyBtn(true), ...(unchanged && !justSaved ? { opacity: .45, cursor: "default" } : {}) }}>{justSaved ? "Saved ✓" : "Save"}</button>;
                     })()}
                 </div>
             )}
@@ -2886,7 +2997,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         <div data-intelligence-workspace="restored" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", gap: ".35rem", alignItems: "center", padding: ".65rem 1rem .55rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
                 {navItems.map(([key, label]) => (
-                    <button key={key} onClick={() => setSection(key)} style={{ padding: ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
+                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
                 ))}
             </div>
 
@@ -2909,7 +3020,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                             <div style={{ fontSize: ".75rem", fontWeight: 750 }}>Recent intelligence</div>
                             <div style={{ marginTop: ".45rem", display: "flex", flexDirection: "column", gap: ".38rem" }}>
                                 {recentItems.length ? recentItems.slice(0, 4).map((item, index) => (
-                                    <button key={`${item.kind}-${item.title}-${index}`} onClick={() => { if (item.kind === "intercept") setOpen({ target: item.target, exchange: item.exchange }); else if (item.kind === "assessment") { setSelectedCountry(item.target); setSection("countries"); } else { setExpandedReport(item.report?.id || ""); setSection("reports"); } }} style={{ padding: ".42rem .5rem", borderRadius: 7, border: "1px solid rgba(255,255,255,.06)", background: "rgba(255,255,255,.02)", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                                    <button key={`${item.kind}-${item.title}-${index}`} className="oh-tap-row" onClick={() => { if (item.kind === "intercept") setOpen({ target: item.target, exchange: item.exchange }); else if (item.kind === "assessment") { setSelectedCountry(item.target); setSection("countries"); } else { setExpandedReport(item.report?.id || ""); setSection("reports"); } }} style={{ padding: ".42rem .5rem", borderRadius: 7, border: "1px solid rgba(255,255,255,.06)", background: "rgba(255,255,255,.02)", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
                                         <div style={{ display: "flex", gap: ".45rem", alignItems: "baseline" }}><strong style={{ fontSize: ".65rem", flex: 1 }}>{item.title}</strong>{item.meta && <span style={{ fontSize: ".55rem", color: "rgba(255,255,255,.3)" }}>{item.meta}</span>}</div>
                                         <div style={{ marginTop: ".15rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.text}</div>
                                     </button>
@@ -2929,7 +3040,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                                 const active = sameCountry(country.name, selectedCountryRecord?.name);
                                 const network = spies.some((spy) => sameCountry(spy.target, country.name));
                                 return (
-                                    <button key={country.name} onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "rgba(167,139,250,.32)" : "transparent"}`, background: active ? "rgba(139,92,246,.12)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
+                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "rgba(167,139,250,.32)" : "transparent"}`, background: active ? "rgba(139,92,246,.12)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".68rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{country.name}</span>
                                         {network && <span title="Active intelligence network" style={{ width: ".38rem", height: ".38rem", borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />}
                                     </button>
@@ -2979,15 +3090,15 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                     {spies.length === 0 ? <div style={{ fontSize: ".68rem", color: "rgba(255,255,255,.34)", padding: ".25rem" }}>No networks are currently in the field.</div> : spies.map((spy) => (
                         <div key={spy.id} style={{ ...panel, padding: ".55rem .7rem", display: "flex", alignItems: "center", gap: ".5rem" }}>
                             <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: ".76rem", fontWeight: 750 }}>{spy.target}</div><div style={{ marginTop: ".12rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)" }}>since {spy.deployedAt || "an earlier date"} · network {networkQualityLabel(signalClarity(myIntel, intelligenceOf(world, spy.target)), true).toLowerCase()}{spy.suspected ? " · source integrity concern" : ""}</div></div>
-                            <button onClick={() => { setSelectedCountry(spy.target); setSection("countries"); }} style={spyBtn(false)}>Dossier</button>
-                            <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+                            <button className="oh-tap-row" onClick={() => { setSelectedCountry(spy.target); setSection("countries"); }} style={spyBtn(false)}>Dossier</button>
+                            <button className="oh-tap-row" onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
                         </div>
                     ))}
                     {history.length > 0 && <div style={{ fontSize: ".61rem", color: "rgba(255,255,255,.34)", fontStyle: "italic" }}>{history.map((spy) => `Agent expelled by ${spy.target}${spy.exposedAt ? ` on ${spy.exposedAt}` : ""}`).join(" · ")}</div>}
                     <div style={{ ...subhead, marginTop: ".15rem" }}>Counterintelligence cases</div>
                     {visibleForeign.length ? visibleForeign.map(renderCounterintelCase) : <div style={{ ...panel, padding: ".7rem", fontSize: ".66rem", color: "rgba(255,255,255,.34)" }}>No detected foreign agents currently require action.</div>}
                     {error && <div style={{ fontSize: ".66rem", color: "#fca5a5" }}>{error}</div>}
-                    <button onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#e9d5ff", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
+                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#e9d5ff", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
                 </div>
             )}
 
@@ -2995,7 +3106,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                 <div data-intelligence-section="reports" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".75rem .85rem", display: "flex", flexDirection: "column", gap: ".7rem" }}>
                     <div style={subhead}>Political assessments</div>
                     {assessedEntries.length ? assessedEntries.map(([target, entry]) => (
-                        <button key={`assessment-${target}`} onClick={() => { setSelectedCountry(target); setSection("countries"); }} style={{ ...panel, padding: ".6rem .7rem", color: "white", textAlign: "left", cursor: "pointer", fontFamily: "sans-serif" }}>
+                        <button key={`assessment-${target}`} className="oh-tap-row" onClick={() => { setSelectedCountry(target); setSection("countries"); }} style={{ ...panel, padding: ".6rem .7rem", color: "white", textAlign: "left", cursor: "pointer", fontFamily: "sans-serif" }}>
                             <div style={{ display: "flex", gap: ".5rem", alignItems: "baseline" }}><strong style={{ flex: 1, fontSize: ".7rem" }}>{target}</strong><span style={{ fontSize: ".57rem", color: "rgba(255,255,255,.3)" }}>{entry.politicalAssessment?.gatheredAt || entry.gatheredAt || ""}</span></div>
                             <div style={{ marginTop: ".2rem", fontSize: ".62rem", color: "rgba(255,255,255,.47)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.politicalAssessment?.summary || "Political assessment on file"}</div>
                         </button>
@@ -3003,7 +3114,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
 
                     <div style={{ ...subhead, marginTop: ".2rem" }}>Intercepted traffic</div>
                     {Object.values(intercepts).some((entry) => (entry?.exchanges || []).some((exchange) => !isDocumentExchange(exchange))) ? Object.entries(intercepts).flatMap(([target, entry]) => (entry.exchanges || []).filter((exchange) => !isDocumentExchange(exchange)).map((exchange) => (
-                        <button key={`${target}-${exchange.id}`} onClick={() => { setOpen({ target, exchange }); void ensureCountryAssessed(target, { reason: "intercept read" }); }} style={{ ...panel, padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".55rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                        <button key={`${target}-${exchange.id}`} className="oh-tap-row" onClick={() => { setOpen({ target, exchange }); void ensureCountryAssessed(target, { reason: "intercept read" }); }} style={{ ...panel, padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".55rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
                             <span aria-hidden="true" style={{ fontSize: ".9rem" }}>{isDocumentExchange(exchange) ? "📄" : "📡"}</span>
                             <span style={{ flex: 1, minWidth: 0 }}><strong style={{ display: "block", fontSize: ".69rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{target} ↔ {exchange.counterpart}</strong><span style={{ display: "block", marginTop: ".1rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{exchange.subject}{exchange.date ? ` · ${exchange.date}` : ""}</span></span>
                         </button>
@@ -3013,7 +3124,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                     {readableReports.length ? readableReports.map((report) => {
                         const openReport = expandedReport === report.id;
                         return (
-                            <button key={report.id} onClick={() => setExpandedReport(openReport ? "" : report.id)} style={{ ...panel, padding: ".6rem .7rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
+                            <button key={report.id} className="oh-tap-row" onClick={() => setExpandedReport(openReport ? "" : report.id)} style={{ ...panel, padding: ".6rem .7rem", color: "white", cursor: "pointer", textAlign: "left", fontFamily: "sans-serif" }}>
                                 <div style={{ display: "flex", gap: ".5rem", alignItems: "baseline" }}><strong style={{ flex: 1, fontSize: ".69rem" }}>{report.title}</strong><span style={{ fontSize: ".57rem", color: "rgba(255,255,255,.3)" }}>{report.dateline || report.createdDate || ""}</span></div>
                                 <div style={{ marginTop: ".15rem", fontSize: ".59rem", color: "rgba(255,255,255,.4)" }}>{report.from ? `From ${report.from} · ` : ""}{report.visibleTo === null ? "published" : report.interceptedBy?.some((name) => sameCountry(name, playerCountry)) && !report.visibleTo?.some((name) => sameCountry(name, playerCountry)) ? "intercepted copy" : "held by your government"}</div>
                                 {openReport && <div style={{ marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)", fontSize: ".64rem", lineHeight: 1.55, color: "rgba(255,255,255,.62)", whiteSpace: "pre-wrap" }}>{report.body}</div>}
@@ -3044,6 +3155,14 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const [activeChat, setActiveChat]             = useState(null);
     const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
     const [showSelector, setShowSelector]         = useState(false);
+    // On a phone, Back closes the country picker before the panel under it
+    // (runtime/backToClose.js; main.jsx does the panel). Only while the panel
+    // shows: closing the panel leaves the picker as it was, off-screen.
+    useBackToClose(isOpen && showSelector, () => setShowSelector(false));
+    // A finger is the pointer: the workspace header's tabs and ✕ are
+    // thumb-sized (the header trims its padding to give back some of the
+    // height that takes), and the panel fits the screen a phone shows (below).
+    const isTouch = useTouchPrimary();
     // A letter the advisor drafted, waiting for the conversation it belongs to to
     // mount. Tied to a chat id so navigating to a DIFFERENT chat never inherits it.
     const [composerDraft, setComposerDraft]       = useState(null);
@@ -3513,7 +3632,18 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return (
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            {/* Laid out against the dock, not the screen: the dock's
+                backdrop-filter makes it this fixed panel's containing block,
+                so left and bottom are measured from the dock, which keeps in
+                from a notch and up from the home indicator itself. On a touch
+                screen the panel fits what a phone shows: the visible height
+                (100vh runs under a browser's bars, and took the header and its
+                ✕ off the top), less the insets top and bottom; a width that
+                leaves 0.5rem at the right, since it starts 1rem in (the dock's
+                0.5rem, then its own); and a 10rem floor, as 24rem is taller
+                than a phone held sideways. Every inset is 0 on a desktop. */}
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+                ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 8rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
@@ -3525,7 +3655,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} />
             ) : (
                 <>
-                <div data-diplomacy-workspace-header="modern" style={{ padding: ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+                <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: ".75rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
                             <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#ddd6fe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
@@ -3534,17 +3664,19 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 <div style={{ marginTop: ".13rem", fontSize: ".56rem", color: "rgba(255,255,255,.32)" }}>Conversations, institutions and statecraft</div>
                             </div>
                         </div>
-                        <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
+                        <button className="oh-tap" aria-label="Close diplomacy panel" onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                     </div>
-                    <div style={{ display: "flex", gap: ".35rem", marginTop: ".55rem" }}>
+                    {/* Three tabs are wider than a phone's header: there the
+                        last one wraps under rather than being cut off. */}
+                    <div style={{ display: "flex", gap: ".35rem", marginTop: ".55rem", ...(isTouch ? { flexWrap: "wrap" } : {}) }}>
                         {[
                             ["chats", "contacts", "Contacts", chatUnreadCount],
                             ["institutions", "institutions", "Institutions", institutionUnreadCount],
                             ...(espionageOn ? [["spy", "intelligence", "Intelligence", 0]] : []),
                         ].map(([key, iconType, label, count]) => (
-                            <button key={key} onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,.07)"), background: currentView === key ? "rgba(139,92,246,0.20)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
+                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,.07)"), background: currentView === key ? "rgba(139,92,246,0.20)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
                                 <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}><WorkspaceTabIcon type={iconType} size={13} /></span>
                                 <span>{label}</span>
                                 {Number(count) > 0 && <span style={{ minWidth: "1.05rem", height: "1.05rem", padding: "0 .25rem", borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: currentView === key ? "rgba(255,255,255,.14)" : "rgba(96,165,250,.16)", color: currentView === key ? "#fff" : "#93c5fd", fontSize: ".57rem", fontWeight: 800 }}>{count}</span>}
@@ -3553,7 +3685,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     </div>
                 </div>
                 {currentView === "spy" ? (
-                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} />
+                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} panelOpen={isOpen} />
                 ) : currentView === "institutions" ? (
                     <InstitutionsWorkspace
                         world={worldSnapshot}
@@ -3591,12 +3723,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     rather than above the tab switch. */}
                 {openChats.length > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
-                    <button onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
+                    <button className="oh-tap-row" onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
                     {showUnreadOnly && <span style={{ width: "0.4rem", height: "0.4rem", borderRadius: "50%", background: "#60a5fa" }} />}
                     Unread{unreadIds.size > 0 ? ` (${unreadIds.size})` : ""}
                     </button>
                     {unreadIds.size > 0 && (
-                        <button onClick={markAllRead} style={{ background: "none", border: "none", color: "rgba(96,165,250,0.75)", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, padding: "0.2rem" }}
+                        <button className="oh-tap-row" onClick={markAllRead} style={{ background: "none", border: "none", color: "rgba(96,165,250,0.75)", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, padding: "0.2rem" }}
                         onMouseEnter={e => e.currentTarget.style.color = "rgba(96,165,250,1)"}
                         onMouseLeave={e => e.currentTarget.style.color = "rgba(96,165,250,0.75)"}>
                         Mark all read
@@ -3622,7 +3754,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ))}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
@@ -3663,6 +3795,15 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const notificationPollStatsRef = useRef({ chatsChecked: 0, messagesInspected: 0, changedChats: 0 });
     const toastTimersRef = useRef(new Map());
     const notificationSeqRef = useRef(0);
+    const isMobile = useIsMobile();
+    const isTouch = useTouchPrimary();
+    // On a phone, Back closes the notification list (runtime/backToClose.js).
+    // "Open" is what is on screen: the list is not drawn while the panel or
+    // the main menu is, even if its flag is still set.
+    useBackToClose(
+        notificationCenterOpen && notificationItems.length > 0 && !isOpen && !mainMenuOpen,
+        () => setNotificationCenterOpen(false),
+    );
 
     // "Someone might be typing": isChatGenerationLikely() is a plain synchronous
     // getter (an idle poll rolling for a diplomatic note), not an event —
@@ -4181,13 +4322,23 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             <div
                 style={{
                     position: "fixed",
-                    top: "4.35rem",
+                    // Clear of the notch: below a status bar the page is drawn
+                    // under, and in from the side a phone held sideways has its
+                    // notch on. Every inset is 0 where there is nothing to avoid.
+                    top: `calc(4.35rem + ${SAFE_TOP})`,
                     left: "auto",
-                    // Advisor and Stats share the same resizable right drawer.
-                    // That drawer publishes its live width as a CSS variable so
-                    // diplomatic toasts can remain top-right without covering it.
-                    right: "calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem)",
-                    width: "min(23rem, calc(100vw - 2rem))",
+                    // Advisor and Stats share the same resizable right drawer,
+                    // and the toasts were meant to sit left of it: the drawer
+                    // was to publish its live width as this variable. Nothing
+                    // sets it on this line (the setter was in advisor.jsx on the
+                    // Continuum checkpoint and never came across), so it is 0
+                    // and the toasts sit at the right edge, over an open drawer.
+                    // On a phone the drawer is the whole screen, with nothing
+                    // beside it, so there the offset is left out.
+                    right: isMobile
+                        ? `calc(0.75rem + ${SAFE_RIGHT})`
+                        : `calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem + ${SAFE_RIGHT})`,
+                    width: `min(23rem, calc(100vw - 2rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
                     zIndex: 10050,
                     pointerEvents: "none",
                     display: "flex",
@@ -4195,7 +4346,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     gap: "0.55rem",
                 }}
             >
-                {!isOpen && toastItems.map((item) => (
+                {/* A phone shows the newest toast only. Four stacked covered
+                    most of its screen, and caught every tap there, for their
+                    twelve seconds; held sideways it had room for two. The 🔔
+                    keeps every one. */}
+                {!isOpen && (isMobile || isTouch ? toastItems.slice(-1) : toastItems).map((item) => (
                     <div
                         key={item.id}
                         role={item.chatId ? "button" : undefined}
@@ -4221,7 +4376,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             backdropFilter: "blur(26px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(26px) saturate(1.35)",
                             color: "white",
-                            padding: "0.75rem 2.35rem 0.75rem 0.85rem",
+                            // Room for the ✕, which is thumb-sized on touch.
+                            padding: isTouch ? "0.75rem 3.3rem 0.75rem 0.85rem" : "0.75rem 2.35rem 0.75rem 0.85rem",
                             boxShadow: "0 14px 38px rgba(0,0,0,0.42)",
                             cursor: item.chatId ? "pointer" : "default",
                             fontFamily: "sans-serif",
@@ -4230,6 +4386,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     >
                         <button
                             type="button"
+                            className="oh-tap"
                             aria-label="Dismiss diplomatic notification"
                             title="Dismiss"
                             onClick={(event) => {
@@ -4283,8 +4440,10 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                         // The V2 command dock now owns the bottom-left edge. Keep the
                         // notification center immediately above it instead of colliding
                         // with / disappearing underneath the dock.
-                        left: FLOATING_UI_EDGE_GAP,
-                        bottom: "4.55rem",
+                        // In from a notch and up from the home indicator, as the
+                        // dock under it is (0 elsewhere).
+                        left: `calc(${FLOATING_UI_EDGE_GAP} + ${SAFE_LEFT})`,
+                        bottom: `calc(4.55rem + ${SAFE_BOTTOM})`,
                         zIndex: 10050,
                         fontFamily: "sans-serif",
                     }}
@@ -4295,8 +4454,19 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                 position: "absolute",
                                 left: 0,
                                 bottom: "3rem",
-                                width: "min(22rem, calc(100vw - 1rem))",
-                                maxHeight: "min(27rem, calc(100vh - 7rem))",
+                                // It starts 0.75rem in, so the same 0.75rem is left
+                                // at the right: `100vw - 1rem` put it 0.25rem from
+                                // the edge of a phone.
+                                width: `min(22rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
+                                // It opens upward from 7.55rem above the bottom (the
+                                // bell's 4.55rem, then 3rem), so on a short screen it
+                                // may be the rest of it and no more: `- 7rem` ran it
+                                // 0.55rem off the top whenever the cap bit (a phone
+                                // held sideways, or with its browser bars showing),
+                                // and the top of its header with it.
+                                maxHeight: isMobile || isTouch
+                                    ? `min(27rem, calc(${APP_HEIGHT} - 8rem - ${SAFE_TOP}))`
+                                    : `min(27rem, calc(${APP_HEIGHT} - 7rem))`,
                                 overflowY: "auto",
                                 borderRadius: "16px",
                                 border: "1px solid rgba(230,230,233,0.18)",
@@ -4326,13 +4496,16 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                     Diplomatic messages ({notificationItems.length})
                                 </strong>
                                 <button
+                                    className="oh-tap"
                                     onClick={toggleSound}
                                     title={soundEnabled ? "Mute diplomacy notification sound" : "Enable diplomacy notification sound"}
+                                    aria-label={soundEnabled ? "Mute diplomacy notification sound" : "Enable diplomacy notification sound"}
                                     style={{ border: "none", background: "transparent", color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.82rem" }}
                                 >
                                     {soundEnabled ? "🔊" : "🔇"}
                                 </button>
                                 <button
+                                    className="oh-tap-row"
                                     onClick={enableDesktop}
                                     title="Desktop notification permission"
                                     style={{
@@ -4346,6 +4519,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                     {desktopPermission === "granted" ? "Desktop ✓" : "Desktop"}
                                 </button>
                                 <button
+                                    className="oh-tap-row"
                                     onClick={() => {
                                         setNotificationItems([]);
                                         setNotificationCenterOpen(false);
@@ -4386,6 +4560,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     </Presence>
 
                     <button
+                        className="oh-tap"
                         onClick={() => setNotificationCenterOpen((open) => !open)}
                         title="Diplomatic notifications"
                         style={{
@@ -4479,13 +4654,17 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     const [hoveredProjects, setHoveredProjects] = useState(false);
+    // A tap fires mouseenter, and on a touch screen nothing fires mouseleave
+    // after it, so a launcher tapped once stayed lit and raised as if the
+    // pointer were still over it. There the hover look is left out.
+    const canHover = useCanHover();
     // The dock grows by one button per launcher; its geometry lives in hudDock.js
     // so the Search control beside it moves with it.
     return (
-        <div style={{ position: "fixed", bottom: `${DOCK_BOTTOM_REM}rem`, left: `${DOCK_LEFT_REM}rem`, height: `${DOCK_HEIGHT_REM}rem`, width: DOCK_WIDTH, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
-        <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
-        <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
-        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
+        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: DOCK_WIDTH, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
+        <Chat hovered={canHover && hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
+        <Actions onOpenAdvisor={onOpenAdvisor} hovered={canHover && hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
+        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={canHover && hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
         </div>
     );
 });

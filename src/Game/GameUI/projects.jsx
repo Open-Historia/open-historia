@@ -34,6 +34,7 @@
 // runtime/projects.js, NOT read off what the model last wrote. That is what keeps
 // the board honest between AI turns.
 import React, { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { APP_HEIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 
 import { getNationFlags } from "../../runtime/assets.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -229,6 +230,7 @@ const Pill = ({ children, color, bg, title }) => (
 const Chip = ({ active, children, onClick, title }) => (
   <button
     type="button"
+    className="oh-tap-row"
     title={title}
     onClick={onClick}
     style={{
@@ -354,8 +356,10 @@ const PrioritySwitch = ({ busy, onSelect, value }) => (
         <button
           key={option.key}
           type="button"
+          className="oh-tap"
           disabled={busy}
           title={option.label}
+          aria-label={option.label}
           aria-pressed={active}
           onClick={() => onSelect(option.key)}
           style={{
@@ -394,6 +398,15 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
   useEffect(() => {
     if (!open) setConfirmingAbandon(false);
   }, [open]);
+  // The blur that disarms it with a mouse never comes on a phone (iOS does
+  // not focus a tapped button), so there the question lapses after four
+  // seconds instead of staying primed for a stray tap.
+  const isTouch = useTouchPrimary();
+  useEffect(() => {
+    if (!confirmingAbandon || !isTouch) return undefined;
+    const timer = setTimeout(() => setConfirmingAbandon(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmingAbandon, isTouch]);
   const timeline = describeTimeline(project, gameDate);
   const secrecy = SECRECY_GLYPH[project.secrecy];
   // A blank ownerCode means the player (see isPlayerProject) — so their own cards
@@ -566,6 +579,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.6rem" }}>
         <button
           type="button"
+          className="oh-tap-row"
           style={ghostButtonStyle}
           onClick={() => onAskAdvisor(mine
             ? buildBriefPrompt(project)
@@ -582,6 +596,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         {!mine && open && (
           <button
             type="button"
+            className="oh-tap-row"
             style={ghostButtonStyle}
             onClick={() => onAskAdvisor(buildCounterPrompt(project, ownerLabel))}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(249,115,22,0.25)"; }}
@@ -593,6 +608,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         {hasFocus && (
           <button
             type="button"
+            className="oh-tap-row"
             style={ghostButtonStyle}
             onClick={() => onShowOnMap(project)}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(59,130,246,0.25)"; }}
@@ -604,6 +620,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
         {project.eventIds.length > 0 && (
           <button
             type="button"
+            className="oh-tap-row"
             style={ghostButtonStyle}
             onClick={() => onToggleExpand(project.id)}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.12)"; }}
@@ -654,6 +671,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
           />
           <button
             type="button"
+            className="oh-tap-row"
             disabled={busy}
             title="Close this out. It stays on the board under Closed, keeping the progress it reached."
             onClick={() => {
@@ -758,6 +776,11 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
   const [pendingId, setPendingId] = useState("");
 
   const isMobile = useIsMobile();
+  const isTouch = useTouchPrimary();
+  // On a phone, either way up, the filters scroll away with the cards. Held
+  // fixed above them, with every chip finger-sized, they took most of a
+  // portrait panel and all of a landscape one, leaving the cards no room.
+  const scrollAsOne = isMobile || isTouch;
 
   // Author-set flags (the scenario's flags.json), fetched once. Not in the poll:
   // it is a static asset, and getNationFlags memoizes it anyway.
@@ -1014,7 +1037,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         fontFamily: "sans-serif",
         // Same sizing rule as the Actions panel: use what a tall screen offers,
         // never below a usable 30rem, never into the 9rem the top HUD needs.
-        height: "min(calc(100vh - 9rem), max(calc(100vh - 16rem), 30rem))",
+        height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`,
         left: "0rem",
         maxWidth: "calc(100vw - 1rem)",
         minHeight: "10rem",
@@ -1045,6 +1068,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         </span>
         <button
           type="button"
+          className="oh-tap"
           onClick={onClose}
           aria-label="Close"
           style={{
@@ -1060,6 +1084,13 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         </button>
       </div>
 
+      {/* On a phone, the one scroller for everything under the header. On a
+          desktop it is not there as far as layout goes (display: contents),
+          so its children keep the panel's indentation. */}
+      <div style={scrollAsOne
+        ? { display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent" }
+        : { display: "contents" }}
+      >
       {!isEmptyBoard && (
         <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", padding: "0.6rem 1rem 0.7rem" }}>
           <div style={{ position: "relative" }}>
@@ -1095,6 +1126,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
 
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
             <select
+              className="oh-tap-row"
               value={sortKey}
               onChange={(event) => setSortKey(event.target.value)}
               style={selectStyle}
@@ -1161,7 +1193,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         </div>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem", flex: 1, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", padding: "0.75rem 1rem 1rem" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.55rem", ...(scrollAsOne ? { flexShrink: 0 } : { flex: 1, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent" }), padding: "0.75rem 1rem 1rem" }}>
         {!hasLoaded && (
           <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.75rem", padding: "1rem 0", textAlign: "center" }}>
             Loading…
@@ -1190,6 +1222,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             </p>
             <button
               type="button"
+              className="oh-tap-row"
               onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
               style={{
                 background: "rgba(255,255,255,0.06)",
@@ -1229,6 +1262,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
                 {" "}
                 <button
                   type="button"
+                  className="oh-tap-row"
                   onClick={() => setOwner("foreign")}
                   style={{
                     background: "none",
@@ -1275,6 +1309,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
         {visible.length > 0 && (
           <button
             type="button"
+            className="oh-tap-row"
             onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
             style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
@@ -1284,6 +1319,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
           </button>
         )}
       </div>
+      </div>{/* the phone scroller */}
     </div>
   );
 };

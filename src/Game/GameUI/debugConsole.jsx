@@ -22,6 +22,8 @@ import {
     setGenerationRating,
 } from "../AI/telemetry.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const COLORS = {
     bg: "#0a0e11",
@@ -98,22 +100,29 @@ const Card = ({ label, value, sub, accent }) => (
     </div>
 );
 
-const Bar = ({ label, value, max, right }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: "0.7rem", padding: "0.2rem 0" }}>
-        <div style={{ width: "10rem", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", fontWeight: 700, color: COLORS.text }} title={label}>{label || "—"}</div>
+// `compact` (a phone): the task name takes a line of its own above its bar.
+// Beside a 10rem name and a 7rem figure, the bar itself had no width left.
+const Bar = ({ label, value, max, right, compact = false }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.7rem", padding: "0.2rem 0", ...(compact ? { flexWrap: "wrap", rowGap: "0.2rem" } : null) }}>
+        <div style={{ width: compact ? "100%" : "10rem", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.72rem", fontWeight: 700, color: COLORS.text }} title={label}>{label || "—"}</div>
         <div style={{ flex: 1, height: "1rem", backgroundColor: COLORS.bg, borderRadius: "4px", overflow: "hidden", border: `1px solid ${COLORS.border}` }}>
             <div style={{ height: "100%", background: "rgba(231,231,234,0.65)", width: max > 0 ? `${Math.max(2, Math.round((value / max) * 100))}%` : "0%" }} />
         </div>
-        <div style={{ width: "7rem", flexShrink: 0, textAlign: "right", fontSize: "0.72rem", fontWeight: 700, color: COLORS.muted, fontFamily: MONO }}>{right ?? fmtInt(value)}</div>
+        <div style={{ width: compact ? "auto" : "7rem", flexShrink: 0, textAlign: "right", fontSize: "0.72rem", fontWeight: 700, color: COLORS.muted, fontFamily: MONO }}>{right ?? fmtInt(value)}</div>
     </div>
 );
 
-const RatingWidget = ({ rating, onRate }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: "0.15rem" }}>
+// Ten finger-sized scores do not fit one row of a phone, so on a touch screen
+// the row wraps.
+const RatingWidget = ({ rating, onRate }) => {
+    const touch = useTouchPrimary();
+    return (
+    <div style={{ display: "flex", alignItems: "center", gap: "0.15rem", ...(touch ? { flexWrap: "wrap" } : null) }}>
         {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
             <button
                 key={value}
                 type="button"
+                className="oh-tap"
                 onClick={() => onRate(value)}
                 title={`Rate ${value}/10`}
                 style={{
@@ -129,7 +138,8 @@ const RatingWidget = ({ rating, onRate }) => (
         ))}
         <span style={{ marginLeft: "0.4rem", fontSize: "0.66rem", fontWeight: 700, color: COLORS.muted, fontFamily: MONO }}>{rating ? `${rating}/10` : "unrated"}</span>
     </div>
-);
+    );
+};
 
 const CopyButton = ({ text }) => {
     const [copied, setCopied] = useState(false);
@@ -137,6 +147,7 @@ const CopyButton = ({ text }) => {
     return (
         <button
             type="button"
+            className="oh-tap-row"
             style={{ ...buttonStyle, padding: "0.15rem 0.5rem", fontSize: "0.66rem" }}
             title="Copy to clipboard"
             onClick={async () => {
@@ -173,7 +184,7 @@ const PreBlock = ({ title, text, emptyText = "(empty)" }) => {
                 </span>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                     {content.length > 4000 && (
-                        <button type="button" onClick={() => setExpanded((current) => !current)} style={{ ...buttonStyle, padding: "0.15rem 0.5rem", fontSize: "0.66rem" }}>
+                        <button type="button" className="oh-tap-row" onClick={() => setExpanded((current) => !current)} style={{ ...buttonStyle, padding: "0.15rem 0.5rem", fontSize: "0.66rem" }}>
                             {expanded ? "Collapse" : "Expand"}
                         </button>
                     )}
@@ -219,7 +230,14 @@ const prettyLookupResponse = (text) => {
     }
 };
 
-const GenerationRow = ({ record, selected, onSelect }) => (
+// `compact` (a phone, or a touch screen with a record open beside the list):
+// the row wraps into three lines (when and what, the model, then the figures)
+// instead of fixed columns about 640 px wide.
+const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
+    // The figures' fixed widths line them up as columns; wrapped, they just
+    // take the width their text needs.
+    const figure = (width) => (compact ? { width: "auto" } : { width });
+    return (
     <button
         type="button"
         onClick={() => onSelect(record.id)}
@@ -236,24 +254,26 @@ const GenerationRow = ({ record, selected, onSelect }) => (
             alignItems: "center",
             gap: "0.5rem",
             fontSize: "0.7rem",
+            ...(compact ? { flexWrap: "wrap", rowGap: "0.2rem" } : null),
         }}
     >
         <span style={{ width: "0.4rem", height: "0.4rem", borderRadius: "50%", flexShrink: 0, backgroundColor: statusColor(record) }} />
         <span style={{ width: "7.5rem", flexShrink: 0, color: COLORS.muted, fontFamily: MONO }}>{fmtTime(record.startedAt)}</span>
-        <span style={{ width: "9rem", flexShrink: 0, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ width: "9rem", flexShrink: 0, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...(compact ? { flex: "1 1 auto", minWidth: 0, width: "auto" } : null) }}>
             {record.taskKey || "direct"}{record.batch ? " (batch)" : ""}{record.maxAttempts > 1 ? ` #${record.attempt}` : ""}
         </span>
-        <span style={{ flex: 1, minWidth: 0, color: COLORS.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={record.model}>{record.model || "unknown model"}</span>
-        <span style={{ width: "4.2rem", flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }} title={record.lookups?.calls ? `${record.lookups.calls} lookup call${record.lookups.calls === 1 ? "" : "s"} over ${record.lookups.rounds} round${record.lookups.rounds === 1 ? "" : "s"}` : undefined}>
+        <span style={{ flex: compact ? "1 1 100%" : 1, minWidth: 0, color: COLORS.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={record.model}>{record.model || "unknown model"}</span>
+        <span style={{ ...figure("4.2rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO, ...(compact && !record.lookups?.calls ? { display: "none" } : null) }} title={record.lookups?.calls ? `${record.lookups.calls} lookup call${record.lookups.calls === 1 ? "" : "s"} over ${record.lookups.rounds} round${record.lookups.rounds === 1 ? "" : "s"}` : undefined}>
             {record.lookups?.calls ? `fn ×${record.lookups.calls}` : ""}
         </span>
-        <span style={{ width: "8rem", flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>
+        <span style={{ ...figure("8rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>
             {record.usage ? `↑${fmtInt(record.usage.promptTokens)} ↓${fmtInt(record.usage.outputTokens)}` : "no usage"}
         </span>
-        <span style={{ width: "3.5rem", flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>{fmtMs(record.latencyMs)}</span>
-        <span style={{ width: "2.8rem", flexShrink: 0, textAlign: "right", color: COLORS.gold, fontFamily: MONO }}>{record.rating ? `${record.rating}/10` : ""}</span>
+        <span style={{ ...figure("3.5rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>{fmtMs(record.latencyMs)}</span>
+        <span style={{ ...figure("2.8rem"), flexShrink: 0, textAlign: "right", color: COLORS.gold, fontFamily: MONO }}>{record.rating ? `${record.rating}/10` : ""}</span>
     </button>
-);
+    );
+};
 
 const SUMMARY_FIELDS = [
     ["eventCount", "events"],
@@ -427,6 +447,11 @@ export const DebugConsole = ({ open, onClose }) => {
     const [modelFilter, setModelFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [search, setSearch] = useState("");
+    const isMobile = useIsMobile();
+    // A phone held sideways gets the desktop layout, where the list shares the
+    // width with an open record; there too the rows wrap instead of running on
+    // past the list.
+    const touch = useTouchPrimary();
 
     const refresh = useCallback(async () => {
         try {
@@ -552,10 +577,13 @@ export const DebugConsole = ({ open, onClose }) => {
 
     const emptyNote = (text) => <div style={{ color: COLORS.muted, fontSize: "0.72rem", fontStyle: "italic" }}>{text}</div>;
 
+    // On a phone the console is the whole screen, clear of the notch and the
+    // home indicator, with no frame around it: the frame's margin was room the
+    // four tabs and the list did not have.
     return (
-        <div style={{ position: "fixed", inset: 0, zIndex: 10001, backgroundColor: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem", boxSizing: "border-box", fontFamily: "sans-serif" }}>
-            <div style={{ width: "100%", height: "100%", maxWidth: "1600px", backgroundColor: COLORS.bg, border: `2px solid ${COLORS.border}`, borderRadius: "14px", boxShadow: "0 0 80px rgba(0,0,0,0.9)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.6rem 1rem", backgroundColor: COLORS.raised, borderBottom: `2px solid ${COLORS.border}`, flexShrink: 0 }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 10001, backgroundColor: "rgba(0,0,0,0.8)", display: "flex", alignItems: "center", justifyContent: "center", padding: isMobile ? 0 : "1rem", boxSizing: "border-box", fontFamily: "sans-serif" }}>
+            <div style={{ width: "100%", height: "100%", maxWidth: "1600px", backgroundColor: COLORS.bg, border: `2px solid ${COLORS.border}`, borderRadius: "14px", boxShadow: "0 0 80px rgba(0,0,0,0.9)", display: "flex", flexDirection: "column", overflow: "hidden", ...(isMobile ? { border: "none", borderRadius: 0, boxShadow: "none", boxSizing: "border-box", paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, paddingTop: SAFE_TOP } : null) }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.6rem 1rem", backgroundColor: COLORS.raised, borderBottom: `2px solid ${COLORS.border}`, flexShrink: 0, ...(isMobile ? { flexWrap: "wrap", gap: "0.4rem", padding: "0.5rem 0.75rem" } : null) }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.7rem" }}>
                         <span style={{ fontSize: "0.8rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "white" }}>AI debug console</span>
                         <span style={{ fontSize: "0.66rem", fontWeight: 700, color: COLORS.muted, backgroundColor: COLORS.bg, border: `1px solid ${COLORS.border}`, padding: "0.1rem 0.5rem", borderRadius: "6px", fontFamily: MONO }}>
@@ -563,16 +591,19 @@ export const DebugConsole = ({ open, onClose }) => {
                         </span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                        <button type="button" onClick={refresh} title="Refresh" style={buttonStyle}>Refresh</button>
-                        <button type="button" onClick={onClose} title="Close" style={buttonStyle}>✕ Close</button>
+                        <button type="button" className="oh-tap-row" onClick={refresh} title="Refresh" style={buttonStyle}>Refresh</button>
+                        <button type="button" className="oh-tap" onClick={onClose} title="Close" aria-label="Close the AI debug console" style={buttonStyle}>✕ Close</button>
                     </div>
                 </div>
 
-                <div style={{ display: "flex", gap: "0.25rem", padding: "0.4rem 0.8rem", backgroundColor: COLORS.panel, borderBottom: `1px solid ${COLORS.border}`, overflowX: "auto", flexShrink: 0 }}>
+                {/* Two by two on a phone, where the four tabs in a row ran past the
+                    edge with Export out of sight. */}
+                <div style={{ display: "flex", gap: "0.25rem", padding: "0.4rem 0.8rem", backgroundColor: COLORS.panel, borderBottom: `1px solid ${COLORS.border}`, overflowX: "auto", flexShrink: 0, ...(isMobile ? { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", padding: "0.4rem 0.75rem" } : null) }}>
                     {TABS.map((tab) => (
                         <button
                             key={tab.id}
                             type="button"
+                            className="oh-tap-row"
                             onClick={() => setActiveTab(tab.id)}
                             style={{
                                 ...buttonStyle,
@@ -592,28 +623,31 @@ export const DebugConsole = ({ open, onClose }) => {
                     {activeTab === "generations" && (
                         <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
                             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.4rem", padding: "0.4rem 0.8rem", backgroundColor: COLORS.bg, borderBottom: `1px solid ${COLORS.border}`, flexShrink: 0 }}>
-                                <select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)} style={selectStyle}>
+                                <select className="oh-tap-row" value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)} style={selectStyle}>
                                     <option value="all">All tasks</option>
                                     {tasks.map((task) => <option key={task} value={task}>{task}</option>)}
                                 </select>
-                                <select value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} style={{ ...selectStyle, maxWidth: "14rem" }}>
+                                <select className="oh-tap-row" value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} style={{ ...selectStyle, maxWidth: "14rem" }}>
                                     <option value="">All models</option>
                                     {models.map((model) => <option key={model} value={model}>{model}</option>)}
                                 </select>
-                                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} style={selectStyle}>
+                                <select className="oh-tap-row" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} style={selectStyle}>
                                     <option value="all">All statuses</option>
                                     <option value="ok">OK</option>
                                     <option value="failed">Failed</option>
                                 </select>
                                 <input
+                                    className="oh-tap-row"
                                     value={search}
                                     onChange={(event) => setSearch(event.target.value)}
                                     placeholder="Search prompts and responses…"
                                     style={{ ...selectStyle, flex: 1, minWidth: "10rem", fontWeight: 400 }}
                                 />
                             </div>
-                            <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-                                <div style={{ display: "flex", flexDirection: "column", borderRight: `1px solid ${COLORS.border}`, width: selected ? "46%" : "100%", minWidth: 0 }}>
+                            {/* On a phone the list and the record stack, the list over the
+                                record: side by side, each had half of 375 px. */}
+                            <div style={{ flex: 1, display: "flex", minHeight: 0, ...(isMobile ? { flexDirection: "column" } : null) }}>
+                                <div style={{ display: "flex", flexDirection: "column", borderRight: `1px solid ${COLORS.border}`, width: selected ? "46%" : "100%", minWidth: 0, ...(isMobile ? { borderBottom: selected ? `1px solid ${COLORS.border}` : "none", borderRight: "none", flex: selected ? "0 0 40%" : "1 1 auto", minHeight: 0, width: "100%" } : null) }}>
                                     <div style={{ flex: 1, overflow: "auto" }}>
                                         {filtered.length === 0 ? (
                                             <div style={{ padding: "2rem", textAlign: "center", color: COLORS.muted, fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -625,14 +659,14 @@ export const DebugConsole = ({ open, onClose }) => {
                                                     {filtered.length} shown (newest first)
                                                 </div>
                                                 {filtered.map((record) => (
-                                                    <GenerationRow key={record.id} record={record} selected={selected?.id === record.id} onSelect={setSelectedId} />
+                                                    <GenerationRow key={record.id} record={record} selected={selected?.id === record.id} onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />
                                                 ))}
                                             </>
                                         )}
                                     </div>
                                 </div>
                                 {selected && (
-                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ flex: 1, minWidth: 0, ...(isMobile ? { minHeight: 0 } : null) }}>
                                         <GenerationDetail record={selected} onRate={handleRate} />
                                     </div>
                                 )}
@@ -653,7 +687,7 @@ export const DebugConsole = ({ open, onClose }) => {
                             </div>
                             <Section title="Token usage by task">
                                 {analytics.length === 0 ? emptyNote("No data yet.") : analytics.map((entry) => (
-                                    <Bar key={entry.label} label={entry.label} value={entry.tokensIn} max={maxTokensByTask} right={`${fmtInt(entry.tokensIn)} in`} />
+                                    <Bar key={entry.label} label={entry.label} value={entry.tokensIn} max={maxTokensByTask} right={`${fmtInt(entry.tokensIn)} in`} compact={isMobile} />
                                 ))}
                             </Section>
                             <Section title="Calls by task">
@@ -677,10 +711,10 @@ export const DebugConsole = ({ open, onClose }) => {
                         <div style={{ height: "100%", overflow: "auto", padding: "1rem", boxSizing: "border-box" }}>
                             <Section title="Export recorded data">
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem" }}>
-                                    <button type="button" onClick={handleExportJson} style={primaryButtonStyle}>All generations (JSON, raw prompts)</button>
-                                    <button type="button" onClick={handleExportCsv} style={buttonStyle}>Summary (CSV)</button>
-                                    <button type="button" onClick={handleExportWorld} style={buttonStyle}>World state (JSON)</button>
-                                    <button type="button" onClick={handleClear} style={{ ...buttonStyle, color: "#ff7b72" }}>Clear all telemetry</button>
+                                    <button type="button" className="oh-tap-row" onClick={handleExportJson} style={primaryButtonStyle}>All generations (JSON, raw prompts)</button>
+                                    <button type="button" className="oh-tap-row" onClick={handleExportCsv} style={buttonStyle}>Summary (CSV)</button>
+                                    <button type="button" className="oh-tap-row" onClick={handleExportWorld} style={buttonStyle}>World state (JSON)</button>
+                                    <button type="button" className="oh-tap-row" onClick={handleClear} style={{ ...buttonStyle, color: "#ff7b72" }}>Clear all telemetry</button>
                                 </div>
                                 <div style={{ fontSize: "0.66rem", color: COLORS.muted, marginTop: "0.7rem", lineHeight: 1.5 }}>
                                     The JSON export carries every recorded generation at full fidelity — system prompt, user message, raw

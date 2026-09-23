@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { configureMapRuntime } from "./runtime/assets.js";
+import { installAppHeight } from "./runtime/mobileUi.js";
 import { startTranslator } from "./runtime/translator.js";
 import {
     installDebugLogCapture,
@@ -24,6 +25,9 @@ const registerServiceWorker = () => {
 };
 
 const mount = () => {
+    // Before the first render: every panel sizes itself from the visible height
+    // (runtime/mobileUi.js), which on a phone is not 100vh.
+    installAppHeight();
     configureMapRuntime();
     createRoot(document.getElementById("root"), {
         // React console.errors every error a boundary catches, before the

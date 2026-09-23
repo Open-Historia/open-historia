@@ -7,6 +7,7 @@ import { JSON_URLS, readJson, writeJson } from "../../runtime/assets.js";
 import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
@@ -1038,6 +1039,22 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
     const isMobile = useIsMobile();
+    // On a touch screen the 🗑 sits a thumb's width from the ✕, and one stray
+    // tap would wipe the whole conversation, so there the first tap only asks
+    // (the way deleting a chat does, chat.jsx). A mouse keeps the one click.
+    const isTouch = useTouchPrimary();
+    const [confirmingClear, setConfirmingClear] = useState(false);
+    useEffect(() => {
+        if (!confirmingClear) return undefined;
+        const timer = setTimeout(() => setConfirmingClear(false), 4000);
+        return () => clearTimeout(timer);
+    }, [confirmingClear]);
+    // On a phone the advisor is the whole screen, and whatever it hands the
+    // player to would open underneath it: it steps aside for the Diplomacy
+    // composer (handleDraftMessage), as it does for Actions and Projects
+    // (main.jsx).
+    const stepAsideRef = useRef(null);
+    stepAsideRef.current = isMobile ? onClose : null;
 
     // Drag the drawer's left edge to resize it. The panel is docked right, so the
     // new width is simply (viewport width − pointer x); the parent (main.jsx) clamps
@@ -1368,6 +1385,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
         logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
         requestDiplomaticChat(target, { draft: draft.text });
+        stepAsideRef.current?.();
     }, []);
 
     // Executes one typed formal institution draft ONLY after the human clicks
@@ -1504,7 +1522,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <>
         <MarkdownStyleInjector />
         <div style={{
-            position: "fixed", bottom: 0, right: 0,
+            // Pinned to the top and the bottom rather than given a height. 100vh
+            // is the height a phone shows with its address bar HIDDEN, so while
+            // the bar showed, a 100vh drawer anchored at the bottom ran off the
+            // top of the screen and took its ✕ with it. Top and bottom together
+            // are always exactly the screen.
+            position: "fixed", top: 0, bottom: 0, right: 0,
             // Slide via transform: the old right: calc(-min(...) - 1rem) was
             // INVALID CSS (a min() can't be negated like that), so the closed
             // position was silently dropped and the drawer never slid away.
@@ -1512,26 +1535,32 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             // slides that same distance (main.jsx), so they move as one. The
             // shadow, which would show past the edge, fades out with it instead.
             transform: isAdvisorOpen ? "translateX(0)" : "translateX(100%)",
-            // Full height now the in-game top bar is gone — it used to stop 64px
-            // (the old BAR_HEIGHT) short of the top to clear it. Anchored bottom: 0
-            // above, so height: 100vh reaches the top edge.
-            width: width || ADVISOR_PANEL_WIDTH, height: "100vh",
+            // Phones: the whole screen, clear of the notch and the home
+            // indicator, with nothing riding beside it (main.jsx leaves the HUD
+            // where it is). Desktop: a drawer the player can drag wider; on a
+            // notched phone held sideways it grows by the right-hand inset and
+            // pads it, so its content keeps its width clear of the notch (every
+            // inset is 0 on a desktop).
+            ...(isMobile
+                ? { left: 0, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingLeft: SAFE_LEFT, paddingRight: SAFE_RIGHT, boxSizing: "border-box" }
+                : { width: `calc(${width || ADVISOR_PANEL_WIDTH} + ${SAFE_RIGHT})`, paddingTop: SAFE_TOP, paddingBottom: SAFE_BOTTOM, paddingRight: SAFE_RIGHT, boxSizing: "border-box", borderLeft: "1px solid rgba(255,255,255,0.1)" }),
             backgroundColor: "rgba(24, 24, 27, 0.95)", backdropFilter: "blur(8px)",
             // Phones: above every HUD button/panel (toolbar 9999, forces 10000,
-            // library panels 10031) so nothing covers the near-full-width
-            // drawer; below the editor (10050) and server-down (10060) overlays.
+            // library panels 10031) so nothing covers the full-screen sheet;
+            // below the editor (10050) and server-down (10060) overlays.
             // Desktop: the drawer can be dragged wide, so it sits under every
             // HUD button, panel and menu (9998 and up: Actions, Projects,
             // diplomacy chat, timeline panels, settings) and over only the map
             // and the session pill (9996).
-            zIndex: isMobile ? 10040 : 9997, borderLeft: "1px solid rgba(255,255,255,0.1)",
+            zIndex: isMobile ? 10040 : 9997,
             boxShadow: isAdvisorOpen ? "-4px 0 24px rgba(0,0,0,0.4)" : "none",
             transition: `transform ${ADVISOR_SLIDE}, box-shadow ${ADVISOR_SLIDE}`,
             display: "flex", flexDirection: "column",
             color: "white", fontFamily: "sans-serif", overflow: "hidden",
         }}>
-        {/* Drag the left edge to resize the drawer (main.jsx clamps + persists). */}
-        {typeof onResize === "function" && (
+        {/* Drag the left edge to resize the drawer (main.jsx clamps + persists).
+            Not on a phone, where it is the whole screen. */}
+        {typeof onResize === "function" && !isMobile && (
             <div
                 onPointerDown={handleResizeStart}
                 onPointerEnter={() => setHandleHover(true)}
@@ -1558,14 +1587,26 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <span style={{ fontSize: "0.9rem", fontWeight: 800 }}>Advisor</span>
         <div style={{ flex: 1 }} />
         <button
-        onClick={async () => { setMessages([]); startChat(); await saveMessages([]); }}
-        title="Clear chat"
-        style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
-        >🗑</button>
+        className="oh-tap"
+        onClick={async () => {
+            if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
+            setConfirmingClear(false);
+            setMessages([]); startChat(); await saveMessages([]);
+        }}
+        title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
+        aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
+        style={confirmingClear
+            ? { background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.55)", borderRadius: "8px", color: "#fca5a5", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.8rem", fontWeight: 600, lineHeight: 1, padding: "0 0.6rem", display: "flex", alignItems: "center" }
+            : { background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+        >{confirmingClear ? "Clear?" : "🗑"}</button>
+        {/* The way out. On a phone the advisor is the whole screen and this ✕
+            (or Back) is all that closes it, so it is finger-sized there. */}
         {onClose && (
             <button
+            className="oh-tap"
             onClick={onClose}
             title="Close advisor"
+            aria-label="Close advisor"
             style={{ background: "none", border: "none", color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: "0 0 0 0.5rem", display: "flex", alignItems: "center" }}
             >✕</button>
         )}
@@ -1597,7 +1638,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         <div style={{ padding: "1rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", alignItems: "center", gap: "0.5rem" }}>
         <textarea
         ref={inputRef}
-        placeholder="Ask your advisor…  (Shift+Enter for a new line)"
+        // A phone's keyboard has no Shift+Enter to speak of.
+        placeholder={isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
         rows={1} value={input}
         onChange={e => {
             setInput(e.target.value);

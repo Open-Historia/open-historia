@@ -16,6 +16,8 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { APP_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const codeToColor = (code) => {
   let h = 0;
@@ -146,6 +148,8 @@ const CountryPickerMap = ({
   const hoveredRegionRef = useRef(null);
   const playableCodesRef = useRef(new Set());
   const [query, setQuery] = useState("");
+  const isMobile = useIsMobile();
+  const touch = useTouchPrimary();
 
   // Refs the once-created map's handlers read at click time — so switching mode or
   // toggling a region never rebuilds the map.
@@ -211,7 +215,13 @@ const CountryPickerMap = ({
     baseLayerRef.current = baseLayer;
     const olMap = new Map({
       target: containerRef.current,
-      controls: defaultControls({ rotate: false, zoom: true }),
+      // The zoom buttons are finger-sized on a touch screen (.oh-tap only
+      // applies there).
+      controls: defaultControls({
+        rotate: false,
+        zoom: true,
+        zoomOptions: { zoomInClassName: "ol-zoom-in oh-tap", zoomOutClassName: "ol-zoom-out oh-tap" },
+      }),
       layers: [baseLayer, layer],
       view: new View({
         center: fromLonLat([0, 20]),
@@ -376,8 +386,11 @@ const CountryPickerMap = ({
           territory. Click again to release one.
         </div>
       ) : (
+        // Not focused on a touch screen: the keyboard would come up over the
+        // map and the list before the player had seen either.
         <input
-          autoFocus
+          autoFocus={!isTouchPrimary()}
+          className="oh-tap-row"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search countries…"
@@ -397,7 +410,10 @@ const CountryPickerMap = ({
         ref={containerRef}
         style={{
           width: "100%",
-          height: "320px",
+          // On a phone the map gives up height so the search, the list and the
+          // dialog's buttons fit on the screen with it: whatever the visible
+          // height leaves after them, between 150 and the usual 320 px.
+          height: isMobile ? `clamp(150px, calc(${APP_HEIGHT} - 28rem), 320px)` : "320px",
           borderRadius: 12,
           overflow: "hidden",
           border: "1px solid rgba(255,255,255,0.1)",
@@ -417,6 +433,7 @@ const CountryPickerMap = ({
           <button
             key={c.code}
             type="button"
+            className="oh-tap-row"
             onClick={() => onPickCountry(c.code)}
             style={{
               alignItems: "center",
@@ -430,7 +447,9 @@ const CountryPickerMap = ({
               fontWeight: 600,
               gap: "0.4rem",
               justifyContent: "flex-start",
-              minHeight: "1.9rem",
+              // Left to .oh-tap-row on a touch screen, which an inline
+              // min-height would override.
+              minHeight: touch ? undefined : "1.9rem",
               padding: "0 0.85rem",
               transition: "background 0.18s ease, border-color 0.18s ease",
             }}

@@ -1,5 +1,8 @@
 /*! Open Historia — cheats panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import {
     JSON_URLS,
     loadCountryNames,
@@ -217,6 +220,11 @@ const labelStyle = {
     textTransform: "uppercase",
 };
 
+// A <summary> is one line of small text, too thin for a thumb. On a touch
+// screen its line is 44 px tall, which keeps the text and its ▸ centred (the
+// tap classes set a min-height, and a summary would sit at the top of it).
+const TOUCH_SUMMARY = { lineHeight: "2.75rem" };
+
 const hexToRgb = (hex) => {
     const match = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? "").trim());
     if (!match) return null;
@@ -294,6 +302,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     // and map clicks route here instead of opening the region popup.
     const [clickMode, setClickMode] = useState(null);
     const clickHandlerRef = useRef(null);
+    const isMobile = useIsMobile();
 
     const refresh = async () => {
         try {
@@ -340,6 +349,10 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
         clickHandlerRef.current = null;
         setClickMode(null);
     };
+    // While the panel waits for a pick on the map it is hidden behind the toast,
+    // and Back on a phone ends the pick, as Done does, rather than closing a
+    // panel the player cannot see.
+    useBackToClose(Boolean(clickMode), endClickMode);
 
     const runBusy = async (work, doneMessage) => {
         setBusy(true);
@@ -361,13 +374,13 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between" }}>
         <div style={{ alignItems: "center", display: "flex", gap: "0.45rem", minWidth: 0 }}>
         {tool && (
-            <button type="button" onClick={() => { setTool(null); setStatus(""); }} style={{ ...buttonStyle, padding: "0.25rem 0.5rem" }}>
+            <button type="button" className="oh-tap" aria-label="Back to the cheat tools" onClick={() => { setTool(null); setStatus(""); }} style={{ ...buttonStyle, padding: "0.25rem 0.5rem" }}>
             ←
             </button>
         )}
         <div style={{ fontSize: "1rem", fontWeight: 800 }}>{title}</div>
         </div>
-        <button type="button" onClick={onClose} style={{ ...buttonStyle, padding: "0.25rem 0.55rem" }}>✕</button>
+        <button type="button" className="oh-tap" aria-label="Close cheats" onClick={onClose} style={{ ...buttonStyle, padding: "0.25rem 0.55rem" }}>✕</button>
         </div>
         {subtitle && <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.74rem", marginTop: "0.2rem" }}>{subtitle}</div>}
         </div>
@@ -375,10 +388,13 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
 
     return (
         <>
+        {/* On a phone the toast takes the width its words need, up to the
+            screen's: centred from 50%, it could only use half the screen and
+            broke a one-line instruction over four. */}
         {clickMode && (
-            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24, 24, 27, 0.96)", border: "1px solid rgba(0,0,0,0.19)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070 }}>
+            <div className="oh-hud-popover" style={{ alignItems: "center", display: "flex", gap: "0.6rem", background: "rgba(24, 24, 27, 0.96)", border: "1px solid rgba(0,0,0,0.19)", borderRadius: 12, boxShadow: "0 8px 24px rgba(0,0,0,0.35)", color: "#fff", fontFamily: "sans-serif", fontSize: "0.85rem", left: "50%", padding: "0.6rem 0.9rem", position: "fixed", top: PANEL_TOP, transform: "translateX(-50%)", zIndex: 10070, ...(isMobile ? { boxSizing: "border-box", maxWidth: "calc(100vw - 1rem)", width: "max-content" } : null) }}>
             <span>{clickMode.label}</span>
-            <button type="button" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
+            <button type="button" className="oh-tap-row" onClick={endClickMode} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }}>Done</button>
             </div>
         )}
 
@@ -394,12 +410,12 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             display: clickMode ? "none" : "flex",
             flexDirection: "column",
             fontFamily: "sans-serif",
-            maxHeight: `calc(100vh - ${PANEL_TOP} - 1rem)`,
+            maxHeight: `calc(${APP_HEIGHT} - ${PANEL_TOP} - ${SAFE_TOP} - 1rem)`,
             overflow: "hidden",
             padding: "0.9rem",
             position: "fixed",
-            right: "0.65rem",
-            top: PANEL_TOP,
+            right: `calc(0.65rem + ${SAFE_RIGHT})`,
+            top: `calc(${PANEL_TOP} + ${SAFE_TOP})`,
             width: ["edit-country", "events", "history-document", "edit-feature", "add-feature"].includes(tool) ? "min(31rem, calc(100vw - 1rem))" : "min(25.5rem, calc(100vw - 1rem))",
             zIndex: 10045,
         }}
@@ -597,6 +613,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
     const [decisionContextText, setDecisionContextText] = useState("");
     const [baseline, setBaseline] = useState(null);
     const [reloadKey, setReloadKey] = useState(0);
+    const touch = useTouchPrimary();
 
     const nameOf = useMemo(
         () => new Map(polities.map((polity) => [polity.code, polity.name])),
@@ -992,6 +1009,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
             <button
                 type="button"
+                className="oh-tap-row"
                 disabled={busy}
                 onClick={() => {
                     beginClickMode(
@@ -1038,7 +1056,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             </div>
 
             <details style={{ ...editorFieldStyle, marginTop: "0.6rem", padding: "0.5rem 0.6rem" }}>
-                <summary style={{ cursor: "pointer", fontSize: "0.7rem", fontWeight: 800 }}>
+                <summary style={{ cursor: "pointer", fontSize: "0.7rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>
                     Advanced · choose from country list
                 </summary>
                 <div style={{ marginTop: "0.5rem" }}>
@@ -1082,6 +1100,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             />
                             <input
                                 type="color"
+                                className="oh-tap"
                                 value={hexToRgb(form.color) ? (String(form.color).startsWith("#") ? form.color : `#${form.color}`) : "rgba(255,255,255,0.22)"}
                                 onChange={(event) => change("color", event.target.value)}
                                 style={{ background: "none", border: "none", cursor: "pointer", height: "2.2rem", padding: 0, width: "2.8rem" }}
@@ -1377,7 +1396,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             </div>
 
                             <details style={{ ...editorFieldStyle, marginTop: "0.65rem" }}>
-                                <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>
+                                <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>
                                     Strategic indices
                                 </summary>
                                 <div style={{ display: "grid", gap: "0.48rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.6rem" }}>
@@ -1391,7 +1410,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             </details>
 
                             <details style={{ ...editorFieldStyle, marginTop: "0.65rem" }}>
-                                <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>
+                                <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>
                                     GDP sector breakdown
                                 </summary>
                                 <div style={{ display: "flex", flexDirection: "column", gap: "0.72rem", marginTop: "0.65rem" }}>
@@ -1441,11 +1460,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     )}
 
                     <div style={{ display: "flex", gap: "0.45rem", marginTop: "0.72rem" }}>
-                        <button type="button" disabled={busy} onClick={save} style={{ ...primaryButtonStyle, flex: 1 }}>
+                        <button type="button" className="oh-tap-row" disabled={busy} onClick={save} style={{ ...primaryButtonStyle, flex: 1 }}>
                             Save present-state edit
                         </button>
                         <button
                             type="button"
+                            className="oh-tap-row"
                             disabled={busy}
                             onClick={() => setReloadKey((value) => value + 1)}
                             style={buttonStyle}
@@ -1746,7 +1766,7 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
                     maxLength={REMINDER_MAX_CHARS}
                     style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical", width: "100%" }}
                 />
-                <button type="button" disabled={busy || !draft.trim()} onClick={issue} style={{ ...primaryButtonStyle, marginTop: "0.45rem", width: "100%" }}>
+                <button type="button" className="oh-tap-row" disabled={busy || !draft.trim()} onClick={issue} style={{ ...primaryButtonStyle, marginTop: "0.45rem", width: "100%" }}>
                     Issue reminder
                 </button>
             </div>
@@ -1768,8 +1788,8 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
                                     style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical", width: "100%" }}
                                 />
                                 <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.4rem" }}>
-                                    <button type="button" disabled={busy} onClick={() => saveEdit(entry.id)} style={{ ...primaryButtonStyle, flex: 1 }}>Save</button>
-                                    <button type="button" disabled={busy} onClick={() => setEditingId(null)} style={{ ...buttonStyle, flex: 1 }}>Cancel</button>
+                                    <button type="button" className="oh-tap-row" disabled={busy} onClick={() => saveEdit(entry.id)} style={{ ...primaryButtonStyle, flex: 1 }}>Save</button>
+                                    <button type="button" className="oh-tap-row" disabled={busy} onClick={() => setEditingId(null)} style={{ ...buttonStyle, flex: 1 }}>Cancel</button>
                                 </div>
                                 </>
                             ) : (
@@ -1780,8 +1800,8 @@ const RemindersView = ({ meta, header, busy, status, game, runBusy }) => {
                                         {entry.date ? `since ${readable(entry.date)}` : ""}{entry.round ? ` · round ${entry.round}` : ""}
                                     </span>
                                     <span style={{ display: "flex", gap: "0.3rem" }}>
-                                        <button type="button" disabled={busy} onClick={() => { setEditingId(entry.id); setEditText(entry.text); }} style={{ ...buttonStyle, fontSize: "0.64rem", padding: "0.22rem 0.45rem" }}>Edit</button>
-                                        <button type="button" disabled={busy} onClick={() => withdraw(entry.id)} style={{ ...buttonStyle, borderColor: "rgba(244,63,94,0.32)", color: "#fda4af", fontSize: "0.64rem", padding: "0.22rem 0.45rem" }}>Withdraw</button>
+                                        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => { setEditingId(entry.id); setEditText(entry.text); }} style={{ ...buttonStyle, fontSize: "0.64rem", padding: "0.22rem 0.45rem" }}>Edit</button>
+                                        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => withdraw(entry.id)} style={{ ...buttonStyle, borderColor: "rgba(244,63,94,0.32)", color: "#fda4af", fontSize: "0.64rem", padding: "0.22rem 0.45rem" }}>Withdraw</button>
                                     </span>
                                 </div>
                                 </>
@@ -1888,7 +1908,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
             {sceneInProgress && (
                 <div style={warnStyle}>
                     A scene is already in progress. End it or set it aside before opening another.
-                    <button type="button" onClick={openScene} style={{ ...buttonStyle, display: "block", marginTop: "0.4rem" }}>Open the scene</button>
+                    <button type="button" className="oh-tap-row" onClick={openScene} style={{ ...buttonStyle, display: "block", marginTop: "0.4rem" }}>Open the scene</button>
                 </div>
             )}
 
@@ -1896,8 +1916,8 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
                 <div style={warnStyle}>
                     <span data-no-translate>{offeredTitle || cleanEventText(offer.eventId)}</span> is offered now.
                     <div style={{ display: "flex", gap: "0.35rem", marginTop: "0.4rem" }}>
-                        <button type="button" onClick={openScene} style={{ ...primaryButtonStyle, flex: 1 }}>Play it out</button>
-                        <button type="button" disabled={busy} onClick={clearOffer} style={{ ...buttonStyle, flex: 1 }}>Clear the offer</button>
+                        <button type="button" className="oh-tap-row" onClick={openScene} style={{ ...primaryButtonStyle, flex: 1 }}>Play it out</button>
+                        <button type="button" className="oh-tap-row" disabled={busy} onClick={clearOffer} style={{ ...buttonStyle, flex: 1 }}>Clear the offer</button>
                     </div>
                 </div>
             )}
@@ -1928,6 +1948,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
                             </div>
                             <button
                                 type="button"
+                                className="oh-tap-row"
                                 disabled={busy || revealing || sceneInProgress}
                                 onClick={() => offerEvent(event)}
                                 title={revealing
@@ -1943,7 +1964,7 @@ const InteractiveEventView = ({ meta, header, busy, status, game, runBusy, close
             </div>
 
             {listed.length > limit && (
-                <button type="button" onClick={() => setLimit((value) => value + 30)} style={buttonStyle}>
+                <button type="button" className="oh-tap-row" onClick={() => setLimit((value) => value + 30)} style={buttonStyle}>
                     Show {Math.min(30, listed.length - limit)} more of {listed.length}
                 </button>
             )}
@@ -1965,6 +1986,8 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     const [createForm, setCreateForm] = useState({});
     const [reactionQueue, setReactionQueue] = useState([]);
     const [reactionClock, setReactionClock] = useState(() => Date.now());
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
 
     const currentDate = cleanEventText(game?.gameDate || game?.startDate);
     const NPC_REACTION_GRACE_MS = 12000;
@@ -2208,7 +2231,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
 
     const renderQuoteEditor = (form, setForm) => (
         <details style={{ ...editorFieldStyle, marginTop: "0.5rem", padding: "0.45rem 0.55rem" }}>
-            <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 750 }}>Optional quotation</summary>
+            <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 750, ...(touch ? TOUCH_SUMMARY : null) }}>Optional quotation</summary>
             <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
                 Quotes are occasional presentation metadata, not a mechanical impact. Leave blank for ordinary events.
             </div>
@@ -2235,20 +2258,22 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
         </details>
     );
 
+    // The inline minHeight would beat the tap class, so a touch screen gets the
+    // thumb-sized one here.
     const choiceButton = (active) => ({
         ...buttonStyle,
         background: active ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.05)",
         borderColor: active ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)",
         color: active ? "#f4f4f5" : "rgba(255,255,255,0.7)",
         fontSize: "0.64rem",
-        minHeight: "2rem",
+        minHeight: touch ? "2.75rem" : "2rem",
         padding: "0.34rem 0.48rem",
         textTransform: "capitalize",
     });
 
     const renderMetadataEditor = (form, setForm) => (
         <details style={{ ...editorFieldStyle, marginTop: "0.5rem", padding: "0.45rem 0.55rem" }}>
-            <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 750 }}>Advanced event metadata</summary>
+            <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 750, ...(touch ? TOUCH_SUMMARY : null) }}>Advanced event metadata</summary>
             <div style={{ marginTop: "0.55rem" }}>
                 <span style={labelStyle}>Importance</span>
                 <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: `repeat(${Math.max(1, Math.min(importanceOptions.length, 4))}, minmax(0, 1fr))` }}>
@@ -2266,7 +2291,9 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
             </div>
             <div style={{ marginTop: "0.5rem" }}>
                 <span style={labelStyle}>Kind</span>
-                <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                {/* Two across on a phone: the list also carries every kind the
+                    record uses, and a long one did not fit a third of it. */}
+                <div style={{ display: "grid", gap: "0.35rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(3, minmax(0, 1fr))" }}>
                     {kindOptions.map((value) => (
                         <button
                             key={value}
@@ -2280,11 +2307,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 </div>
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem 1rem", marginTop: "0.55rem" }}>
-                <label style={{ alignItems: "center", cursor: "pointer", display: "flex", fontSize: "0.7rem", gap: "0.38rem" }}>
+                <label className="oh-tap-row" style={{ alignItems: "center", cursor: "pointer", display: "flex", fontSize: "0.7rem", gap: "0.38rem" }}>
                     <input type="checkbox" checked={Boolean(form.notable)} onChange={(e) => setForm({ ...form, notable: e.target.checked })} />
                     Notable
                 </label>
-                <label style={{ alignItems: "center", cursor: "pointer", display: "flex", fontSize: "0.7rem", gap: "0.38rem" }}>
+                <label className="oh-tap-row" style={{ alignItems: "center", cursor: "pointer", display: "flex", fontSize: "0.7rem", gap: "0.38rem" }}>
                     <input type="checkbox" checked={Boolean(form.playerRelated)} onChange={(e) => setForm({ ...form, playerRelated: e.target.checked })} />
                     Player-related
                 </label>
@@ -2341,7 +2368,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 <strong style={{ color: "#dbeafe" }}>Canonical history editor.</strong> Text, optional quotations, and metadata edits immediately change the persistent timeline. Already-applied state effects are deliberately not replayed, reverted, or reinterpreted here.
             </div>
 
-            <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", marginTop: "0.55rem" }}>
+            <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", marginTop: "0.55rem" }}>
                 {[
                     ["Events", counts.total],
                     ["Campaign", counts.campaign],
@@ -2355,7 +2382,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 ))}
             </div>
 
-            <button type="button" disabled={busy} onClick={beginCreate} style={{ ...primaryButtonStyle, marginTop: "0.55rem", width: "100%" }}>
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={beginCreate} style={{ ...primaryButtonStyle, marginTop: "0.55rem", width: "100%" }}>
                 + Add exact event
             </button>
 
@@ -2383,6 +2410,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                     <div style={{ display: "flex", gap: "0.45rem", marginTop: "0.55rem" }}>
                         <button
                             type="button"
+                            className="oh-tap-row"
                             disabled={busy}
                             onClick={() => runBusy(async () => {
                                 const title = cleanEventText(createForm.title);
@@ -2425,19 +2453,21 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                         >
                             Add to canonical history
                         </button>
-                        <button type="button" disabled={busy} onClick={() => { setCreating(false); setCreateForm({}); }} style={buttonStyle}>Cancel</button>
+                        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => { setCreating(false); setCreateForm({}); }} style={buttonStyle}>Cancel</button>
                     </div>
                 </div>
             )}
 
-            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.55rem" }}>
+            {/* On a phone the search has the whole row and the sort goes under
+                it: beside a 9rem sort, the field was too short to read. */}
+            <div style={{ display: "flex", flexWrap: isMobile ? "wrap" : undefined, gap: "0.4rem", marginTop: "0.55rem" }}>
                 <input
                     style={{ ...inputStyle, flex: 1, minWidth: 0 }}
                     value={search}
                     onChange={(event) => { setSearch(event.target.value); setLimit(80); }}
                     placeholder="Search title, description, date, kind…"
                 />
-                <div style={{ display: "grid", flexShrink: 0, gap: "0.25rem", gridTemplateColumns: "1fr 1fr", width: "9rem" }}>
+                <div style={{ display: "grid", flexShrink: 0, gap: "0.25rem", gridTemplateColumns: "1fr 1fr", width: isMobile ? "100%" : "9rem" }}>
                     <button type="button" onClick={() => setSort("newest")} style={choiceButton(sort === "newest")}>Newest</button>
                     <button type="button" onClick={() => setSort("oldest")} style={choiceButton(sort === "oldest")}>Oldest</button>
                 </div>
@@ -2451,7 +2481,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                     ["player", "Player"],
                     ["manual", "Manual"],
                 ].map(([value, label]) => (
-                    <button key={value} type="button" onClick={() => { setFilter(value); setLimit(80); }} style={eventFilterButtonStyle(filter === value)}>{label}</button>
+                    <button key={value} type="button" className="oh-tap-row" onClick={() => { setFilter(value); setLimit(80); }} style={eventFilterButtonStyle(filter === value)}>{label}</button>
                 ))}
                 <span style={{ alignSelf: "center", color: "rgba(255,255,255,0.34)", fontSize: "0.62rem", marginLeft: "auto" }}>
                     {filtered.length} match{filtered.length === 1 ? "" : "es"}
@@ -2482,10 +2512,12 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                     <div style={{ fontSize: "0.78rem", fontWeight: 780, lineHeight: 1.28, marginTop: "0.08rem" }}>{event.title || "(untitled)"}</div>
                                 </div>
                                 <div style={{ display: "flex", flexShrink: 0, gap: "0.3rem" }}>
-                                    <button type="button" disabled={busy} style={{ ...buttonStyle, padding: "0.28rem 0.5rem" }} onClick={() => isEditing ? setEditingKey(null) : beginEdit(event, editorKey)}>{isEditing ? "Close" : "Edit"}</button>
+                                    <button type="button" className="oh-tap-row" disabled={busy} style={{ ...buttonStyle, padding: "0.28rem 0.5rem" }} onClick={() => isEditing ? setEditingKey(null) : beginEdit(event, editorKey)}>{isEditing ? "Close" : "Edit"}</button>
                                     <button
                                         type="button"
+                                        className="oh-tap"
                                         disabled={busy}
+                                        aria-label="Delete event"
                                         title="Delete event from canonical history"
                                         style={{ ...buttonStyle, borderColor: "rgba(244,63,94,0.32)", color: "#fda4af", padding: "0.28rem 0.48rem" }}
                                         onClick={() => {
@@ -2531,6 +2563,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                     </div>
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         disabled={busy}
                                         onClick={() => runBusy(async () => {
                                             const next = (events ?? []).map((entry, index) => index === sourceIndex
@@ -2603,6 +2636,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                     <div style={{ display: "flex", gap: "0.45rem", marginTop: "0.55rem" }}>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => runBusy(async () => {
                                                 const title = cleanEventText(editForm.title);
@@ -2656,7 +2690,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                         >
                                             Save canonical edit
                                         </button>
-                                        <button type="button" disabled={busy} onClick={() => { setEditingKey(null); setEditForm({}); }} style={buttonStyle}>Cancel</button>
+                                        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => { setEditingKey(null); setEditForm({}); }} style={buttonStyle}>Cancel</button>
                                     </div>
                                 </div>
                             )}
@@ -2665,7 +2699,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 })}
 
                 {filtered.length > limit && (
-                    <button type="button" onClick={() => setLimit((value) => value + 80)} style={{ ...buttonStyle, width: "100%" }}>
+                    <button type="button" className="oh-tap-row" onClick={() => setLimit((value) => value + 80)} style={{ ...buttonStyle, width: "100%" }}>
                         Show 80 more · {filtered.length - limit} remaining
                     </button>
                 )}
@@ -2688,6 +2722,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const [items, setItems] = useState(null);
     const [search, setSearch] = useState("");
     const [editingId, setEditingId] = useState(null);
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
 
     const loadMapFeatureData = async () => {
         const [world, geojson] = await Promise.all([
@@ -2956,6 +2992,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             return (
                 <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => setGmExpandedSections((current) => ({ ...current, [sectionId]: !expanded }))}
                     style={{
                         background: "transparent",
@@ -3026,7 +3063,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </div>
 
                 <label style={labelStyle}>Mode</label>
-                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
+                {/* One per row on a phone: a third of the panel squeezed each
+                    mode's description into a column a word or two wide. */}
+                <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", marginBottom: "0.7rem" }}>
                     {modeOptions.map((option) => {
                         const active = gmMode === option.id;
                         return (
@@ -3069,6 +3108,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 />
                 <button
                     type="button"
+                    className="oh-tap-row"
                     disabled={busy || !text.trim()}
                     onClick={() => runBusy(async () => {
                         const result = await previewGameMasterCommand(text.trim(), { mode: gmMode });
@@ -3406,6 +3446,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                         <button
                             type="button"
+                            className="oh-tap-row"
                             disabled={busy || gmApplied}
                             title={gmApplied ? "This exact transaction has already been applied." : "Apply exactly the validated preview above. No second AI call."}
                             onClick={() => runBusy(async () => {
@@ -3500,7 +3541,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         return (
             <>
             {header(meta.title, meta.subtitle)}
-            <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+            {/* Scrolls on a phone: a sixteen-row document under the notes is
+                taller than a phone's panel, which cut off the Save buttons. */}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...(isMobile || touch ? { overflowY: "auto" } : null) }}>
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem", marginBottom: "0.5rem" }}>
             Every event stays in the timeline in full. When enough have piled up, a pass folds the older ones into this document — the first pass writes it, every later one rewrites it with the new period added and unimportant older material condensed to stay near {HISTORY_CONSOLIDATION.documentWordBudget} words — and the AI is shown the document in their place, plus the newest {HISTORY_CONSOLIDATION.retainEvents} events one by one.
             </div>
@@ -3513,6 +3556,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.45rem" }}>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={busy || !data.status.canFoldNow}
                 title={data.status.canFoldNow ? "Runs the AI consolidator on the older events now" : "Only the retained tail is waiting; there is nothing older to fold"}
                 style={{ ...primaryButtonStyle, opacity: busy || !data.status.canFoldNow ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
@@ -3528,12 +3572,13 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </button>
                 {confirmingReset ? (
                     <>
-                    <button type="button" disabled={busy} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }} onClick={() => runBusy(resetCompression)}>Confirm reset</button>
-                    <button type="button" disabled={busy} style={{ ...buttonStyle, padding: "0.3rem 0.6rem" }} onClick={() => setEditingId(null)}>Keep</button>
+                    <button type="button" className="oh-tap-row" disabled={busy} style={{ ...primaryButtonStyle, padding: "0.3rem 0.6rem" }} onClick={() => runBusy(resetCompression)}>Confirm reset</button>
+                    <button type="button" className="oh-tap-row" disabled={busy} style={{ ...buttonStyle, padding: "0.3rem 0.6rem" }} onClick={() => setEditingId(null)}>Keep</button>
                     </>
                 ) : (
                     <button
                     type="button"
+                    className="oh-tap-row"
                     disabled={busy || (!doc && passes.length === 0)}
                     title="Deletes the document and the pass ledger; every event is shown to the AI in full again until the next pass"
                     style={{ ...buttonStyle, opacity: busy || (!doc && passes.length === 0) ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
@@ -3558,19 +3603,20 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.4rem" }}>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={busy || !dirty}
                 style={{ ...primaryButtonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }}
                 onClick={() => runBusy(saveDocument)}
                 >
                 Save document
                 </button>
-                <button type="button" disabled={busy || !dirty} style={{ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }} onClick={() => setFields({ document: savedText })}>Revert</button>
+                <button type="button" className="oh-tap-row" disabled={busy || !dirty} style={{ ...buttonStyle, opacity: busy || !dirty ? 0.55 : 1, padding: "0.3rem 0.6rem" }} onClick={() => setFields({ document: savedText })}>Revert</button>
                 </div>
                 </>
             )}
             {passes.length > 0 && (
                 <details style={{ marginTop: "0.6rem" }}>
-                <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem" }}>{passes.length} pass{passes.length === 1 ? "" : "es"} so far — what each one folded</summary>
+                <summary style={{ cursor: "pointer", color: "rgba(255,255,255,0.6)", fontSize: "0.74rem", ...(touch ? TOUCH_SUMMARY : null) }}>{passes.length} pass{passes.length === 1 ? "" : "es"} so far — what each one folded</summary>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.4rem", maxHeight: "18rem", overflowY: "auto" }}>
                 {passes.map((entry, index) => {
                     const summary = String(entry?.summary ?? "");
@@ -3632,6 +3678,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div style={{ display: "flex", flexShrink: 0, gap: "0.3rem" }}>
                         <button
                         type="button"
+                        className="oh-tap-row"
                         disabled={busy}
                         style={{ ...primaryButtonStyle, padding: "0.25rem 0.55rem" }}
                         onClick={() => runBusy(async () => {
@@ -3659,10 +3706,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         >
                         Confirm
                         </button>
-                        <button type="button" style={{ ...buttonStyle, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(null)}>Cancel</button>
+                        <button type="button" className="oh-tap-row" style={{ ...buttonStyle, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(null)}>Cancel</button>
                         </div>
                     ) : (
-                        <button type="button" disabled={busy} style={{ ...buttonStyle, flexShrink: 0, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(snap.id)}>Roll back</button>
+                        <button type="button" className="oh-tap-row" disabled={busy} style={{ ...buttonStyle, flexShrink: 0, padding: "0.25rem 0.55rem" }} onClick={() => setEditingId(snap.id)}>Roll back</button>
                     )}
                     </div>
                     </div>
@@ -3687,6 +3734,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <PolitySelect polities={polities} value={target} onChange={setTarget} />
             <button
             type="button"
+            className="oh-tap-row"
             disabled={busy || !target}
             onClick={() => runBusy(async () => {
                 const current = await readGameData({ force: true });
@@ -3851,6 +3899,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <PolitySelect polities={polities} value={target} onChange={setTarget} placeholder="Pick the new owner…" />
             <button
             type="button"
+            className="oh-tap-row"
             disabled={!target}
             onClick={() => {
                 const owner = target;
@@ -3986,12 +4035,13 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <input style={{ ...inputStyle, width: "8rem" }} value={fields.color ?? ""} onChange={(event) => setFields({ ...fields, color: event.target.value })} placeholder="#a1a1aa" />
             <input
             type="color"
+            className="oh-tap"
             value={hexToRgb(fields.color) ? (fields.color.startsWith("#") ? fields.color : `#${fields.color}`) : "#a1a1aa"}
             onChange={(event) => setFields({ ...fields, color: event.target.value })}
             style={{ background: "none", border: "none", cursor: "pointer", height: "2.1rem", padding: 0, width: "2.6rem" }}
             />
             </div>
-            <button type="button" disabled={busy} onClick={applyCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={applyCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
             {adding ? "Create country" : "Save changes"}
             </button>
             {statusLine}
@@ -4154,6 +4204,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                 <button
                     type="button"
+                    className="oh-tap-row"
                     disabled={busy}
                     onClick={() => beginClickMode("Click a region on the map to inspect it", async (props) => {
                         try {
@@ -4199,6 +4250,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <PolitySelect polities={polities} value={fields.controllerTarget ?? controller} onChange={(value) => setFields({ ...fields, controllerTarget: value })} placeholder="Unclaimed / no controller" />
                         <button
                             type="button"
+                            className="oh-tap-row"
                             disabled={busy || !fields.controllerTarget || fields.controllerTarget === controller}
                             onClick={() => runBusy(() => applyTerritoryImpacts({
                                 regionControlOps: [{
@@ -4217,6 +4269,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         {isOccupied && (
                             <button
                                 type="button"
+                                className="oh-tap-row"
                                 disabled={busy || !sovereign}
                                 onClick={() => runBusy(() => applyTerritoryImpacts({
                                     regionControlOps: [
@@ -4254,6 +4307,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <PolitySelect polities={polities} value={fields.sovereignTarget ?? sovereign} onChange={(value) => setFields({ ...fields, sovereignTarget: value })} placeholder="Pick legal sovereign…" />
                         <button
                             type="button"
+                            className="oh-tap-row"
                             disabled={busy || !fields.sovereignTarget || fields.sovereignTarget === sovereign}
                             onClick={() => runBusy(() => applyTerritoryImpacts({
                                 regionTransfers: [{
@@ -4288,6 +4342,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         <span style={{ color: "#f4f4f5", fontSize: "0.73rem", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{nameOf(claimant)}</span>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => runBusy(() => applyTerritoryImpacts({
                                                 regionClaims: [{
@@ -4363,6 +4418,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     />
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         disabled={busy || !target || target === owner || claimants.includes(target)}
                                         onClick={() => runBusy(() => applyTerritoryImpacts({
                                             regionClaims: [{
@@ -4385,6 +4441,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         {claimants.length > 0 && (
                             <button
                                 type="button"
+                                className="oh-tap-row"
                                 disabled={busy}
                                 onClick={() => runBusy(() => applyTerritoryImpacts({
                                     regionClaims: claimants.map((claimant) => ({
@@ -4403,7 +4460,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     </div>
 
                     <details style={{ ...editorFieldStyle, marginTop: "0.55rem", padding: "0.5rem 0.6rem" }}>
-                        <summary style={{ cursor: "pointer", fontSize: "0.69rem", fontWeight: 800 }}>Advanced · region identity</summary>
+                        <summary style={{ cursor: "pointer", fontSize: "0.69rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>Advanced · region identity</summary>
                         <div style={{ marginTop: "0.5rem" }}>
                             <label style={labelStyle}>Region name</label>
                             <input
@@ -4420,6 +4477,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {fields.canRename && (
                                 <button
                                     type="button"
+                                    className="oh-tap-row"
                                     disabled={busy || !String(fields.name ?? "").trim()}
                                     onClick={() => runBusy(async () => {
                                         const geojson = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true });
@@ -4580,7 +4638,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         return (
             <>
             {header(meta.title, "Runtime world features + scenario-authored cities")}
-            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+            {/* On a phone the whole tool scrolls as one, the list with it: with
+                the notes, tabs and search held in place, a phone held sideways
+                had no room left for the list at all. */}
+            <div style={{ display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden", ...(isMobile || touch ? { overflow: "auto" } : null) }}>
                 <div style={{
                     background: "rgba(255,255,255,0.04)",
                     border: "1px solid rgba(255,255,255,0.1)",
@@ -4596,6 +4657,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                 <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => navigateTool?.("add-feature")}
                     style={{ ...primaryButtonStyle, marginBottom: "0.5rem", width: "100%" }}
                 >
@@ -4603,10 +4665,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </button>
 
                 <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "1fr 1fr", marginBottom: "0.5rem" }}>
-                    <button type="button" onClick={() => setFeatureTab("runtime")} style={choiceButton(activeTab === "runtime")}>
+                    <button type="button" className="oh-tap-row" onClick={() => setFeatureTab("runtime")} style={choiceButton(activeTab === "runtime")}>
                         World features · {markers.length}
                     </button>
-                    <button type="button" onClick={() => setFeatureTab("cities")} style={choiceButton(activeTab === "cities")}>
+                    <button type="button" className="oh-tap-row" onClick={() => setFeatureTab("cities")} style={choiceButton(activeTab === "cities")}>
                         Scenario cities · {cities.length}
                     </button>
                 </div>
@@ -4618,7 +4680,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     placeholder={activeTab === "runtime" ? "Search name, type, owner, status…" : "Search scenario cities…"}
                 />
 
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.38rem", marginTop: "0.5rem", overflowY: "auto", paddingRight: "0.08rem" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.38rem", marginTop: "0.5rem", overflowY: isMobile || touch ? "visible" : "auto", paddingRight: "0.08rem" }}>
                 {activeTab === "runtime" && markerRows.length === 0 && (
                     <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.72rem", lineHeight: 1.45, padding: "0.55rem 0" }}>
                         No runtime world features match this view. Use + Add new map feature above to create HQs, ports, landmarks, temporary markers, and more without replacing the city layer.
@@ -4646,6 +4708,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 <div style={{ display: "flex", gap: "0.3rem", flexShrink: 0 }}>
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         onClick={() => {
                                             if (isEditing) {
                                                 setEditingId(null);
@@ -4673,6 +4736,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     </button>
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         disabled={busy}
                                         onClick={() => {
                                             if (!window.confirm(`Delete “${marker.name}” from the canonical world?`)) return;
@@ -4696,9 +4760,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} />
 
                                     <label style={labelStyle}>Feature type</label>
-                                    <div style={{ display: "grid", gap: "0.28rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                                    {/* Two across on a phone, where a third of the card could
+                                        not hold "Fortification" or "Industrial Site". */}
+                                    <div style={{ display: "grid", gap: "0.28rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(3, minmax(0, 1fr))" }}>
                                     {MAP_FEATURE_KINDS.map((kind) => (
-                                        <button key={kind.id} type="button" onClick={() => setFields({ ...fields, kind: kind.id })} style={choiceButton(fields.kind === kind.id)}>
+                                        <button key={kind.id} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, kind: kind.id })} style={choiceButton(fields.kind === kind.id)}>
                                             {kind.icon} {kind.label}
                                         </button>
                                     ))}
@@ -4732,6 +4798,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     <div style={{ display: "grid", gap: "0.38rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.55rem" }}>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => {
                                                 beginClickMode(`Click the new map position for “${marker.name}”`, async (props) => {
@@ -4754,6 +4821,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         </button>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => runBusy(async () => {
                                                 const saved = await saveMarker(marker);
@@ -4768,7 +4836,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     </div>
 
                                     <details style={{ marginTop: "0.45rem" }}>
-                                        <summary style={{ color: "rgba(255,255,255,0.48)", cursor: "pointer", fontSize: "0.64rem" }}>Manual coordinates · advanced</summary>
+                                        <summary style={{ color: "rgba(255,255,255,0.48)", cursor: "pointer", fontSize: "0.64rem", ...(touch ? TOUCH_SUMMARY : null) }}>Manual coordinates · advanced</summary>
                                         <div style={{ display: "grid", gap: "0.38rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.38rem" }}>
                                             <input style={inputStyle} value={fields.lng ?? ""} onChange={(event) => setFields({ ...fields, lng: event.target.value })} placeholder="Longitude" />
                                             <input style={inputStyle} value={fields.lat ?? ""} onChange={(event) => setFields({ ...fields, lat: event.target.value })} placeholder="Latitude" />
@@ -4813,6 +4881,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                 <div style={{ display: "flex", gap: "0.3rem", flexShrink: 0 }}>
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         onClick={() => {
                                             if (isEditing) {
                                                 setEditingId(null);
@@ -4833,6 +4902,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     </button>
                                     <button
                                         type="button"
+                                        className="oh-tap-row"
                                         disabled={busy}
                                         onClick={() => {
                                             const name = props.city || props.name || `City ${index + 1}`;
@@ -4857,9 +4927,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} />
 
                                     <label style={labelStyle}>Prominence</label>
-                                    <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                                    <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))" }}>
                                     {CITY_PROMINENCE.map((entry) => (
-                                        <button key={entry.tier} type="button" onClick={() => setFields({ ...fields, tier: String(entry.tier) })} style={choiceButton(Number(fields.tier) === entry.tier)}>
+                                        <button key={entry.tier} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, tier: String(entry.tier) })} style={choiceButton(Number(fields.tier) === entry.tier)}>
                                             {entry.label}
                                         </button>
                                     ))}
@@ -4875,6 +4945,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     <div style={{ display: "grid", gap: "0.38rem", gridTemplateColumns: "1fr 1fr", marginTop: "0.55rem" }}>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => {
                                                 const oldName = props.city || props.name || `City ${index + 1}`;
@@ -4898,6 +4969,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         </button>
                                         <button
                                             type="button"
+                                            className="oh-tap-row"
                                             disabled={busy}
                                             onClick={() => runBusy(async () => {
                                                 const saved = await editCity(index);
@@ -5019,6 +5091,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             <div style={{ overflowY: "auto", paddingRight: "0.08rem" }}>
                 <button
                     type="button"
+                    className="oh-tap"
                     onClick={() => navigateTool?.("edit-feature")}
                     style={{ ...buttonStyle, marginBottom: "0.55rem", width: "100%" }}
                 >
@@ -5029,9 +5102,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 </div>
 
                 <label style={{ ...labelStyle, marginTop: 0 }}>Feature type</label>
-                <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+                <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(3, minmax(0, 1fr))" }}>
                 {kindChoices.map((kind) => (
-                    <button key={kind.id} type="button" onClick={() => setFields({ ...fields, addType: kind.id })} style={choiceStyle(type === kind.id)}>
+                    <button key={kind.id} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, addType: kind.id })} style={choiceStyle(type === kind.id)}>
                         {kind.icon} {kind.label}
                     </button>
                 ))}
@@ -5046,9 +5119,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 {isCity && currentUsesCustomCities ? (
                     <>
                     <label style={labelStyle}>Prominence</label>
-                    <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                    <div style={{ display: "grid", gap: "0.3rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))" }}>
                     {CITY_PROMINENCE.map((entry) => (
-                        <button key={entry.tier} type="button" onClick={() => setFields({ ...fields, tier: String(entry.tier) })} style={choiceStyle(Number(fields.tier || 2) === entry.tier)}>
+                        <button key={entry.tier} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, tier: String(entry.tier) })} style={choiceStyle(Number(fields.tier || 2) === entry.tier)}>
                             {entry.label}
                         </button>
                     ))}
@@ -5090,7 +5163,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     </>
                 )}
 
-                <button type="button" disabled={busy || !String(fields.name ?? "").trim()} onClick={beginPlacement} style={{ ...primaryButtonStyle, marginTop: "0.72rem", width: "100%" }}>
+                <button type="button" className="oh-tap-row" disabled={busy || !String(fields.name ?? "").trim()} onClick={beginPlacement} style={{ ...primaryButtonStyle, marginTop: "0.72rem", width: "100%" }}>
                     Place on map →
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.38rem" }}>
@@ -5125,6 +5198,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                 <button
                     type="button"
+                    className="oh-tap-row"
                     disabled={busy || markerCount === 0}
                     onClick={() => {
                         if (!window.confirm(`Delete all ${markerCount} runtime world feature${markerCount === 1 ? "" : "s"}?`)) return;
@@ -5141,6 +5215,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 {data.customCities && (
                     <button
                         type="button"
+                        className="oh-tap-row"
                         disabled={busy || cityCount === 0}
                         onClick={() => {
                             if (!window.confirm(`Delete all ${cityCount} scenario-authored cities? The historical city layer will become empty.`)) return;
@@ -5156,12 +5231,13 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 )}
 
                 <details style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 9, marginTop: "0.55rem", padding: "0.5rem 0.58rem" }}>
-                    <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 800 }}>Advanced · city-layer source</summary>
+                    <summary style={{ cursor: "pointer", fontSize: "0.68rem", fontWeight: 800, ...(touch ? TOUCH_SUMMARY : null) }}>Advanced · city-layer source</summary>
                     <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.63rem", lineHeight: 1.45, marginTop: "0.45rem" }}>
                         Turning off scenario cities restores the stock PMTiles city database. On historical scenarios this may reintroduce modern/anachronistic cities, so this is intentionally not the default cleanup action.
                     </div>
                     <button
                         type="button"
+                        className="oh-tap-row"
                         disabled={busy || !data.customCities}
                         onClick={() => runBusy(async () => {
                             const world = await readWorldState({ force: true });
