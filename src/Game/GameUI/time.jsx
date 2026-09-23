@@ -1,5 +1,6 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
@@ -703,6 +704,7 @@ const MetricPill = ({ children, icon = null, tone = "default", onClick = null, a
     return (
         <Tag
         type={onClick ? "button" : undefined}
+        className={onClick ? "oh-tap-row" : undefined}
         onClick={onClick ?? undefined}
         style={{
             alignItems: "center",
@@ -766,6 +768,7 @@ const LINK_GLYPHS = { polity: "⚑", region: "⌖", unit: "⛊", structure: "▣
 const LinkPill = ({ link, onFocus }) => (
     <button
     type="button"
+    className="oh-tap-row"
     title={`Show ${link.label} on the map`}
     onClick={() => onFocus?.(link.bounds)}
     style={{
@@ -797,6 +800,7 @@ const EventDocument = ({ report }) => {
         <div style={{ background: "rgba(251,191,36,0.05)", border: "1px solid rgba(251,191,36,0.18)", borderRadius: "12px", overflow: "hidden" }}>
         <button
         type="button"
+        className="oh-tap-row"
         onClick={() => setOpen((value) => !value)}
         style={{ alignItems: "center", background: "none", border: "none", color: "rgba(254,243,199,0.92)", cursor: "pointer", display: "flex", font: "inherit", fontSize: "0.74rem", fontWeight: 700, gap: "0.45rem", padding: "0.5rem 0.7rem", textAlign: "left", width: "100%" }}
         >
@@ -951,10 +955,10 @@ const InteractiveOfferStrip = () => {
                 <div style={{ color: "#fde047", fontSize: "0.74rem", fontWeight: 800 }}>⚡ Interactive event</div>
                 <div style={{ color: "rgba(254,249,195,0.72)", fontSize: "0.68rem", lineHeight: 1.4 }}>Play this moment out as a scene: you make the moves, and how it ends goes into the record.</div>
             </div>
-            <button type="button" onClick={openInteractiveEvent} style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.4rem 0.75rem" }}>
+            <button type="button" className="oh-tap-row" onClick={openInteractiveEvent} style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.4rem 0.75rem" }}>
                 Play it out
             </button>
-            <button type="button" onClick={letPass} disabled={passing} title="Let the moment pass as it happened — free" style={{ ...ghostButtonStyle, opacity: passing ? 0.6 : 1, padding: "0.4rem 0.75rem" }}>
+            <button type="button" className="oh-tap-row" onClick={letPass} disabled={passing} title="Let the moment pass as it happened — free" style={{ ...ghostButtonStyle, opacity: passing ? 0.6 : 1, padding: "0.4rem 0.75rem" }}>
                 {passing ? "Letting it pass…" : "Let it pass"}
             </button>
         </div>
@@ -998,16 +1002,16 @@ const PanelChrome = ({
         <div
         style={{
             ...panelSurface,
-            bottom: isOpen ? "4.9rem" : "-34rem",
+            bottom: isOpen ? `calc(4.9rem + ${SAFE_BOTTOM})` : "-34rem",
             display: "flex",
             flexDirection: "column",
             // Match the Actions/Chat panels: on short laptop screens the sliver
             // calc(100vh - 33rem) collapsed to the 10rem floor, so grow to at
             // least 30rem while still capping at calc(100vh - 9rem) to fit. (The
             // min() already caps height, so no separate maxHeight is needed.)
-            height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))",
-            left: "0.5rem",
-            maxWidth: "calc(100vw - 1rem)",
+            height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 33rem), 30rem))`,
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
+            maxWidth: `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`,
             minHeight: "10rem",
             opacity: isOpen ? 1 : 0,
             pointerEvents: isOpen ? "auto" : "none",
@@ -1043,6 +1047,7 @@ const PanelChrome = ({
         )}
         <button
         type="button"
+        className="oh-tap"
         onClick={onClose}
         style={{
             background: "none",
@@ -1117,6 +1122,7 @@ const JumpNode = ({ isLoading, opt, onJump }) => {
     return (
         <button
         type="button"
+        className="oh-tap-row"
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onClick={() => {
@@ -1170,6 +1176,7 @@ const SkipProgressRow = ({ label, onCancel }) => (
     {onCancel && (
         <button
         type="button"
+        className="oh-tap-row"
         onClick={onCancel}
         style={{
             background: "rgba(220,38,38,0.18)",
@@ -1270,6 +1277,7 @@ const TimelineSkipPanel = ({
                 ⚡ A scene is in progress. Time stands still until it ends or is set aside.
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={openInteractiveEvent}
                 style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", display: "block", fontSize: "0.72rem", fontWeight: 800, margin: "0.4rem auto 0", padding: "0.3rem 0.7rem" }}
                 >
@@ -1284,6 +1292,7 @@ const TimelineSkipPanel = ({
                 ⚡ An interactive event is on offer: <span data-no-translate style={{ fontWeight: 800 }}>{offeredInteractive.title}</span>. The next time skip lets it pass.
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={openInteractiveEvent}
                 style={{ background: "#facc15", border: "none", borderRadius: "8px", color: "#1c1917", cursor: "pointer", display: "block", fontSize: "0.72rem", fontWeight: 800, margin: "0.4rem auto 0", padding: "0.3rem 0.7rem" }}
                 >
@@ -1295,6 +1304,7 @@ const TimelineSkipPanel = ({
             <>
             <button
             type="button"
+            className="oh-tap-row"
             disabled={isLoading}
             onClick={() => { if (!isLoading) onUndo(); }}
             style={{
@@ -1344,6 +1354,7 @@ const TimelineSkipPanel = ({
         <div style={{ background: "rgba(255,255,255,0.1)", height: "1.25rem", width: "2px" }} />
         <button
         type="button"
+        className="oh-tap-row"
         onClick={() => {
             if (blocked) {
                 return;
@@ -1381,6 +1392,7 @@ const TimelineSkipPanel = ({
         >
         <input
         type="number"
+        className="oh-tap-row"
         min="1"
         step="any"
         value={customValue}
@@ -1402,6 +1414,7 @@ const TimelineSkipPanel = ({
         />
         <select
         data-no-translate
+        className="oh-tap-row"
         value={customUnit}
         onChange={(event) => setCustomUnit(event.target.value)}
         disabled={blocked}
@@ -1426,6 +1439,7 @@ const TimelineSkipPanel = ({
         </select>
         <button
         type="button"
+        className="oh-tap-row"
         onClick={runCustomJump}
         disabled={blocked || !customValue}
         style={{
@@ -1505,6 +1519,7 @@ const TimelineSkipPanel = ({
             <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={isRetryingSegment}
                 onClick={onRetrySegment}
                 style={{
@@ -1523,6 +1538,7 @@ const TimelineSkipPanel = ({
                 </button>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={isRetryingSegment}
                 onClick={onDiscardSegment}
                 style={{
@@ -1578,6 +1594,7 @@ const TimelineSkipPanel = ({
             <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={isRetryingProjects}
                 onClick={onRetryProjects}
                 style={{
@@ -1596,6 +1613,7 @@ const TimelineSkipPanel = ({
                 </button>
                 <button
                 type="button"
+                className="oh-tap-row"
                 disabled={isRetryingProjects}
                 onClick={onDiscardProjects}
                 style={{
@@ -1647,6 +1665,7 @@ const TimelineSkipPanel = ({
             <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={onAcceptModeSuggestion}
                 style={{
                     background: "rgba(96,165,250,0.2)",
@@ -1663,6 +1682,7 @@ const TimelineSkipPanel = ({
                 </button>
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={onDeclineModeSuggestion}
                 style={{
                     background: "rgba(255,255,255,0.06)",
@@ -1738,6 +1758,9 @@ const TimelineHistoryPanel = ({
     : [];
     const hasMoreEvents = visibleEvents.length < totalEvents;
     const lastVisibleEventRef = React.useRef(null);
+    // The reveal buttons pin a compact minHeight inline, which the finger-sized
+    // .oh-tap-row cannot beat; on a touch screen it is left to the class.
+    const isTouch = useTouchPrimary();
     // Save the log with this fallback attached, or — logging off — copy the
     // fallback alone under the button's old label (runtime/saveDebugLog.js).
     const report = useFailureReportButton({
@@ -1813,6 +1836,7 @@ const TimelineHistoryPanel = ({
             {typeof buildDebugIncident === "function" && (
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={report.onClick}
                 title={report.loggingOn
                     ? "Saves the diagnostics log as a file, with this turn's details — what was attempted and the raw model response — at the top. Attach the file to your bug report. No API key is included; the model's response may quote your campaign."
@@ -1844,6 +1868,7 @@ const TimelineHistoryPanel = ({
             {typeof onRollbackTurn === "function" && (canRollbackTurn || rollbackState === "working") && (
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={handleRollbackClick}
                 disabled={rollbackState === "working"}
                 title="Undoes this turn and restores the world to how it was before the jump, so you can fix the provider settings and try again."
@@ -1885,6 +1910,7 @@ const TimelineHistoryPanel = ({
                         <button
                         key={tag}
                         type="button"
+                        className="oh-tap-row"
                         onClick={() => setCategoryChoice({ recordId: record.id, tag: active ? null : tag })}
                         style={{
                             padding: "0.2rem 0.6rem",
@@ -1927,10 +1953,11 @@ const TimelineHistoryPanel = ({
                 <>
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={() => onRevealNextEvent()}
                 style={{
                     ...ghostButtonStyle,
-                    minHeight: "2.5rem",
+                    minHeight: isTouch ? undefined : "2.5rem",
                     width: "100%",
                 }}
                 >
@@ -1941,10 +1968,11 @@ const TimelineHistoryPanel = ({
                     to the final state. Nothing is truncated — every event stays. */}
                 <button
                 type="button"
+                className="oh-tap-row"
                 onClick={() => onRevealAll?.()}
                 style={{
                     ...ghostButtonStyle,
-                    minHeight: "1.9rem",
+                    minHeight: isTouch ? undefined : "1.9rem",
                     opacity: 0.75,
                     width: "100%",
                 }}
@@ -1980,15 +2008,17 @@ const TimelineHistoryPanel = ({
                         <div style={{ display: "flex", gap: "0.4rem" }}>
                             <button
                             type="button"
+                            className="oh-tap-row"
                             onClick={handleInterveneClick}
-                            style={{ ...ghostButtonStyle, flex: 1, minHeight: "2rem", border: "1px solid rgba(251,191,36,0.8)", background: "rgba(251,191,36,0.22)" }}
+                            style={{ ...ghostButtonStyle, flex: 1, minHeight: isTouch ? undefined : "2rem", border: "1px solid rgba(251,191,36,0.8)", background: "rgba(251,191,36,0.22)" }}
                             >
                             <span>Stop here</span>
                             </button>
                             <button
                             type="button"
+                            className="oh-tap-row"
                             onClick={() => setInterveneState({ recordId: record.id, state: "idle" })}
-                            style={{ ...ghostButtonStyle, flex: 1, minHeight: "2rem", opacity: 0.8 }}
+                            style={{ ...ghostButtonStyle, flex: 1, minHeight: isTouch ? undefined : "2rem", opacity: 0.8 }}
                             >
                             <span>Keep going</span>
                             </button>
@@ -1997,12 +2027,13 @@ const TimelineHistoryPanel = ({
                     ) : (
                         <button
                         type="button"
+                        className="oh-tap-row"
                         onClick={handleInterveneClick}
                         disabled={intervening === "working"}
                         title="Stop the round here: what is revealed happened, what is not never does, and you act before it."
                         style={{
                             ...ghostButtonStyle,
-                            minHeight: "1.9rem",
+                            minHeight: isTouch ? undefined : "1.9rem",
                             opacity: intervening === "working" ? 0.7 : 0.9,
                             width: "100%",
                             cursor: intervening === "working" ? "default" : "pointer",
@@ -2114,6 +2145,11 @@ const DateWidget = ({
     const [undoCount, setUndoCount] = useState(0);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
+    // Wherever the « » are finger-sized (a touch screen, a phone either way
+    // up), the country sits over the date: beside it, it was cut to its first
+    // letters.
+    const touch = useTouchPrimary();
+    const stackCountry = isMobile || touch;
     const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
 
     useEffect(() => {
@@ -2801,7 +2837,8 @@ const DateWidget = ({
     const rawGameDate = gameData?.gameDate || gameData?.startDate || "";
     // Any game date, BC included ("March 1st, 218 BC"); prose dates show verbatim.
     const hasValidGameDate = isGameDate(rawGameDate);
-    // Mobile shares the row with the country name, so abbreviate the month.
+    // A phone's widget is narrow (the country sits over the date there), so
+    // abbreviate the month.
     const displayDate = !gameData
     ? "Loading..."
     : hasValidGameDate
@@ -3193,6 +3230,8 @@ const DateWidget = ({
         >
         <button
         type="button"
+        className="oh-tap"
+        aria-label="Events"
         style={{
             ...buttonStyle,
             color: openPanel === "history" ? "#bfdbfe" : buttonStyle.color,
@@ -3214,7 +3253,13 @@ const DateWidget = ({
 
         <div style={{ alignItems: "center", display: "flex", flex: 1, flexDirection: "column", justifyContent: "center", minWidth: 0 }}>
         {playerCountry ? (
-            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}>
+            // On a touch screen the country sits over the date: the buttons are
+            // finger-sized, and side by side the name was cut down to its first
+            // few letters.
+            <div style={stackCountry
+                ? { alignItems: "center", display: "flex", flexDirection: "column", gap: "0.1rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }
+                : { alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}
+            >
             <span
             style={{
                 color: "rgba(147,197,253,0.88)",
@@ -3226,6 +3271,8 @@ const DateWidget = ({
                 textOverflow: "ellipsis",
                 textTransform: "uppercase",
                 whiteSpace: "nowrap",
+                // A column's items are as wide as their text unless told otherwise.
+                ...(stackCountry ? { maxWidth: "100%" } : null),
             }}
             >
             {playerCountry}
@@ -3243,6 +3290,8 @@ const DateWidget = ({
 
         <button
         type="button"
+        className="oh-tap"
+        aria-label="Timeline"
         style={{
             ...buttonStyle,
             color: openPanel === "skip" ? "#e4e4e7" : buttonStyle.color,

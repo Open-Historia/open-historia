@@ -1,5 +1,6 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
 import MapScene from "./MapScene.jsx";
@@ -1052,7 +1053,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     <div
       id="oh-globe-space"
       style={{
-        height: "100vh",
+        height: APP_HEIGHT,
         width: "100vw",
         backgroundColor: isGlobe ? "#000" : "#0b1017",
         position: "relative",

@@ -6,6 +6,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebView;
 
+import androidx.activity.OnBackPressedCallback;
+
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
@@ -25,5 +27,24 @@ public class MainActivity extends BridgeActivity {
                 }
             });
         }
+        // Back closes the panel on top. Capacitor leaves the Back button to its
+        // App plugin, which this app does not ship, so without this every Back
+        // left the game, whatever was open. Each panel the page opens adds a
+        // step to its history (src/runtime/backToClose.js) and stepping back
+        // closes it; with nothing open there is no step to take, and Back does
+        // what it always did.
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                WebView view = getBridge() != null ? getBridge().getWebView() : null;
+                if (view != null && view.canGoBack()) {
+                    view.goBack();
+                    return;
+                }
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+                setEnabled(true);
+            }
+        });
     }
 }

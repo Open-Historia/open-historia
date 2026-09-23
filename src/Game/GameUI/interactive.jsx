@@ -12,6 +12,7 @@
 // AI request, each move one more, and ending the scene one more. Letting an
 // offer pass, taking a move back and setting a scene aside cost nothing.
 import React, { useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
@@ -34,8 +35,10 @@ const panelStyle = {
     display: "flex",
     flexDirection: "column",
     fontFamily: "sans-serif",
-    maxHeight: "min(46rem, calc(100vh - 2rem))",
-    maxWidth: "calc(100vw - 2rem)",
+    // Inside the backdrop's padding, which keeps clear of a notch and a home
+    // indicator (the insets are 0 everywhere else).
+    maxHeight: `min(46rem, calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`,
+    maxWidth: `calc(100vw - 2rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`,
     overflow: "hidden",
     width: "40rem",
 };
@@ -159,14 +162,16 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
     const idle = !busy;
 
     return (
-        <div style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", padding: "1rem", position: "fixed", zIndex: 10001 }}>
+        <div style={{ alignItems: "center", background: "rgba(0,0,0,0.55)", display: "flex", inset: 0, justifyContent: "center", padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})`, position: "fixed", zIndex: 10001 }}>
             <div role="dialog" aria-label="Interactive event" style={panelStyle}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(250,204,21,0.18)", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.9rem 1.1rem" }}>
                     <div>
                         <div style={{ color: YELLOW, fontSize: "0.95rem", fontWeight: 850, letterSpacing: "0.02em" }}>⚡ Interactive event</div>
                         <div style={{ ...caption, marginTop: "0.15rem" }}>A moment of the campaign played out as a scene. Time stands still until it ends.</div>
                     </div>
-                    <button type="button" onClick={onClose} title="Close — a scene in progress stays where it is, and an offer stays until the next time skip" style={quietButton(false)}>✕ Leave</button>
+                    {/* Kept on one line: squeezed by the caption on a phone, it
+                        broke into "✕" over "Leave". */}
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Leave" title="Close — a scene in progress stays where it is, and an offer stays until the next time skip" style={{ ...quietButton(false), flexShrink: 0, whiteSpace: "nowrap" }}>✕ Leave</button>
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem", overflowY: "auto", padding: "1rem 1.1rem 1.1rem" }}>
@@ -174,7 +179,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                         <div style={{ background: "rgba(250,204,21,0.08)", border: "1px solid rgba(250,204,21,0.3)", borderRadius: "10px", fontSize: "0.8rem", lineHeight: 1.5, padding: "0.7rem 0.85rem" }}>
                             The scene is over and written into the record{finished.title ? <>: <span data-no-translate style={{ fontWeight: 800 }}>{finished.title}</span></> : null}.
                             {typeof onOpenTimeline === "function" && (
-                                <button type="button" onClick={onOpenTimeline} style={{ ...quietButton(false), marginLeft: "0.6rem", padding: "0.3rem 0.6rem" }}>See it on the timeline</button>
+                                <button type="button" className="oh-tap-row" onClick={onOpenTimeline} style={{ ...quietButton(false), marginLeft: "0.6rem", padding: "0.3rem 0.6rem" }}>See it on the timeline</button>
                             )}
                         </div>
                     )}
@@ -196,7 +201,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                                                     Your move: <span data-no-translate>{beat.choice}</span>
                                                 </div>
                                                 {canRewindInteractiveTo(scene, index) && (
-                                                    <button type="button" onClick={() => takeBack(index)} disabled={!idle} title="Return the scene to just before this move — free; choosing again is one request" style={{ ...quietButton(!idle), fontSize: "0.68rem", padding: "0.2rem 0.5rem" }}>↶ Take back</button>
+                                                    <button type="button" className="oh-tap-row" onClick={() => takeBack(index)} disabled={!idle} title="Return the scene to just before this move — free; choosing again is one request" style={{ ...quietButton(!idle), fontSize: "0.68rem", padding: "0.2rem 0.5rem" }}>↶ Take back</button>
                                                 )}
                                             </div>
                                             {beat.summary && <SceneText style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.8rem", marginTop: "0.25rem" }}>{beat.summary}</SceneText>}
@@ -209,7 +214,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
 
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
                                 {choices.map((choice) => (
-                                    <button type="button" key={choice} onClick={() => play(choice)} disabled={!idle} style={choiceButton(!idle)}>
+                                    <button type="button" className="oh-tap-row" key={choice} onClick={() => play(choice)} disabled={!idle} style={choiceButton(!idle)}>
                                         <span data-no-translate>{choice}</span>
                                     </button>
                                 ))}
@@ -224,13 +229,13 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                                     placeholder="Or write your own move…"
                                     style={{ ...inputStyle, resize: "none" }}
                                 />
-                                <button type="button" onClick={() => play(move)} disabled={!idle || !move.trim()} style={primaryButton(!idle || !move.trim())}>Play</button>
+                                <button type="button" className="oh-tap-row" onClick={() => play(move)} disabled={!idle || !move.trim()} style={primaryButton(!idle || !move.trim())}>Play</button>
                             </div>
                             <div style={caption}>Each move is one AI request. The scene ends when it reaches its outcome, or when you end it.</div>
 
                             <div style={{ alignItems: "center", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", flexWrap: "wrap", gap: "0.6rem", paddingTop: "0.8rem" }}>
-                                <button type="button" onClick={end} disabled={!idle || !beats.length} title={beats.length ? "Write what has happened into the record — one request" : "Play a move first; with none played there is nothing to record"} style={quietButton(!idle || !beats.length)}>End the scene</button>
-                                <button type="button" onClick={setAside} disabled={!idle} title="Close the scene without writing anything — free" style={quietButton(!idle)}>Set aside</button>
+                                <button type="button" className="oh-tap-row" onClick={end} disabled={!idle || !beats.length} title={beats.length ? "Write what has happened into the record — one request" : "Play a move first; with none played there is nothing to record"} style={quietButton(!idle || !beats.length)}>End the scene</button>
+                                <button type="button" className="oh-tap-row" onClick={setAside} disabled={!idle} title="Close the scene without writing anything — free" style={quietButton(!idle)}>Set aside</button>
                                 <span style={caption}>Ending writes the scene into the record (one request). Setting it aside keeps nothing.</span>
                             </div>
                         </>
@@ -256,8 +261,8 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                             />
                             {revealing && <div style={{ ...caption, color: "#fde68a" }}>Finish revealing the last time skip first: a scene starts from what you have seen.</div>}
                             <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                                <button type="button" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
-                                <button type="button" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
+                                <button type="button" className="oh-tap-row" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
+                                <button type="button" className="oh-tap-row" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
                                 <span style={caption}>Playing it out is one AI request; each move is one more, and ending it one more. Letting it pass costs nothing.</span>
                             </div>
                         </>

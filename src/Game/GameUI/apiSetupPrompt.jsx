@@ -1,4 +1,8 @@
 import React, { useId, useMemo, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
+import { usePresenceLeaving } from "./presence.jsx";
 import {
   DEFAULT_PROVIDER,
   GEMINI_DEFAULT_CHAIN,
@@ -128,6 +132,13 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
   const meta = getProviderMeta(provider);
   const recentModels = useMemo(() => getRecentModels(provider), [provider]);
   const canSave = selfHosted ? endpoint.trim().length > 0 : apiKey.trim().length > 0;
+  const isMobile = useIsMobile();
+  const isTouch = useTouchPrimary();
+  const leaving = usePresenceLeaving();
+  // On a phone "Not now" is a long scroll away, under the video and the form,
+  // so the card gets a ✕ at the top as well, and Back answers it the same way.
+  const phone = isMobile || isTouch;
+  useBackToClose(!leaving, onDismiss);
 
   const choose = (next) => {
     setProvider(next);
@@ -159,7 +170,8 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
         display: "flex",
         inset: 0,
         justifyContent: "center",
-        padding: "1rem",
+        // Clear of a notch and a home indicator (the insets are 0 elsewhere).
+        padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})`,
         position: "fixed",
         zIndex: 10040,
       }}
@@ -172,13 +184,29 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
           boxShadow: "var(--oh-hud-shadow)",
           color: "white",
           fontFamily: "sans-serif",
-          maxHeight: "calc(100vh - 2rem)",
+          maxHeight: `calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM})`,
           overflowY: "auto",
           padding: "1.35rem 1.4rem 1.2rem",
           width: "min(34rem, 100%)",
         }}
       >
-        <div style={{ fontSize: "1.05rem", fontWeight: 900 }}>Set up your AI provider</div>
+        {phone ? (
+          <div style={{ alignItems: "flex-start", display: "flex", gap: "0.75rem", justifyContent: "space-between" }}>
+            <div style={{ fontSize: "1.05rem", fontWeight: 900 }}>Set up your AI provider</div>
+            <button
+              type="button"
+              className="oh-tap"
+              onClick={onDismiss}
+              aria-label="Not now"
+              title="Not now"
+              style={{ background: "none", border: "none", color: "rgba(255,255,255,0.55)", cursor: "pointer", display: "flex", flexShrink: 0, fontSize: "1.1rem", lineHeight: 1, margin: "-0.6rem -0.7rem 0 0", padding: "0.15rem 0.3rem" }}
+            >
+              ✕
+            </button>
+          </div>
+        ) : (
+          <div style={{ fontSize: "1.05rem", fontWeight: 900 }}>Set up your AI provider</div>
+        )}
         <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.8rem", lineHeight: 1.55, marginTop: "0.5rem" }}>
           Open Historia writes every turn, advisor reply and diplomatic message with an AI model, and {providerLabel} has {missing} missing.
           Until it is set, time skips fall back to canned events and the advisor cannot answer. Paste your details below and you are ready to play.
@@ -200,7 +228,7 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
                 A Gemini key is free. The video walks through getting one; the button opens the page where it is made.
               </div>
             </div>
-            <a href={AI_STUDIO_KEY_URL} target="_blank" rel="noopener noreferrer" style={linkButtonStyle}>
+            <a href={AI_STUDIO_KEY_URL} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={linkButtonStyle}>
               Get a key at Google AI Studio ↗
             </a>
           </div>
@@ -223,16 +251,18 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
                 </div>
               )}
               <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", justifyContent: "space-between", marginTop: "0.4rem" }}>
-                <a href={TUTORIAL_VIDEO_URL} target="_blank" rel="noopener noreferrer" style={{ color: "rgba(147,197,253,0.9)", fontSize: "0.7rem" }}>
+                {/* A finger-high row on a touch screen, with the words kept in
+                    its middle as a button's are. */}
+                <a href={TUTORIAL_VIDEO_URL} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={{ color: "rgba(147,197,253,0.9)", fontSize: "0.7rem", ...(isTouch ? { alignItems: "center", display: "inline-flex" } : null) }}>
                   Watch on YouTube ↗
                 </a>
-                <button type="button" onClick={() => setShowTutorial(false)} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.45)", cursor: "pointer", fontSize: "0.7rem", padding: 0 }}>
+                <button type="button" className="oh-tap-row" onClick={() => setShowTutorial(false)} style={{ background: "transparent", border: "none", color: "rgba(255,255,255,0.45)", cursor: "pointer", fontSize: "0.7rem", padding: 0 }}>
                   Hide the video
                 </button>
               </div>
             </div>
           ) : (
-            <button type="button" onClick={() => setShowTutorial(true)} style={{ ...quietButtonStyle, fontSize: "0.72rem", marginTop: "0.6rem", padding: "0.35rem 0.7rem" }}>
+            <button type="button" className="oh-tap-row" onClick={() => setShowTutorial(true)} style={{ ...quietButtonStyle, fontSize: "0.72rem", marginTop: "0.6rem", padding: "0.35rem 0.7rem" }}>
               Show the video tutorial
             </button>
           )}
@@ -322,14 +352,15 @@ export const ApiSetupPrompt = ({ providerLabel = "the selected provider", missin
         )}
 
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1.1rem" }}>
-          <button type="button" onClick={onDismiss} style={quietButtonStyle}>
+          <button type="button" className="oh-tap-row" onClick={onDismiss} style={quietButtonStyle}>
             Not now
           </button>
-          <button type="button" onClick={onConfigure} style={quietButtonStyle}>
+          <button type="button" className="oh-tap-row" onClick={onConfigure} style={quietButtonStyle}>
             Open full settings
           </button>
           <button
             type="button"
+            className="oh-tap-row"
             onClick={save}
             disabled={!canSave}
             style={{ ...primaryButtonStyle, cursor: canSave ? "pointer" : "not-allowed", opacity: canSave ? 1 : 0.5 }}

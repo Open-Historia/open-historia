@@ -1,5 +1,8 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { memo, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
@@ -408,6 +411,10 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
     const votes = poll?.votes ?? {};
     const mine = Object.entries(votes).find(([voter]) => voter.toLowerCase() === String(playerCountry ?? "").toLowerCase())?.[1] ?? "";
     const total = Object.keys(votes).length;
+    // Who voted for what is each option's tooltip, and a touch screen has no
+    // hover to show it: there it is written under the option instead.
+    const canHover = useCanHover();
+    const isTouch = useTouchPrimary();
     return (
         <div style={{
             background: "rgba(59,130,246,0.08)",
@@ -431,10 +438,14 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                     <button
                         key={option.id}
                         type="button"
+                        className="oh-tap-row"
                         disabled={Boolean(mine)}
                         onClick={() => onVote?.(option.id)}
                         title={voters.length ? voters.join(", ") : "No vote yet"}
                         style={{
+                            // Centred, not stretched, once a thumb-high row is
+                            // taller than its text.
+                            ...(isTouch ? { alignItems: "center" } : {}),
                             background: `linear-gradient(to right, rgba(96,165,250,0.28) ${share}%, rgba(255,255,255,0.05) ${share}%)`,
                             border: chosen ? "1px solid rgba(255,255,255,0.28)" : "1px solid rgba(255,255,255,0.12)",
                             borderRadius: "8px",
@@ -448,7 +459,12 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                             textAlign: "left",
                         }}
                     >
-                        <span>{option.label}{chosen ? " ✓" : ""}</span>
+                        <span>
+                            {option.label}{chosen ? " ✓" : ""}
+                            {!canHover && voters.length > 0 && (
+                                <span data-no-translate style={{ color: "rgba(255,255,255,0.5)", display: "block", fontSize: "0.68rem", marginTop: "0.15rem" }}>{voters.join(", ")}</span>
+                            )}
+                        </span>
                         <span data-no-translate style={{ color: "rgba(255,255,255,0.55)" }}>{option.votes}</span>
                     </button>
                 );
@@ -501,6 +517,7 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
     const button = (label, onClick, tone = "neutral") => (
         <button
             type="button"
+            className="oh-tap-row"
             disabled={busy}
             onClick={onClick}
             style={{
@@ -602,6 +619,7 @@ const MessageBubble = ({ msg, onRetry }) => {
     const reactionFlags = useCountryFlagUrls(reactions.map(([name, { code }]) => ({ name, code })));
     const nationColor = useNationColor(!isPlayer && !isError ? msg.code : null);
     const accentColor = nationColor ?? ((!isPlayer && !isError) ? countryAccentColor(msg.speaker ?? "") : null);
+    const isMobile = useIsMobile();
 
     return (
         <div style={{ display: "flex", flexDirection: "column", alignItems: isPlayer ? "flex-end" : "flex-start", overflow: "visible" }}>
@@ -615,7 +633,9 @@ const MessageBubble = ({ msg, onRetry }) => {
                 fontSize: "0.7rem",
                 color: "rgba(255,255,255,0.4)",
                        marginBottom: "0.25rem",
-                       whiteSpace: "nowrap",
+                       // A phone's bubble is narrower than a long polity name on
+                       // one line, which pushed the whole thread sideways.
+                       whiteSpace: isMobile ? "normal" : "nowrap",
             }}>
             {isError ? "⚠️ Error" : <><FlagImg url={flagUrl} alt={msg.speaker} size="0.95em" />{msg.speaker}</>}
             </span>
@@ -664,7 +684,7 @@ const MessageBubble = ({ msg, onRetry }) => {
             to answer — so the player re-sends the same message rather than
             retyping it. Only offered on the newest error (see the caller). */}
         {isError && onRetry && (
-            <button onClick={onRetry}
+            <button className="oh-tap-row" onClick={onRetry}
             style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.4rem", padding: "0.3rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.12)", color: "#fca5a5", fontSize: "0.75rem", fontWeight: 600, fontFamily: "sans-serif", cursor: "pointer", transition: "all 0.12s ease" }}
             onMouseEnter={e => { e.currentTarget.style.background = "rgba(239,68,68,0.22)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.6)"; e.currentTarget.style.color = "#fecaca"; }}
             onMouseLeave={e => { e.currentTarget.style.background = "rgba(239,68,68,0.12)"; e.currentTarget.style.borderColor = "rgba(239,68,68,0.35)"; e.currentTarget.style.color = "#fca5a5"; }}>
@@ -690,7 +710,12 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
     const [hovered, setHovered] = useState(false);
     const [pos, setPos] = useState({ x: 0, y: 0 });
     const anchorRef = useRef(null);
+    const tooltipRef = useRef(null);
     const nationColor = useNationColor(code ?? null);
+    // Who reacted is said only by this label, and a touch screen has no hover
+    // to show it: there a tap shows it, for a few seconds or until the thread
+    // scrolls (the label is pinned to the screen, not to the bubble).
+    const canHover = useCanHover();
 
     const handleMouseEnter = () => {
         if (anchorRef.current) {
@@ -700,8 +725,30 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
         setHovered(true);
     };
 
+    useEffect(() => {
+        if (canHover || !hovered) return undefined;
+        const hide = () => setHovered(false);
+        const timer = setTimeout(hide, 2500);
+        window.addEventListener("scroll", hide, true);
+        return () => {
+            clearTimeout(timer);
+            window.removeEventListener("scroll", hide, true);
+        };
+    }, [canHover, hovered]);
+
+    // Reactions sit on the player's own lines, at the right of the thread, and
+    // on a phone that is the right edge of the screen: a label centred on the
+    // bubble ran off it. Measured once drawn and moved back on, before paint.
+    useLayoutEffect(() => {
+        const tip = tooltipRef.current;
+        if (canHover || !hovered || !tip) return;
+        const half = tip.offsetWidth / 2;
+        const edge = 8;
+        tip.style.left = `${Math.min(Math.max(pos.x, edge + half), window.innerWidth - edge - half)}px`;
+    }, [canHover, hovered, pos.x]);
+
     const tooltip = hovered ? ReactDOM.createPortal(
-        <div style={{
+        <div ref={tooltipRef} style={{
             position: "fixed",
             left: pos.x,
             top: pos.y - 2,
@@ -725,13 +772,22 @@ const ReactionBubble = ({ country, emoji, flagUrl, code }) => {
     ) : null;
 
     return (
-        <div style={{ position: "relative", marginBottom: "-1rem" }}>
+        <div
+        // On touch the tap lands on this wrapper, which reaches past the
+        // 1.6rem bubble to a thumb's 2.75rem and gives that room back in
+        // margin, so nothing moves. The bubble sits above its neighbours'
+        // reach, so a tap on a bubble is always that bubble's.
+        onClick={canHover ? undefined : () => (hovered ? setHovered(false) : handleMouseEnter())}
+        style={canHover
+            ? { position: "relative", marginBottom: "-1rem" }
+            : { position: "relative", padding: "0.575rem", margin: "-0.575rem -0.575rem -1.575rem" }}>
         {tooltip}
         <div
         ref={anchorRef}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={() => setHovered(false)}
+        onMouseEnter={canHover ? handleMouseEnter : undefined}
+        onMouseLeave={canHover ? () => setHovered(false) : undefined}
         style={{
+            ...(canHover ? {} : { position: "relative", zIndex: 1 }),
             width: "1.6rem", height: "1.6rem", borderRadius: "50%",
             backgroundColor: nationColor
             ? `color-mix(in srgb, ${nationColor} 25%, rgba(31,31,34,0.98))`
@@ -851,7 +907,7 @@ const CountrySelectorModal = ({
         <div style={{ fontWeight: 700, fontSize: "1.05rem", color: "white" }}>{title}</div>
         <div style={{ fontSize: "0.78rem", color: "rgba(255,255,255,0.4)", marginTop: "0.2rem" }}>{subtitle}</div>
         </div>
-        <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
+        <button className="oh-tap" aria-label="Close" onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.5)", fontSize: "1.1rem", padding: "0.1rem 0.3rem", borderRadius: "6px", lineHeight: 1 }}
         onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
         onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
         </div>
@@ -880,10 +936,10 @@ const CountrySelectorModal = ({
         ))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", gap: "0.5rem", flexShrink: 0 }}>
-        <button onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+        <button className="oh-tap-row" onClick={onCancel} style={{ flex: 1, padding: "0.65rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
         onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
         onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.06)"}>Cancel</button>
-        <button onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
+        <button className="oh-tap-row" onClick={() => selected.length > 0 && onStart(selected)} disabled={selected.length === 0}
         style={{ flex: 2, padding: "0.65rem", borderRadius: "10px", border: "none", background: selected.length > 0 ? "rgba(255,255,255,0.28)" : "rgba(59,130,246,0.3)", color: "white", fontSize: "0.85rem", fontWeight: 600, cursor: selected.length > 0 ? "pointer" : "not-allowed", fontFamily: "sans-serif" }}
         onMouseEnter={e => { if (selected.length > 0) e.currentTarget.style.background = "#2563eb"; }}
         onMouseLeave={e => { if (selected.length > 0) e.currentTarget.style.background = "#3b82f6"; }}>
@@ -899,10 +955,30 @@ const CountrySelectorModal = ({
 // 12rem at the default 16px root, matching the composer's max-height below.
 const COMPOSER_MAX_HEIGHT = 192;
 
+// Deleting a chat takes two presses (the list row, the conversation header),
+// and the first disarms again when the pointer leaves or the button loses focus,
+// so a half-pressed delete never sits waiting to catch a later click. A finger
+// does neither dependably: nothing hovers to leave, and iOS Safari never focuses
+// a tapped button. On a touch screen the first press disarms itself after a few
+// seconds instead, as the advisor's 🗑 does.
+const useTouchDisarm = (armed, setArmed) => {
+    const canHover = useCanHover();
+    useEffect(() => {
+        if (canHover || !armed) return undefined;
+        const timer = setTimeout(() => setArmed(false), 4000);
+        return () => clearTimeout(timer);
+    }, [armed, canHover, setArmed]);
+};
+
 const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied }) => {
     // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
+    useTouchDisarm(confirmingDelete, setConfirmingDelete);
+    // A finger is the pointer: the header's buttons and the send button are
+    // thumb-sized (the oh-tap classes), and the header trims its own padding
+    // so the thread keeps the height it had.
+    const isTouch = useTouchPrimary();
     const countries = useMemo(
         () => Array.isArray(chat?.countries)
             ? chat.countries.filter((country) => country && (country.name || country.code))
@@ -1012,7 +1088,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
         requestAnimationFrame(() => {
             const el = composerRef.current;
             if (!el) return;
-            el.focus();
+            // Not on a touch screen: focus there raises the keyboard, which
+            // covers the letter the player is meant to read over first. A tap
+            // on the box brings it up when they want to edit.
+            if (!isTouchPrimary()) el.focus();
             // Caret at the end, so a stray keystroke appends rather than landing
             // in the middle of the letter — but scrolled to the TOP, because a
             // long letter is there to be read from its opening line.
@@ -1540,8 +1619,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
 
         return (
             <>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-            <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", display: "flex", padding: "0.2rem", borderRadius: "6px" }}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: isTouch ? "0.35rem 1rem" : "0.85rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+            <button className="oh-tap" aria-label="Back to chats" onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.6)", display: "flex", padding: "0.2rem", borderRadius: "6px" }}
             onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.6)"; e.currentTarget.style.background = "none"; }}>
             <BackIcon />
@@ -1549,7 +1628,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             <span style={{ flex: 1, fontWeight: 700, fontSize: "0.95rem", color: "white", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             Chat with {countries.map(c => c.name).join(", ") || "unknown participant"}
             </span>
-            <button onClick={() => onToggleRead?.()}
+            <button className="oh-tap" onClick={() => onToggleRead?.()}
             title={unread ? "Mark as read" : "Mark as unread"}
             aria-label={unread ? "Mark as read" : "Mark as unread"}
             style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
@@ -1558,7 +1637,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             <EnvelopeIcon filled={unread} />
             </button>
             {/* Two-step, same as the list row: one click arms, the next confirms. */}
-            <button title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"}
+            <button className="oh-tap" title={confirmingDelete ? "Click again to delete this chat" : "Delete chat"}
             aria-label={confirmingDelete ? "Confirm deleting this chat" : "Delete chat"}
             onClick={() => { if (confirmingDelete) { onDelete?.(); } else { setConfirmingDelete(true); } }}
             onBlur={() => setConfirmingDelete(false)}
@@ -1567,7 +1646,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             onMouseLeave={e => { if (!confirmingDelete) { e.currentTarget.style.color = "rgba(239,68,68,0.65)"; e.currentTarget.style.background = "none"; } }}>
             {confirmingDelete ? "Delete?" : <TrashIcon />}
             </button>
-            <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: "1rem", lineHeight: 1, padding: "0.25rem 0.3rem", borderRadius: "6px" }}
+            <button className="oh-tap" aria-label="Close chat" onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)", fontSize: "1rem", lineHeight: 1, padding: "0.25rem 0.3rem", borderRadius: "6px" }}
             onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.45)"; e.currentTarget.style.background = "none"; }}>✕</button>
             </div>
@@ -1581,6 +1660,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
             {hiddenMessageCount > 0 && (
                 <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => setVisibleMessageLimit((current) => current + CHAT_RENDER_WINDOW_STEP)}
                     style={{
                         alignSelf: "center",
@@ -1644,12 +1724,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 </p>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button
+                className="oh-tap-row"
                 onClick={handleSpeakInstead}
                 style={{ flex: 1, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.11)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
                 onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
                 >Speak</button>
                 <button
+                className="oh-tap-row"
                 onClick={handleLetSpeak}
                 style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
                 onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
@@ -1666,6 +1748,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 {canDemand && (
                     <button
                     type="button"
+                    className="oh-tap"
                     onClick={() => setMakeDemand((on) => !on)}
                     aria-pressed={makeDemand}
                     title={makeDemand ? "This message is a demand. Click to send it as an ordinary message." : `Make this message a demand of ${countries[0]?.name}`}
@@ -1679,11 +1762,16 @@ const ConversationView = ({ chat, playerCountry, gameDate, onDelete, onBack, onM
                 onChange={e => setPlayerInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
                 onInput={fitComposer}
-                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
+                // On a touch screen the keyboard takes up to half the screen,
+                // and the panel shrinks with it: a composer grown to 12rem then
+                // pushed the send button out of the bottom. There it stops at a
+                // quarter of the visible height (never under one line) and
+                // scrolls past that.
+                style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "10px", color: "white", fontSize: "0.875rem", padding: "0.6rem 0.75rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", transition: "border-color 0.2s" }}
                 onFocus={e => e.target.style.borderColor = "rgba(59,130,246,0.6)"}
                 onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                 />
-                <button onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
+                <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
                 style={{ backgroundColor: playerInput.trim() ? "#3b82f6" : "rgba(59,130,246,0.3)", border: "none", borderRadius: "10px", width: "2.5rem", height: "2.5rem", display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: "1rem", transition: "background-color 0.2s" }}
                 onMouseEnter={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#2563eb"; }}
                 onMouseLeave={e => { if (playerInput.trim()) e.currentTarget.style.backgroundColor = "#3b82f6"; }}
@@ -2102,6 +2190,12 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false, p
     // second click. Resets whenever the pointer leaves the row, so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirming, setConfirming] = React.useState(false);
+    useTouchDisarm(confirming, setConfirming);
+    // The row's own buttons appear on hover, and nothing hovers on a touch
+    // screen: there they are always drawn, and the row's text stops short of
+    // them rather than running underneath.
+    const canHover = useCanHover();
+    const showActions = hovered || !canHover;
     const previewCountries = chat.countries.slice(0, 4);
     const flagUrlMap = useCountryFlagUrls(previewCountries);
     const names    = chat.countries.map(c => c.name).join(", ");
@@ -2111,7 +2205,7 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false, p
 
     return (
         <div onMouseEnter={() => setHovered(true)} onMouseLeave={() => { setHovered(false); setConfirming(false); }} style={{ position: "relative" }}>
-        <button onClick={onClick} style={{ width: "100%", padding: "0.7rem 0.9rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: hovered ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer", transition: "background 0.15s", fontFamily: "sans-serif", textAlign: "left" }}>
+        <button onClick={onClick} style={{ width: "100%", padding: canHover ? "0.7rem 0.9rem" : "0.7rem 6.6rem 0.7rem 0.9rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.07)", background: hovered ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer", transition: "background 0.15s", fontFamily: "sans-serif", textAlign: "left" }}>
         {/* Fixed-width slot, always rendered, so read and unread rows stay aligned. */}
         <div style={{ width: "0.5rem", flexShrink: 0, display: "flex", justifyContent: "center" }} aria-hidden="true">
         {unread && <div style={{ width: "0.5rem", height: "0.5rem", borderRadius: "50%", background: "#60a5fa" }} />}
@@ -2131,16 +2225,16 @@ const ChatListItem = ({ chat, onClick, onDelete, onToggleRead, unread = false, p
         <div style={{ fontSize: "0.75rem", color: unread ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.35)", marginTop: "0.15rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preview}</div>
         </div>
         </button>
-        {hovered && (
+        {showActions && (
             <div style={{ position: "absolute", top: "50%", right: "0.6rem", transform: "translateY(-50%)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
-            <button onClick={e => { e.stopPropagation(); onToggleRead?.(); }}
+            <button className="oh-tap" onClick={e => { e.stopPropagation(); onToggleRead?.(); }}
             title={unread ? "Mark as read" : "Mark as unread"}
             aria-label={unread ? "Mark as read" : "Mark as unread"}
             style={{ display: "flex", alignItems: "center", background: "none", border: "1px solid transparent", cursor: "pointer", color: "rgba(96,165,250,0.75)", padding: "0.25rem", borderRadius: "6px", lineHeight: 1 }}
             onMouseEnter={e => { e.currentTarget.style.color = "rgba(96,165,250,1)"; e.currentTarget.style.background = "rgba(96,165,250,0.12)"; }}
             onMouseLeave={e => { e.currentTarget.style.color = "rgba(96,165,250,0.75)"; e.currentTarget.style.background = "none"; }}>
             <EnvelopeIcon filled={unread} /></button>
-            <button onClick={e => { e.stopPropagation(); if (confirming) { onDelete(); } else { setConfirming(true); } }}
+            <button className="oh-tap" onClick={e => { e.stopPropagation(); if (confirming) { onDelete(); } else { setConfirming(true); } }}
             title={confirming ? "Click again to delete this chat" : "Delete chat"}
             aria-label={confirming ? "Confirm deleting this chat" : "Delete chat"}
             style={{ display: "flex", alignItems: "center", gap: "0.3rem", background: confirming ? "rgba(239,68,68,0.18)" : "none", border: `1px solid ${confirming ? "rgba(239,68,68,0.55)" : "transparent"}`, cursor: "pointer", color: confirming ? "#fca5a5" : "rgba(239,68,68,0.7)", fontSize: "0.72rem", fontWeight: 600, fontFamily: "sans-serif", padding: confirming ? "0.25rem 0.5rem" : "0.25rem", borderRadius: "6px", lineHeight: 1 }}
@@ -2209,7 +2303,7 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
     return (
         <>
         <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", padding: "0.85rem 1rem 0.6rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-        <button onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
+        <button className="oh-tap" onClick={onBack} aria-label="Back" style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", padding: "0.2rem", display: "flex" }}><BackIcon /></button>
         <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>🕵 {target} ↔ {exchange.counterpart}</div>
         <div style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.5)" }}>{exchange.subject}{exchange.date ? " · " + exchange.date : ""}</div>
@@ -2237,7 +2331,7 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
     );
 };
 
-const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
+const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOpen = true }) => {
     const world                       = useRuntimeState("world");
     const filedIntercepts             = useRuntimeState("intercepts", normalizeIntercepts);
     // A copy an agent stole in an event the reveal has not reached yet is not in
@@ -2247,6 +2341,13 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
     const [error, setError]           = useState("");
+    // On a phone, Back closes the target picker before the panel under it
+    // (runtime/backToClose.js). Only while the panel shows: a closed panel keeps
+    // this view, and its picker, mounted off-screen.
+    useBackToClose(panelOpen && choosing, () => setChoosing(false));
+    // A phone's row is too narrow for an agent's name and "Possibly
+    // compromised" on one line, and the warning is what got cut off.
+    const isMobile = useIsMobile();
 
     // Opening the tab is when these have to be current; the store does the rest.
     useEffect(() => { void refreshRuntimeState(["world", "intercepts"]); }, []);
@@ -2365,14 +2466,14 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         {spies.map((spy) => (
             <div key={spy.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0.7rem", borderRadius: "10px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <div style={{ fontSize: "0.82rem", fontWeight: 600, whiteSpace: isMobile ? "normal" : "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {spy.target}{spy.suspected && <span title="Your analysts think this agent's reports are being fed to you" style={{ marginLeft: "0.4rem", color: "#fbbf24", fontSize: "0.7rem" }}>⚠ Possibly compromised</span>}
             </div>
             <div style={{ fontSize: "0.66rem", color: "rgba(255,255,255,0.45)" }}>
             {spy.deployedAt ? "since " + spy.deployedAt : "in place"} · their service {intelligenceOf(world, spy.target)}/100
             </div>
             </div>
-            <button onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
+            <button className="oh-tap-row" onClick={() => handleRecall(spy)} style={spyBtn(false)}>Recall</button>
             </div>
         ))}
         {history.length > 0 && (
@@ -2397,9 +2498,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
             {spy.status === "discovered" ? "agent in custody — decide what to do" : "double agent since " + (spy.turnedAt || "capture") + " — " + spy.owner + " still trusts them"}
             </div>
             </div>
-            {spy.status === "discovered" && <button onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
+            {spy.status === "discovered" && <button className="oh-tap-row" onClick={() => handleExpel(spy)} style={spyBtn(false)}>Expel</button>}
             {spy.status === "discovered" && (
-                <button onClick={() => handleTurn(spy)} style={spyBtn(true)} title={storyOf(spy) ? "Turn this agent and plant the story below as what it reports home" : "Turn this agent into a double agent; you can plant a story afterwards"}>
+                <button className="oh-tap-row" onClick={() => handleTurn(spy)} style={spyBtn(true)} title={storyOf(spy) ? "Turn this agent and plant the story below as what it reports home" : "Turn this agent into a double agent; you can plant a story afterwards"}>
                     {storyOf(spy) ? "Turn & plant story" : "Turn"}
                 </button>
             )}
@@ -2414,7 +2515,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
                     const unchanged = storyOf(spy) === spy.coverStory;
                     const justSaved = savedFlash === spy.id;
                     return (
-                        <button onClick={() => handleStory(spy)} disabled={unchanged && !justSaved}
+                        <button className="oh-tap-row" onClick={() => handleStory(spy)} disabled={unchanged && !justSaved}
                             style={{ ...spyBtn(true), ...(unchanged && !justSaved ? { opacity: 0.45, cursor: "default" } : {}) }}
                             title={justSaved ? "Saved — this is what the agent now reports home" : unchanged ? "The agent already reports this story" : "Save the story the agent reports home (Enter does the same)"}>
                             {justSaved ? "Saved ✓" : "Save"}
@@ -2444,7 +2545,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries }) => {
         )))}
         </div>
         <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-        <button onClick={() => setChoosing(true)} disabled={full}
+        <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full}
             style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.09)", color: "#f4f4f5", fontSize: "0.85rem", fontWeight: 600, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? 0.5 : 1 }}>
         🕵 Deploy a spy
         </button>
@@ -2468,6 +2569,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [showSelector, setShowSelector]         = useState(false);
+    // On a phone, Back closes the country picker before the panel under it
+    // (runtime/backToClose.js; main.jsx does the panel). Only while the panel
+    // shows: closing the panel leaves the picker as it was, off-screen.
+    useBackToClose(isOpen && showSelector, () => setShowSelector(false));
+    // A finger is the pointer: the list header's tabs and ✕ are thumb-sized,
+    // and the header trims its padding to keep the height it had.
+    const isTouch = useTouchPrimary();
     // A letter the advisor drafted, waiting for the conversation it belongs to to
     // mount. Tied to a chat id so navigating to a DIFFERENT chat never inherits it.
     const [composerDraft, setComposerDraft]       = useState(null);
@@ -2828,7 +2936,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         return (
             <>
             <MarkdownStyleInjector />
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: "calc(100vw - 1rem)", height: "min(calc(100vh - 9rem), max(calc(100vh - 33rem), 30rem))", minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
+            {/* Laid out against the dock, not the screen: the dock's
+                backdrop-filter makes it this fixed panel's containing block,
+                so left 0 is the dock's left edge (0.5rem in, and in from a
+                notch the way the dock is) and bottom 4.25rem is just above it.
+                It narrows by both notch insets (0 wherever there is none). */}
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-40rem", left: "0rem", width: "26.25rem", maxWidth: `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`, height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 33rem), 30rem))`, minHeight: "10rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column" }}>
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
@@ -2839,21 +2952,21 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 onDraftApplied={() => setComposerDraft(null)} />
             ) : (
                 <>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: isTouch ? "0.45rem 1.25rem 0.3rem" : "1rem 1.25rem 0.75rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: "0.35rem" }}>
                 {[["chats", "Diplomacy"], ...(espionageOn ? [["spy", "Spy"]] : [])].map(([key, label]) => (
-                    <button key={key} onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
+                    <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ padding: "0.3rem 0.7rem", borderRadius: "8px", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer", fontFamily: "sans-serif",
                         border: "1px solid " + (currentView === key ? "rgba(255,255,255,0.23)" : "transparent"), background: currentView === key ? "rgba(255,255,255,0.11)" : "transparent", color: currentView === key ? "white" : "rgba(255,255,255,0.5)" }}>
                     {label}
                     </button>
                 ))}
                 </div>
-                <button onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
+                <button className="oh-tap" aria-label="Close diplomacy panel" onClick={onClose} style={{ background: "none", border: "none", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: "1.1rem", lineHeight: 1, padding: "0.15rem 0.3rem", borderRadius: "6px" }}
                 onMouseEnter={e => { e.currentTarget.style.color = "white"; e.currentTarget.style.background = "rgba(255,255,255,0.08)"; }}
                 onMouseLeave={e => { e.currentTarget.style.color = "rgba(255,255,255,0.5)"; e.currentTarget.style.background = "none"; }}>✕</button>
                 </div>
                 {currentView === "spy" ? (
-                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} />
+                    <SpyView playerCountry={playerCountry} gameDate={gameDate} countries={countries} loadingCountries={loadingCountries} panelOpen={isOpen} />
                 ) : (
                 <>
                 {/* The unread filter belongs to the diplomacy list only — the Spy
@@ -2861,12 +2974,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                     rather than above the tab switch. */}
                 {openChats.length > 0 && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0.55rem 1.25rem", borderBottom: "1px solid rgba(255,255,255,0.06)", flexShrink: 0 }}>
-                    <button onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
+                    <button className="oh-tap-row" onClick={() => setShowUnreadOnly(v => !v)} style={{ alignItems: "center", background: showUnreadOnly ? "rgba(96,165,250,0.18)" : "rgba(255,255,255,0.05)", border: `1px solid ${showUnreadOnly ? "rgba(96,165,250,0.5)" : "rgba(255,255,255,0.12)"}`, borderRadius: "999px", color: showUnreadOnly ? "#93c5fd" : "rgba(255,255,255,0.6)", cursor: "pointer", display: "flex", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, gap: "0.3rem", padding: "0.28rem 0.65rem", transition: "all 0.12s ease" }}>
                     {showUnreadOnly && <span style={{ width: "0.4rem", height: "0.4rem", borderRadius: "50%", background: "#60a5fa" }} />}
                     Unread{unreadIds.size > 0 ? ` (${unreadIds.size})` : ""}
                     </button>
                     {unreadIds.size > 0 && (
-                        <button onClick={markAllRead} style={{ background: "none", border: "none", color: "rgba(96,165,250,0.75)", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, padding: "0.2rem" }}
+                        <button className="oh-tap-row" onClick={markAllRead} style={{ background: "none", border: "none", color: "rgba(96,165,250,0.75)", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.72rem", fontWeight: 600, padding: "0.2rem" }}
                         onMouseEnter={e => e.currentTarget.style.color = "rgba(96,165,250,1)"}
                         onMouseLeave={e => e.currentTarget.style.color = "rgba(96,165,250,0.75)"}>
                         Mark all read
@@ -2892,7 +3005,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ))}
                 </div>
                 <div style={{ padding: "0.75rem 1rem", borderTop: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
-                <button onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
+                <button className="oh-tap-row" onClick={() => setShowSelector(true)} style={{ width: "100%", padding: "0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.85)", fontSize: "0.85rem", fontWeight: 500, cursor: "pointer", fontFamily: "sans-serif" }}
                 onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.12)"}
                 onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}>Start New Chat</button>
                 </div>
@@ -2933,6 +3046,15 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
     const notificationPollStatsRef = useRef({ chatsChecked: 0, messagesInspected: 0, changedChats: 0 });
     const toastTimersRef = useRef(new Map());
     const notificationSeqRef = useRef(0);
+    const isMobile = useIsMobile();
+    const isTouch = useTouchPrimary();
+    // On a phone, Back closes the notification list (runtime/backToClose.js).
+    // "Open" is what is on screen: the list is not drawn while the panel or
+    // the main menu is, even if its flag is still set.
+    useBackToClose(
+        notificationCenterOpen && notificationItems.length > 0 && !isOpen && !mainMenuOpen,
+        () => setNotificationCenterOpen(false),
+    );
 
     // "Someone might be typing": isChatGenerationLikely() is a plain synchronous
     // getter (an idle poll rolling for a diplomatic note), not an event —
@@ -3451,13 +3573,23 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
             <div
                 style={{
                     position: "fixed",
-                    top: "4.35rem",
+                    // Clear of the notch: below a status bar the page is drawn
+                    // under, and in from the side a phone held sideways has its
+                    // notch on. Every inset is 0 where there is nothing to avoid.
+                    top: `calc(4.35rem + ${SAFE_TOP})`,
                     left: "auto",
-                    // Advisor and Stats share the same resizable right drawer.
-                    // That drawer publishes its live width as a CSS variable so
-                    // diplomatic toasts can remain top-right without covering it.
-                    right: "calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem)",
-                    width: "min(23rem, calc(100vw - 2rem))",
+                    // Advisor and Stats share the same resizable right drawer,
+                    // and the toasts were meant to sit left of it: the drawer
+                    // was to publish its live width as this variable. Nothing
+                    // sets it on this line (the setter was in advisor.jsx on the
+                    // Continuum checkpoint and never came across), so it is 0
+                    // and the toasts sit at the right edge, over an open drawer.
+                    // On a phone the drawer is the whole screen, with nothing
+                    // beside it, so there the offset is left out.
+                    right: isMobile
+                        ? `calc(0.75rem + ${SAFE_RIGHT})`
+                        : `calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem + ${SAFE_RIGHT})`,
+                    width: `min(23rem, calc(100vw - 2rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
                     zIndex: 10050,
                     pointerEvents: "none",
                     display: "flex",
@@ -3465,7 +3597,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     gap: "0.55rem",
                 }}
             >
-                {!isOpen && toastItems.map((item) => (
+                {/* A phone shows the newest toast only. Four stacked covered
+                    most of its screen, and caught every tap there, for their
+                    twelve seconds; held sideways it had room for two. The 🔔
+                    keeps every one. */}
+                {!isOpen && (isMobile || isTouch ? toastItems.slice(-1) : toastItems).map((item) => (
                     <div
                         key={item.id}
                         role={item.chatId ? "button" : undefined}
@@ -3491,7 +3627,8 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                             backdropFilter: "blur(26px) saturate(1.35)",
                             WebkitBackdropFilter: "blur(26px) saturate(1.35)",
                             color: "white",
-                            padding: "0.75rem 2.35rem 0.75rem 0.85rem",
+                            // Room for the ✕, which is thumb-sized on touch.
+                            padding: isTouch ? "0.75rem 3.3rem 0.75rem 0.85rem" : "0.75rem 2.35rem 0.75rem 0.85rem",
                             boxShadow: "0 14px 38px rgba(0,0,0,0.42)",
                             cursor: item.chatId ? "pointer" : "default",
                             fontFamily: "sans-serif",
@@ -3500,6 +3637,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     >
                         <button
                             type="button"
+                            className="oh-tap"
                             aria-label="Dismiss diplomatic notification"
                             title="Dismiss"
                             onClick={(event) => {
@@ -3553,8 +3691,10 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                         // The V2 command dock now owns the bottom-left edge. Keep the
                         // notification center immediately above it instead of colliding
                         // with / disappearing underneath the dock.
-                        left: FLOATING_UI_EDGE_GAP,
-                        bottom: "4.55rem",
+                        // In from a notch and up from the home indicator, as the
+                        // dock under it is (0 elsewhere).
+                        left: `calc(${FLOATING_UI_EDGE_GAP} + ${SAFE_LEFT})`,
+                        bottom: `calc(4.55rem + ${SAFE_BOTTOM})`,
                         zIndex: 10050,
                         fontFamily: "sans-serif",
                     }}
@@ -3565,8 +3705,19 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                 position: "absolute",
                                 left: 0,
                                 bottom: "3rem",
-                                width: "min(22rem, calc(100vw - 1rem))",
-                                maxHeight: "min(27rem, calc(100vh - 7rem))",
+                                // It starts 0.75rem in, so the same 0.75rem is left
+                                // at the right: `100vw - 1rem` put it 0.25rem from
+                                // the edge of a phone.
+                                width: `min(22rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
+                                // It opens upward from 7.55rem above the bottom (the
+                                // bell's 4.55rem, then 3rem), so on a short screen it
+                                // may be the rest of it and no more: `- 7rem` ran it
+                                // 0.55rem off the top whenever the cap bit (a phone
+                                // held sideways, or with its browser bars showing),
+                                // and the top of its header with it.
+                                maxHeight: isMobile || isTouch
+                                    ? `min(27rem, calc(${APP_HEIGHT} - 8rem - ${SAFE_TOP}))`
+                                    : `min(27rem, calc(${APP_HEIGHT} - 7rem))`,
                                 overflowY: "auto",
                                 borderRadius: "16px",
                                 border: "1px solid rgba(230,230,233,0.18)",
@@ -3596,13 +3747,16 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                     Diplomatic messages ({notificationItems.length})
                                 </strong>
                                 <button
+                                    className="oh-tap"
                                     onClick={toggleSound}
                                     title={soundEnabled ? "Mute diplomacy notification sound" : "Enable diplomacy notification sound"}
+                                    aria-label={soundEnabled ? "Mute diplomacy notification sound" : "Enable diplomacy notification sound"}
                                     style={{ border: "none", background: "transparent", color: "rgba(255,255,255,0.72)", cursor: "pointer", fontSize: "0.82rem" }}
                                 >
                                     {soundEnabled ? "🔊" : "🔇"}
                                 </button>
                                 <button
+                                    className="oh-tap-row"
                                     onClick={enableDesktop}
                                     title="Desktop notification permission"
                                     style={{
@@ -3616,6 +3770,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                                     {desktopPermission === "granted" ? "Desktop ✓" : "Desktop"}
                                 </button>
                                 <button
+                                    className="oh-tap-row"
                                     onClick={() => {
                                         setNotificationItems([]);
                                         setNotificationCenterOpen(false);
@@ -3656,6 +3811,7 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     </Presence>
 
                     <button
+                        className="oh-tap"
                         onClick={() => setNotificationCenterOpen((open) => !open)}
                         title="Diplomatic notifications"
                         style={{
@@ -3749,13 +3905,17 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     const [hoveredChat, setHoveredChat]       = useState(false);
     const [hoveredActions, setHoveredActions] = useState(false);
     const [hoveredProjects, setHoveredProjects] = useState(false);
+    // A tap fires mouseenter, and on a touch screen nothing fires mouseleave
+    // after it, so a launcher tapped once stayed lit and raised as if the
+    // pointer were still over it. There the hover look is left out.
+    const canHover = useCanHover();
     // The dock grows by one button per launcher; its geometry lives in hudDock.js
     // so the Search control beside it moves with it.
     return (
-        <div style={{ position: "fixed", bottom: `${DOCK_BOTTOM_REM}rem`, left: `${DOCK_LEFT_REM}rem`, height: `${DOCK_HEIGHT_REM}rem`, width: DOCK_WIDTH, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
-        <Chat hovered={hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
-        <Actions onOpenAdvisor={onOpenAdvisor} hovered={hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
-        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
+        <div style={{ position: "fixed", bottom: `calc(${DOCK_BOTTOM_REM}rem + ${SAFE_BOTTOM})`, left: `calc(${DOCK_LEFT_REM}rem + ${SAFE_LEFT})`, height: `${DOCK_HEIGHT_REM}rem`, width: DOCK_WIDTH, gap: `${DOCK_GAP_REM}rem`, padding: "0 0.1rem", backgroundColor: "var(--oh-hud-bg)", backdropFilter: "var(--oh-hud-blur)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", color: "white", fontFamily: "sans-serif", borderRadius: "14px", border: "1px solid var(--oh-hud-border)", boxShadow: "var(--oh-hud-shadow-soft)" }}>
+        <Chat hovered={canHover && hoveredChat} setHovered={setHoveredChat} isOpen={activePanel === "chat"} onToggle={() => onTogglePanel("chat")} />
+        <Actions onOpenAdvisor={onOpenAdvisor} hovered={canHover && hoveredActions} setHovered={setHoveredActions} isOpen={activePanel === "actions"} onToggle={() => onTogglePanel("actions")} />
+        <Projects onOpenAdvisor={onOpenAdvisor} mapRef={mapRef} hovered={canHover && hoveredProjects} setHovered={setHoveredProjects} isOpen={activePanel === "projects"} onToggle={() => onTogglePanel("projects")} />
         </div>
     );
 });

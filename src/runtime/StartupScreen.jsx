@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 // Cinzel + EB Garamond from the bundle rather than Google Fonts: no request to
 // Google on every start, and the right faces with no network.
 import "../assets/fonts/fonts.css";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
 
 // Loading-screen artwork. The first is the original; the rest cycle in once the
 // files exist in /public. Missing files are skipped (see the preload check), so
@@ -91,7 +92,7 @@ const StartupScreen = ({
       .ss-shell {
         position: relative;
         width: 100vw;
-        height: 100vh;
+        height: ${APP_HEIGHT};
         overflow: hidden;
         background: #050403;
         font-family: 'EB Garamond', Georgia, serif;
@@ -136,14 +137,15 @@ const StartupScreen = ({
         z-index: 2;
       }
 
-      /* All UI lives in this bottom-anchored container */
+      /* All UI lives in this bottom-anchored container, clear of the home
+         indicator and of a notch at the side (every inset is 0 on a desktop) */
       .ss-hud {
         position: absolute;
         bottom: 0;
         left: 0;
         right: 0;
         z-index: 10;
-        padding: 0 5vw 2.8rem;
+        padding: 0 calc(5vw + ${SAFE_RIGHT}) calc(2.8rem + ${SAFE_BOTTOM}) calc(5vw + ${SAFE_LEFT});
         display: flex;
         flex-direction: column;
         gap: 1.1rem;
@@ -163,6 +165,18 @@ const StartupScreen = ({
         align-items: flex-end;
         justify-content: space-between;
         gap: 1rem;
+      }
+
+      /* A phone (useIsMobile's width) has no room for the step beside the
+         title: it goes underneath, lined up with the title's left edge. */
+      @media (max-width: 700px) {
+        .ss-top-row {
+          flex-wrap: wrap;
+        }
+        .ss-step-info {
+          align-items: flex-start;
+          text-align: left;
+        }
       }
 
       .ss-identity {
@@ -380,8 +394,8 @@ const StartupScreen = ({
       /* Creator credit over the artwork — small and very subtle */
       .ss-copyright {
         position: absolute;
-        top: 0.85rem;
-        right: 1.1rem;
+        top: calc(0.85rem + ${SAFE_TOP});
+        right: calc(1.1rem + ${SAFE_RIGHT});
         z-index: 5;
         font-family: 'Cinzel', serif;
         font-size: 0.5rem;

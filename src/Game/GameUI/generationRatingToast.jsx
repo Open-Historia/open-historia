@@ -12,6 +12,8 @@ import {
   isRatingEnabled,
   setGenerationRating,
 } from "../AI/telemetry.js";
+import { SAFE_BOTTOM, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const TASK_LABELS = {
   jumpForward: "time skip",
@@ -23,7 +25,7 @@ const TASK_LABELS = {
 
 const barStyle = {
   position: "fixed",
-  bottom: "6rem",
+  bottom: `calc(6rem + ${SAFE_BOTTOM})`,
   left: "50%",
   transform: "translateX(-50%)",
   zIndex: 9999,
@@ -54,9 +56,41 @@ const scoreStyle = {
   padding: 0,
 };
 
+// On a phone the one row, 500-620px of it, ran off both sides of the screen.
+// There the bar spans the screen: the label and Skip on the first line, the
+// ten scores in two rows of five under them, finger-sized on a touch screen.
+// It sits clear of the launcher dock and the advisor button (4.5rem up) and of
+// the home indicator.
+const phoneBarStyle = {
+  bottom: `calc(6rem + ${SAFE_BOTTOM})`,
+  flexWrap: "wrap",
+  justifyContent: "space-between",
+  left: "0.5rem",
+  right: "0.5rem",
+  rowGap: "0.45rem",
+  transform: "none",
+};
+const phoneScoresStyle = {
+  display: "grid",
+  flexBasis: "100%",
+  gap: "0.3rem",
+  gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+  order: 1,
+};
+// A larger touch screen keeps the one row while it fits, and wraps, still on
+// the screen, when finger-sized scores make it too wide.
+const touchBarStyle = {
+  flexWrap: "wrap",
+  justifyContent: "center",
+  maxWidth: "calc(100vw - 1rem)",
+  width: "max-content",
+};
+
 export const GenerationRatingToast = () => {
   const [pending, setPending] = useState(null); // { recordId, taskKey }
   const [enabled, setEnabled] = useState(() => isRatingEnabled());
+  const isMobile = useIsMobile();
+  const isTouch = useTouchPrimary();
 
   useEffect(() => {
     const onSettingChange = () => setEnabled(isRatingEnabled());
@@ -84,17 +118,19 @@ export const GenerationRatingToast = () => {
   if (!enabled || !pending) return null;
 
   return (
-    <div style={barStyle} role="group" aria-label="Rate this generation">
+    <div style={{ ...barStyle, ...(isMobile ? phoneBarStyle : isTouch ? touchBarStyle : null) }} role="group" aria-label="Rate this generation">
       <span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>
         Rate this {TASK_LABELS[pending.taskKey] || "generation"}
       </span>
-      <div style={{ display: "flex", gap: "0.2rem" }}>
+      <div style={isMobile ? phoneScoresStyle : { display: "flex", gap: "0.2rem" }}>
         {Array.from({ length: 10 }, (_, index) => index + 1).map((value) => (
           <button
             key={value}
             type="button"
+            className="oh-tap"
             title={`${value}/10`}
-            style={scoreStyle}
+            aria-label={`${value} out of 10`}
+            style={isMobile ? { ...scoreStyle, width: "100%" } : scoreStyle}
             onClick={async () => {
               await setGenerationRating(pending.recordId, value);
               setPending(null);
@@ -106,6 +142,7 @@ export const GenerationRatingToast = () => {
       </div>
       <button
         type="button"
+        className="oh-tap"
         onClick={() => setPending(null)}
         style={{ ...scoreStyle, width: "auto", padding: "0 0.5rem", color: "rgba(255,255,255,0.6)" }}
       >

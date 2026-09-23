@@ -11,6 +11,9 @@ import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import { openCountryPanel } from "./CountryPanel.jsx";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -185,7 +188,10 @@ const IconBtn = ({ children, title, onClick }) => {
 
     return (
         <button
+        // Finger-sized on a touch screen (styles.css); a mouse keeps 22 px.
+        className="oh-tap"
         title={title}
+        aria-label={title}
         onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -225,11 +231,45 @@ if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
         from { opacity: 1; transform: translateY(-100%); }
         to   { opacity: 0; transform: translateY(calc(-100% + 10px)); }
     }
+    @keyframes regionSheetFadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: none; }
+    }
+    @keyframes regionSheetFadeOut {
+        from { opacity: 1; transform: none; }
+        to   { opacity: 0; transform: translateY(10px); }
+    }
     `;
     document.head.appendChild(style);
 }
 
+// On a phone the card is a sheet across the bottom of the screen: anchored at
+// the tap, a 238 px card ran off the side of a 375 px screen whenever the tap
+// was near an edge. It sits above the toolbar and the advisor button (4rem
+// tall, 0.5rem up), stops 6rem short of the top for the date bar, and scrolls
+// if it is taller than that leaves.
+const SHEET_PLACEMENT = {
+    left: `calc(0.5rem + ${SAFE_LEFT})`,
+    right: `calc(0.5rem + ${SAFE_RIGHT})`,
+    bottom: `calc(5rem + ${SAFE_BOTTOM})`,
+};
+const SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 6rem - ${SAFE_TOP} - 5rem - ${SAFE_BOTTOM})`;
+// Held sideways, a narrower sheet at the right, clear of the chat and other
+// panels at the left: between the date bar (4.5rem down) and the flag badge
+// over the advisor button (7.75rem up), and scrolling in what that leaves.
+const SIDEWAYS_SHEET_PLACEMENT = {
+    right: `calc(0.5rem + ${SAFE_RIGHT})`,
+    bottom: `calc(7.75rem + ${SAFE_BOTTOM})`,
+    width: `min(22rem, calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
+};
+const SIDEWAYS_SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 4.5rem - ${SAFE_TOP} - 7.75rem - ${SAFE_BOTTOM})`;
+
 const RegionPopup = () => {
+    const isMobile = useIsMobile();
+    // A sheet on a phone, and on a phone held sideways (runtime/mobileUi.js).
+    const shortTouch = useShortTouchScreen();
+    const asSheet = isMobile || shortTouch;
+    const isTouch = useTouchPrimary();
     const [selection, setSelection] = useState(null);
     const [screenPos, setScreenPos] = useState(null);
     const [animKey, setAnimKey] = useState(0);
@@ -408,7 +448,7 @@ const RegionPopup = () => {
     _dismiss = () => setDismissing(true);
 
     const handleAnimationEnd = (e) => {
-        if (e.animationName !== "regionPopupFadeOut") return;
+        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
 
         _currentSelection = null;
         setSelection(null);
@@ -440,7 +480,8 @@ const RegionPopup = () => {
     }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
     useEffect(() => {
-        if (!map || !selection) {
+        // A phone's sheet follows no point on the map, so nothing is tracked.
+        if (!map || !selection || asSheet) {
             setScreenPos(null);
             return;
         }
@@ -489,9 +530,19 @@ const RegionPopup = () => {
             if (frameId) cancelAnimationFrame(frameId);
             map.off("move", scheduleUpdate);
         };
-    }, [map, selection]);
+    }, [map, selection, asSheet]);
 
-    if (!selection || !screenPos) return null;
+    // On a phone the card and a bottom panel would share one spot at the
+    // bottom of the screen, the card underneath: it tells the HUD it opened,
+    // and the HUD shuts the panel (GameUI/main.jsx).
+    useEffect(() => {
+        if (isMobile && selection) window.dispatchEvent(new CustomEvent(MAP_CARD_OPENED));
+    }, [isMobile, selection]);
+
+    // Back on a phone closes the card (runtime/backToClose.js).
+    useBackToClose(Boolean(selection) && !dismissing, () => setDismissing(true));
+
+    if (!selection || (!asSheet && !screenPos)) return null;
 
     const { COUNTRY, NAME_1 } = selection;
     const regionId = selection.GID_1 || "";
@@ -549,7 +600,10 @@ const RegionPopup = () => {
     const heldPuppets = controllerKey && worldState && playerCountry
         ? livePuppetsFor(worldState, playerCountry).filter((row) => row.overlord === controllerKey)
         : [];
-    const POPUP_WIDTH = 238;
+    // Wider on a touch screen that still anchors the card at the tap (a tablet,
+    // a phone on its side): the finger-sized buttons took 140 of the header's
+    // 216 px and broke the country's name mid-word.
+    const POPUP_WIDTH = isTouch ? 300 : 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
 
     return createPortal(
@@ -558,14 +612,16 @@ const RegionPopup = () => {
         onAnimationEnd={handleAnimationEnd}
         style={{
             position: "fixed",
-            left: screenPos.x - POPUP_WIDTH / 2,
-            top: screenPos.y - 10,
-            width: `${POPUP_WIDTH}px`,
+            ...(asSheet ? (isMobile ? SHEET_PLACEMENT : SIDEWAYS_SHEET_PLACEMENT) : {
+                left: screenPos.x - POPUP_WIDTH / 2,
+                top: screenPos.y - 10,
+                width: `${POPUP_WIDTH}px`,
+            }),
             zIndex: 20,
             pointerEvents: dismissing ? "none" : "auto",
             animation: dismissing
-            ? "regionPopupFadeOut 0.18s cubic-bezier(0.4, 0, 1, 1) both"
-            : "regionPopupFadeIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both",
+            ? `${asSheet ? "regionSheetFadeOut" : "regionPopupFadeOut"} 0.18s cubic-bezier(0.4, 0, 1, 1) both`
+            : `${asSheet ? "regionSheetFadeIn" : "regionPopupFadeIn"} 0.22s cubic-bezier(0.22, 1, 0.36, 1) both`,
         }}
         >
         <div
@@ -574,7 +630,8 @@ const RegionPopup = () => {
             backdropFilter: "blur(4px)",
             WebkitBackdropFilter: "blur(4px)",
             borderRadius: "12px",
-            overflow: "hidden",
+            overflow: asSheet ? "auto" : "hidden",
+            maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : undefined,
             fontFamily: "sans-serif",
             boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
             border: "1px solid rgba(255,255,255,0.12)",
@@ -608,6 +665,8 @@ const RegionPopup = () => {
             </div>
         )}
         <button
+        className="oh-tap"
+        aria-label="Close region card"
         onClick={() => _dismiss?.()}
         style={{
             position: "absolute",
@@ -716,16 +775,19 @@ const RegionPopup = () => {
         </div>
         </div>
 
-        <div
-        style={{
-            width: 0,
-            height: 0,
-            borderLeft: "8px solid transparent",
-            borderRight: "8px solid transparent",
-            borderTop: "9px solid rgba(24,24,27,0.95)",
-            margin: "0 auto",
-        }}
-        />
+        {/* The pointer at the tapped spot; a phone's sheet points at nothing. */}
+        {!asSheet && (
+            <div
+            style={{
+                width: 0,
+                height: 0,
+                borderLeft: "8px solid transparent",
+                borderRight: "8px solid transparent",
+                borderTop: "9px solid rgba(24,24,27,0.95)",
+                margin: "0 auto",
+            }}
+            />
+        )}
         </div>,
         document.body
     );

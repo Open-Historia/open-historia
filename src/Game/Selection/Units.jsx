@@ -25,6 +25,9 @@ import { readEventsState } from "../../runtime/gameState.js";
 import { POSTURE_LABEL, strengthColor } from "../GameUI/forces.jsx";
 import { haversineKm } from "../../runtime/unitMotion.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useCanHover, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -77,12 +80,44 @@ if (typeof document !== "undefined" && !document.getElementById(ANIM_ID)) {
   @keyframes unitPopupFadeOut {
     from { opacity: 1; transform: translateY(-100%); }
     to   { opacity: 0; transform: translateY(calc(-100% + 10px)); }
+  }
+  @keyframes unitSheetFadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes unitSheetFadeOut {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateY(10px); }
   }`;
   document.head.appendChild(style);
 }
 
+// On a phone the card is a sheet across the bottom of the screen: anchored at
+// the formation, a 240 px card ran off the side of a 375 px screen whenever the
+// formation was near an edge. It sits above the toolbar and the advisor button
+// (4rem tall, 0.5rem up), stops 6rem short of the top for the date bar, and
+// scrolls if it is taller than that leaves (the keyboard, while orders are typed).
+const SHEET_PLACEMENT = {
+  left: `calc(0.5rem + ${SAFE_LEFT})`,
+  right: `calc(0.5rem + ${SAFE_RIGHT})`,
+  bottom: `calc(5rem + ${SAFE_BOTTOM})`,
+};
+const SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 6rem - ${SAFE_TOP} - 5rem - ${SAFE_BOTTOM})`;
+// Held sideways, a narrower sheet at the right, clear of the chat and other
+// panels at the left: between the date bar (4.5rem down) and the flag badge
+// over the advisor button (7.75rem up), and scrolling in what that leaves.
+const SIDEWAYS_SHEET_PLACEMENT = {
+  right: `calc(0.5rem + ${SAFE_RIGHT})`,
+  bottom: `calc(7.75rem + ${SAFE_BOTTOM})`,
+  width: `min(22rem, calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
+};
+const SIDEWAYS_SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 4.5rem - ${SAFE_TOP} - 7.75rem - ${SAFE_BOTTOM})`;
+
 const ActionButton = ({ label, onClick, tone = "neutral", disabled = false }) => {
   const [hovered, setHovered] = useState(false);
+  // A tap fires mouseenter, so on a touch screen the hover shade stuck until
+  // the next tap elsewhere and hid the button's tone (the red "Disband?").
+  const canHover = useCanHover();
   const tones = {
     neutral: "rgba(255,255,255,0.12)",
     danger: "rgba(220,70,70,0.25)",
@@ -90,13 +125,14 @@ const ActionButton = ({ label, onClick, tone = "neutral", disabled = false }) =>
   };
   return (
     <button
+      className="oh-tap-row"
       onClick={onClick}
       disabled={disabled}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
         flex: 1,
-        background: hovered && !disabled ? "rgba(255,255,255,0.18)" : tones[tone],
+        background: hovered && canHover && !disabled ? "rgba(255,255,255,0.18)" : tones[tone],
         border: "1px solid rgba(255,255,255,0.15)",
         borderRadius: "6px",
         color: disabled ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.9)",
@@ -145,6 +181,10 @@ const describeOrder = (unit, order) => {
 };
 
 const UnitPopup = () => {
+  const isMobile = useIsMobile();
+  // A sheet on a phone, and on a phone held sideways (runtime/mobileUi.js).
+  const shortTouch = useShortTouchScreen();
+  const asSheet = isMobile || shortTouch;
   const [selection, setSelection] = useState(null);
   const [unit, setUnit] = useState(null);
   const [order, setOrder] = useState(null);
@@ -155,6 +195,17 @@ const UnitPopup = () => {
   const [requestState, setRequestState] = useState("idle"); // idle | sending | queued
   const [originEvent, setOriginEvent] = useState(null);
   const { current: map } = useMap();
+  // On a touch screen Disband sits a thumb's width from Request orders, and on
+  // a phone just above the toolbar; one stray tap would stand the formation
+  // down for good, so there the first tap only asks (as the advisor's clear
+  // chat does). A mouse keeps the one click.
+  const isTouch = useTouchPrimary();
+  const [confirmingDisband, setConfirmingDisband] = useState(false);
+  useEffect(() => {
+    if (!confirmingDisband) return undefined;
+    const timer = setTimeout(() => setConfirmingDisband(false), 4000);
+    return () => clearTimeout(timer);
+  }, [confirmingDisband]);
 
   _setSelection = (value) => {
     _currentSelection = value;
@@ -164,6 +215,7 @@ const UnitPopup = () => {
     setOrder(value ? getUnitOrder(value.id) : null);
     setRequest("");
     setRequestState("idle");
+    setConfirmingDisband(false);
     if (value !== null) setAnimKey((key) => key + 1);
   };
 
@@ -227,7 +279,7 @@ const UnitPopup = () => {
   }, [eventId]);
 
   const handleAnimationEnd = (e) => {
-    if (e.animationName !== "unitPopupFadeOut") return;
+    if (e.animationName !== "unitPopupFadeOut" && e.animationName !== "unitSheetFadeOut") return;
     _currentSelection = null;
     setSelection(null);
     setUnit(null);
@@ -236,7 +288,8 @@ const UnitPopup = () => {
   };
 
   useEffect(() => {
-    if (!map || !selection) {
+    // A phone's sheet follows no point on the map, so nothing is tracked.
+    if (!map || !selection || asSheet) {
       setScreenPos(null);
       return;
     }
@@ -282,13 +335,23 @@ const UnitPopup = () => {
       if (frameId) cancelAnimationFrame(frameId);
       map.off("move", scheduleUpdate);
     };
-  }, [map, selection, unit]);
+  }, [map, selection, unit, asSheet]);
 
   // Full owner name, never the code (called before the early return —
   // hook order must not depend on the selection).
   const ownerName = useCountryDisplayName(unit?.ownerCode || "");
 
-  if (!selection || !screenPos || !unit) return null;
+  // On a phone the card and a bottom panel would share one spot at the
+  // bottom of the screen, the card underneath: it tells the HUD it opened,
+  // and the HUD shuts the panel (GameUI/main.jsx).
+  useEffect(() => {
+    if (isMobile && selection) window.dispatchEvent(new CustomEvent(MAP_CARD_OPENED));
+  }, [isMobile, selection]);
+
+  // Back on a phone closes the card (runtime/backToClose.js).
+  useBackToClose(Boolean(selection && unit) && !dismissing, () => setDismissing(true));
+
+  if (!selection || !unit || (!asSheet && !screenPos)) return null;
 
   const POPUP_WIDTH = 240;
   const isOwn = unit.ownerCode === getPlayerCode();
@@ -298,6 +361,11 @@ const UnitPopup = () => {
   const postureText = POSTURE_LABEL[unit.posture] || "";
 
   const disband = () => {
+    if (isTouch && !confirmingDisband) {
+      setConfirmingDisband(true);
+      return;
+    }
+    setConfirmingDisband(false);
     removeUnit(unit.id);
     _dismiss?.();
   };
@@ -316,14 +384,16 @@ const UnitPopup = () => {
       onAnimationEnd={handleAnimationEnd}
       style={{
         position: "fixed",
-        left: screenPos.x - POPUP_WIDTH / 2,
-        top: screenPos.y - 14,
-        width: `${POPUP_WIDTH}px`,
+        ...(asSheet ? (isMobile ? SHEET_PLACEMENT : SIDEWAYS_SHEET_PLACEMENT) : {
+          left: screenPos.x - POPUP_WIDTH / 2,
+          top: screenPos.y - 14,
+          width: `${POPUP_WIDTH}px`,
+        }),
         zIndex: 21,
         pointerEvents: dismissing ? "none" : "auto",
         animation: dismissing
-          ? "unitPopupFadeOut 0.18s cubic-bezier(0.4, 0, 1, 1) both"
-          : "unitPopupFadeIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both",
+          ? `${asSheet ? "unitSheetFadeOut" : "unitPopupFadeOut"} 0.18s cubic-bezier(0.4, 0, 1, 1) both`
+          : `${asSheet ? "unitSheetFadeIn" : "unitPopupFadeIn"} 0.22s cubic-bezier(0.22, 1, 0.36, 1) both`,
         fontFamily: "sans-serif",
       }}
     >
@@ -333,7 +403,8 @@ const UnitPopup = () => {
           backdropFilter: "blur(4px)",
           WebkitBackdropFilter: "blur(4px)",
           borderRadius: "12px",
-          overflow: "hidden",
+          overflow: asSheet ? "auto" : "hidden",
+          maxHeight: asSheet ? (isMobile ? SHEET_MAX_HEIGHT : SIDEWAYS_SHEET_MAX_HEIGHT) : undefined,
           boxShadow: "0 8px 32px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.3)",
           border: "1px solid rgba(255,255,255,0.12)",
           color: "white",
@@ -348,6 +419,8 @@ const UnitPopup = () => {
             </div>
           </div>
           <button
+            className="oh-tap"
+            aria-label="Close unit card"
             onClick={() => _dismiss?.()}
             style={{
               background: "rgba(24,24,27,0.7)",
@@ -463,7 +536,11 @@ const UnitPopup = () => {
                   disabled={requestState !== "idle" || !request.trim()}
                   onClick={sendRequest}
                 />
-                <ActionButton label="Disband" onClick={disband} />
+                <ActionButton
+                  label={confirmingDisband ? "Disband?" : "Disband"}
+                  tone={confirmingDisband ? "danger" : "neutral"}
+                  onClick={disband}
+                />
               </div>
               {requestState === "queued" && (
                 <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
