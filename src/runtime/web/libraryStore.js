@@ -915,6 +915,11 @@ const createGame = async (body = {}) => {
     seedGameJsonFromScenario(record, sourceScenario, baseRecord);
     copyOptionalJsonAssets(record, sourceScenario);
   }
+  // The starting country and difficulty, in before the game can become the
+  // active one (server twin: createGame's gamePatch).
+  if (body.gamePatch && typeof body.gamePatch === "object") {
+    record.json.game = canonicalizeGameCountry({ ...jsonAsset(record, "game"), ...body.gamePatch }, jsonAsset(record, "world"));
+  }
 
   // Meta cascade + seed inheritance, byte-faithful to server createGame (:1343).
   const createdAt = nowIso();

@@ -475,8 +475,8 @@ export const createGame = async (payload) => {
   });
   logDebugEvent("game", `New game created: "${payload?.name || details?.id || "untitled"}".`, {
     scenarioId: payload?.scenarioId || "",
-    country: payload?.country || "",
-    difficulty: payload?.difficulty || "",
+    country: payload?.gamePatch?.country || payload?.country || "",
+    difficulty: payload?.gamePatch?.difficulty || payload?.difficulty || "",
   });
   // Card text edits translate (and reach the server language pack) right away.
   enqueueContentStrings(payload);

@@ -16,6 +16,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
+import { isBrowserOnline } from "../../runtime/networkStatus.js";
 import { SCREEN_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 
@@ -109,6 +110,11 @@ const buildBaseLayer = (customBackground) => {
         stroke: new Stroke({ color: "rgba(0,0,0,0.18)", width: 0.4 }),
       }),
     });
+  }
+  // No network at all: the game's bundled relief (public/offline-relief), dimmed
+  // toward the dark canvas, instead of tile requests that can only fail.
+  if (!isBrowserOnline()) {
+    return new TileLayer({ source: new XYZ({ url: "/offline-relief/{z}/{y}/{x}.jpg", maxZoom: 3, wrapX: false }), opacity: 0.4 });
   }
   return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
 };

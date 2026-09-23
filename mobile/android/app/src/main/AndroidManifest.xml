@@ -33,4 +33,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Lets the WebView see connectivity. Without it navigator.onLine is always
+         true, so the game could not tell it was offline: the map kept asking
+         remote tile servers instead of drawing its bundled relief. A normal
+         permission, granted at install without a prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 </manifest>
