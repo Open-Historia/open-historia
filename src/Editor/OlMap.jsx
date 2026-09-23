@@ -39,6 +39,7 @@ import { samePolityName } from "../../server/polityRename.js";
 import { buildRegionChanges } from "./regionChanges.js";
 import RBush from "ol/structs/RBush.js";
 import { BORDER_CLEANUP, findEnclosedGaps, hotspotsOf, planTopologyChunks, touchesHotspot, vertexCountOf, yieldToBrowser } from "./topologySweep.js";
+import { claimStamper } from "./claimOverrides.js";
 import Collection from "ol/Collection";
 import GeoJSON from "ol/format/GeoJSON";
 import ImageLayer from "ol/layer/Image";
@@ -2173,7 +2174,7 @@ const OlMap = ({
       // Forget what the last save wrote, so the next one carries the whole map.
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
-      loadRegions: (fc, ownershipOverrides = null) => {
+      loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
         const fmt = new GeoJSON();
         regionSource.clear();
         savedRegionHashes.clear();
@@ -2182,6 +2183,7 @@ const OlMap = ({
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857",
           });
+          const stampClaims = claimStamper(claimOverrides);
           for (const f of feats) {
             const p = f.getProperties();
             if (f.getId() == null && p.id != null) f.setId(String(p.id));
@@ -2194,6 +2196,7 @@ const OlMap = ({
             if (ownershipOverrides && id != null && Object.prototype.hasOwnProperty.call(ownershipOverrides, id)) {
               f.set("owner", ownershipOverrides[id] || null);
             }
+            stampClaims(f);
           }
           regionSource.addFeatures(feats);
         }
@@ -2214,13 +2217,15 @@ const OlMap = ({
       // Seed the modern world, then stamp a scenario's ownership overrides on
       // top — how a scenario WITHOUT custom geometry opens in the editor (its
       // tier-1 map is exactly "stock world + these overrides").
-      reseedWorldWithOwners: (overrides = {}) => {
+      reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
         loadSeedFeatures().then((feats) => {
           regionSource.clear();
         savedRegionHashes.clear();
+          const stampClaims = claimStamper(claimOverrides);
           for (const f of feats) {
             const id = f.getId();
             if (id != null && overrides[id] !== undefined) f.set("owner", overrides[id] || null);
+            stampClaims(f);
           }
           regionSource.addFeatures(feats);
           regionLayer.changed();

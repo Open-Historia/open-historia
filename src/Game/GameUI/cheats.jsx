@@ -19,6 +19,7 @@ import {
     writeWorldState,
 } from "../../runtime/gameState.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
+import { POLITY_ROLE_PLACEHOLDER, polityRoleOf } from "../../../server/polityRole.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
@@ -4083,11 +4084,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 controller: currentOwner,
                 sovereign: currentSovereign,
                 claimants: currentClaimants,
+                // What each claimant is (server/polityRole.js), and the edits
+                // typed into the rows below before they are saved.
+                claimantRoles: Object.fromEntries(currentClaimants.map((claimant) => [claimant, polityRoleOf(world?.polityOverrides, claimant)])),
+                claimantRoleDrafts: {},
                 canRename: Boolean(customFeature),
                 ownerTarget: currentOwner,
                 controllerTarget: currentOwner,
                 sovereignTarget: currentSovereign,
                 claimantTarget: "",
+                claimantTyped: "",
+                claimantRoleNew: "",
             };
             setFields(next);
             return { world, geojson, customFeature, next };
@@ -4267,12 +4274,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
                         <div style={editorSectionLabelStyle}>Claims & disputed state</div>
                         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
-                            A claim marks the region disputed — striped in the claimant's colour — without moving the border.
+                            A claim marks the region disputed — striped in the claimant's colour — without moving the border. A claimant can be anyone: a country claiming the land as its own, a terrorist organisation, a gang, one side of a civil war. What you write under it is what the AI is told it is, wherever it appears.
                         </div>
                         {claimants.length ? (
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem" }}>
-                                {claimants.map((claimant) => (
-                                    <div key={claimant} style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.38rem 0.5rem" }}>
+                                {claimants.map((claimant) => {
+                                    const savedRole = fields.claimantRoles?.[claimant] ?? "";
+                                    const draftRole = fields.claimantRoleDrafts?.[claimant] ?? savedRole;
+                                    const roleChanged = draftRole.trim() !== savedRole && draftRole.trim() !== "";
+                                    return (
+                                    <div key={claimant} style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "grid", gap: "0.3rem", padding: "0.38rem 0.5rem" }}>
+                                        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                                         <span style={{ color: "#f4f4f5", fontSize: "0.73rem", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{nameOf(claimant)}</span>
                                         <button
                                             type="button"
@@ -4290,33 +4302,85 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         >
                                             Withdraw
                                         </button>
+                                        </div>
+                                        <div style={{ display: "flex", gap: "0.35rem" }}>
+                                            <input
+                                                value={draftRole}
+                                                placeholder={POLITY_ROLE_PLACEHOLDER}
+                                                aria-label={`What ${nameOf(claimant)} is`}
+                                                onChange={(event) => setFields({ ...fields, claimantRoleDrafts: { ...(fields.claimantRoleDrafts ?? {}), [claimant]: event.target.value } })}
+                                                style={{ ...inputStyle, flex: 1, minWidth: 0, fontSize: "0.68rem", padding: "0.3rem 0.45rem" }}
+                                            />
+                                            <button
+                                                type="button"
+                                                disabled={busy || !roleChanged}
+                                                // Restating the claim with a role: the list is unchanged,
+                                                // and the role lands on the claimant's record.
+                                                onClick={() => runBusy(() => applyTerritoryImpacts({
+                                                    regionClaims: [{
+                                                        regionId,
+                                                        regionName: fields.name || "",
+                                                        claimantCode: claimant,
+                                                        claimantRole: draftRole.trim(),
+                                                        note: "Region Inspector describes a claimant",
+                                                    }],
+                                                }, `${nameOf(claimant)} is now described as ${draftRole.trim()}.`))}
+                                                style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.66rem", padding: "0.24rem 0.42rem" }}
+                                            >
+                                                Save
+                                            </button>
+                                        </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         ) : (
                             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No active claimants.</div>
                         )}
 
-                        <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                                <PolitySelect polities={polities} value={fields.claimantTarget ?? ""} onChange={(value) => setFields({ ...fields, claimantTarget: value })} placeholder="Add a claimant…" />
+                        {(() => {
+                            // An existing power from the list, or any name typed in: a
+                            // name the world does not know is founded as a landless
+                            // claimant when the claim lands (runtime/polityFounding.js).
+                            const typed = String(fields.claimantTyped ?? "").trim();
+                            const target = typed || fields.claimantTarget || "";
+                            const newRole = String(fields.claimantRoleNew ?? "").trim();
+                            return (
+                            <div style={{ display: "grid", gap: "0.35rem", marginTop: "0.5rem" }}>
+                                <PolitySelect polities={polities} value={fields.claimantTarget ?? ""} onChange={(value) => setFields({ ...fields, claimantTarget: value, claimantTyped: "" })} placeholder="Add a claimant…" />
+                                <input
+                                    value={fields.claimantTyped ?? ""}
+                                    placeholder="…or type any name (a movement, a gang, a faction)"
+                                    onChange={(event) => setFields({ ...fields, claimantTyped: event.target.value })}
+                                    style={{ ...inputStyle, fontSize: "0.7rem" }}
+                                />
+                                <div style={{ display: "flex", gap: "0.4rem" }}>
+                                    <input
+                                        value={fields.claimantRoleNew ?? ""}
+                                        placeholder={`What it is — ${POLITY_ROLE_PLACEHOLDER}`}
+                                        onChange={(event) => setFields({ ...fields, claimantRoleNew: event.target.value })}
+                                        style={{ ...inputStyle, flex: 1, minWidth: 0, fontSize: "0.7rem" }}
+                                    />
+                                    <button
+                                        type="button"
+                                        disabled={busy || !target || target === owner || claimants.includes(target)}
+                                        onClick={() => runBusy(() => applyTerritoryImpacts({
+                                            regionClaims: [{
+                                                regionId,
+                                                regionName: fields.name || "",
+                                                claimantCode: target,
+                                                ...(newRole ? { claimantRole: newRole } : {}),
+                                                note: "Region Inspector asserts a claim",
+                                            }],
+                                        }, `${nameOf(target)} now claims the region.`))}
+                                        style={{ ...primaryButtonStyle, flexShrink: 0, padding: "0.5rem 0.7rem" }}
+                                    >
+                                        Add
+                                    </button>
+                                </div>
                             </div>
-                            <button
-                                type="button"
-                                disabled={busy || !fields.claimantTarget || fields.claimantTarget === owner || claimants.includes(fields.claimantTarget)}
-                                onClick={() => runBusy(() => applyTerritoryImpacts({
-                                    regionClaims: [{
-                                        regionId,
-                                        regionName: fields.name || "",
-                                        claimantCode: fields.claimantTarget,
-                                        note: "Region Inspector asserts a claim",
-                                    }],
-                                }, `${nameOf(fields.claimantTarget)} now claims the region.`))}
-                                style={{ ...primaryButtonStyle, flexShrink: 0, padding: "0.5rem 0.7rem" }}
-                            >
-                                Add
-                            </button>
-                        </div>
+                            );
+                        })()}
 
                         {claimants.length > 0 && (
                             <button

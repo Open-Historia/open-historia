@@ -608,8 +608,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       }
       d.mergeColors(polityColors);
     }
-    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {});
-    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {});
+    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
+    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).

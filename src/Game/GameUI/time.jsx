@@ -291,13 +291,15 @@ const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup
     for (const transfer of impacts.regionTransfers ?? []) {
         lines.push({ kind: "territory", text: `${region(transfer)}: ${polity(transfer.fromCode) || "unowned"} → ${polity(transfer.toCode) || "unowned"}${transfer.wholeCountry ? " (whole country)" : ""}${note(transfer.note)}` });
     }
+    // What a claimant or a side is, when the event says ("a terrorist organisation").
+    const role = (text) => (text ? ` (${text})` : "");
     for (const op of impacts.regionControlOps ?? []) {
-        if (op?.op === "contest") lines.push({ kind: "control", text: `${region(op)}: contested by ${polity(op.actorCode)}, held by ${polity(op.fromCode) || "no one"}${note(op.note)}` });
-        else if (op?.op === "control") lines.push({ kind: "control", text: `${region(op)}: control passes from ${polity(op.fromCode) || "no one"} to ${polity(op.toCode)}${note(op.note)}` });
+        if (op?.op === "contest") lines.push({ kind: "control", text: `${region(op)}: contested by ${polity(op.actorCode)}${role(op.actorRole)}, held by ${polity(op.fromCode) || "no one"}${note(op.note)}` });
+        else if (op?.op === "control") lines.push({ kind: "control", text: `${region(op)}: control passes from ${polity(op.fromCode) || "no one"} to ${polity(op.toCode)}${role(op.toRole)}${note(op.note)}` });
         else if (op?.op === "clear_contest") lines.push({ kind: "control", text: `${region(op)}: ${op.clearAll ? "every contest settled" : `${polity(op.claimantCode)} no longer contests it`}${note(op.note)}` });
     }
     for (const claim of impacts.regionClaims ?? []) {
-        lines.push({ kind: "claim", text: `${region(claim)}: ${claim.drop ? `${polity(claim.claimantCode)} drops its claim` : `claimed by ${polity(claim.claimantCode)}`}${note(claim.note)}` });
+        lines.push({ kind: "claim", text: `${region(claim)}: ${claim.drop ? `${polity(claim.claimantCode)} drops its claim` : `claimed by ${polity(claim.claimantCode)}${role(claim.claimantRole)}`}${note(claim.note)}` });
     }
     for (const change of impacts.polityChanges ?? []) {
         const verb = { create: "created", rename: "renamed", dissolve: "dissolved", restore: "restored", update: "updated" }[change.operation] || "updated";
@@ -308,6 +310,7 @@ const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup
         if (change.reputation != null && change.reputation !== "") details.push(`reputation ${change.reputation}`);
         if (change.intelligence != null && change.intelligence !== "") details.push(`intelligence ${change.intelligence}`);
         if (Array.isArray(change.tags) && change.tags.length) details.push(`tags ${change.tags.join(", ")}`);
+        if (change.role) details.push(`now ${change.role}`);
         lines.push({ kind: "polity", text: `${name}: ${verb}${details.length ? ` (${details.join("; ")})` : ""}${note(change.note)}` });
     }
     for (const op of impacts.unitOps ?? []) {
