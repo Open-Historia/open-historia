@@ -1,5 +1,7 @@
 /*! Open Historia — portions (reasoning toggle + small-screen menu) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import {
     AI_TASK_ROUTING,
@@ -163,6 +165,11 @@ const listCardStyle = {
     marginBottom: "0.45rem",
 };
 
+// A <summary> is one line of small text, too thin for a thumb. On a touch
+// screen its line is 44 px tall, which keeps the text and its ▸ centred (the
+// tap classes set a min-height, and a summary would sit at the top of it).
+const TOUCH_SUMMARY = { lineHeight: "2.75rem" };
+
 function providerMatchesQuery(option, query) {
     if (!query) return true;
 
@@ -289,18 +296,26 @@ const ChatLanguageSelector = () => {
     );
 };
 
-const Toggle = ({ label, enabled, onToggle }) => (
+// On a touch screen the whole row is the switch: the pill alone is 28 px tall,
+// under a thumb's width, and the label beside it is what a thumb goes for. The
+// pill keeps its size and stops shrinking when a long label wraps beside it.
+const Toggle = ({ label, enabled, onToggle }) => {
+    const touch = useTouchPrimary();
+    return (
     <div
+    className="oh-tap-row"
+    onClick={touch ? onToggle : undefined}
     style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: "1rem",
+        ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
     }}
     >
     <span style={{ fontSize: "0.9rem" }}>{label}</span>
     <button
-    onClick={onToggle}
+    onClick={touch ? undefined : onToggle}
     style={{
         width: "3.5rem",
         height: "1.75rem",
@@ -310,6 +325,7 @@ const Toggle = ({ label, enabled, onToggle }) => (
         position: "relative",
         transition: "0.3s",
         backgroundColor: enabled ? "#3b82f6" : "#55555b",
+        ...(touch ? { flexShrink: 0 } : null),
     }}
     >
     <div
@@ -328,7 +344,8 @@ const Toggle = ({ label, enabled, onToggle }) => (
     />
     </button>
     </div>
-);
+    );
+};
 
 const ApiProviderSelector = ({ provider, onProviderChange }) => {
     const [isCatalogOpen, setIsCatalogOpen] = useState(false);
@@ -703,6 +720,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
     const sharedBy = entries.filter((other) => other.connectionId === entry.connectionId).length;
     const suggestions = [...new Set([connection?.suggestedModel, ...getRecentModels(provider)].filter(Boolean))];
     const set = (field) => (value) => updateEntry(entry.id, { [field]: value });
+    const touch = useTouchPrimary();
     return (
         <div>
         {connections.length > 1 && (
@@ -729,7 +747,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
             : "Leave blank to use the built-in default."}
         />
         <details style={{ marginBottom: "0.4rem" }}>
-        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem" }}>This model only</summary>
+        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", marginBottom: "0.6rem", ...(touch ? TOUCH_SUMMARY : null) }}>This model only</summary>
         <SettingsInput
         label="Custom parameters for this model (JSON)"
         multiline
@@ -765,15 +783,15 @@ const FillPanel = ({ connections, onDone }) => {
         you already have are skipped.
         </div>
         {connections.map((connection) => (
-            <label key={connection.id} style={{ alignItems: "center", display: "flex", gap: "0.5rem", fontSize: "0.8rem", marginBottom: "0.35rem", cursor: "pointer" }}>
+            <label key={connection.id} className="oh-tap-row" style={{ alignItems: "center", display: "flex", gap: "0.5rem", fontSize: "0.8rem", marginBottom: "0.35rem", cursor: "pointer" }}>
             <input type="checkbox" checked={ticked.includes(connection.id)} onChange={() => toggle(connection.id)} />
             {connectionDisplayName(connection)} <span style={{ color: "rgba(255,255,255,0.45)" }}>({getProviderMeta(connection.provider).label})</span>
             </label>
         ))}
         <SettingsInput label="Models, strongest first (one per line)" multiline value={models} onChange={setModels} placeholder={GEMINI_DEFAULT_CHAIN.join("\n")} />
         <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
-        <button type="button" onClick={fill} disabled={!ticked.length || !models.trim()} style={{ ...primaryButtonStyle, opacity: ticked.length && models.trim() ? 1 : 0.5 }}>Fill</button>
-        <button type="button" onClick={onDone} style={smallButtonStyle}>Close</button>
+        <button type="button" className="oh-tap-row" onClick={fill} disabled={!ticked.length || !models.trim()} style={{ ...primaryButtonStyle, opacity: ticked.length && models.trim() ? 1 : 0.5 }}>Fill</button>
+        <button type="button" className="oh-tap-row" onClick={onDone} style={smallButtonStyle}>Close</button>
         {added !== null && <span style={{ ...helperStyle, marginTop: 0 }}>{added ? `Added ${added} entr${added === 1 ? "y" : "ies"}.` : "Nothing new to add."}</span>}
         </div>
         </div>
@@ -821,7 +839,7 @@ const FallbackListSection = () => {
             <>
             <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginBottom: "0.5rem" }}>
             <StatusChip status={entries[0].status} at={at} />
-            {entries[0].status.status !== "ready" && <button type="button" onClick={() => resetEntryState(entries[0].id)} style={rowButtonStyle}>Reset</button>}
+            {entries[0].status.status !== "ready" && <button type="button" className="oh-tap-row" onClick={() => resetEntryState(entries[0].id)} style={rowButtonStyle}>Reset</button>}
             </div>
             <EntryEditor entry={entries[0]} connections={connections} entries={entries} />
             </>
@@ -842,11 +860,11 @@ const FallbackListSection = () => {
             <StatusChip status={entry.status} at={at} />
             </div>
             <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.45rem", flexWrap: "wrap" }}>
-            <button type="button" onClick={() => moveEntry(entry.id, index - 1)} disabled={index === 0} aria-label="Move up" title="Move up" style={{ ...rowButtonStyle, opacity: index === 0 ? 0.4 : 1 }}>↑</button>
-            <button type="button" onClick={() => moveEntry(entry.id, index + 1)} disabled={index === entries.length - 1} aria-label="Move down" title="Move down" style={{ ...rowButtonStyle, opacity: index === entries.length - 1 ? 0.4 : 1 }}>↓</button>
-            <button type="button" onClick={() => setEditingId(editingId === entry.id ? null : entry.id)} style={rowButtonStyle}>{editingId === entry.id ? "Done" : "Edit"}</button>
-            {entry.status.status !== "ready" && <button type="button" onClick={() => resetEntryState(entry.id)} title="Clear this status. Every call tries this model again either way." style={rowButtonStyle}>Reset</button>}
-            <button type="button" onClick={() => remove(entry)} aria-label="Remove" title="Remove from the list" style={rowButtonStyle}>✕</button>
+            <button type="button" className="oh-tap" onClick={() => moveEntry(entry.id, index - 1)} disabled={index === 0} aria-label="Move up" title="Move up" style={{ ...rowButtonStyle, opacity: index === 0 ? 0.4 : 1 }}>↑</button>
+            <button type="button" className="oh-tap" onClick={() => moveEntry(entry.id, index + 1)} disabled={index === entries.length - 1} aria-label="Move down" title="Move down" style={{ ...rowButtonStyle, opacity: index === entries.length - 1 ? 0.4 : 1 }}>↓</button>
+            <button type="button" className="oh-tap-row" onClick={() => setEditingId(editingId === entry.id ? null : entry.id)} style={rowButtonStyle}>{editingId === entry.id ? "Done" : "Edit"}</button>
+            {entry.status.status !== "ready" && <button type="button" className="oh-tap-row" onClick={() => resetEntryState(entry.id)} title="Clear this status. Every call tries this model again either way." style={rowButtonStyle}>Reset</button>}
+            <button type="button" className="oh-tap" onClick={() => remove(entry)} aria-label="Remove" title="Remove from the list" style={rowButtonStyle}>✕</button>
             </div>
             {editingId === entry.id && (
                 <div style={{ marginTop: "0.75rem" }}>
@@ -856,9 +874,9 @@ const FallbackListSection = () => {
             </div>
         ))}
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.6rem" }}>
-        <button type="button" onClick={addBackup} style={primaryButtonStyle}>{entries.length ? "+ Add a backup" : "+ Add a model"}</button>
-        <button type="button" onClick={() => setFilling((open) => !open)} style={smallButtonStyle}>Fill…</button>
-        {entries.length > 0 && <button type="button" onClick={clearAll} style={smallButtonStyle}>Clear list</button>}
+        <button type="button" className="oh-tap-row" onClick={addBackup} style={primaryButtonStyle}>{entries.length ? "+ Add a backup" : "+ Add a model"}</button>
+        <button type="button" className="oh-tap-row" onClick={() => setFilling((open) => !open)} style={smallButtonStyle}>Fill…</button>
+        {entries.length > 0 && <button type="button" className="oh-tap-row" onClick={clearAll} style={smallButtonStyle}>Clear list</button>}
         </div>
         {filling && <FillPanel connections={connections} onDone={() => setFilling(false)} />}
         <div style={{ ...fieldGroupStyle, marginTop: "0.9rem" }}>
@@ -919,8 +937,8 @@ const ConnectionsSection = () => {
                 </div>
                 </div>
                 <div style={{ display: "flex", gap: "0.3rem", flexShrink: 0 }}>
-                <button type="button" onClick={() => setEditingId(editingId === connection.id ? null : connection.id)} style={rowButtonStyle}>{editingId === connection.id ? "Done" : "Edit"}</button>
-                <button type="button" onClick={() => remove(connection)} aria-label="Remove" title="Remove connection" style={rowButtonStyle}>✕</button>
+                <button type="button" className="oh-tap-row" onClick={() => setEditingId(editingId === connection.id ? null : connection.id)} style={rowButtonStyle}>{editingId === connection.id ? "Done" : "Edit"}</button>
+                <button type="button" className="oh-tap" onClick={() => remove(connection)} aria-label="Remove" title="Remove connection" style={rowButtonStyle}>✕</button>
                 </div>
                 </div>
                 {editingId === connection.id && (
@@ -932,9 +950,9 @@ const ConnectionsSection = () => {
             );
         })}
         <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginTop: "0.4rem" }}>
-        <button type="button" onClick={() => setEditingId(addConnection({ provider: DEFAULT_PROVIDER, name: "" }))} style={primaryButtonStyle}>+ New connection</button>
+        <button type="button" className="oh-tap-row" onClick={() => setEditingId(addConnection({ provider: DEFAULT_PROVIDER, name: "" }))} style={primaryButtonStyle}>+ New connection</button>
         {CONNECTION_TEMPLATES.map((template) => (
-            <button key={template.name} type="button" onClick={() => setEditingId(addConnection(template))} style={smallButtonStyle}>+ {template.name}</button>
+            <button key={template.name} type="button" className="oh-tap-row" onClick={() => setEditingId(addConnection(template))} style={smallButtonStyle}>+ {template.name}</button>
         ))}
         </div>
         </SettingsSection>
@@ -959,7 +977,7 @@ const TaskPicks = () => {
 
     return (
         <div>
-        <button type="button" onClick={() => setExpanded((current) => !current)} style={{ ...smallButtonStyle, width: "100%", display: "flex", justifyContent: "space-between" }}>
+        <button type="button" className="oh-tap-row" onClick={() => setExpanded((current) => !current)} style={{ ...smallButtonStyle, width: "100%", display: "flex", justifyContent: "space-between" }}>
         <span>Per-task models{activeCount ? ` (${activeCount} set)` : ""}</span>
         <span>{expanded ? "Hide" : "Show"}</span>
         </button>
@@ -1167,6 +1185,9 @@ const RequestBudgetSection = () => {
 };
 
 const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
+    // A link is not a button: its text would sit at the top of the 44 px the
+    // tap class gives it, so on a touch screen it centres its own text.
+    const touch = useTouchPrimary();
     const links = [
         discordUrl ? { label: "Discord", href: discordUrl } : null,
         redditUrl ? { label: "Reddit", href: redditUrl } : null,
@@ -1183,6 +1204,7 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
                 href={link.href}
                 target="_blank"
                 rel="noopener noreferrer"
+                className="oh-tap-row"
                 style={{
                     background: "rgba(255,255,255,0.04)",
                     border: "1px solid rgba(255,255,255,0.08)",
@@ -1192,6 +1214,7 @@ const SocialLinks = ({ discordUrl, redditUrl, githubUrl }) => {
                     fontWeight: 700,
                     padding: "0.38rem 0.55rem",
                     textDecoration: "none",
+                    ...(touch ? { alignItems: "center", display: "inline-flex" } : null),
                 }}
                 >
                 {link.label}
@@ -1214,7 +1237,7 @@ const SettingsButton = ({ onToggle, topOffset = "0.5rem", hidden = false }) => (
     style={{
         ...baseStyle,
         top: topOffset,
-        left: "0.5rem",
+        left: `calc(0.5rem + ${SAFE_LEFT})`,
         height: "4rem",
         width: "4rem",
         cursor: "pointer",
@@ -1324,7 +1347,7 @@ const NetworkSharing = () => {
             }}>
             <div style={{ marginBottom: "0.25rem", opacity: 0.8 }}>Type this into the Android app:</div>
             {state.addresses.map((address) => (
-                <div key={address.url} style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>
+                <div key={address.url} style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600, overflowWrap: "anywhere" }}>
                 {address.url}
                 {state.addresses.length > 1 && (
                     <span style={{ fontWeight: 400, opacity: 0.55 }}> ({address.interface})</span>
@@ -1367,6 +1390,9 @@ const DiagnosticsLogViewer = () => {
     const [desktopStatus, setDesktopStatus] = useState("");
     const [onlyProblems, setOnlyProblems] = useState(false);
     const [expanded, setExpanded] = useState(null);
+    // Each line opens its detail; on a touch screen every line is a thumb tall,
+    // with its text centred rather than on the baseline at the top.
+    const touch = useTouchPrimary();
 
     const show = (desktop) => {
         setDesktopStatus(desktop.status);
@@ -1388,8 +1414,8 @@ const DiagnosticsLogViewer = () => {
     return (
         <div style={{ marginBottom: "0.8rem" }}>
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.4rem" }}>
-        <button type="button" onClick={load} style={{ ...diagnosticsButton, flex: 1 }}>Refresh</button>
-        <button type="button" onClick={() => setOnlyProblems((value) => !value)} style={{ ...diagnosticsButton, flex: 1 }}>
+        <button type="button" className="oh-tap-row" onClick={load} style={{ ...diagnosticsButton, flex: 1 }}>Refresh</button>
+        <button type="button" className="oh-tap-row" onClick={() => setOnlyProblems((value) => !value)} style={{ ...diagnosticsButton, flex: 1 }}>
         {onlyProblems ? "Showing problems only" : "Showing everything"}
         </button>
         </div>
@@ -1406,8 +1432,9 @@ const DiagnosticsLogViewer = () => {
         {entries.map((entry, index) => (
             <div key={`${entry.at}-${index}`} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)", padding: "0.3rem 0.45rem" }}>
             <div
+            className="oh-tap-row"
             onClick={() => entry.detail && setExpanded(expanded === index ? null : index)}
-            style={{ cursor: entry.detail ? "pointer" : "default", display: "flex", gap: "0.45rem", fontSize: "0.72rem", alignItems: "baseline" }}
+            style={{ cursor: entry.detail ? "pointer" : "default", display: "flex", gap: "0.45rem", fontSize: "0.72rem", alignItems: touch ? "center" : "baseline" }}
             >
             <span style={{ color: "rgba(255,255,255,0.4)", whiteSpace: "nowrap" }}>{String(entry.at || "").slice(11, 19)}</span>
             <span style={{ color: entry.problem ? "#ffb35c" : "rgba(255,255,255,0.55)", fontWeight: 700, whiteSpace: "nowrap" }}>{entry.category}</span>
@@ -1567,13 +1594,14 @@ const DiagnosticsPanel = () => {
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", opacity: enabled ? 1 : 0.45 }}>
         <button
         type="button"
+        className="oh-tap-row"
         onClick={handleCopy}
         disabled={copyState === "copying"}
         style={{ ...diagnosticsButton, flex: 1 }}
         >
         {copyState === "copied" ? "✓ Copied!" : copyState === "failed" ? "Couldn't copy" : copyState === "copying" ? "Copying…" : "📋 Copy log"}
         </button>
-        <button type="button" onClick={handleDownload} style={{ ...diagnosticsButton, flex: 1 }}>
+        <button type="button" className="oh-tap-row" onClick={handleDownload} style={{ ...diagnosticsButton, flex: 1 }}>
         💾 Save log file
         </button>
         </div>
@@ -1585,6 +1613,7 @@ const DiagnosticsPanel = () => {
         {(
         <button
         type="button"
+        className="oh-tap-row"
         onClick={handleAttachGame}
         disabled={attachState.kind === "working"}
         style={{ ...diagnosticsButton, width: "100%", marginBottom: "0.5rem" }}
@@ -1604,6 +1633,7 @@ const DiagnosticsPanel = () => {
 
         <button
         type="button"
+        className="oh-tap-row"
         onClick={() => setViewing((value) => !value)}
         style={{ ...diagnosticsButton, width: "100%", marginBottom: "0.5rem" }}
         >
@@ -1624,6 +1654,7 @@ const DiagnosticsPanel = () => {
         </span>
         <button
         type="button"
+        className="oh-tap-row"
         onClick={handleClear}
         title="Empties the log. Do this just before reproducing a bug and the log will contain only the steps that caused it."
         style={{ ...diagnosticsButton, padding: "0.3rem 0.55rem", fontSize: "0.7rem" }}
@@ -1928,6 +1959,9 @@ const SettingsWorkspace = ({
         };
     }, [onBack]);
 
+    // On a phone the four categories share one row, each an icon over its name.
+    // Side by side at 9.6rem each only two fitted, and nothing said the strip
+    // scrolled to the other two.
     const nav = (
         <nav style={{ display: "flex", flexDirection: isMobile ? "row" : "column", gap: "0.35rem", overflowX: isMobile ? "auto" : "visible", padding: isMobile ? "0.65rem" : "0.85rem", scrollbarWidth: "none" }}>
             {SETTINGS_SECTIONS.map((section) => {
@@ -1936,6 +1970,7 @@ const SettingsWorkspace = ({
                     <button
                     key={section.key}
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => onSectionChange(section.key)}
                     style={{
                         alignItems: "center",
@@ -1945,13 +1980,14 @@ const SettingsWorkspace = ({
                         color: selected ? "#f4f4f5" : "rgba(255,255,255,0.58)",
                         cursor: "pointer",
                         display: "flex",
-                        flex: isMobile ? "0 0 auto" : "none",
+                        flex: isMobile ? "1 1 0" : "none",
                         fontFamily: "inherit",
                         gap: "0.65rem",
-                        minWidth: isMobile ? "9.6rem" : 0,
+                        minWidth: 0,
                         padding: "0.62rem 0.65rem",
                         textAlign: "left",
                         width: isMobile ? "auto" : "100%",
+                        ...(isMobile ? { flexDirection: "column", gap: "0.3rem", justifyContent: "center", padding: "0.45rem 0.2rem", textAlign: "center" } : null),
                     }}
                     >
                         <span aria-hidden="true" style={{ alignItems: "center", background: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)", borderRadius: "7px", display: "inline-flex", flexShrink: 0, fontSize: "0.76rem", fontWeight: 900, height: "1.8rem", justifyContent: "center", width: "1.8rem" }}>{section.icon}</span>
@@ -2084,6 +2120,7 @@ const SettingsWorkspace = ({
                 right={(
                     <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={() => onSectionChange("ai")}
                     style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.24)", borderRadius: "8px", color: "#bfdbfe", cursor: "pointer", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
                     >
@@ -2099,6 +2136,7 @@ const SettingsWorkspace = ({
                 right={typeof onOpenDebugConsole === "function" ? (
                     <button
                     type="button"
+                    className="oh-tap-row"
                     onClick={onOpenDebugConsole}
                     style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.24)", borderRadius: "8px", color: "#bfdbfe", cursor: "pointer", fontSize: "0.72rem", fontWeight: 750, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
                     >
@@ -2128,12 +2166,15 @@ const SettingsWorkspace = ({
         </div>
     );
 
+    // On a phone the card is the whole screen less a thin margin, and that margin
+    // is widened by the notch and the home indicator so neither covers the ←, the
+    // ✕ or the bottom of the page.
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? "0.45rem" : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? "calc(100vh - 0.9rem)" : "min(800px, calc(100vh - 2.4rem))", maxWidth: "1120px", overflow: "hidden", width: isMobile ? "calc(100vw - 0.9rem)" : "min(94vw, 1120px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Game settings" className={leaving ? "oh-fade-out" : closing ? "oh-fade-out-slow" : fromRect ? undefined : "oh-fade-in"} style={{ alignItems: "center", background: "rgba(6,6,7,0.42)", backdropFilter: "blur(18px) saturate(1.2)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? `calc(0.45rem + ${SAFE_TOP}) calc(0.45rem + ${SAFE_RIGHT}) calc(0.45rem + ${SAFE_BOTTOM}) calc(0.45rem + ${SAFE_LEFT})` : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div ref={cardRef} className="oh-ws-card" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.72), rgba(17,17,19,0.62))", backdropFilter: "var(--oh-hud-blur)", WebkitBackdropFilter: "var(--oh-hud-blur)", border: "1px solid var(--oh-hud-border)", borderRadius: isMobile ? "12px" : "18px", boxShadow: "var(--oh-hud-shadow)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: isMobile ? `calc(${APP_HEIGHT} - 0.9rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : `min(800px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1120px", overflow: "hidden", width: isMobile ? `calc(100vw - 0.9rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "min(94vw, 1120px)" }}>
                 <div aria-hidden="true" className="oh-ws-tint" style={{ background: "linear-gradient(180deg, rgba(46,46,50,0.68), rgba(17,17,19,0.58))", borderRadius: "inherit", inset: 0, pointerEvents: "none", position: "absolute" }} />
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.8rem 0.9rem" }}>
-                    <button type="button" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
+                    <button type="button" className="oh-tap" onClick={onBack} aria-label="Back to game menu" title="Back to game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.66)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>←</button>
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.65rem" }}>
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
@@ -2143,7 +2184,7 @@ const SettingsWorkspace = ({
                             {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close settings" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
                 <div style={{ display: "grid", flex: 1, gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "235px minmax(0, 1fr)", gridTemplateRows: isMobile ? "auto minmax(0, 1fr)" : "minmax(0, 1fr)", minHeight: 0 }}>
                     <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.07)" : "none", borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: isMobile ? "visible" : "auto" }}>{nav}</aside>
@@ -2162,9 +2203,12 @@ const QUICK_MENU_TABS = [
     { key: "help", label: "Help" },
 ];
 
-const QuickMenuTabButton = ({ label, selected, onClick }) => (
+// `fill` (a phone): the four tabs share the strip evenly, with room for all
+// four down to a 320 px screen.
+const QuickMenuTabButton = ({ label, selected, onClick, fill = false }) => (
     <button
     type="button"
+    className="oh-tap-row"
     onClick={onClick}
     style={{
         background: selected ? "rgba(0,0,0,0.42)" : "transparent",
@@ -2178,6 +2222,7 @@ const QuickMenuTabButton = ({ label, selected, onClick }) => (
         padding: "0.5rem 0.8rem",
         textTransform: "uppercase",
         letterSpacing: "0.04em",
+        ...(fill ? { flex: "1 1 auto", padding: "0.5rem 0.45rem" } : null),
     }}
     >
     {label}
@@ -2336,6 +2381,9 @@ const SettingsMenu = ({
             setActiveSettingsSection(null);
         }, 230);
     };
+    // On a phone, Back steps out of the workspace to the quick menu first, as
+    // Escape does; the Back after that closes the menu (main.jsx).
+    useBackToClose(Boolean(activeSettingsSection), backToMenu);
 
     if (activeSettingsSection) {
         return (
@@ -2438,13 +2486,13 @@ const SettingsMenu = ({
             ...baseStyle,
             // On the button's own corner: the menu is the button, grown.
             top: topOffset,
-            left: "0.5rem",
-            width: isMobile ? "calc(100vw - 1rem)" : "29rem",
-            maxWidth: "calc(100vw - 1rem)",
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
+            width: isMobile ? `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "29rem",
+            maxWidth: `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})`,
             minHeight: isMobile ? "auto" : "22rem",
             // Never taller than the space below the panel's own top edge — the old
             // 100vh-5rem pushed the bottom (Discord/GitHub links) off short screens.
-            maxHeight: `calc(100vh - ${topOffset} - 1rem)`,
+            maxHeight: `calc(${APP_HEIGHT} - ${topOffset} - 1rem)`,
             overflowY: "auto",
             padding: "0.85rem",
             flexDirection: "column",
@@ -2466,12 +2514,12 @@ const SettingsMenu = ({
                         {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game menu"}
                     </div>
                 </div>
-                <button type="button" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
+                <button type="button" className="oh-tap" onClick={() => onClose?.()} aria-label="Close game menu" style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "8px", color: "rgba(255,255,255,0.58)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2rem", justifyContent: "center", width: "2rem" }}>×</button>
             </div>
 
             <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "10px", display: "flex", gap: "0.2rem", padding: "0.2rem", marginBottom: "0.8rem", overflowX: "auto", scrollbarWidth: "none" }}>
                 {QUICK_MENU_TABS.map((tab) => (
-                    <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} />
+                    <QuickMenuTabButton key={tab.key} label={tab.label} selected={activeQuickTab === tab.key} onClick={() => setActiveQuickTab(tab.key)} fill={isMobile} />
                 ))}
             </div>
 

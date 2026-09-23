@@ -1,5 +1,8 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import { JSON_URLS, getNationFlags, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
@@ -581,7 +584,8 @@ const DiplomacySection = ({ world, targetCountry }) => {
     );
 };
 
-const statsSubtabStyle = (selected) => ({
+// `touch`: a thumb-sized tab. The inline minHeight would beat the tap class.
+const statsSubtabStyle = (selected, touch = false) => ({
     alignItems: "center",
     backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.03)",
     border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.09)"}`,
@@ -593,10 +597,27 @@ const statsSubtabStyle = (selected) => ({
     fontSize: "0.72rem",
     fontWeight: 800,
     justifyContent: "center",
-    minHeight: "2.45rem",
+    minHeight: touch ? "2.75rem" : "2.45rem",
     padding: "0.45rem 0.55rem",
     transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
 });
+
+// A statistics sheet on a phone: exactly the screen, clear of the notch and the
+// home indicator. The cards' minimum heights (580 and 520 px) go, as on any
+// touch screen: they are taller than a small phone.
+const phoneSheetStyle = {
+    border: "none",
+    borderRadius: 0,
+    boxSizing: "border-box",
+    height: APP_HEIGHT,
+    maxWidth: "none",
+    minHeight: 0,
+    paddingBottom: SAFE_BOTTOM,
+    paddingLeft: SAFE_LEFT,
+    paddingRight: SAFE_RIGHT,
+    paddingTop: SAFE_TOP,
+    width: "100%",
+};
 
 // ---------------------------------------------------------------------------
 // 8B.3 — Advanced Statistics
@@ -709,21 +730,25 @@ const advancedRangeStyle = (active) => ({
     padding: "0.42rem 0.62rem",
 });
 
-const AdvancedLineChart = ({ samples, metricKeys, metricsByKey }) => {
+// `compact` (a phone): a narrower drawing. Scaled from 900 units down to a
+// phone's 340 px, its axis labels came out 4 px tall. `fill` (a touch screen
+// held sideways): the chart takes the height it is given rather than 340 px,
+// which pushed the sheet past the bottom of the screen.
+const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false, fill = false }) => {
     const [hoverIndex, setHoverIndex] = useState(null);
     const metrics = metricKeys.map((key) => metricsByKey[key]).filter(Boolean);
     const validSamples = samples.filter((sample) => metrics.some((metric) => Number.isFinite(Number(historyMetricValue(sample, metric.key)))));
 
     if (!validSamples.length || !metrics.length) {
         return (
-            <div style={{ alignItems: "center", color: "rgba(255,255,255,0.38)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center", minHeight: "330px", textAlign: "center" }}>
+            <div style={{ alignItems: "center", color: "rgba(255,255,255,0.38)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center", minHeight: compact || fill ? "8rem" : "330px", textAlign: "center" }}>
                 No historical samples are available for this selection yet.
             </div>
         );
     }
 
-    const width = 900;
-    const height = 470;
+    const width = compact ? 420 : 900;
+    const height = compact ? 320 : 470;
     const pad = { left: 78, right: 34, top: 34, bottom: 58 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
@@ -777,7 +802,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey }) => {
 
     return (
         <div style={{ minHeight: 0, position: "relative", width: "100%" }}>
-            <svg aria-label="Historical statistics chart" role="img" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", height: "auto", maxHeight: "58vh", minHeight: "340px", width: "100%" }}>
+            <svg aria-label="Historical statistics chart" role="img" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", height: "auto", maxHeight: "58vh", minHeight: "340px", width: "100%", ...(compact ? { maxHeight: "none", minHeight: 0 } : fill ? { height: "100%", maxHeight: "none", minHeight: 0 } : null) }}>
                 <defs>
                     <linearGradient id="ohStatsGridFade" x1="0" x2="1">
                         <stop offset="0%" stopColor="rgba(255,255,255,0.02)" />
@@ -868,6 +893,12 @@ const AdvancedStatsModal = ({
 }) => {
     const [metricKeys, setMetricKeys] = useState(["gdp"]);
     const [range, setRange] = useState("all");
+    // A phone gets the whole screen and one column, the chart over the choice
+    // of statistics. Any touch screen drops the fixed minimum heights, so a
+    // phone held sideways keeps the header, and its ✕, on the screen.
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
+    const fit = isMobile || touch;
     const metricGroups = useMemo(
         () => advancedMetricGroupsFor(indexRows, statSheetDefinition),
         [indexRows, statSheetDefinition],
@@ -933,8 +964,8 @@ const AdvancedStatsModal = ({
             : "No history yet";
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
+        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
                         {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
@@ -946,10 +977,12 @@ const AdvancedStatsModal = ({
                         </div>
                         <div data-no-translate style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{sampleSpan} · {visibleSamples.length} snapshot{visibleSamples.length === 1 ? "" : "s"}</div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
 
-                <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(0, 1fr) minmax(285px, 330px)", minHeight: 0 }}>
+                {/* On a phone one column that scrolls as a whole: the chart, its
+                    figures, then the time range and the statistics to plot. */}
+                <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(0, 1fr) minmax(285px, 330px)", minHeight: 0, ...(isMobile ? { display: "block", overflowY: "auto" } : null) }}>
                     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, padding: "1rem 1rem 0.9rem" }}>
                         <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.35rem" }}>
                             <div>
@@ -961,18 +994,18 @@ const AdvancedStatsModal = ({
                             </div>
                         </div>
 
-                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: "390px", overflow: "hidden", padding: "0.35rem" }}>
+                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: isMobile ? "10rem" : fit ? 0 : "390px", overflow: "hidden", padding: "0.35rem" }}>
                             {status === "loading" ? (
                                 <div style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center" }}>Loading campaign history…</div>
                             ) : status === "error" ? (
                                 <div style={{ alignItems: "center", color: "#fca5a5", display: "flex", flex: 1, fontSize: "0.8rem", justifyContent: "center", padding: "2rem", textAlign: "center" }}>{error || "Historical Stats could not be loaded."}</div>
                             ) : (
-                                <AdvancedLineChart samples={visibleSamples} metricKeys={metricKeys} metricsByKey={metricsByKey} />
+                                <AdvancedLineChart samples={visibleSamples} metricKeys={metricKeys} metricsByKey={metricsByKey} compact={isMobile} fill={fit && !isMobile} />
                             )}
                         </div>
 
                         {first && last && (
-                            <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
+                            <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(isMobile ? 2 : 4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
                                 {selectedMetrics.map((metric) => {
                                     const start = Number(historyMetricValue(first, metric.key));
                                     const end = Number(historyMetricValue(last, metric.key));
@@ -1000,10 +1033,10 @@ const AdvancedStatsModal = ({
                         )}
                     </div>
 
-                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem" }}>
+                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem", ...(isMobile ? { borderLeft: "none", borderTop: "1px solid rgba(255,255,255,0.07)", overflowY: "visible" } : null) }}>
                         <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.58rem", fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>Time range</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
-                            {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
+                            {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" className="oh-tap-row" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
                         </div>
 
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginTop: "1rem" }}>
@@ -1020,7 +1053,7 @@ const AdvancedStatsModal = ({
                                         const checked = metricKeys.includes(metric.key);
                                         const compatible = !selectedMetrics.length || selectedUnit === metric.unit || checked;
                                         return (
-                                            <button key={metric.key} type="button" onClick={() => toggleMetric(metric)} style={{ alignItems: "center", backgroundColor: checked ? `${metric.color}16` : "transparent", border: `1px solid ${checked ? `${metric.color}50` : "transparent"}`, borderRadius: "7px", color: checked ? "rgba(255,255,255,0.9)" : compatible ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", cursor: "pointer", display: "flex", fontSize: "0.66rem", fontWeight: checked ? 800 : 650, gap: "0.45rem", padding: "0.38rem 0.45rem", textAlign: "left", width: "100%" }}>
+                                            <button key={metric.key} type="button" className="oh-tap-row" onClick={() => toggleMetric(metric)} style={{ alignItems: "center", backgroundColor: checked ? `${metric.color}16` : "transparent", border: `1px solid ${checked ? `${metric.color}50` : "transparent"}`, borderRadius: "7px", color: checked ? "rgba(255,255,255,0.9)" : compatible ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", cursor: "pointer", display: "flex", fontSize: "0.66rem", fontWeight: checked ? 800 : 650, gap: "0.45rem", padding: "0.38rem 0.45rem", textAlign: "left", width: "100%" }}>
                                                 <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: checked ? metric.color : "rgba(255,255,255,0.08)", border: `1px solid ${checked ? metric.color : "rgba(255,255,255,0.13)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{checked ? "✓" : ""}</span>
                                                 <span style={{ flex: 1, minWidth: 0 }}>{metric.label}</span>
                                             </button>
@@ -1054,6 +1087,12 @@ const HistoricalTrackingModal = ({
     currentCountry,
 }) => {
     const [search, setSearch] = useState("");
+    // As Advanced Statistics: a phone gets the whole screen and one column that
+    // scrolls, the country list holding at most half the screen of its own; any
+    // touch screen drops the fixed minimum height and lets both halves scroll.
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
+    const fit = isMobile || touch;
 
     useEffect(() => {
         if (!open) return undefined;
@@ -1114,8 +1153,8 @@ const HistoricalTrackingModal = ({
     if (!open || typeof document === "undefined") return null;
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(760px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "1rem 1.05rem 0.95rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
                         <div style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "1.2rem", height: "2.5rem", justifyContent: "center", width: "2.5rem" }}>⚙</div>
@@ -1126,11 +1165,11 @@ const HistoricalTrackingModal = ({
                             </div>
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} style={{ alignItems: "center", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "inline-flex", flexShrink: 0, fontSize: "1rem", height: "2.4rem", justifyContent: "center", width: "2.4rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close historical tracking" style={{ alignItems: "center", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "inline-flex", flexShrink: 0, fontSize: "1rem", height: "2.4rem", justifyContent: "center", width: "2.4rem" }}>×</button>
                 </div>
 
-                <div style={{ display: "grid", flex: 1, gap: "1rem", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 330px)", minHeight: 0, padding: "1rem 1.05rem 1.05rem" }}>
-                    <div style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+                <div style={{ display: "grid", flex: 1, gap: "1rem", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 330px)", minHeight: 0, padding: "1rem 1.05rem 1.05rem", ...(isMobile ? { display: "block", overflowY: "auto", padding: "0.85rem" } : null) }}>
+                    <div style={{ minHeight: 0, overflow: isMobile ? "visible" : touch ? "auto" : "hidden", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
                         <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800, marginBottom: "0.5rem" }}>Auto-refresh cadence</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
@@ -1140,6 +1179,7 @@ const HistoricalTrackingModal = ({
                                         <button
                                             key={months}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => setIntervalMonths(months)}
                                             style={{
                                                 backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
@@ -1163,7 +1203,7 @@ const HistoricalTrackingModal = ({
                             </div>
                         </div>
 
-                        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+                        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem", display: "flex", flexDirection: "column", minHeight: fit ? "auto" : 0, flex: 1 }}>
                             <div style={{ alignItems: "center", display: "flex", gap: "0.7rem", justifyContent: "space-between" }}>
                                 <div>
                                     <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800 }}>Tracked countries</div>
@@ -1192,9 +1232,11 @@ const HistoricalTrackingModal = ({
                                         <button
                                             key={key}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => toggleCountry(key)}
                                             style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.2)", borderRadius: "999px", color: "#dbeafe", cursor: "pointer", display: "inline-flex", fontSize: "0.68rem", gap: "0.45rem", padding: "0.35rem 0.6rem" }}
                                             title="Remove from tracked countries"
+                                            aria-label={`Stop tracking ${label}`}
                                         >
                                             <span>{label}</span>
                                             {isPlayer && <span style={{ color: "#fbbf24", fontSize: "0.62rem", fontWeight: 800 }}>you</span>}
@@ -1207,7 +1249,7 @@ const HistoricalTrackingModal = ({
                                 )}
                             </div>
 
-                            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.85rem", minHeight: 0, overflowY: "auto", paddingTop: "0.85rem" }}>
+                            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.85rem", minHeight: 0, overflowY: "auto", paddingTop: "0.85rem", ...(fit ? { flex: "0 0 auto", maxHeight: `calc(${APP_HEIGHT} * 0.5)` } : null) }}>
                                 {filteredCandidates.map((key) => {
                                     const tracked = trackedPolities.some((item) => lowerText(item) === lowerText(key));
                                     const isPlayer = lowerText(key) === lowerText(playerCountry);
@@ -1217,6 +1259,7 @@ const HistoricalTrackingModal = ({
                                         <button
                                             key={key}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => toggleCountry(key)}
                                             disabled={maxed}
                                             style={{
@@ -1258,7 +1301,7 @@ const HistoricalTrackingModal = ({
                         </div>
                     </div>
 
-                    <aside style={{ display: "flex", flexDirection: "column", gap: "0.9rem", minHeight: 0 }}>
+                    <aside style={{ display: "flex", flexDirection: "column", gap: "0.9rem", minHeight: 0, ...(isMobile ? { marginTop: "0.9rem" } : fit ? { overflowY: "auto" } : null) }}>
                         <div style={{ backgroundColor: "rgba(59,130,246,0.07)", border: "1px solid rgba(96,165,250,0.14)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "#bfdbfe", fontSize: "0.78rem", fontWeight: 850 }}>At a glance</div>
                             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.3rem" }}>
@@ -1276,7 +1319,7 @@ const HistoricalTrackingModal = ({
                             </ul>
                         </div>
                         <div style={{ marginTop: "auto", display: "flex", gap: "0.6rem" }}>
-                            <button type="button" onClick={onClose} style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", flex: 1, fontSize: "0.76rem", fontWeight: 800, padding: "0.7rem 0.85rem" }}>Done</button>
+                            <button type="button" className="oh-tap-row" onClick={onClose} style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", flex: 1, fontSize: "0.76rem", fontWeight: 800, padding: "0.7rem 0.85rem" }}>Done</button>
                         </div>
                     </aside>
                 </div>
@@ -1297,6 +1340,10 @@ const StatsPaneBody = ({ active }) => {
     const [statsView, setStatsView] = useState("diplomacy");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
+    // On a phone, Back closes the statistics sheet on top, not the advisor under it.
+    useBackToClose(advancedOpen, () => setAdvancedOpen(false));
+    useBackToClose(trackingOpen, () => setTrackingOpen(false));
+    const touch = useTouchPrimary();
     const [trackingSettings, setTrackingSettings] = useState({ intervalMonths: 0, trackedPolities: [] });
     const [historyState, setHistoryState] = useState({ status: "idle", samples: [], error: "", recoveredCount: 0, persistentCount: 0 });
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
@@ -1926,6 +1973,7 @@ const StatsPaneBody = ({ active }) => {
             </div>
             {statsView === "economy" && state.status !== "loading" && (
                 <button
+                className="oh-tap"
                 onClick={(event) => loadSheet({ force: true, forceReassess: event.shiftKey })}
                 title="Refresh stat sheet · Shift+click = force fresh baseline"
                 aria-label="Refresh stat sheet; hold Shift while clicking to force a fresh baseline"
@@ -1939,13 +1987,13 @@ const StatsPaneBody = ({ active }) => {
             type="button"
             aria-pressed={statsView === "diplomacy"}
             onClick={() => setStatsView("diplomacy")}
-            style={statsSubtabStyle(statsView === "diplomacy")}
+            style={statsSubtabStyle(statsView === "diplomacy", touch)}
             >🤝 Diplomacy</button>
             <button
             type="button"
             aria-pressed={statsView === "economy"}
             onClick={() => setStatsView("economy")}
-            style={statsSubtabStyle(statsView === "economy")}
+            style={statsSubtabStyle(statsView === "economy", touch)}
             >{statSheetDefinition.custom ? "📊 National" : "📈 Economy"}</button>
             </div>
 
@@ -1965,6 +2013,7 @@ const StatsPaneBody = ({ active }) => {
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>
                 {state.error}
                 <button
+                className="oh-tap-row"
                 onClick={() => loadSheet({ force: true })}
                 style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", display: "block", fontSize: "0.8rem", fontWeight: 700, marginTop: "0.4rem", padding: 0 }}
                 >Try again</button>

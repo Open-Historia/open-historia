@@ -3,6 +3,7 @@ import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { SAFE_BOTTOM } from "../../runtime/mobileUi.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -175,7 +176,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         } : {
             ...baseStyle,
             ...dockStyle,
-            bottom: "4.75rem",
+            bottom: `calc(4.75rem + ${SAFE_BOTTOM})`,
             // Rides beside the advisor drawer, so a wide drawer carries it over
             // the Actions/Projects/chat panels (9998); an open panel stays on top.
             zIndex: 9997,

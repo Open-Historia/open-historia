@@ -10,6 +10,8 @@ import {
   normalizeStatSheetDefinition,
   toStatIndexKey,
 } from "../../runtime/statIndexDefinitions.js";
+import { useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -28,6 +30,15 @@ const buttonStyle = (accent = false) => ({
   minHeight: "2rem",
   padding: "0 0.7rem",
 });
+
+// On a touch screen .oh-tap / .oh-tap-row (styles.css) make a button a finger's
+// 44 px, but the 2rem floors written inline here would beat the class, so there
+// they are left out (an icon button's min-width too); with a mouse the style is
+// returned untouched.
+const touchFit = (style, touch, { icon = false } = {}) => {
+  if (!touch) return style;
+  return icon ? { ...style, minHeight: undefined, minWidth: undefined } : { ...style, minHeight: undefined };
+};
 
 const inputStyle = {
   background: "rgba(255,255,255,0.04)",
@@ -169,8 +180,11 @@ const compactPreviewValue = (stat) => {
   return `${stat.prefix || ""}${stat.compact ? "18.6K" : "18,600"}${stat.suffix ? ` ${stat.suffix}` : ""}`;
 };
 
-const StatPreview = ({ stat }) => (
-  <div style={{ flex: "1 1 0", maxWidth: "100%", minWidth: 0, overflow: "hidden" }}>
+// minWidth lets a touch row push its buttons onto a line of their own when the
+// row is too narrow for both (a phone), instead of squeezing the preview to
+// nothing.
+const StatPreview = ({ stat, minWidth = 0 }) => (
+  <div style={{ flex: "1 1 0", maxWidth: "100%", minWidth, overflow: "hidden" }}>
     <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0, overflow: "hidden" }}>
       <span aria-hidden="true" style={{ flex: "0 0 auto", fontSize: "0.9rem", width: "1.15rem" }}>{stat.icon || "◆"}</span>
       <span style={{ color: "rgba(255,255,255,0.91)", flex: "1 1 8rem", fontSize: "0.76rem", fontWeight: 780, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{stat.label}</span>
@@ -271,6 +285,8 @@ const StatsSheetEditor = ({ value, onChange }) => {
   const [editingStatKey, setEditingStatKey] = useState("");
   const [editingSectionKey, setEditingSectionKey] = useState("");
   const [dragItem, setDragItem] = useState(null);
+  const touch = useTouchPrimary();
+  const isMobile = useIsMobile();
 
   const emitSections = (nextSections) => onChange?.({ custom: true, version: 2, sections: nextSections });
 
@@ -415,6 +431,43 @@ const StatsSheetEditor = ({ value, onChange }) => {
     emitSections(next);
   };
 
+  // A finger cannot drag here (HTML5 drag-and-drop is mouse-only), so on a
+  // touch screen every row has ▲ and ▼ instead of the ☰ handle, and they make
+  // the same moves a drop makes, through moveSection and moveStat. A stat at
+  // the edge of its section steps into the next section, as a drag can take it.
+  const moveSectionBy = (sectionIndex, step) => {
+    const target = sections[sectionIndex + step];
+    if (target) moveSection(sections[sectionIndex].key, target.key);
+  };
+
+  // Where a step takes a stat: past its neighbour in the section, or over the
+  // edge to the end of the section above / the start of the one below, unless
+  // that one is full. Null when there is nowhere to go.
+  const statStep = (sectionIndex, statIndex, step) => {
+    const neighbour = sections[sectionIndex].stats[statIndex + step];
+    if (neighbour) return { neighbour };
+    const section = sections[sectionIndex + step];
+    return section && section.stats.length < MAX_STATS_PER_SECTION ? { section } : null;
+  };
+
+  const moveStatBy = (sectionIndex, statIndex, step) => {
+    const section = sections[sectionIndex];
+    const stat = section.stats[statIndex];
+    const target = statStep(sectionIndex, statIndex, step);
+    if (!target) return;
+    if (target.neighbour) {
+      // Always made as the lower of the two rising above the upper: that is a
+      // drop onto the row above, which moveStat places exactly (a stat dropped
+      // further down its own section lands a row short of where it was let go).
+      if (step < 0) moveStat(section.key, stat.key, section.key, target.neighbour.key);
+      else moveStat(section.key, target.neighbour.key, section.key, stat.key);
+    } else if (step < 0) {
+      moveStat(section.key, stat.key, target.section.key);
+    } else {
+      moveStat(section.key, stat.key, target.section.key, target.section.stats[0]?.key);
+    }
+  };
+
   const totalStats = flattenStatSheetRows({ custom: true, sections }).length;
 
   return (
@@ -425,17 +478,25 @@ const StatsSheetEditor = ({ value, onChange }) => {
       </div>
 
       {!custom && (
-        <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.75rem" }}>
+        // On a phone the button goes under the text instead of squeezing it
+        // into a column a few words wide.
+        <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flexWrap: isMobile ? "wrap" : undefined, gap: "0.75rem", justifyContent: "space-between", padding: "0.75rem" }}>
           <div>
             <div style={{ fontSize: "0.78rem", fontWeight: 820 }}>Standard National Stats sheet</div>
             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.4, marginTop: "0.18rem" }}>Uses the current audited population/GDP engine, strategic indices, and modern economy fields.</div>
           </div>
-          <button type="button" onClick={enableCustom} style={buttonStyle(true)}>Customize full sheet</button>
+          <button type="button" className="oh-tap-row" onClick={enableCustom} style={touchFit(buttonStyle(true), touch)}>Customize full sheet</button>
         </div>
       )}
 
-      {custom && sections.map((section) => {
+      {custom && sections.map((section, sectionIndex) => {
         const sectionEditing = editingSectionKey === section.key;
+        const sectionActions = (
+          <>
+            <button type="button" className="oh-tap" aria-label={`Edit section ${section.label}`} title="Edit section" onClick={() => setEditingSectionKey(sectionEditing ? "" : section.key)} style={touchFit({ ...buttonStyle(false), flex: "0 0 auto", minWidth: "2rem", padding: 0 }, touch, { icon: true })}>✎</button>
+            <button type="button" className="oh-tap" aria-label={`Delete section ${section.label}`} title={sections.length <= 1 ? "A custom sheet needs at least one section" : "Delete section"} disabled={sections.length <= 1} onClick={() => removeSection(section.key)} style={touchFit({ ...buttonStyle(false), color: "#fca5a5", flex: "0 0 auto", minWidth: "2rem", opacity: sections.length <= 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>🗑</button>
+          </>
+        );
         return (
           <div
             key={section.draftId || section.key}
@@ -454,29 +515,38 @@ const StatsSheetEditor = ({ value, onChange }) => {
             }}
             style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${dragItem?.sectionKey === section.key ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.08)"}`, borderRadius: "13px", maxWidth: "100%", minWidth: 0, overflow: "hidden", width: "100%" }}
           >
-            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", display: "flex", gap: "0.5rem", maxWidth: "100%", minWidth: 0, padding: "0.62rem 0.65rem" }}>
-              <button
-                type="button"
-                draggable
-                aria-label={`Drag section ${section.label}`}
-                title="Drag section"
-                onDragStart={(event) => {
-                  const item = { type: "section", sectionKey: section.key };
-                  setDragItem(item);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("application/x-oh-stat", JSON.stringify(item));
-                  event.dataTransfer.setData("text/plain", JSON.stringify(item));
-                }}
-                onDragEnd={() => setDragItem(null)}
-                style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
-              >☰</button>
+            {/* On a touch screen the four buttons travel together, onto a line
+                of their own under the name when the row is too narrow. */}
+            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", display: "flex", flexWrap: touch ? "wrap" : undefined, gap: "0.5rem", maxWidth: "100%", minWidth: 0, padding: "0.62rem 0.65rem" }}>
+              {!touch && (
+                <button
+                  type="button"
+                  draggable
+                  aria-label={`Drag section ${section.label}`}
+                  title="Drag section"
+                  onDragStart={(event) => {
+                    const item = { type: "section", sectionKey: section.key };
+                    setDragItem(item);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("application/x-oh-stat", JSON.stringify(item));
+                    event.dataTransfer.setData("text/plain", JSON.stringify(item));
+                  }}
+                  onDragEnd={() => setDragItem(null)}
+                  style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
+                >☰</button>
+              )}
               <span style={{ fontSize: "0.9rem" }}>{section.icon || "◆"}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ flex: 1, minWidth: touch ? "8rem" : 0 }}>
                 <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.72rem", fontWeight: 850, letterSpacing: "0.06em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{section.label}</div>
                 <div style={{ color: "rgba(255,255,255,0.28)", fontFamily: "monospace", fontSize: "0.56rem", marginTop: "0.1rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{section.key} · {section.stats.length} stat{section.stats.length === 1 ? "" : "s"}</div>
               </div>
-              <button type="button" title="Edit section" onClick={() => setEditingSectionKey(sectionEditing ? "" : section.key)} style={{ ...buttonStyle(false), flex: "0 0 auto", minWidth: "2rem", padding: 0 }}>✎</button>
-              <button type="button" title={sections.length <= 1 ? "A custom sheet needs at least one section" : "Delete section"} disabled={sections.length <= 1} onClick={() => removeSection(section.key)} style={{ ...buttonStyle(false), color: "#fca5a5", flex: "0 0 auto", minWidth: "2rem", opacity: sections.length <= 1 ? 0.4 : 1, padding: 0 }}>🗑</button>
+              {touch ? (
+                <div style={{ display: "flex", flex: "0 0 auto", gap: "0.32rem", marginLeft: "auto" }}>
+                  <button type="button" className="oh-tap" aria-label={`Move section ${section.label} up`} title="Move up" disabled={sectionIndex === 0} onClick={() => moveSectionBy(sectionIndex, -1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: sectionIndex === 0 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>▲</button>
+                  <button type="button" className="oh-tap" aria-label={`Move section ${section.label} down`} title="Move down" disabled={sectionIndex === sections.length - 1} onClick={() => moveSectionBy(sectionIndex, 1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: sectionIndex === sections.length - 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>▼</button>
+                  {sectionActions}
+                </div>
+              ) : sectionActions}
             </div>
 
             {sectionEditing && (
@@ -494,8 +564,10 @@ const StatsSheetEditor = ({ value, onChange }) => {
             )}
 
             <div style={{ display: "grid", gap: "0.48rem", maxWidth: "100%", minWidth: 0, padding: "0.58rem" }}>
-              {section.stats.map((stat) => {
+              {section.stats.map((stat, statIndex) => {
                 const editing = editingStatKey === stat.key;
+                const canMoveUp = Boolean(statStep(sectionIndex, statIndex, -1));
+                const canMoveDown = Boolean(statStep(sectionIndex, statIndex, 1));
                 return (
                   <div
                     key={stat.draftId || stat.key}
@@ -514,26 +586,36 @@ const StatsSheetEditor = ({ value, onChange }) => {
                     }}
                     style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${dragItem?.statKey === stat.key ? "rgba(255,255,255,0.24)" : "rgba(255,255,255,0.07)"}`, borderRadius: "11px", maxWidth: "100%", minWidth: 0, padding: "0.6rem" }}
                   >
-                    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", maxWidth: "100%", minWidth: 0 }}>
-                      <button
-                        type="button"
-                        draggable
-                        aria-label={`Drag ${stat.label}`}
-                        title="Drag to reorder or move to another section"
-                        onDragStart={(event) => {
-                          const item = { type: "stat", sectionKey: section.key, statKey: stat.key };
-                          setDragItem(item);
-                          event.dataTransfer.effectAllowed = "move";
-                          event.dataTransfer.setData("application/x-oh-stat", JSON.stringify(item));
-                          event.dataTransfer.setData("text/plain", JSON.stringify(item));
-                        }}
-                        onDragEnd={() => setDragItem(null)}
-                        style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
-                      >☰</button>
-                      <StatPreview stat={stat} />
+                    {/* On a touch screen, where a phone has no room for the preview and
+                        four buttons side by side, the buttons drop under it together. */}
+                    <div style={{ alignItems: "flex-start", display: "flex", flexWrap: touch ? "wrap" : undefined, gap: "0.5rem", justifyContent: touch ? "flex-end" : undefined, maxWidth: "100%", minWidth: 0 }}>
+                      {!touch && (
+                        <button
+                          type="button"
+                          draggable
+                          aria-label={`Drag ${stat.label}`}
+                          title="Drag to reorder or move to another section"
+                          onDragStart={(event) => {
+                            const item = { type: "stat", sectionKey: section.key, statKey: stat.key };
+                            setDragItem(item);
+                            event.dataTransfer.effectAllowed = "move";
+                            event.dataTransfer.setData("application/x-oh-stat", JSON.stringify(item));
+                            event.dataTransfer.setData("text/plain", JSON.stringify(item));
+                          }}
+                          onDragEnd={() => setDragItem(null)}
+                          style={{ ...buttonStyle(false), cursor: "grab", flex: "0 0 auto", minWidth: "2rem", padding: 0 }}
+                        >☰</button>
+                      )}
+                      <StatPreview stat={stat} minWidth={touch ? "9rem" : 0} />
                       <div style={{ display: "flex", flex: "0 0 auto", gap: "0.32rem" }}>
-                        <button type="button" aria-label={`Edit ${stat.label}`} title="Edit" onClick={() => setEditingStatKey(editing ? "" : stat.key)} style={{ ...buttonStyle(false), minWidth: "2rem", padding: 0 }}>✎</button>
-                        <button type="button" aria-label={`Delete ${stat.label}`} title={totalStats <= 1 ? "A custom sheet needs at least one statistic" : "Delete"} disabled={totalStats <= 1} onClick={() => removeStat(section.key, stat.key)} style={{ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: totalStats <= 1 ? 0.4 : 1, padding: 0 }}>🗑</button>
+                        {touch && (
+                          <>
+                            <button type="button" className="oh-tap" aria-label={`Move ${stat.label} up`} title="Move up" disabled={!canMoveUp} onClick={() => moveStatBy(sectionIndex, statIndex, -1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: canMoveUp ? 1 : 0.4, padding: 0 }, touch, { icon: true })}>▲</button>
+                            <button type="button" className="oh-tap" aria-label={`Move ${stat.label} down`} title="Move down" disabled={!canMoveDown} onClick={() => moveStatBy(sectionIndex, statIndex, 1)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", opacity: canMoveDown ? 1 : 0.4, padding: 0 }, touch, { icon: true })}>▼</button>
+                          </>
+                        )}
+                        <button type="button" className="oh-tap" aria-label={`Edit ${stat.label}`} title="Edit" onClick={() => setEditingStatKey(editing ? "" : stat.key)} style={touchFit({ ...buttonStyle(false), minWidth: "2rem", padding: 0 }, touch, { icon: true })}>✎</button>
+                        <button type="button" className="oh-tap" aria-label={`Delete ${stat.label}`} title={totalStats <= 1 ? "A custom sheet needs at least one statistic" : "Delete"} disabled={totalStats <= 1} onClick={() => removeStat(section.key, stat.key)} style={touchFit({ ...buttonStyle(false), color: "#fca5a5", minWidth: "2rem", opacity: totalStats <= 1 ? 0.4 : 1, padding: 0 }, touch, { icon: true })}>🗑</button>
                       </div>
                     </div>
                     {editing && <StatEditor stat={stat} onPatch={(patch) => patchStat(section.key, stat.key, patch)} />}
@@ -541,7 +623,7 @@ const StatsSheetEditor = ({ value, onChange }) => {
                 );
               })}
 
-              <button type="button" disabled={section.stats.length >= MAX_STATS_PER_SECTION || totalStats >= MAX_CUSTOM_STATS} onClick={() => addStat(section.key)} style={{ ...buttonStyle(true), justifySelf: "start", opacity: section.stats.length >= MAX_STATS_PER_SECTION || totalStats >= MAX_CUSTOM_STATS ? 0.45 : 1 }}>+ Add statistic</button>
+              <button type="button" className="oh-tap-row" disabled={section.stats.length >= MAX_STATS_PER_SECTION || totalStats >= MAX_CUSTOM_STATS} onClick={() => addStat(section.key)} style={touchFit({ ...buttonStyle(true), justifySelf: "start", opacity: section.stats.length >= MAX_STATS_PER_SECTION || totalStats >= MAX_CUSTOM_STATS ? 0.45 : 1 }, touch)}>+ Add statistic</button>
             </div>
           </div>
         );
@@ -550,8 +632,8 @@ const StatsSheetEditor = ({ value, onChange }) => {
       {custom && (
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "space-between" }}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button type="button" onClick={addSection} disabled={sections.length >= MAX_STAT_SECTIONS || totalStats >= MAX_CUSTOM_STATS} style={{ ...buttonStyle(true), opacity: sections.length >= MAX_STAT_SECTIONS || totalStats >= MAX_CUSTOM_STATS ? 0.45 : 1 }}>+ Add section</button>
-            <button type="button" onClick={useStandard} style={buttonStyle(false)}>Use standard sheet</button>
+            <button type="button" className="oh-tap-row" onClick={addSection} disabled={sections.length >= MAX_STAT_SECTIONS || totalStats >= MAX_CUSTOM_STATS} style={touchFit({ ...buttonStyle(true), opacity: sections.length >= MAX_STAT_SECTIONS || totalStats >= MAX_CUSTOM_STATS ? 0.45 : 1 }, touch)}>+ Add section</button>
+            <button type="button" className="oh-tap-row" onClick={useStandard} style={touchFit(buttonStyle(false), touch)}>Use standard sheet</button>
           </div>
           <span style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.61rem" }}>{sections.length}/{MAX_STAT_SECTIONS} sections · {totalStats}/{MAX_CUSTOM_STATS} stats</span>
         </div>

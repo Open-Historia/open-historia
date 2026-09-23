@@ -11,6 +11,9 @@ import {
 } from "../Map/unitsController.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.js";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 
 const TYPE_LABEL = {
   infantry: "Infantry",
@@ -51,6 +54,10 @@ export const POSTURE_LABEL = {
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
 };
+// The same instruction where there is no mouse to click with.
+const TOUCH_MODE_HINT = {
+  deploy: "Tap the map to place your unit",
+};
 
 const surface = {
   backgroundColor: "rgba(24, 24, 27, 0.92)",
@@ -73,6 +80,7 @@ const unitActivity = (unit) => POSTURE_LABEL[unit.posture] || unit.posture || un
 
 const UnitRow = ({ unit, dimmed, onClick }) => (
   <button
+    className="oh-tap-row"
     onClick={onClick}
     style={{
       display: "flex",
@@ -119,6 +127,13 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   const [deployStrength, setDeployStrength] = useState(100);
   const [deployComposition, setDeployComposition] = useState("");
   const [deployName, setDeployName] = useState("");
+  const isMobile = useIsMobile();
+  const isTouch = useTouchPrimary();
+  // On a phone, either way up, the deploy form scrolls with the units under
+  // the header. With the form held fixed and every field finger-sized, a
+  // landscape screen had no room left for the list, and the form spilled out
+  // of the panel.
+  const scrollAsOne = isMobile || isTouch;
 
   useEffect(() => {
     const unsubscribe = subscribeUnits(() => {
@@ -128,6 +143,10 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
     });
     return unsubscribe;
   }, []);
+
+  // A placement waiting for its tap on the map is the thing on top: on a phone,
+  // Back cancels it, as the banner's Cancel does.
+  useBackToClose(mode.kind !== "idle", clearInteractionMode);
 
   // Owner codes render as full names; re-render once the lookup is warm.
   const [, setNamesEpoch] = useState(0);
@@ -182,7 +201,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
           style={{
             ...surface,
             position: "fixed",
-            top: "4.5rem",
+            top: `calc(4.5rem + ${SAFE_TOP})`,
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 10000,
@@ -191,10 +210,17 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
             gap: "12px",
             padding: "8px 14px",
             fontSize: "13px",
+            // Centred from left: 50%, the banner may only be half the screen
+            // wide, which squeezed the hint into a column on a phone. There it
+            // is as wide as its words, up to the screen, and wraps past that.
+            ...(isMobile
+              ? { flexWrap: "wrap", justifyContent: "center", maxWidth: "calc(100vw - 1rem)", width: "max-content" }
+              : null),
           }}
         >
-          <span>{MODE_HINT[mode.kind] ?? "Select a target"}</span>
+          <span>{(isTouch ? TOUCH_MODE_HINT : MODE_HINT)[mode.kind] ?? "Select a target"}</span>
           <button
+            className="oh-tap-row"
             onClick={() => clearInteractionMode()}
             style={{
               background: "rgba(220,70,70,0.25)",
@@ -216,10 +242,12 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
           style={{
             ...surface,
             position: "fixed",
-            bottom: "4.75rem",
-            left: "0.5rem",
+            bottom: `calc(4.75rem + ${SAFE_BOTTOM})`,
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
             width: "17rem",
-            maxHeight: "60vh",
+            // 60% of the height the screen actually shows, which follows a
+            // phone's address bar and keyboard; 60vh is of the tallest it can.
+            maxHeight: `calc(${APP_HEIGHT} * 0.6)`,
             display: "flex",
             flexDirection: "column",
             zIndex: 9999,
@@ -229,18 +257,25 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
             <strong style={{ fontSize: "14px" }}>Forces</strong>
             <button
+              className="oh-tap"
               onClick={() => setOpen(false)}
+              aria-label="Close forces"
               style={{ background: "none", border: "none", color: "rgba(255,255,255,0.6)", cursor: "pointer", fontSize: "14px" }}
             >
               ✕
             </button>
           </div>
 
+          {/* On a phone, one scroller for the form and the units. On a desktop
+              it is not there as far as layout goes (display: contents), so its
+              children keep the panel's indentation. */}
+          <div style={scrollAsOne ? { flex: 1, minHeight: 0, overflowY: "auto" } : { display: "contents" }}>
           {/* Deploy controls */}
           <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: "8px", padding: "8px", marginBottom: "10px" }}>
             <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", marginBottom: "6px" }}>Deploy a unit</div>
             <div style={{ display: "flex", gap: "5px", marginBottom: "6px" }}>
               <select
+                className="oh-tap-row"
                 value={deployType}
                 onChange={(e) => setDeployType(e.target.value)}
                 style={{ flex: 1, background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px" }}
@@ -253,6 +288,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               </select>
               <input
                 type="number"
+                className="oh-tap-row"
                 min={1}
                 max={100}
                 value={deployStrength}
@@ -263,6 +299,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
             </div>
             <input
               type="text"
+              className="oh-tap-row"
               value={deployName}
               placeholder="Unit name (optional)"
               onChange={(e) => setDeployName(e.target.value)}
@@ -272,12 +309,14 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
                 tells the player nothing; "1 aircraft carrier, 2 frigates" does. */}
             <input
               type="text"
+              className="oh-tap-row"
               value={deployComposition}
               placeholder="Composition, e.g. 2 frigates (optional)"
               onChange={(e) => setDeployComposition(e.target.value)}
               style={{ width: "100%", boxSizing: "border-box", background: "rgba(0,0,0,0.3)", color: "white", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", padding: "4px", fontSize: "12px", marginBottom: "6px" }}
             />
             <button
+              className="oh-tap-row"
               onClick={startDeploy}
               style={{ width: "100%", background: "rgba(59,130,246,0.35)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "12px", fontWeight: 600, padding: "6px 0" }}
             >
@@ -285,7 +324,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
             </button>
           </div>
 
-          <div style={{ overflowY: "auto", flex: 1 }}>
+          <div style={scrollAsOne ? undefined : { overflowY: "auto", flex: 1 }}>
             <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", margin: "0 0 5px" }}>
               Your units ({myUnits.length})
             </div>
@@ -309,6 +348,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               </>
             )}
           </div>
+          </div>{/* the phone scroller */}
         </div>
       )}
     </>

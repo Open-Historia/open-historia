@@ -15,6 +15,13 @@ import { Toolbar } from "./chat";
 import { Search } from "./search";
 import { ForcesPanel } from "./forces";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
+import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_RIGHT } from "../../runtime/mobileUi.js";
+import { dismissRegionPopup } from "../Selection/Regions.jsx";
+import { dismissUnitPopup } from "../Selection/Units.jsx";
+import { dismissFeaturePopup } from "../Selection/Features.jsx";
+import { openCountryPanel } from "../Selection/CountryPanel.jsx";
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -175,7 +182,7 @@ const AdvisorButton = ({ isAdvisorOpen, dockStyle, onToggle }) => (
     style={{
       ...baseStyle,
       ...dockStyle,
-      bottom: "0.5rem",
+      bottom: `calc(0.5rem + ${SAFE_BOTTOM})`,
       // Rides beside the advisor drawer, so a wide drawer carries it over the
       // Actions/Projects/chat panels (9998); an open panel stays on top.
       zIndex: 9997,
@@ -406,16 +413,57 @@ const Main = ({
   // one. A drag changes only the width, which `right` follows with no
   // transition at all. (Easing `right` instead made the HUD cover less
   // distance than the drawer in the same time, on the busy main thread.)
-  const advisorDockStyle = useMemo(() => ({
-    right: `calc(${advisorCssWidth} + 0.5rem)`,
-    transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
-    transition: `transform ${ADVISOR_SLIDE}`,
-  }), [advisorCssWidth, isAdvisorOpen]);
+  //
+  // Not on a phone. There the advisor is the whole screen (advisor.jsx), so
+  // nothing rides beside it and the HUD stays at the edge. A phone-wide drawer
+  // used to carry the advisor button off the left of the screen, leaving the
+  // drawer's own ✕ as the only way back.
+  const isMobile = useIsMobile();
+  // (Either way it keeps clear of a notch or rounded corner on the right, like
+  // the drawer; the inset is 0 on a desktop.)
+  const advisorDockStyle = useMemo(() => (isMobile
+    ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
+    : {
+      right: `calc(${advisorCssWidth} + 0.5rem + ${SAFE_RIGHT})`,
+      transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+      transition: `transform ${ADVISOR_SLIDE}`,
+    }), [advisorCssWidth, isAdvisorOpen, isMobile]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
     ));
   }, []);
+
+  // On a phone, Back closes the panel on top instead of leaving the game
+  // (runtime/backToClose.js; with a mouse nothing changes).
+  useBackToClose(Boolean(activeBottomPanel), () => setActiveBottomPanel(null));
+  useBackToClose(isAdvisorOpen, () => setIsAdvisorOpen(false));
+  useBackToClose(isForcesOpen, () => setIsForcesOpen(false));
+  useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
+  useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
+  useBackToClose(isInteractiveOpen, () => setIsInteractiveOpen(false));
+  useBackToClose(isSettingsOpen, () => {
+    setSettingsInitialSection(null);
+    setIsSettingsOpen(false);
+  });
+
+  // On a phone a map card and a bottom panel take turns (runtime/mobileUi.js):
+  // both sit at the bottom of the screen, and a card opened by a tap on the
+  // strip of map above an open panel came up underneath it, unseen. A panel
+  // opening also puts away the screen-sized sheets (the advisor, a country's
+  // panel): a diplomacy toast, which shows above them, opens the chat, and
+  // the chat came up underneath them.
+  useEffect(() => {
+    if (!isMobile || !activeBottomPanel) return undefined;
+    dismissRegionPopup();
+    dismissUnitPopup();
+    dismissFeaturePopup();
+    openCountryPanel(null);
+    setIsAdvisorOpen(false);
+    const onCardOpened = () => setActiveBottomPanel(null);
+    window.addEventListener(MAP_CARD_OPENED, onCardOpened);
+    return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);
+  }, [isMobile, activeBottomPanel]);
 
   // An interactive event opens from the card of the event a time skip offered,
   // and from the time panel's note while one is offered or in progress (time.jsx
@@ -466,8 +514,10 @@ const Main = ({
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizeEnd={handleAdvisorResizeEnd}
-            onOpenActions={() => setActiveBottomPanel("actions")}
-            onOpenProjects={() => setActiveBottomPanel("projects")}
+            // A phone's advisor covers the screen, so it steps aside for the
+            // panel it opens.
+            onOpenActions={() => { setActiveBottomPanel("actions"); if (isMobile) setIsAdvisorOpen(false); }}
+            onOpenProjects={() => { setActiveBottomPanel("projects"); if (isMobile) setIsAdvisorOpen(false); }}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
           />

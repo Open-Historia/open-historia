@@ -1,5 +1,7 @@
 /*! Open Historia — portions (panel sizing on small screens) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
+import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -114,6 +116,10 @@ normalizeActionEntry({
 
 const ActionItem = ({ action, onDelete }) => {
     const [hovered, setHovered] = React.useState(false);
+    // The ✕ appears with the pointer over the row. Nothing hovers on a touch
+    // screen, so there it is always shown, or an order could never be deleted.
+    const canHover = useCanHover();
+    const showDelete = hovered || !canHover;
     const normalized = normalizeActionEntry(action);
 
     if (!normalized) {
@@ -164,8 +170,10 @@ const ActionItem = ({ action, onDelete }) => {
         </div>
         <button
         type="button"
+        className="oh-tap"
         onClick={onDelete}
         title="Delete action"
+        aria-label="Delete action"
         style={{
             alignItems: "center",
             background: hovered ? "rgba(239,68,68,0.1)" : "none",
@@ -177,9 +185,9 @@ const ActionItem = ({ action, onDelete }) => {
             flexShrink: 0,
             fontSize: "1rem",
             lineHeight: 1,
-            opacity: hovered ? 1 : 0,
+            opacity: showDelete ? 1 : 0,
             padding: "0.18rem 0.3rem",
-            pointerEvents: hovered ? "auto" : "none",
+            pointerEvents: showDelete ? "auto" : "none",
             transition: "opacity 0.15s, color 0.15s, background 0.15s",
         }}
         >
@@ -214,6 +222,7 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
             <button
             key={action.id}
             type="button"
+            className="oh-tap-row"
             disabled={isQueued}
             onClick={() => onQueue(action)}
             style={{
@@ -376,14 +385,14 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
             />
             <div style={{ alignItems: "center", display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
             {goal && (
-                <button type="button" disabled={saving || turnRunning} onClick={() => void save("")} style={{ ...goalButtonStyle(!saving && !turnRunning), marginRight: "auto" }}>
+                <button type="button" className="oh-tap-row" disabled={saving || turnRunning} onClick={() => void save("")} style={{ ...goalButtonStyle(!saving && !turnRunning), marginRight: "auto" }}>
                 Clear goal
                 </button>
             )}
-            <button type="button" onClick={() => { setEditing(false); setError(""); }} style={goalButtonStyle(true)}>
+            <button type="button" className="oh-tap-row" onClick={() => { setEditing(false); setError(""); }} style={goalButtonStyle(true)}>
             Cancel
             </button>
-            <button type="button" disabled={!canSave} onClick={() => void save(draft)} style={goalButtonStyle(canSave, "primary")}>
+            <button type="button" className="oh-tap-row" disabled={!canSave} onClick={() => void save(draft)} style={goalButtonStyle(canSave, "primary")}>
             {saving ? "Saving…" : "Save"}
             </button>
             </div>
@@ -398,6 +407,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         return (
             <button
             type="button"
+            className="oh-tap-row"
             disabled={turnRunning}
             onClick={startEditing}
             title={turnRunning ? lockedNote : "Your advisor, the time skip and the AI suggestions steer by it. Foreign leaders never see it."}
@@ -428,6 +438,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         {label}
         <button
         type="button"
+        className="oh-tap"
         disabled={turnRunning}
         onClick={startEditing}
         title={turnRunning ? lockedNote : "Change or clear the goal"}
@@ -464,6 +475,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [isSuggesting, setIsSuggesting] = React.useState(false);
     const inputRef = React.useRef(null);
     const lastRoundRef = React.useRef(null);
+    const isMobile = useIsMobile();
+    const isTouch = useTouchPrimary();
+    // On a phone, either way up, the body scrolls as one. With only the orders
+    // list scrolling, everything above it kept its full height and the list got
+    // what was left: on a short screen, with suggestions showing, nothing.
+    const scrollAsOne = isMobile || isTouch;
 
     React.useEffect(() => {
         if (!isOpen) {
@@ -660,7 +677,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             // Grow to use the height a taller screen offers (leaving ~16rem for the
             // top bar), never dropping below a usable 30rem floor for laptops/phones,
             // and never past the 9rem the top UI needs (so it can't overflow up).
-            height: "min(calc(100vh - 9rem), max(calc(100vh - 16rem), 30rem))",
+            height: `min(calc(${APP_HEIGHT} - 9rem), max(calc(${APP_HEIGHT} - 16rem), 30rem))`,
             minHeight: "10rem",
             left: "0rem",
             maxWidth: "calc(100vw - 1rem)",
@@ -685,7 +702,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         <span style={{ fontSize: "1rem", fontWeight: 700, letterSpacing: "0.01em" }}>Actions</span>
         <button
         type="button"
+        className="oh-tap"
         onClick={onClose}
+        aria-label="Close actions"
         style={{
             background: "none",
             border: "none",
@@ -710,7 +729,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </button>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem", padding: "0.875rem 1.25rem", flex: 1, minHeight: 0, ...(scrollAsOne ? { overflowY: "auto", scrollbarWidth: "none" } : { overflow: "hidden" }) }}>
         <p
         style={{
             color: "rgba(255,255,255,0.75)",
@@ -726,6 +745,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         <button
         type="button"
+        className="oh-tap-row"
         // Opens the Advisor primed with a starter message (in its input box, not
         // auto-sent) rather than blank — the advisor can create/edit/remove
         // queued actions right from that conversation (see advisor.jsx), so this
@@ -759,6 +779,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         <button
         type="button"
+        className="oh-tap-row"
         onClick={refreshSuggestions}
         style={{
             alignItems: "center",
@@ -794,8 +815,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 display: "flex",
                 flexDirection: "column",
                 gap: "0.5rem",
-                maxHeight: "13rem",
-                overflowY: "auto",
+                // Uncapped when the whole body scrolls: a box that scrolls on
+                // its own inside one that scrolls catches the thumb halfway.
+                ...(scrollAsOne ? { flexShrink: 0 } : { maxHeight: "13rem", overflowY: "auto" }),
                 scrollbarWidth: "none",
             }}
             >
@@ -810,7 +832,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             </div>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
+        <div style={{ display: "flex", flexDirection: "column", ...(scrollAsOne ? { flexShrink: 0 } : { flex: 1, overflow: "hidden" }) }}>
         <p
         style={{
             color: "rgba(255,255,255,0.9)",
@@ -829,9 +851,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             display: "flex",
             flexDirection: "column",
             gap: "0.4rem",
-            flex: 1,
-            overflowY: "auto",
-            scrollbarWidth: "none",
+            ...(scrollAsOne ? null : { flex: 1, overflowY: "auto", scrollbarWidth: "none" }),
         }}
         >
         {submittedActions.length === 0 && (
@@ -860,7 +880,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         <textarea
         ref={inputRef}
         className="actions-composer"
-        placeholder="Enter your action…  (Shift+Enter for a new line)"
+        // A phone's keyboard has no Shift+Enter to speak of.
+        placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
         value={inputValue}
         onChange={(event) => setInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
@@ -873,7 +894,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             fontFamily: "sans-serif",
             fontSize: "0.82rem",
             outline: "none",
-            padding: "0.7rem 2.8rem 0.7rem 0.85rem",
+            // Room on the right for the Improve button, bigger on a touch screen.
+            padding: isTouch ? "0.7rem 3rem 0.7rem 0.85rem" : "0.7rem 2.8rem 0.7rem 0.85rem",
             resize: "vertical",
             transition: "border-color 0.2s",
             minHeight: "3rem",
@@ -890,6 +912,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         />
         <button
         type="button"
+        className="oh-tap"
         onClick={isImproving ? handleStopImprove : handleImprove}
         title={isImproving ? "Stop generating" : "Improve action text"}
         aria-label={isImproving ? "Stop generating" : "Improve action text"}
@@ -905,8 +928,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             justifyContent: "center",
             padding: 0,
             position: "absolute",
-            right: "0.45rem",
-            top: "0.55rem",
+            // Finger-sized on a touch screen (.oh-tap), and tucked into the
+            // corner so it stays inside the box at its smallest.
+            right: isTouch ? "0.125rem" : "0.45rem",
+            top: isTouch ? "0.125rem" : "0.55rem",
             width: "1.8rem",
         }}
         >
@@ -916,8 +941,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         <button
         type="button"
+        className="oh-tap"
         onClick={handleSubmit}
         disabled={!inputValue.trim() || isSubmitting || isImproving}
+        aria-label="Submit action"
         style={{
             alignItems: "center",
             background: inputValue.trim() && !isSubmitting && !isImproving ? "#3b82f6" : "rgba(59,130,246,0.3)",

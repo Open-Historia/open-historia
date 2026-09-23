@@ -1,5 +1,7 @@
 /*! Open Historia — portions (map-editor embed, apply-to-scenario, country picker) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { Presence } from "./presence.jsx";
 import {
   PROMPT_EDITOR_SECTIONS,
@@ -126,8 +128,10 @@ const subscribeMainMenu = (listener) => {
 };
 export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isMainMenuOpen, isMainMenuOpen);
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
-// widget, forces panel, editor drawer) starts at the screen edge.
-const TOP_BAR_OFFSET = "0.5rem";
+// widget, forces panel, editor drawer) starts at the screen edge, below a
+// status bar or camera cutout the page is drawn under (Android Chrome in
+// fullscreen, a home-screen app); the inset is 0 everywhere else.
+const TOP_BAR_OFFSET = `calc(0.5rem + ${SAFE_TOP})`;
 
 const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
@@ -156,6 +160,20 @@ const actionButtonStyle = {
   padding: "0 0.95rem",
   transition: "background 0.18s ease, border-color 0.18s ease, transform 0.18s ease",
 };
+
+// On a touch screen .oh-tap / .oh-tap-row (styles.css) make a control a
+// finger's 44 px, but a min-height written inline beats a class, and every pill
+// in this file writes one. So where a finger is the pointer the inline floor is
+// left out and the class sets it (an icon button's min-width too); with a mouse
+// the style is returned untouched.
+const touchFit = (style, touch, { icon = false } = {}) => {
+  if (!touch) return style;
+  return icon ? { ...style, minHeight: undefined, minWidth: undefined } : { ...style, minHeight: undefined };
+};
+
+// A shelf card, never wider than the phone it is on: at 320 px a 21rem card ran
+// past the edge of the screen and took the game card's ⋮ with it.
+const SHELF_CARD_WIDTH = "min(21rem, calc(100vw - 2.4rem))";
 
 const fieldLabelStyle = {
   color: "rgba(255,255,255,0.72)",
@@ -350,6 +368,7 @@ const PromptSectionEditor = ({
 }) => {
   const promptFileInputRef = useRef(null);
   const [promptTransferStatus, setPromptTransferStatus] = useState(null);
+  const touch = useTouchPrimary();
   const currentSection =
     PROMPT_EDITOR_SECTIONS.find((section) => section.key === promptSectionKey) ??
     PROMPT_EDITOR_SECTIONS[0];
@@ -424,8 +443,9 @@ const PromptSectionEditor = ({
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
             {onExportPromptPack ? (
               <button
+                className="oh-tap-row"
                 onClick={handlePromptExport}
-                style={{ ...actionButtonStyle, minHeight: "2rem", padding: "0 0.8rem" }}
+                style={touchFit({ ...actionButtonStyle, minHeight: "2rem", padding: "0 0.8rem" }, touch)}
                 type="button"
               >
                 Export all prompts
@@ -434,8 +454,9 @@ const PromptSectionEditor = ({
             {onImportPromptPack ? (
               <>
                 <button
+                  className="oh-tap-row"
                   onClick={() => promptFileInputRef.current?.click()}
-                  style={{ ...actionButtonStyle, minHeight: "2rem", padding: "0 0.8rem" }}
+                  style={touchFit({ ...actionButtonStyle, minHeight: "2rem", padding: "0 0.8rem" }, touch)}
                   type="button"
                 >
                   Import all prompts
@@ -491,8 +512,9 @@ const PromptSectionEditor = ({
         {PROMPT_EDITOR_SECTIONS.map((section) => (
           <button
             key={section.key}
+            className="oh-tap-row"
             onClick={() => setPromptSectionKey(section.key)}
-            style={{
+            style={touchFit({
               ...actionButtonStyle,
               background:
                 section.key === currentSection.key ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
@@ -500,7 +522,7 @@ const PromptSectionEditor = ({
                 section.key === currentSection.key ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
               minHeight: "2rem",
               padding: "0 0.8rem",
-            }}
+            }, touch)}
             type="button"
           >
             {section.label}
@@ -542,8 +564,9 @@ const PromptSectionEditor = ({
                 </label>
                 {edited ? (
                   <button
+                    className="oh-tap-row"
                     onClick={() => onChangePrompt(currentSection, segment.id, null)}
-                    style={smallButtonStyle}
+                    style={touchFit(smallButtonStyle, touch)}
                     type="button"
                   >
                     Reset to default
@@ -568,7 +591,7 @@ const PromptSectionEditor = ({
 
       {editedCount > 0 ? (
         <div style={{ marginTop: "0.9rem" }}>
-          <button onClick={() => onChangePrompt(currentSection, null, null)} style={smallButtonStyle} type="button">
+          <button className="oh-tap-row" onClick={() => onChangePrompt(currentSection, null, null)} style={touchFit(smallButtonStyle, touch)} type="button">
             Reset every passage in this section
           </button>
         </div>
@@ -583,6 +606,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
     .filter(([key]) => scenario.assetStatus?.[key])
     .map(([, label]) => label.replace(" PMTiles", "").replace(" JSON", ""));
   const cardImageUrl = scenario.coverImageUrl || DEFAULT_SCENARIO_COVER;
+  const touch = useTouchPrimary();
 
   return (
     <div
@@ -590,7 +614,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
         ...surfaceStyle,
         borderColor: selected ? `${scenario.accentColor}66` : "rgba(255,255,255,0.08)",
         borderRadius: "24px",
-        flex: "0 0 21rem",
+        flex: `0 0 ${SHELF_CARD_WIDTH}`,
         minHeight: "15rem",
         overflow: "hidden",
         position: "relative",
@@ -725,14 +749,15 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             {/* A hub-imported, unmodified scenario whose post has a newer bundle
                 swaps its primary action for Update; everyone else starts games. */}
             <button
+              className="oh-tap-row"
               onClick={() => (updateAvailable ? onUpdate(scenario) : onPlay(scenario))}
-              style={{
+              style={touchFit({
                 ...actionButtonStyle,
                 background: updateAvailable ? "#1d7f4ccc" : `${scenario.accentColor}cc`,
                 borderColor: updateAvailable ? "#27a663dd" : `${scenario.accentColor}dd`,
                 color: "#fff",
                 flex: 1,
-              }}
+              }, touch)}
               title={updateAvailable
                 ? "A newer version of this scenario is on the community hub. Updating replaces this copy (existing games keep working)."
                 : undefined}
@@ -740,10 +765,10 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
             >
               {updateAvailable ? "⬆ Update" : "New Game"}
             </button>
-            <button onClick={() => onEdit(scenario.id)} style={{ ...actionButtonStyle, flex: 1 }} type="button">
+            <button className="oh-tap-row" onClick={() => onEdit(scenario.id)} style={touchFit({ ...actionButtonStyle, flex: 1 }, touch)} type="button">
               Edit
             </button>
-            <button onClick={() => onClone(scenario)} style={{ ...actionButtonStyle, flexBasis: "100%" }} type="button">
+            <button className="oh-tap-row" onClick={() => onClone(scenario)} style={touchFit({ ...actionButtonStyle, flexBasis: "100%" }, touch)} type="button">
               Clone Scenario
             </button>
           </div>
@@ -759,17 +784,42 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
 // destructive, which is why Archive stays out here on its own.
 const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, onExport }) => {
   const cardImageUrl = game.coverImageUrl || DEFAULT_SCENARIO_COVER;
+  const touch = useTouchPrimary();
   const [cardMenuOpen, setCardMenuOpen] = useState(false);
   // Which row the pointer is over. These are plain buttons on a translucent
   // surface, so without this nothing moves under the cursor and there is no way
   // to tell which one is about to be clicked.
   const [hoveredMenuItem, setHoveredMenuItem] = useState(null);
+  const cardMenuRef = useRef(null);
+  const cardMenuButtonRef = useRef(null);
 
   // Export is the one that takes a moment — a second or two on a phone for a game
   // with roll-back points, longer when a map has to go in. So it keeps the menu
   // open and says so on the row that was pressed, rather than closing and leaving
   // the card looking like nothing happened. Edit and Clone are instant and close.
   const [exporting, setExporting] = useState(false);
+
+  // Click-away. It used to be a fixed layer over the screen, but the card's
+  // backdrop-filter makes the card the containing block of anything fixed
+  // inside it, so the layer covered the card alone and a click anywhere else
+  // left the menu open. A listener on the document hears the click wherever it
+  // lands; it exists only while this card's menu is open, so a shelf of cards
+  // still carries none. Presses on the menu and on its ⋮ are the menu's own.
+  useEffect(() => {
+    if (!cardMenuOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (exporting) return;
+      if (cardMenuRef.current?.contains(event.target) || cardMenuButtonRef.current?.contains(event.target)) return;
+      setCardMenuOpen(false);
+      setHoveredMenuItem(null);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [cardMenuOpen, exporting]);
+  useBackToClose(cardMenuOpen, () => {
+    setCardMenuOpen(false);
+    setHoveredMenuItem(null);
+  });
 
   const runExport = async () => {
     setExporting(true);
@@ -796,7 +846,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
         ...surfaceStyle,
         borderColor: active ? `${game.accentColor}66` : "rgba(255,255,255,0.08)",
         borderRadius: "24px",
-        flex: "0 0 21rem",
+        flex: `0 0 ${SHELF_CARD_WIDTH}`,
         minHeight: "14rem",
         overflow: "hidden",
         position: "relative",
@@ -868,12 +918,14 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                   to go in — and the menu closes on the click, so without this the
                   card looks like it did nothing and gets pressed again. */}
               <button
+                ref={cardMenuButtonRef}
                 aria-haspopup="menu"
                 aria-expanded={cardMenuOpen}
                 aria-label={busy ? "Working…" : `More for ${game.name}`}
+                className="oh-tap"
                 disabled={busy}
                 onClick={() => setCardMenuOpen((open) => !open)}
-                style={{
+                style={touchFit({
                   ...actionButtonStyle,
                   background: cardMenuOpen ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.35)",
                   cursor: busy ? "progress" : "pointer",
@@ -882,7 +934,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                   minWidth: "2rem",
                   opacity: busy ? 0.5 : 1,
                   padding: "0.3rem 0.45rem",
-                }}
+                }, touch, { icon: true })}
                 title={busy ? "Working…" : undefined}
                 type="button"
               >
@@ -890,18 +942,8 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
               </button>
               {cardMenuOpen && (
                 <>
-                  {/* Click-away, rather than a document listener: the card is one of
-                      many in a scrolling shelf and a listener per card is a listener
-                      per card. */}
                   <div
-                    onClick={() => {
-                      if (exporting) return;
-                      setCardMenuOpen(false);
-                      setHoveredMenuItem(null);
-                    }}
-                    style={{ inset: 0, position: "fixed", zIndex: 1 }}
-                  />
-                  <div
+                    ref={cardMenuRef}
                     role="menu"
                     style={{
                       ...surfaceStyle,
@@ -925,6 +967,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                     {cardMenuItems.map(([label, run, working]) => (
                       <button
                         key={label}
+                        className="oh-tap-row"
                         disabled={exporting}
                         onClick={() => { setHoveredMenuItem(null); run(); }}
                         onFocus={() => setHoveredMenuItem(label)}
@@ -932,7 +975,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                         onMouseEnter={() => setHoveredMenuItem(label)}
                         onMouseLeave={() => setHoveredMenuItem(null)}
                         role="menuitem"
-                        style={{
+                        style={touchFit({
                           ...actionButtonStyle,
                           background:
                             working || hoveredMenuItem === label ? "rgba(255,255,255,0.16)" : "transparent",
@@ -949,7 +992,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                           opacity: exporting && !working ? 0.45 : 1,
                           padding: "0.55rem 0.8rem",
                           textAlign: "left",
-                        }}
+                        }, touch)}
                         type="button"
                       >
                         {label}
@@ -1005,14 +1048,15 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
             <button
+              className="oh-tap-row"
               onClick={() => onActivate(game.id)}
-              style={{
+              style={touchFit({
                 ...actionButtonStyle,
                 background: active ? "rgba(0,0,0,0.42)" : `${game.accentColor}cc`,
                 borderColor: active ? "rgba(255,255,255,0.22)" : `${game.accentColor}dd`,
                 color: "#fff",
                 flexBasis: "100%",
-              }}
+              }, touch)}
               type="button"
             >
               {active ? "Current" : "Play"}
@@ -1021,8 +1065,9 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                 Delete cannot serve. Archiving the ACTIVE game is allowed: the
                 server hands the active slot to another game first. */}
             <button
+              className="oh-tap-row"
               onClick={() => onArchive(game)}
-              style={{ ...actionButtonStyle, flexBasis: "100%" }}
+              style={touchFit({ ...actionButtonStyle, flexBasis: "100%" }, touch)}
               title={game.archived ? "Move back into your library" : "Hide from the library without deleting"}
               type="button"
             >
@@ -1068,7 +1113,7 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
       color: "rgba(255,255,255,0.78)",
       cursor: busy ? "wait" : "pointer",
       display: "flex",
-      flex: "0 0 21rem",
+      flex: `0 0 ${SHELF_CARD_WIDTH}`,
       flexDirection: "column",
       gap: "0.55rem",
       justifyContent: "center",
@@ -1081,13 +1126,14 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
   </button>
 );
 
-const SectionTabs = ({ currentSection, sections, setSection }) => (
+const SectionTabs = ({ currentSection, sections, setSection, touch }) => (
   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
     {sections.map((sectionKey) => (
       <button
         key={sectionKey}
+        className="oh-tap-row"
         onClick={() => setSection(sectionKey)}
-        style={{
+        style={touchFit({
           ...actionButtonStyle,
           background:
             currentSection === sectionKey ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
@@ -1095,7 +1141,7 @@ const SectionTabs = ({ currentSection, sections, setSection }) => (
             currentSection === sectionKey ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)",
           minHeight: "2rem",
           padding: "0 0.8rem",
-        }}
+        }, touch)}
         type="button"
       >
         {editorSectionLabels[sectionKey] || sectionKey}
@@ -1130,6 +1176,8 @@ const EditorDrawer = ({
   statsValue,
   onStatsChange,
 }) => {
+  const isMobile = useIsMobile();
+  const touch = useTouchPrimary();
   if (!details || !formState) {
     return null;
   }
@@ -1139,21 +1187,27 @@ const EditorDrawer = ({
     kind === "scenario"
       ? ["overview", "world", "stats", "features", "prompts", "assets", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
+  // Two fields to a row leave a phone under 140 px for each, too narrow for a
+  // date or a font name, so there the fields stack.
+  const formColumns = isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))";
 
   return (
     <div
       style={{
         ...surfaceStyle,
         borderRadius: "26px",
-        bottom: "0.85rem",
+        // Every edge keeps clear of the status bar, the home indicator and a
+        // notch at the side in landscape (the SAFE_* insets, 0 on a desktop);
+        // the top follows the main menu's bar, which grows by the same inset.
+        bottom: `calc(0.85rem + ${SAFE_BOTTOM})`,
         color: "#fff",
-        maxHeight: `calc(100vh - ${BAR_HEIGHT + 32}px)`,
+        maxHeight: `calc(${APP_HEIGHT} - ${BAR_HEIGHT + 32}px - ${SAFE_TOP} - ${SAFE_BOTTOM})`,
         overflow: "auto",
         padding: "1.05rem",
         position: "fixed",
-        right: "0.85rem",
+        right: `calc(0.85rem + ${SAFE_RIGHT})`,
         top: `calc(${TOP_BAR_OFFSET} + 3.5rem)`,
-        width: "min(34rem, calc(100vw - 1.2rem))",
+        width: `min(34rem, calc(100vw - 1.2rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`,
         // Above the main menu (10046) — the menu's + tile and Edit buttons open
         // this drawer, and it must land on top of the menu it came from.
         zIndex: 10048,
@@ -1169,19 +1223,21 @@ const EditorDrawer = ({
           </div>
         </div>
         <button
+          aria-label={`Close the ${kind === "scenario" ? "scenario" : "game"} editor`}
+          className="oh-tap"
           onClick={onClose}
-          style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.04)", minWidth: "2.35rem", padding: 0 }}
+          style={touchFit({ ...actionButtonStyle, background: "rgba(255,255,255,0.04)", minWidth: "2.35rem", padding: 0 }, touch, { icon: true })}
           type="button"
         >
           X
         </button>
       </div>
 
-      <SectionTabs currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} />
+      <SectionTabs currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
 
       {editorSection === "overview" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
-          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
             <div style={{ gridColumn: "1 / -1" }}>
               <label style={fieldLabelStyle}>Name</label>
               <input style={inputStyle} value={formState.name} onChange={(event) => onChange("name", event.target.value)} />
@@ -1216,7 +1272,7 @@ const EditorDrawer = ({
 
       {editorSection === "world" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
-          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+          <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
             <div>
               <label style={fieldLabelStyle}>Player Country</label>
               <input style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
@@ -1245,19 +1301,20 @@ const EditorDrawer = ({
                       <button
                         key={unitType}
                         type="button"
+                        className="oh-tap-row"
                         onClick={() => {
                           const set = new Set(formState.allowedUnitTypes ?? []);
                           if (set.has(unitType)) set.delete(unitType);
                           else set.add(unitType);
                           onChange("allowedUnitTypes", UNIT_TYPES.filter((t) => set.has(t)));
                         }}
-                        style={{
+                        style={touchFit({
                           ...actionButtonStyle,
                           background: checked ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
                           borderColor: checked ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
                           minHeight: "2rem",
                           padding: "0 0.7rem",
-                        }}
+                        }, touch)}
                       >
                         {checked ? "✓ " : ""}
                         {UNIT_TYPE_LABELS[unitType] ?? unitType}
@@ -1371,7 +1428,9 @@ const EditorDrawer = ({
                     : "No custom cover image.";
 
               return (
-                <div key={assetKey} style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "14px", display: "flex", gap: "0.75rem", justifyContent: "space-between", padding: "0.72rem 0.78rem" }}>
+                // On a phone the Upload and Reset buttons drop below the text
+                // rather than squeezing it to a word per line.
+                <div key={assetKey} style={{ alignItems: "center", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "14px", display: "flex", flexWrap: isMobile ? "wrap" : undefined, gap: "0.75rem", justifyContent: "space-between", padding: "0.72rem 0.78rem" }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>{label}</div>
                     <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.78rem", marginTop: "0.15rem" }}>
@@ -1400,16 +1459,17 @@ const EditorDrawer = ({
                     )}
                   </div>
                   <div style={{ display: "flex", gap: "0.45rem" }}>
-                    <button onClick={() => onOpenFileDialog(assetKey)} style={actionButtonStyle} type="button">
+                    <button className="oh-tap-row" onClick={() => onOpenFileDialog(assetKey)} style={touchFit(actionButtonStyle, touch)} type="button">
                       Upload
                     </button>
                     <button
+                      className="oh-tap-row"
                       onClick={() => onClearAsset(assetKey)}
-                      style={{
+                      style={touchFit({
                         ...actionButtonStyle,
                         background: "rgba(255,255,255,0.03)",
                         color: hasOwnAsset ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.35)",
-                      }}
+                      }, touch)}
                       disabled={!hasOwnAsset}
                       type="button"
                     >
@@ -1438,10 +1498,10 @@ const EditorDrawer = ({
             Download the scenario as one self-contained file — custom map geometry, cities and basemap all travel with it, ready to share or re-import. The <strong>.zip</strong> carries a custom basemap as a real image file (smaller, and the form the community hub expects); the <strong>JSON</strong> packs everything into one text file.
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
-            <button onClick={() => onExportBundle("zip")} style={actionButtonStyle} type="button">
+            <button className="oh-tap-row" onClick={() => onExportBundle("zip")} style={touchFit(actionButtonStyle, touch)} type="button">
               Download .zip
             </button>
-            <button onClick={() => onExportBundle("json")} style={actionButtonStyle} type="button">
+            <button className="oh-tap-row" onClick={() => onExportBundle("json")} style={touchFit(actionButtonStyle, touch)} type="button">
               Download JSON
             </button>
           </div>
@@ -1456,16 +1516,18 @@ const EditorDrawer = ({
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
         <button
+          className="oh-tap-row"
           onClick={onSave}
-          style={{ ...actionButtonStyle, background: `${record.accentColor}cc`, borderColor: `${record.accentColor}dd`, color: "#fff", minWidth: "7.2rem" }}
+          style={touchFit({ ...actionButtonStyle, background: `${record.accentColor}cc`, borderColor: `${record.accentColor}dd`, color: "#fff", minWidth: "7.2rem" }, touch)}
           type="button"
         >
           {isBusy ? "Saving..." : "Save"}
         </button>
         {kind === "scenario" && onOpenMapEditor && (
           <button
+            className="oh-tap-row"
             onClick={onOpenMapEditor}
-            style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.19)", color: "#fff", minWidth: "9rem" }}
+            style={touchFit({ ...actionButtonStyle, background: "rgba(255,255,255,0.12)", borderColor: "rgba(255,255,255,0.19)", color: "#fff", minWidth: "9rem" }, touch)}
             type="button"
           >
             🗺️ Open Map Editor
@@ -1473,8 +1535,9 @@ const EditorDrawer = ({
         )}
         {record.canDelete && (
           <button
+            className="oh-tap-row"
             onClick={onDelete}
-            style={{ ...actionButtonStyle, background: "rgba(127,29,29,0.34)", borderColor: "rgba(248,113,113,0.28)", color: "#fecaca" }}
+            style={touchFit({ ...actionButtonStyle, background: "rgba(127,29,29,0.34)", borderColor: "rgba(248,113,113,0.28)", color: "#fecaca" }, touch)}
             type="button"
           >
             Delete
@@ -1499,6 +1562,13 @@ const LibraryTopBar = () => {
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
   const [menuOpen, setMenuOpenState] = useState(menuOpenDefault);
+  // Whether the menu was opened from inside a game (⌂ Exit Game, or the game
+  // menu's Game Management), so that a phone's Back can close it again and
+  // return to the game. Opened any other way, above all at boot, the menu is
+  // the front page with nothing behind it, and there Back leaves the app as it
+  // always has. Per instance on purpose: after a remount the game behind the
+  // menu is not the one the player left.
+  const [menuOverGame, setMenuOverGame] = useState(false);
   // The module-level default is the ONLY value that survives the keyed UI
   // remount a game activation triggers, so every open/close writes it first.
   // Flows that activate a game flip it BEFORE awaiting the request — the
@@ -1506,11 +1576,18 @@ const LibraryTopBar = () => {
   const setMenuOpen = (open) => {
     menuOpenDefault = open;
     setMenuOpenState(open);
+    if (!open) setMenuOverGame(false);
     mainMenuListeners.forEach((listener) => listener());
+  };
+  // The ⌂ Exit Game buttons: the menu, over the game the player is in.
+  const exitToMenu = () => {
+    setMenuOverGame(true);
+    setMenuOpen(true);
   };
   // Bridge for outside callers: open the main menu on a library tab.
   _openLibraryTab = (tab) => {
     setActiveTab(tab);
+    if (!menuOpenDefault) setMenuOverGame(true);
     setMenuOpen(true);
   };
   const [editorKind, setEditorKind] = useState(null);
@@ -2368,6 +2445,7 @@ const LibraryTopBar = () => {
   }, [activeGame, activeCountryName]);
 
   const isMobile = useIsMobile();
+  const touch = useTouchPrimary();
 
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
@@ -2392,6 +2470,29 @@ const LibraryTopBar = () => {
   // Step two of the new-game dialog: the chosen country waits here while the
   // player picks a difficulty.
   const [difficultyPick, setDifficultyPick] = useState(null);
+
+  const closeCountryPicker = () => {
+    setCountryPicker(null);
+    setPlayGameId(null);
+    setDifficultyPick(null);
+    setCustomRegionData(null);
+    setPickerOwnerOverrides(null);
+    setPickerBackground(null);
+  };
+
+  // On a phone, Back closes what is on top (runtime/backToClose.js; with a
+  // mouse nothing changes). Declared bottom-up, so surfaces opened together
+  // stack in the order they are drawn. The drawer sits it out while the
+  // Workshop covers it: Back there would otherwise throw away the drawer's
+  // unsaved fields behind a screen the player cannot see through. The Workshop
+  // itself has no Back of its own here: its close button saves first and asks
+  // before dropping work, and that lives in src/Editor/MapEditor.jsx.
+  useBackToClose(menuOpen && menuOverGame && Boolean(activeGame), () => setMenuOpen(false));
+  useBackToClose(Boolean(editorKind && editorDetails && editorState) && !isMapEditorOpen, resetEditor);
+  useBackToClose(Boolean(countryPicker), closeCountryPicker);
+  // The difficulty step goes back to the country step, as its own Back does.
+  useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
+  useBackToClose(Boolean(missingScenarioGame), () => setMissingScenarioGame(null));
 
   // Write a map built in the editor into its scenario (region geometry + ownership
   // + colors), then immediately spin up and activate a fresh game from it so the
@@ -2677,6 +2778,15 @@ const LibraryTopBar = () => {
     [scenarios],
   );
 
+  // The open tab's own actions: in the bar on a desktop, heading the page on a
+  // phone. The Community tab brings its own.
+  const tabActions = activeTab === "community" ? [] : [
+    { icon: "⟳", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
+    activeTab === "scenarios"
+      ? { icon: "⬆", label: "Import JSON", phoneLabel: "Import scenario", run: () => importScenarioInputRef.current?.click() }
+      : { icon: "⬆", label: "Import game", run: () => importGameInputRef.current?.click() },
+  ];
+
   return (
     <>
       {/* In-game the full-width top bar is gone — the map gets the space. What
@@ -2692,9 +2802,9 @@ const LibraryTopBar = () => {
             display: "flex",
             fontFamily: "sans-serif",
             gap: "0.45rem",
-            left: "5rem",
+            left: `calc(5rem + ${SAFE_LEFT})`,
             position: "fixed",
-            top: "0.5rem",
+            top: TOP_BAR_OFFSET,
             zIndex: 9996,
           }}
         >
@@ -2720,7 +2830,7 @@ const LibraryTopBar = () => {
             </div>
           </div>
           <button
-            onClick={() => setMenuOpen(true)}
+            onClick={exitToMenu}
             title="Leave this game and return to the main menu"
             type="button"
             style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "11px", fontSize: "0.68rem", minHeight: "2.85rem", padding: "0 0.85rem" }}
@@ -2731,7 +2841,8 @@ const LibraryTopBar = () => {
       )}
 
       {/* Phones: the date widget spans the whole top row, so Exit Game sits
-          in the left gutter under the ⋮ settings button instead. */}
+          in the left gutter under the ⋮ settings button instead, clear of the
+          status bar and of a notch at the side. */}
       {!menuOpen && isMobile && (
         <div
           style={{
@@ -2739,17 +2850,19 @@ const LibraryTopBar = () => {
             flexDirection: "column",
             fontFamily: "sans-serif",
             gap: "0.45rem",
-            left: "0.5rem",
+            left: `calc(0.5rem + ${SAFE_LEFT})`,
             position: "fixed",
-            top: "5rem",
+            top: `calc(5rem + ${SAFE_TOP})`,
             zIndex: 9997,
           }}
         >
           <button
-            onClick={() => setMenuOpen(true)}
+            aria-label="Exit to the main menu"
+            className="oh-tap"
+            onClick={exitToMenu}
             title="Leave this game and return to the main menu"
             type="button"
-            style={{ ...actionButtonStyle, ...surfaceStyle, borderRadius: "12px", fontSize: "1rem", height: "2.6rem", minHeight: "0", minWidth: "0", padding: 0, width: "2.6rem" }}
+            style={touchFit({ ...actionButtonStyle, ...surfaceStyle, borderRadius: "12px", fontSize: "1rem", height: "2.6rem", minHeight: "0", minWidth: "0", padding: 0, width: "2.6rem" }, touch, { icon: true })}
           >
             ⌂
           </button>
@@ -2784,12 +2897,15 @@ const LibraryTopBar = () => {
       <Presence open={Boolean(countryPicker)} value={countryPicker}>
         {(countryPicker) => (
         <div
-          onClick={() => { setCountryPicker(null); setPlayGameId(null); setDifficultyPick(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }}
-          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={closeCountryPicker}
+          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}
         >
+          {/* On a phone the card takes the whole visible height rather than 80%
+              of it: the search, the map, the list and the buttons need every
+              row a phone has. */}
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
+            style={{ ...surfaceStyle, borderRadius: 16, width: difficultyPick ? "min(440px, 92vw)" : "min(640px, 92vw)", maxHeight: isMobile ? `calc(${APP_HEIGHT} - 1.5rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : "80vh", display: "flex", flexDirection: "column", padding: "1rem", color: "#fff", fontFamily: "sans-serif", overflow: difficultyPick ? "visible" : "auto" }}
           >
             {difficultyPick ? (
               <>
@@ -2827,7 +2943,7 @@ const LibraryTopBar = () => {
                     </button>
                   ))}
                 </div>
-                <button type="button" onClick={() => setDifficultyPick(null)} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                <button type="button" className="oh-tap-row" onClick={() => setDifficultyPick(null)} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>
                   Back
                 </button>
               </>
@@ -2846,27 +2962,29 @@ const LibraryTopBar = () => {
                   <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.7rem" }}>
                     <button
                       type="button"
+                      className="oh-tap-row"
                       onClick={() => setPickerTab("country")}
-                      style={{
+                      style={touchFit({
                         ...actionButtonStyle,
                         flex: 1,
                         fontWeight: 700,
                         background: pickerTab === "country" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
                         borderColor: pickerTab === "country" ? "rgba(255,255,255,0.28)" : undefined,
-                      }}
+                      }, touch)}
                     >
                       Pick a country
                     </button>
                     <button
                       type="button"
+                      className="oh-tap-row"
                       onClick={() => setPickerTab("faction")}
-                      style={{
+                      style={touchFit({
                         ...actionButtonStyle,
                         flex: 1,
                         fontWeight: 700,
                         background: pickerTab === "faction" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
                         borderColor: pickerTab === "faction" ? "rgba(255,255,255,0.28)" : undefined,
-                      }}
+                      }, touch)}
                     >
                       Create a faction
                     </button>
@@ -2883,8 +3001,9 @@ const LibraryTopBar = () => {
                   <>
                     <button
                       type="button"
+                      className="oh-tap-row"
                       onClick={() => pickCountry("")}
-                      style={{ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.06)", marginBottom: "0.4rem" }}
+                      style={touchFit({ ...actionButtonStyle, justifyContent: "flex-start", background: "rgba(255,255,255,0.06)", marginBottom: "0.4rem" }, touch)}
                     >
                       {playGameId ? "Keep scenario default" : "Scenario default"}
                     </button>
@@ -2903,7 +3022,7 @@ const LibraryTopBar = () => {
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={{ ...actionButtonStyle, marginTop: "0.6rem" }}>
+                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>
                       {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
@@ -2942,9 +3061,10 @@ const LibraryTopBar = () => {
               <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
                 {pending.importedScenarioOrigin && (
                   <button
+                    className="oh-tap-row"
                     disabled={isBusy}
                     onClick={() => handleMissingScenarioImport(pending)}
-                    style={{ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.6rem" }}
+                    style={touchFit({ ...actionButtonStyle, background: "rgba(255,255,255,0.15)", borderColor: "rgba(255,255,255,0.28)", minHeight: "2.6rem" }, touch)}
                     type="button"
                   >
                     {isBusy ? "Getting the scenario…" : "Import & play"}
@@ -2954,18 +3074,20 @@ const LibraryTopBar = () => {
                     Otherwise the player has a file to import, and the Scenarios
                     tab is where importing one happens. */}
                 <button
+                  className="oh-tap-row"
                   onClick={() => {
                     setMissingScenarioGame(null);
                     setActiveTab(pending.importedScenarioOrigin ? "community" : "scenarios");
                   }}
-                  style={{ ...actionButtonStyle, minHeight: "2.6rem" }}
+                  style={touchFit({ ...actionButtonStyle, minHeight: "2.6rem" }, touch)}
                   type="button"
                 >
                   {pending.importedScenarioOrigin ? "Browse the community hub" : "Go to scenarios"}
                 </button>
                 <button
+                  className="oh-tap-row"
                   onClick={() => setMissingScenarioGame(null)}
-                  style={{ ...actionButtonStyle, minHeight: "2.6rem" }}
+                  style={touchFit({ ...actionButtonStyle, minHeight: "2.6rem" }, touch)}
                   type="button"
                 >
                   Not now
@@ -3017,15 +3139,16 @@ const LibraryTopBar = () => {
               display: "grid",
               flexShrink: 0,
               gap: isMobile ? "0.4rem" : "0.9rem",
-              // Three columns keeps the tabs optically centred on a desktop. On a
-              // phone the tabs and the action buttons together are wider than the
-              // bar, so the actions column collapses to nothing and its buttons
-              // spill left across the Community tab. Two columns, and the logo —
-              // decorative, and its wordmark is already hidden here — gives up its
-              // space.
-              gridTemplateColumns: isMobile ? "minmax(0, 1fr) auto" : "minmax(0, 1fr) auto minmax(0, 1fr)",
-              height: `${BAR_HEIGHT}px`,
-              padding: isMobile ? "0 0.5rem" : "0 1rem",
+              // Three columns keeps the tabs optically centred on a desktop. A
+              // phone has room for the three tabs and nothing more: the logo —
+              // decorative, and its wordmark already hidden there — gives up its
+              // space, and the tab's own actions move down to head the page,
+              // where they have room for their names (below).
+              gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) auto minmax(0, 1fr)",
+              // Clear of a status bar the page draws under, and of a notch at
+              // the side in landscape; every inset is 0 on a desktop.
+              height: `calc(${BAR_HEIGHT}px + ${SAFE_TOP})`,
+              padding: `${SAFE_TOP} calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_RIGHT}) 0 calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_LEFT})`,
             }}
           >
             {!isMobile && (
@@ -3045,7 +3168,7 @@ const LibraryTopBar = () => {
                 display: "flex",
                 gap: "0.55rem",
                 justifyContent: isMobile ? "flex-start" : "center",
-                justifySelf: isMobile ? "start" : "center",
+                justifySelf: "center",
                 minWidth: 0,
                 overflowX: "auto",
                 scrollbarWidth: "none",
@@ -3054,14 +3177,15 @@ const LibraryTopBar = () => {
               {["games", "scenarios", "community"].map((tab) => (
                 <button
                   key={tab}
+                  className="oh-tap-row"
                   onClick={() => setActiveTab(tab)}
-                  style={{
+                  style={touchFit({
                     ...actionButtonStyle,
                     background: activeTab === tab ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
                     borderColor: activeTab === tab ? "rgba(255,255,255,0.19)" : "rgba(255,255,255,0.08)",
                     minWidth: isMobile ? "0" : "6.6rem",
                     padding: isMobile ? "0.55rem 0.6rem" : undefined,
-                  }}
+                  }, touch)}
                   type="button"
                 >
                   {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : "Community"}
@@ -3069,41 +3193,33 @@ const LibraryTopBar = () => {
               ))}
             </div>
 
-            <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem", justifyContent: "flex-end" }}>
-              {activeTab !== "community" && (
-                <button
-                  onClick={() => refreshLibraryCatalog({ force: true }).catch(() => {})}
-                  style={{ ...actionButtonStyle, flexShrink: 0, padding: isMobile ? "0 0.7rem" : undefined }}
-                  title={isMobile ? "Refresh" : undefined}
-                  type="button"
-                >
-                  {isMobile ? "⟳" : "Refresh"}
-                </button>
-              )}
-              {activeTab === "scenarios" && (
-                <button
-                  onClick={() => importScenarioInputRef.current?.click()}
-                  style={{ ...actionButtonStyle, flexShrink: 0, padding: isMobile ? "0 0.7rem" : undefined }}
-                  title={isMobile ? "Import a scenario" : undefined}
-                  type="button"
-                >
-                  {isMobile ? "⬆" : "Import JSON"}
-                </button>
-              )}
-              {activeTab === "games" && (
-                <button
-                  onClick={() => importGameInputRef.current?.click()}
-                  style={{ ...actionButtonStyle, flexShrink: 0, padding: isMobile ? "0 0.7rem" : undefined }}
-                  title={isMobile ? "Import a game" : undefined}
-                  type="button"
-                >
-                  {isMobile ? "⬆" : "Import game"}
-                </button>
-              )}
-            </div>
+            {!isMobile && (
+              <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem", justifyContent: "flex-end" }}>
+                {tabActions.map(({ label, run }) => (
+                  // padding: undefined leaves these the browser's own padding in
+                  // place of the pill's, as they have always had.
+                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit({ ...actionButtonStyle, flexShrink: 0, padding: undefined }, touch)} type="button">
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? "1.1rem 0.8rem 2.5rem" : "1.5rem 1.6rem 3rem" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? `1.1rem calc(0.8rem + ${SAFE_RIGHT}) calc(2.5rem + ${SAFE_BOTTOM}) calc(0.8rem + ${SAFE_LEFT})` : `1.5rem calc(1.6rem + ${SAFE_RIGHT}) calc(3rem + ${SAFE_BOTTOM}) calc(1.6rem + ${SAFE_LEFT})` }}>
+            {/* Phones: the tab's actions head the page, by name. In the bar they
+                were a bare ⟳ and ⬆ named only by a tooltip, which a finger
+                never sees, and the bar has no room for words beside the tabs. */}
+            {isMobile && tabActions.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.1rem" }}>
+                {tabActions.map(({ icon, label, phoneLabel, run }) => (
+                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit(actionButtonStyle, touch)} type="button">
+                    <span aria-hidden="true">{icon}</span>
+                    {phoneLabel || label}
+                  </button>
+                ))}
+              </div>
+            )}
             {activeTab === "community" ? (
               <Suspense
                 fallback={
