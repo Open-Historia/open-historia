@@ -40,6 +40,7 @@ import {
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
 import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
+import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
     busyProviderMessage,
     classifyProviderFailure,
@@ -2571,7 +2572,9 @@ let promptsReady = null;
 let promptsReadyKey = "";
 
 async function ensurePromptsLoaded() {
-    const cacheKey = JSON_URLS.prompts;
+    // The guidance passages arrive in the player's language a moment after boot
+    // (runtime/promptTranslations.js); a pack composed before then is recomposed.
+    const cacheKey = `${JSON_URLS.prompts}|${promptTranslationsVersion()}`;
 
     if (!promptsReady || promptsReadyKey !== cacheKey) {
         promptsReadyKey = cacheKey;

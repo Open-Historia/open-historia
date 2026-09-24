@@ -322,7 +322,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | `basemaps/*` | `handleBasemaps` (`basemapStore.js`) | basemap meta + payload (two stores) |
 | `flags/*` | `handleFlags` (`flagStore.js`) | flag records |
 | `ui-settings/*` | `handleUiSettings` (`settingsStore.js:82`) | UI settings persisted in `kv` |
-| `lang/*` | `handleLang` (`settingsStore.js:44`) | language packs: IndexedDB overrides merged over the static `/lang/*.json` Vite copies to the site |
+| `lang/*` | `handleLang` (`settingsStore.js`) | language packs: the static `/lang/*.json` Vite copies to the site, merged over the IndexedDB overlay of AI translations (shipped wins; see [Languages & Translation](i18n.md)) |
 
 ---
 

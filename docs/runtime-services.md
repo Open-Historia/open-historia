@@ -14,7 +14,7 @@ Related pages: [World state](world-state.md) · [Game state](world-state.md) · 
 | Scenario store | `src/runtime/scenarios.js` | scenario-only catalog (parallel, editor/standalone) | editor / scenario-picker contexts |
 | Country-name resolver | `src/runtime/assets.js` (+ `polityNames.js`) | code→display-name plumbing, runtime asset endpoints/token | every map/name renderer |
 | Language setting | `src/runtime/i18n.js` | UI language choice, `LANGUAGES`, RTL, `languageDirective` | Settings UI, `translator.js`, `callAI` |
-| Translator | `src/runtime/translator.js` | pre-translation pass + live DOM translation cache | `src/main.jsx` (boot), map labels |
+| Translator | `src/runtime/translator.js` (+ `phraseBook.js`, `promptTranslations.js`) | shipped packs applied to the live DOM; content translated by the AI | `src/main.jsx` (boot), map labels, content writers |
 | Country tags | `src/runtime/countryTags.js` | tag normalization + author-vs-live resolution | editor, game, server, `promptContext.js` |
 | Country labels | `src/runtime/countryLabels.js` | map country-label GeoJSON (curved + point) | `src/Game/Map/Nations.jsx` |
 | Community flags | `src/runtime/communityFlags.js` | hub-hosted shared flags & flag packs | `src/Editor/FlagPicker.jsx` |
@@ -178,10 +178,11 @@ Storage rule: writing `en` (or empty) **removes** the key rather than storing it
 
 ## Translator — `src/runtime/translator.js`
 
-Translates the running UI into the player's language using whichever AI provider is configured. Two layers:
+Puts the running game into the player's language. The full design (the three kinds of text, the packs, patterns and runs, content, the prompts, regenerating the packs) is in **[Languages & Translation](i18n.md)**. In short:
 
-1. **One-time pre-translation pass** per language (on boot / after a switch): gathers every string the game *could* show, translates up front behind a progress pill, caches in localStorage.
-2. **A `MutationObserver`** that keeps applying the cache to new DOM synchronously (no English flash) and lazily translates the rare strings the pre-pass couldn't know.
+1. **The interface** comes from the shipped pack (`public/lang/<code>.json`) in the 22 languages that have one (`SHIPPED_PACK_LANGUAGES`), applied to the DOM by a `MutationObserver` as it renders: exact strings, `{{slot}}` patterns and runs of text nodes (`phraseBook.js`). It never costs an AI request there.
+2. **Content** (what a scenario's author or a player made) is gathered up front, at boot and on every switch of save, and translated by the AI in a few big requests, then saved to the server's pack.
+3. In a language **without** a pack, the interface goes through the AI as well, as content does.
 
 ### Lifecycle
 
@@ -190,21 +191,22 @@ Translates the running UI into the player's language using whichever AI provider
 | `startTranslator()` | Called once from `src/main.jsx:24`. Syncs language from server (reload if changed), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
 | `stopTranslator()` | Disconnects the observer, clears timers, removes the progress pill |
 
-Boot order inside `startTranslator` (`translator.js:587`): `syncLanguageFromServer()` (reload on change) → bail if `en` → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectCatalogStrings()` → show progress if >10 pending → `processQueue()`.
+Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on change) → bail if `en` → `loadPromptTranslations()` (pack languages) → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectContentStrings()` (again on `oh:active-game-changed`) → show progress if >10 pending → `processQueue()`.
 
 ### Public lookups (for callers/data outside the DOM)
 
 | Export | Purpose |
 |---|---|
-| `translateLabel(text)` | **Sync** best-effort translate for text drawn outside the DOM (map country labels). Returns cached translation, or the original while queuing the string + firing `i18n:updated` when it resolves |
-| `enqueueStrings(strings)` | Proactively queue an array of strings (e.g. freshly-fetched hub posts); only uncached ones cost a call |
+| `translateLabel(text)` | **Sync** best-effort translate for text drawn outside the DOM (map country labels). Returns the known translation, or the original while queuing the name as content + firing `i18n:updated` when it resolves |
+| `enqueueStrings(strings)` | Proactively queue content (e.g. freshly-fetched hub posts); only unknown strings cost a call |
+| `enqueueEventStrings(events)` | An event log as it is written: queues only the scenario's own events (`source` `"scenario"`); the AI's are written in the player's language |
 | `enqueueContentStrings(payload)` | Deep-walk a saved payload (≤6 deep) pulling human-readable fields (`CONTENT_TEXT_KEYS` + `aliases`), skipping `features`/`geometry`/`coordinates`, and enqueue them. Called by `library.js` on `createScenario/saveScenario/createGame/saveGame` so edited names/descriptions translate **and reach the server pack** the moment they're saved |
 
 `countryLabels.js` calls `translateLabel(...)` so map labels follow the UI language; when new translations land, the `"i18n:updated"` event (debounced in `announceUpdate`) tells label builders to rebuild.
 
 ### Server language pack
 
-- `loadServerPack()` — GET `/api/lang/:language`, merges shipped + community-generated translations into the local cache without overwriting.
+- `loadServerPack()` — GET `/api/lang/:language` (shipped over saved) laid over this device's cache, so a stale local translation never hides the pack's; what the device learned that the server lacks is sent to it again.
 - `syncEntriesToServer()` — debounced (2 s) PUT `/api/lang/:language` `{ entries }` pushing newly-generated translations so every device and future session reuses them instead of paying for the same AI call.
 
 ### Translation engine + config
@@ -213,17 +215,17 @@ Boot order inside `startTranslator` (`translator.js:587`): `syncLanguageFromServ
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `CACHE_PREFIX` | `i18n_cache_` | localStorage key prefix (`+language`) |
+| `CACHE_PREFIX` | `i18n_v2_` | localStorage key prefix (`+language`): what the AI translated on this device and the server does not have yet. The pre-pack `i18n_cache_*` keys are removed on boot |
 | `CACHE_LIMIT` | `8000` | Max cached entries persisted (most-recent kept) |
 | `BATCH_MAX_STRINGS` | `240` | Strings per AI call, at most |
 | `BATCH_MAX_CHARS` | `6000` | Source characters per call, at most (whichever ceiling binds first) |
 | `BATCH_MIN_STRINGS` | `30` | What the batch halves down to after a failure, recovering on the next success |
 | `SCAN_DEBOUNCE_MS` | `350` | Debounce before a DOM scan |
 | `MAX_CONSECUTIVE_FAILURES` | `3` | Failures before a 60 s cooldown |
-| `TRANSLATED_ATTRIBUTES` | `placeholder, title, aria-label` | Attributes also translated |
+| `TRANSLATED_ATTRIBUTES` | `placeholder, title, aria-label, aria-description, alt` | Attributes also translated (and observed as they change) |
 | `SKIP_SELECTOR` | `script, style, noscript, input, textarea, [contenteditable], [data-no-translate]` | Never-translated nodes; opt out with `data-no-translate` |
 
-The `nodeSources` WeakMap records the English source last seen at each text node, so re-renders that restore English are re-translated and the translator recognizes its own writes.
+The `nodeRecords` and `attributeRecords` WeakMaps record, per text node and attribute, the English last seen there and what the translator wrote over it, so re-renders that bring new English are translated again and the translator recognizes its own writes, runs of text nodes included.
 
 ---
 

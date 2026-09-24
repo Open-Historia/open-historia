@@ -1,13 +1,18 @@
 /*! Open Historia — language pack generator © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Fills public/lang/<code>.json from public/lang/catalog-en.json using any
-// OpenAI-compatible chat endpoint.
+// Fills public/lang/<code>.json from public/lang/catalog-en.json, and
+// public/lang/prompts/<code>.json from public/lang/prompts/catalog-en.json (the
+// default prompts' guidance passages), using any OpenAI-compatible chat
+// endpoint. Build the catalogs first: node scripts/i18n/build-catalog.mjs
+// (docs/i18n.md).
 //
-// The in-game translator works on the live DOM and only runs in a browser, so it
-// can't produce packs offline or for a language nobody has played. This does the
-// same job headlessly: catalog in, pack out.
+// A language with a shipped pack never sends the interface to the player's AI
+// (translator.js), so the pack must hold every catalog string. This makes one
+// headlessly: catalog in, pack out.
 //
 // Incremental by default: a string already present in a pack is never re-sent, so
 // re-running after adding UI strings only pays for the new ones. --force retranslates.
+// Entries the catalog no longer has are dropped. A translation that loses a
+// placeholder ({{count}}, ${PLAYER_POLITY}) is not written, so a re-run retries it.
 //
 //   OH_LLM_BASE_URL=http://localhost:8080/v1 \
 //   OH_LLM_KEY=... OH_LLM_MODEL=nemotron-3-super \
@@ -25,6 +30,14 @@ import url from "node:url";
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "..");
 const LANG_DIR = path.join(ROOT, "public", "lang");
 const CATALOG = path.join(LANG_DIR, "catalog-en.json");
+const PROMPT_DIR = path.join(LANG_DIR, "prompts");
+const PROMPT_CATALOG = path.join(PROMPT_DIR, "catalog-en.json");
+
+// What must survive translation unchanged: pattern slots, prompt placeholders.
+const tokensOf = (text) => [
+  ...(text.match(/\{\{[^{}]+\}\}/g) ?? []),
+  ...(text.match(/\$\{[^{}]+\}/g) ?? []),
+].sort().join(" ");
 
 const BASE_URL = (process.env.OH_LLM_BASE_URL || "").replace(/\/$/, "");
 const API_KEY = process.env.OH_LLM_KEY || "";
@@ -84,7 +97,9 @@ const translateBatch = async (strings, code, endonym) => {
     "You translate user-interface strings for a historical strategy game. " +
     "Reply with ONLY a JSON array of strings — no prose, no code fence, no keys. " +
     "Return exactly one translation per input, in the same order. " +
-    "Preserve any {placeholder}, %s, or HTML tag EXACTLY as-is. " +
+    "Preserve every placeholder EXACTLY as-is: {{name}} slots (the game fills them " +
+    "with numbers and names; move them where your grammar needs them), ${NAME}, %s, " +
+    "and HTML tags. " +
     "Keep translations short: these are buttons and labels, and a long string " +
     "breaks the layout. " +
     // Do NOT say "leave proper nouns unchanged". Most of this catalog is country
@@ -123,6 +138,53 @@ const translateBatch = async (strings, code, endonym) => {
   return null;
 };
 
+// The prompts' guidance: instructions for the model that runs the world, so
+// faithfulness over brevity, one passage a request.
+const translatePassage = async (passage, code, endonym) => {
+  const system =
+    "You translate instructions written for an AI model that runs a historical " +
+    `strategy game into ${endonym} (${code}). The model will read your translation ` +
+    "instead of the English, so keep every rule, nuance, example and emphasis; do not " +
+    "summarise or add anything. Keep every ${PLACEHOLDER} exactly as written. Translate " +
+    "section headings in square brackets but keep the brackets. Keep the line breaks, " +
+    "bullets and **bold**. Reply with ONLY the translated text.";
+  for (let attempt = 1; attempt <= RETRIES; attempt += 1) {
+    try {
+      const out = (await chat([
+        { role: "system", content: system },
+        { role: "user", content: passage },
+      ])).trim();
+      if (tokensOf(out) !== tokensOf(passage)) throw new Error("a placeholder was lost");
+      return out;
+    } catch (error) {
+      if (attempt === RETRIES) {
+        console.warn(`      passage failed after ${RETRIES} tries: ${error.message}`);
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const generatePrompts = async (code, passages, { dryRun, force }) => {
+  const endonym = LANGUAGES[code] || code;
+  const packPath = path.join(PROMPT_DIR, `${code}.json`);
+  const existing = readJson(packPath, {});
+  const todo = force ? passages : passages.filter((p) => !existing[p]);
+  console.log(`  ${code} prompts: ${todo.length} of ${passages.length} passages to translate`);
+  if (dryRun) return 0;
+  const pack = Object.fromEntries(passages.filter((p) => existing[p]).map((p) => [p, existing[p]]));
+  let added = 0;
+  for (const passage of todo) {
+    const out = await translatePassage(passage, code, endonym);
+    if (out) { pack[passage] = out; added += 1; }
+  }
+  const sorted = Object.fromEntries(Object.keys(pack).sort().map((k) => [k, pack[k]]));
+  fs.mkdirSync(PROMPT_DIR, { recursive: true });
+  fs.writeFileSync(packPath, JSON.stringify(sorted));
+  return added;
+};
+
 const generate = async (code, catalog, { dryRun, force }) => {
   const endonym = LANGUAGES[code] || code;
   const packPath = path.join(LANG_DIR, `${code}.json`);
@@ -136,7 +198,8 @@ const generate = async (code, catalog, { dryRun, force }) => {
   console.log(`  ${code} (${endonym}): ${todo.length} to translate (${Object.keys(existing).length} already done)`);
   if (dryRun) return { code, added: 0, total: Object.keys(existing).length, dryRun: true };
 
-  const pack = { ...existing };
+  // Only what the catalog still has.
+  const pack = Object.fromEntries(catalog.filter((s) => existing[s]).map((s) => [s, existing[s]]));
   let added = 0, failed = 0;
   for (let i = 0; i < todo.length; i += BATCH) {
     const slice = todo.slice(i, i + BATCH);
@@ -144,7 +207,10 @@ const generate = async (code, catalog, { dryRun, force }) => {
     if (!out) { failed += slice.length; continue; }
     slice.forEach((src, n) => {
       const t = (out[n] || "").trim();
-      if (t) { pack[src] = t; added += 1; }
+      if (!t) return;
+      if (tokensOf(t) !== tokensOf(src)) { failed += 1; return; }
+      pack[src] = t;
+      added += 1;
     });
     process.stdout.write(`      ${Math.min(i + BATCH, todo.length)}/${todo.length}\r`);
   }
@@ -179,9 +245,13 @@ const main = async () => {
     process.exit(1);
   }
 
-  console.log(`Catalog: ${catalog.length} strings — model ${MODEL} at ${BASE_URL}`);
+  const passages = readJson(PROMPT_CATALOG, []);
+  console.log(`Catalog: ${catalog.length} strings, ${passages.length} prompt passages — model ${MODEL} at ${BASE_URL}`);
   const results = [];
-  for (const code of codes) results.push(await generate(code, catalog, { dryRun, force }));
+  for (const code of codes) {
+    results.push(await generate(code, catalog, { dryRun, force }));
+    if (Array.isArray(passages) && passages.length) await generatePrompts(code, passages, { dryRun, force });
+  }
 
   const totalFailed = results.reduce((n, r) => n + (r.failed || 0), 0);
   console.log(`\nDone: ${results.length} language(s), +${results.reduce((n, r) => n + r.added, 0)} strings` +

@@ -1,7 +1,7 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
-import { enqueueContentStrings } from "./translator.js";
+import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
@@ -4334,8 +4334,9 @@ export const writeEventsState = async (events, options = {}) => {
   const normalized = preserveApprovedEvents
     ? dedupeEventLog(normalizedEvents, { keyOf: eventCanonicalKey })
     : dedupeEventLog(normalizedEvents);
-  // New/edited event text follows the UI language immediately (see above).
-  enqueueContentStrings(normalized);
+  // A scenario's own events follow the UI language immediately (see above);
+  // the AI's are written in it.
+  enqueueEventStrings(normalized);
   return writeJson(JSON_URLS.events, normalized, { pretty: true, ...writeOptions });
 };
 
@@ -4383,7 +4384,7 @@ const buildCanonicalTurnPayload = ({
   const normalizedEvents = preserveApprovedEvents
     ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
     : dedupeEventLog(eventLog);
-  enqueueContentStrings(normalizedEvents);
+  enqueueEventStrings(normalizedEvents);
 
   return {
     actions: cloneValue(normalizeActions(actions)),

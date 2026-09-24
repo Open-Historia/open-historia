@@ -236,7 +236,7 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
 | **Content nodes** | `server/node.js` — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest | [Content nodes](assets-and-data.md) |
 | **Web accounts + sync** | Google sign-in + E2E-encrypted game/scenario sync against the registry Worker (web build only) | [Web build & accounts](web-build.md) |
-| **i18n** | `startTranslator()` live-translates the UI; server accumulates AI-generated language packs | [i18n & translation](i18n.md) |
+| **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
 ---
 
