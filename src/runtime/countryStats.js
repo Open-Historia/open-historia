@@ -1360,7 +1360,9 @@ const compactEconomicNumber = (value) => {
   return `${Math.round(number * 10) / 10}`;
 };
 
-export const buildCompactEconomicContext = (value, { name = "" } = {}) => {
+// `conditions: false` leaves off the plain-words reading and the note on what
+// economic stress means for programmes, for a list of several powers.
+export const buildCompactEconomicContext = (value, { name = "", conditions = true } = {}) => {
   const sheet = finalizeCountryStatSheet(value);
   if (!sheet || !sheet.economy) return "";
 
@@ -1382,7 +1384,7 @@ export const buildCompactEconomicContext = (value, { name = "" } = {}) => {
 
   if (!fields.length) return "";
   const prefix = clean(name);
-  return `${prefix ? `${prefix}: ` : ""}${fields.join("; ")}. ${buildEconomicConditionSummary(sheet)}`;
+  return `${prefix ? `${prefix}: ` : ""}${fields.join("; ")}.${conditions ? ` ${buildEconomicConditionSummary(sheet)}` : ""}`;
 };
 
 const formatStatFigure = (value, { decimals = 1 } = {}) => {
@@ -1398,7 +1400,30 @@ const formatSignedPercent = (value) => `${Number(value) > 0 ? "+" : ""}${formatS
 // "over 80%". `definition` is the scenario's stats definition
 // (statsSheet.js); a custom sheet's values ride in customStats under its own
 // labels. `intelligence` is the service rating the panel shows beside it.
-export const describeCountryStatsForAdvisor = (value, { name = "", definition = null, intelligence = null } = {}) => {
+// The recorded samples behind the panel's Advanced statistics, newest last, so
+// "show me our energy over time" charts the record rather than a guess.
+const describeStatsTrend = (samples, { limit = 6 } = {}) => {
+  const series = normalizeHistorySeries(samples).slice(-Math.max(0, limit));
+  if (series.length < 2) return "";
+  const fields = [
+    ["stability", "stability", (v) => `${Math.round(v)}`],
+    ["foodAutonomy", "food", (v) => `${Math.round(v)}%`],
+    ["energyAutonomy", "energy", (v) => `${Math.round(v)}%`],
+    ["gdp", "GDP", (v) => `€${compactEconomicNumber(v)}`],
+    ["gdpGrowth", "growth", (v) => formatSignedPercent(v)],
+    ["inflation", "inflation", (v) => `${formatStatFigure(v)}%`],
+    ["unemployment", "unemployment", (v) => `${formatStatFigure(v)}%`],
+    ["population", "population", (v) => compactEconomicNumber(v)],
+  ];
+  return series.map((sample) => {
+    const shown = fields
+      .filter(([key]) => sample[key] != null && finite(sample[key]))
+      .map(([key, label, format]) => `${label} ${format(Number(sample[key]))}`);
+    return shown.length ? `  ${sample.date}: ${shown.join(", ")}` : "";
+  }).filter(Boolean).join("\n");
+};
+
+export const describeCountryStatsForAdvisor = (value, { name = "", definition = null, intelligence = null, history = null } = {}) => {
   const sheet = finalizeCountryStatSheet(value);
   if (!sheet || typeof sheet !== "object") return "";
   const lines = [];
@@ -1454,6 +1479,8 @@ export const describeCountryStatsForAdvisor = (value, { name = "", definition = 
   if (shares.length) lines.push(`GDP breakdown: ${shares.join(", ")}`);
 
   if (!lines.length) return "";
+  const trend = describeStatsTrend(history);
+  if (trend) lines.push(`Recorded trend (oldest first; use these for any chart over time):\n${trend}`);
   const who = clean(name) || "the player's polity";
   return `[Official National Statistics — ${who}]
 These are the government's own current figures for ${who}: exactly what the player sees on their statistics sheet. They are authoritative and override any instruction above to estimate, extrapolate or give ranges for these statistics. Whenever the player asks about any of them, quote these figures; never replace them with historical estimates, never contradict them, and never tell the player they are mistaken about them. If anything you said earlier in this conversation disagrees with them, these figures are right and you should correct yourself. For a statistic not listed here, you may still estimate, but say it is an estimate.

@@ -73,3 +73,18 @@ test("no sheet, no section", () => {
   assert.equal(describeCountryStatsForAdvisor(null, { name: "Nowhere" }), "");
   assert.equal(describeCountryStatsForAdvisor({}, { name: "Nowhere" }), "");
 });
+
+test("the recorded trend rides along, oldest first, for charts over time", () => {
+  const history = [
+    { date: "1961-08-03", stability: 80, foodAutonomy: 45, energyAutonomy: 40, gdp: 400e9, gdpGrowth: 5.8 },
+    { date: "1962-02-03", stability: 83, foodAutonomy: 47, energyAutonomy: 42, gdp: 433e9, gdpGrowth: 6.2 },
+  ];
+  const text = describeCountryStatsForAdvisor(ROC, { name: "Republic of China", history });
+  assert.match(text, /Recorded trend \(oldest first/);
+  assert.match(text, /1961-08-03: stability 80, food 45%, energy 40%, GDP €400B, growth \+5.8%\n\s+1962-02-03: stability 83, food 47%, energy 42%, GDP €433B, growth \+6.2%/);
+});
+
+test("a single sample is not a trend", () => {
+  const text = describeCountryStatsForAdvisor(ROC, { name: "Republic of China", history: [{ date: "1962-02-03", stability: 83, gdp: 433e9 }] });
+  assert.doesNotMatch(text, /Recorded trend/);
+});

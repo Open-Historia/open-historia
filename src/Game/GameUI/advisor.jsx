@@ -58,7 +58,9 @@ const UNIT_TYPES_ALLOWED = new Set(["infantry", "armor", "air", "naval", "artill
 // extractFencedJson and would print its JSON into the bubble.
 const UNCLOSED_CHART = /```chart[\s\S]*$/;
 
-const parseMessage = (rawText) => {
+// `streaming`: the reply is still arriving, so an open fence is hidden rather
+// than salvaged (advisorBlocks.js extractFencedJson).
+const parseMessage = (rawText, { streaming = false } = {}) => {
     const { rest: chartRest, json: chartJson, reason: chartReason } = extractFencedJson(rawText, "chart");
     const unclosedChart = !chartJson && !chartReason && UNCLOSED_CHART.test(chartRest);
     const afterChart = unclosedChart ? chartRest.replace(UNCLOSED_CHART, "") : chartRest;
@@ -69,10 +71,10 @@ const parseMessage = (rawText) => {
         ? validateChartConfig(chartJson)
         : { config: null, problem: chartReason ? `the chart block was ${chartReason}` : unclosedChart ? "the chart block was cut off before it closed" : "" };
     const chartConfig = chart.config;
-    const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions");
-    const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft");
-    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy");
-    const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true });
+    const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions", { streaming });
+    const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft", { streaming });
+    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy", { streaming });
+    const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true, streaming });
     const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
@@ -801,7 +803,7 @@ const formatAdvisorDate = (dateStr) => {
 // keystroke in the composer below.
 const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
     const { text, chartConfig, chartProblem, messageDrafts, deployments } = msg.role === "advisor"
-        ? parseMessage(msg.text)
+        ? parseMessage(msg.text, { streaming: Boolean(msg.streaming) })
         : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
