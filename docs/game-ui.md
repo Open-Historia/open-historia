@@ -134,7 +134,7 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 
 ### 4.2 Menu chrome
 
-Full-page overlay at z 10046. Header is a 3-column grid: **logo/title** | **tab buttons** | **actions**.
+Full-page overlay at z 10046. Header is a centered, width-bounded 3-column grid: **logo/title** | **tab buttons** | **actions**. The desktop shell now grows to **3000px** before capping, so 2560px and 3440px displays use substantially more of the viewport instead of rendering a 1080p-era island in the middle. Card widths remain independently capped, so additional width yields more cards per row rather than oversized cards; very wide displays still retain deliberate outer gutters instead of pinning chrome to the physical screen edges.
 
 | Tab | Content | Component |
 |---|---|---|
@@ -142,7 +142,9 @@ Full-page overlay at z 10046. Header is a 3-column grid: **logo/title** | **tab 
 | Scenarios | 🔥 Most Played, 🕐 Last Updated, ✦ Your Scenarios (with `CreateScenarioTile`) | `ScenarioCard` |
 | Community | Lazy `CommunityPanel fullPage` | `communityHub.jsx` |
 
-Header action buttons (right cell): **Refresh** (`refreshLibraryCatalog({force:true})`, hidden on Community), **Import JSON** (Scenarios only → hidden file input `handleImportScenarioFile`).
+Header utility actions use the shared inline `ButtonIcon` glyphs: **Settings**, **Refresh**, and the tab-specific **Import Game** / **Import Scenario** action. The labels remain visible on desktop and use the same icon vocabulary on phones.
+
+Each `MenuRow` carries a short description plus a subtle divider. Desktop rows use a responsive grid so a populated library scales across the available width; phones retain horizontally scrollable shelves. Sparse libraries are not stretched into oversized feature cards.
 
 The Games tab's empty state ("No games yet") offers **Start from a scenario** / **Browse community scenarios** shortcuts.
 
@@ -166,7 +168,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 | Edit | `onEdit`→`openGameEditor` | `loadGameDetails` → editor drawer |
 | Clone Game | `onClone`→`handleGameClone` | `createGame({seedGameId, setActive})` → editor |
 
-**`ScenarioCard`** (`libraryBar.jsx:360`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Buttons:
+**`ScenarioCard`** (`libraryBar.jsx:360`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Cover art receives a stronger dark scrim and the title/body copy uses a dedicated multi-layer text shadow so authored scenario text stays legible over bright or detailed images without an opaque text panel. Buttons:
 
 | Button | Handler | Effect |
 |---|---|---|

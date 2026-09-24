@@ -137,7 +137,7 @@ test("main-menu settings, gameplay-only idle diplomacy and terminal lifecycle cl
   assert.match(main, /<LibraryTopBar onOpenSettings=/);
   assert.match(library, /const LibraryTopBar = \(\{ onOpenSettings \}\) =>/);
   assert.match(library, /onClick=\{onOpenSettings\}/);
-  assert.match(library, /isMobile \? "⚙" : "Settings"/);
+  assert.match(library, /<ButtonIcon kind="settings" \/> Settings/);
   assert.match(main, /if \(hasNoGames \|\| mainMenuOpen\) return undefined;/);
   assert.match(main, /\[hasNoGames, mainMenuOpen\]/);
   assert.match(chat, /const leaveActiveChat = \(\) =>/);
