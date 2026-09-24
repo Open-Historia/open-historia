@@ -1941,7 +1941,7 @@ const buildPlacementGazetteer = (context, world) => {
   const units = normalizeArray(world?.units).filter((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
   const markers = normalizeArray(world?.markers).filter((marker) => Number.isFinite(marker?.lng) && Number.isFinite(marker?.lat));
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
-  const asRegion = (row) => ({ id: row.id, name: row.name, geometry: row.geometry });
+  const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
 
   // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
   // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
@@ -2015,7 +2015,15 @@ const buildPlacementGazetteer = (context, world) => {
     const ashore = nearestInteriorPoint(best.geometry, point);
     return ashore ? { point: ashore, region: asRegion(best) } : null;
   };
-  return { find, findRegionId, suggest, regionAt, nearestLand };
+  // Whether a polity, by any of its names, holds any land on the map right now;
+  // null for a name the map does not know at all — a polity this very turn
+  // founds is not on the map yet, and must not read as one that lost its land.
+  const holdsLand = (name) => {
+    const owner = context.resolveOwner(name);
+    if (!owner) return null;
+    return (context.ownerRows.get(owner) ?? []).length > 0;
+  };
+  return { find, findRegionId, suggest, regionAt, nearestLand, holdsLand };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2026,7 +2034,11 @@ const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 // beside it. `receipt` hears what could not be placed; an operation that then has
 // no coordinates at all is left for the normalizer to drop, exactly as one that
 // never had any.
-const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
+// `noteGround` (the structure director's pass) also writes onto each structure
+// who holds the ground it landed on (`groundOwner`) and whether the owner it was
+// given holds any land at all (`ownerHoldsLand`) — what the director's rules
+// need to catch a structure credited to a polity that no longer has a country.
+const resolvePlacements = async (containers, world, { receipt = null, noteGround = false } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
@@ -2048,7 +2060,7 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path });
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2173,6 +2185,11 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
       if (index >= 0) standing.splice(index, 1);
     }
     standing.push({ id: entry.id || `placed-${standing.length}`, lng: Number(target[lngKey]), lat: Number(target[latKey]), radiusKm });
+    if (noteGround && entry.build) {
+      target.groundOwner = home?.owner || "";
+      const holds = entry.markerOwner ? gazetteer.holdsLand(entry.markerOwner) : null;
+      if (holds !== null) target.ownerHoldsLand = holds;
+    }
   }
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
@@ -6892,9 +6909,10 @@ const applySimulationResult = async ({
   const movedThisTurn = freshEvents.flatMap((event) =>
     normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
   // A deployment the player asked for and this skip resolved without removing
-  // it has been accepted (gameState.js confirmResolvedDeployments). Only when the
-  // skip resolved the planned actions: a scene or a check that leaves them
-  // planned has not answered the request yet.
+  // it has been accepted (gameState.js confirmResolvedDeployments), and so has a
+  // pending unit with no request left in the queue at all. Only when the skip
+  // resolved the planned actions: a scene or a check that leaves them planned
+  // has not answered the request yet.
   let worldWithImpacts = enforceUnitVolume(
     confirmResolvedDeployments(advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
@@ -6910,7 +6928,7 @@ const applySimulationResult = async ({
         round: nextGame.round,
         skipUnitIds: movedThisTurn,
       },
-    ), result.clearActions ? plannedActionSnapshot : []),
+    ), result.clearActions ? plannedActionSnapshot : [], { queuedActions: result.clearActions ? plannedActionSnapshot : null }),
     { playerCode: baseGame.country },
   );
 
@@ -12555,7 +12573,7 @@ const placeStructureOrders = async (payload, world, events) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt: null });
+    await resolvePlacements(containers, world, { receipt: null, noteGround: true });
   } catch (error) {
     console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
   }

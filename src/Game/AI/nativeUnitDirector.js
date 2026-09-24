@@ -82,8 +82,14 @@ const opKey = (op) => {
   if (kind === "spawn") {
     return `spawn|${normalizeString(op?.unit?.ownerCode).toLowerCase()}|${normalizeString(op?.unit?.name).toLowerCase()}|${normalizeString(op?.unit?.type).toLowerCase()}`;
   }
+  // One move per unit per event: an event is one moment, and the unit can only
+  // go to one place in it. This used to key on the destination too, and never
+  // matched — placement keeps every placed thing clear of what already stands
+  // there, so the director's move for a unit the simulator had already moved
+  // landed a few hundred metres from the first and was kept as a second one.
+  // The event then listed the same move twice under its map changes.
   if (kind === "move") {
-    return `move|${normalizeString(op?.unitId)}|${Number(op?.toLng).toFixed(4)}|${Number(op?.toLat).toFixed(4)}`;
+    return `move|${normalizeString(op?.unitId)}`;
   }
   if (kind === "attack") {
     return `attack|${normalizeString(op?.unitId)}|${normalizeString(op?.targetUnitId)}`;

@@ -2571,7 +2571,26 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
         if (unit.id !== op.unitId) return unit;
         // Garrisons are fixed by definition — a move op on one is a mistake, not
         // an order (the same doctrine buildMilitaryFeasibilityText already states).
-        if (unit.type === "garrison") return unit;
+        // Except while it is still a player's pending deployment: the request asks
+        // the skip to "confirm it, reposition it, or reject it", and a move is how
+        // it answers the first two. It is being sited, not marched, so it goes
+        // straight to the spot and joins the order of battle. Ignoring it left a
+        // garrison the story had deployed three times a translucent counter.
+        if (unit.type === "garrison") {
+          if (unit.status !== "pending" || !Number.isFinite(op.toLng) || !Number.isFinite(op.toLat)) return unit;
+          dropOrder(unit.id);
+          return {
+            ...unit,
+            lng: op.toLng,
+            lat: op.toLat,
+            regionId: op.regionId || unit.regionId,
+            status: "idle",
+            posture: op.posture || unit.posture,
+            orderId: "",
+            ...(eventId ? { eventId } : {}),
+            updatedAt: stamp(),
+          };
+        }
 
         const budget =
           elapsedDays === null || elapsedDays === undefined
@@ -2793,17 +2812,27 @@ export const clearStaleUnitMotion = (world, { queuedUnitIds = [] } = {}) => {
 // move op cleared the status, a move on a garrison is ignored by design, and a
 // fleet the story says arrived was a translucent counter for the rest of the
 // campaign. `resolvedActions` are the planned actions this skip resolved.
-// Pure; returns the same world when there is nothing to confirm.
-export const confirmResolvedDeployments = (world, resolvedActions = []) => {
-  const requested = new Set(
-    normalizeArray(resolvedActions)
-      .map((action) => normalizeUnitRevert(action?.unitRevert))
-      .filter((revert) => revert?.remove)
-      .map((revert) => revert.unitId),
-  );
-  if (requested.size === 0) return world;
+//
+// `queuedActions`, when given, is the whole queue the skip started from. A
+// pending unit with no deploy request anywhere in it is an orphan: its request
+// was answered and cleared before this confirmation existed, so nothing can
+// ever answer it again, and a skip that resolved the queue takes it as
+// accepted too. Seen in a live game (2026-09-21): a garrison placed in 2016 was
+// still pending in 2019. Pure; returns the same world when there is nothing to
+// confirm.
+const deployRequestUnitIds = (actions) => new Set(
+  normalizeArray(actions)
+    .map((action) => normalizeUnitRevert(action?.unitRevert))
+    .filter((revert) => revert?.remove)
+    .map((revert) => revert.unitId),
+);
+export const confirmResolvedDeployments = (world, resolvedActions = [], { queuedActions = null } = {}) => {
+  const requested = deployRequestUnitIds(resolvedActions);
+  const stillRequested = queuedActions ? deployRequestUnitIds(queuedActions) : null;
+  if (requested.size === 0 && !stillRequested) return world;
   const units = normalizeUnits(world?.units);
-  const accepted = (unit) => unit.status === "pending" && requested.has(unit.id);
+  const accepted = (unit) => unit.status === "pending"
+    && (requested.has(unit.id) || Boolean(stillRequested && !stillRequested.has(unit.id)));
   if (!units.some(accepted)) return world;
   const stamp = new Date().toISOString();
   return {

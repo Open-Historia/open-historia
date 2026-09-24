@@ -324,7 +324,16 @@ const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup
         else if (op?.op === "update") lines.push({ kind: "structure", text: `${op.name || op.markerId} updated` });
         else if (op?.op === "population") lines.push({ kind: "structure", text: `${op.name || op.markerId}: population changed` });
     }
-    return lines;
+    // Two ops that read the same are one change to the player. Events written
+    // before the unit director stopped adding a second move for a unit already
+    // moved (nativeUnitDirector.js opKey) carry both, a few hundred metres apart.
+    const seen = new Set();
+    return lines.filter((line) => {
+        const key = `${line.kind}\u0000${line.text}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 };
 
 const getEventMapChangeCount = (event) => describeEventMapChanges(event).length;

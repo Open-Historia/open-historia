@@ -175,8 +175,8 @@ const Units = () => {
     return () => mapInstance.off?.("styledata", check);
   }, [map]);
   const labelBeforeId = labelsReady ? "country-curved-labels" : undefined;
-  // Scenario polities carry their own flags, and a custom-era country usually
-  // resolves to no ISO flag at all — so this is the only flag it will ever have.
+  // The polity records: a scenario polity's own flag, and the aliases and map
+  // references a renamed or custom-era polity's flag is found through.
   const { polityOverrides } = useWorldState();
 
   // Everything the tween needs, kept out of React state so a frame costs a
@@ -261,9 +261,17 @@ const Units = () => {
   useEffect(() => {
     flagSourcesRef.current = { ...flagSourcesRef.current, polities: polityOverrides ?? {} };
     // world.json is re-read every 5s and comes back as fresh objects, so react to
-    // the flags actually changing rather than to the poll.
+    // the flags actually changing rather than to the poll. A rename or a new
+    // alias can change which flag a polity resolves to (resolveUnitFlagUrl), so
+    // those count as a change too.
     const signature = Object.entries(polityOverrides ?? {})
-      .map(([code, polity]) => `${code}:${polity?.flag || ""}`)
+      .map(([code, polity]) => [
+        code,
+        polity?.flag || "",
+        polity?.name || "",
+        (polity?.aliases ?? []).join(","),
+        (polity?.mapRefs?.gadm0 ?? []).join(","),
+      ].join(":"))
       .sort()
       .join("|");
     if (signature === polityFlagSignatureRef.current) return;

@@ -15,7 +15,7 @@
 //   * A failure is cached per owner+URL too. A bad old URL must not poison a
 //     later replacement flag for the same stable polity identity.
 
-import { gidToAlpha2 } from "../../runtime/countryFlags.js";
+import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 
 // Rasterised at 64px and scaled down by icon-size. Comfortably above the largest
 // counter (16px radius => a ~26px disc at z12), so the flag stays supersampled
@@ -28,17 +28,28 @@ const iconIdFor = (ownerCode) => `unit-flag:${ownerCode}`;
 // Take the raster here: an SVG drawn into a canvas has no reliable intrinsic
 // size (a viewBox-only file reports 0, or 300x150), and guessing it wrong
 // stretches the flag.
-const isoFlagUrl = (ownerCode) => {
-  const alpha2 = gidToAlpha2(ownerCode);
-  return alpha2 ? `https://flagcdn.com/w160/${alpha2}.png` : null;
+const FLAGCDN_SVG = /^https:\/\/flagcdn\.com\/([a-z-]+)\.svg$/i;
+const rasterFlagUrl = (url) => {
+  const match = FLAGCDN_SVG.exec(url);
+  return match ? `https://flagcdn.com/w160/${match[1].toLowerCase()}.png` : url;
 };
 
-// Same precedence as the country panel (see resolveEraFlagInfo in Selection/Regions):
-// a flag the map-maker uploaded wins, then a scenario polity's own, then the ISO
-// flag the owner name resolves to.
+// The same flag the country panel, the chat and the flag picker show: the one
+// shared resolver (runtime/polityFlags.js). This used to be its own lookup —
+// an exact flags.json key, the polity record's own flag, or an ISO country
+// NAMED exactly like the owner — so a renamed polity (the United Kingdom
+// reconstituted as the British Empire) found nothing on all three and its
+// counters fell back to the unit-type letters while its panel showed the flag.
+// The shared resolver follows the polity's identity: its aliases, its map
+// references and its stock country.
 export const resolveUnitFlagUrl = (ownerCode, customFlags, polities) => {
   if (!ownerCode) return null;
-  return customFlags?.[ownerCode] || polities?.[ownerCode]?.flag || isoFlagUrl(ownerCode);
+  const { imageUrl } = resolvePolityFlag({
+    polity: { name: ownerCode, code: ownerCode },
+    world: { polityOverrides: polities ?? {} },
+    flags: customFlags ?? {},
+  });
+  return imageUrl ? rasterFlagUrl(imageUrl) : null;
 };
 
 // ownerCode + URL -> ImageData, or null once that exact URL has failed. Stable
