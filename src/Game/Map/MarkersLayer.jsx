@@ -134,12 +134,15 @@ const MarkersLayer = () => {
               "text-allow-overlap": true,
               "text-ignore-placement": false,
               "text-padding": 3,
-              "text-size": ["interpolate", ["linear"], ["zoom"], 3, 9, 7, 13, 11, 17],
+              // Half again the city glyph's size: a structure is a single point
+              // that has to be found and clicked, and at 9px it vanished into
+              // the relief at continental zoom.
+              "text-size": ["interpolate", ["linear"], ["zoom"], 3, 13, 7, 19, 11, 25],
             }}
             paint={{
               "text-color": ["get", "rgb"],
               "text-halo-color": "rgba(5, 8, 12, 0.92)",
-              "text-halo-width": 1.4,
+              "text-halo-width": 1.8,
               "text-halo-blur": 0.25,
               "text-opacity": ["get", "statusOpacity"],
             }}
@@ -158,7 +161,7 @@ const MarkersLayer = () => {
               "text-field": ["get", "displayName"],
               "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
               "text-padding": 6,
-              "text-radial-offset": 0.8,
+              "text-radial-offset": 1.2,
               "text-size": ["interpolate", ["linear"], ["zoom"], 4, 8.5, 10, 10.5],
               "text-variable-anchor": ["top", "bottom", "left", "right"],
               "text-max-width": 16,
