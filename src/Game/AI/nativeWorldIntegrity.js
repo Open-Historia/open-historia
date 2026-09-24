@@ -54,6 +54,10 @@ const ROUTINE_MILITARY_CUE_RE =
 const STRONG_MILITARY_CONSEQUENCE_RE =
   /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
 
+// A milestone reached: the one thing a routine-patrol card never reports.
+const CONCRETE_MILESTONE_RE =
+  /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
+
 // Material endogenous changes that can legitimately wake a deferred process even
 // when they do not yet carry a hard map/ledger impact. The associated storyline
 // update must ALSO move objective state (status/pressure/momentum); this regex alone
@@ -1743,6 +1747,14 @@ const routineMilitaryNoDeltaReason = (event) => {
 
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
+  // The cue is single words, so it fires on a noun in passing: a drone
+  // programme's "unmanned surface patrol vessels" hid a Project milestone as
+  // "routine military activity". Something finished or brought into service is
+  // not a routine continuation, whatever it mentions on the way.
+  if (CONCRETE_MILESTONE_RE.test(text)) return "";
+  // The player's own news is left to the curator, which judges routine
+  // military continuation with the analyst's reading rather than a word list.
+  if (event?.playerRelated === true || normalizeString(event?.kind).toLowerCase() === "player") return "";
   // An event explicitly bound to a queued player Action is the order's
   // canonical answer. Hiding it here would make settleOrders carry the
   // same order over as overdue even though the simulator cited it exactly.
