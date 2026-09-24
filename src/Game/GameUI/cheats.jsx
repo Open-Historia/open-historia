@@ -1491,7 +1491,6 @@ const cleanEventText = (value) => String(value ?? "").replace(/\s+/g, " ").trim(
 // collapsing every run of whitespace turned an edited event into a single block
 // and threw the paragraphs away.
 const cleanEventBody = tidyProse;
-
 const eventImpactSummary = (event) => {
     const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
     const rows = [
@@ -2926,6 +2925,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const warUpdates = Array.isArray(transaction?.warUpdates) ? transaction.warUpdates : [];
         const relationUpdates = Array.isArray(transaction?.relationUpdates) ? transaction.relationUpdates : [];
         const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
+        const puppetUpdates = Array.isArray(transaction?.puppetUpdates) ? transaction.puppetUpdates : [];
         const outreach = Array.isArray(transaction?.diplomaticOutreach) ? transaction.diplomaticOutreach : [];
         const impactCounts = events.reduce((acc, event) => {
             const impacts = event?.impacts ?? {};
@@ -3124,7 +3124,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     {busy ? "Planning canonical transaction…" : gmPreview ? "Regenerate Preview" : "Generate Preview"}
                 </button>
                 <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.69rem", lineHeight: 1.4, marginTop: "0.45rem" }}>
-                    AI interpretation is constrained by the live native GM schema. Wars, relations and agreements are structured objects now — no encoded string mini-language and no turn simulation path.
+                    AI interpretation is constrained by the live native GM schema. Wars, relations, agreements and subordinations are structured objects now — no encoded string mini-language and no turn simulation path.
                 </div>
 
                 {gmPreview && (
@@ -3163,6 +3163,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("wars", warUpdates.length)}
                             {countChip("relations", relationUpdates.length)}
                             {countChip("agreements", agreementUpdates.length)}
+                            {countChip("subordinations", puppetUpdates.length)}
                             {countChip("chats", impactCounts.chats + outreach.length)}
                         </div>
 
@@ -3417,6 +3418,19 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                             <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || "update").toUpperCase()} · {entry.id}</strong> · {entry.type}
                                             <div style={{ marginTop: "0.12rem" }}>Parties: {entry.parties?.join(", ") || "—"}{entry.title ? ` · ${entry.title}` : ""}</div>
                                             <div style={{ color: "rgba(255,255,255,0.38)", marginTop: "0.1rem" }}>Events: {entry.eventIndexes?.join(", ") || "—"}{entry.terms ? ` · ${entry.terms}` : ""}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {puppetUpdates.length > 0 && (
+                                <div data-gm-puppet-updates="true">
+                                    {subsectionTitle("Subordinations", puppetUpdates.length, "world.puppets")}
+                                    {puppetUpdates.map((entry, index) => (
+                                        <div key={`puppet-${entry.overlord}-${entry.puppet}-${entry.op}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || "update").toUpperCase()} · {entry.overlord || "Unknown overlord"} → {entry.puppet || "Unknown puppet"}</strong>
+                                            <div style={{ marginTop: "0.12rem" }}>Kind: {entry.kind || "—"} · Secrecy: {entry.secrecy || "—"} · Loyalty: {Number.isFinite(Number(entry.loyalty)) ? Number(entry.loyalty) : "—"}</div>
+                                            <div style={{ color: "rgba(255,255,255,0.38)", marginTop: "0.1rem" }}>Events: {entry.eventIndexes?.join(", ") || "—"}{entry.note ? ` · ${entry.note}` : ""}</div>
                                         </div>
                                     ))}
                                 </div>

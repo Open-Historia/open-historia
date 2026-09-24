@@ -27,13 +27,14 @@ Both layers return a string error (`""` means valid). A non-empty error on attem
 
 Each task is identified by a **task key**. `GAMEPLAY_SCHEMAS` maps the key to its schema; `GAMEPLAY_TOOLS` maps it to a `{ name, description, schema }` tool object built by `makeTool` (`gameplaySchemas.js:637`). `getGameplayTool(taskKey)` (`:733`) is what `runJsonTask` calls to get the provider tool; `validateGameplayPayload(taskKey, value)` (`:852`) is what validates the result.
 
+Diplomatic speaker routing is deliberately absent from this table: one-on-one threads select their sole counterpart natively, while group turns choose speakers inside `chatActions` in the same request that generates the table's actions. The retired standalone `nextSpeaker` schema/tool no longer exists.
+
 | Task key | Schema export | Tool name (provider function name) | Called from |
 |---|---|---|---|
 | `actions` | `ACTIONS_SCHEMA` | `submit_actions` | `generateActions` |
 | `jumpForward` | `JUMP_FORWARD_SCHEMA` | `submit_jump_result` | `simulateTimelineJump` |
 | `autoJumpForward` | `AUTO_JUMP_FORWARD_SCHEMA` (**= `JUMP_FORWARD_SCHEMA`**, `:429`) | `submit_jump_result` | `simulateAutoJump` |
 | `descriptionToAction` | `DESCRIPTION_TO_ACTION_SCHEMA` | `submit_description_to_action` | freeform-intent → command |
-| `nextSpeaker` | `NEXT_SPEAKER_SCHEMA` | `submit_next_speaker` | diplomatic chat turn order |
 | `eventConsolidator` | `EVENT_CONSOLIDATOR_SCHEMA` | `submit_event_consolidation` | `consolidateHistoryBatch` |
 | `interactiveCreation` | `INTERACTIVE_CREATION_SCHEMA` (**= `interactiveSchema`**, `:517`) | `submit_interactive_creation` | opening an interactive event's scene |
 | `interactiveExecutor` | `INTERACTIVE_EXECUTOR_SCHEMA` | `submit_interactive_execution` | advance an interactive event |
@@ -278,7 +279,6 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 |---|---|---|
 | `ACTIONS_SCHEMA` (`:369`) | `topics`* (array `minItems:1`); each topic: `title`*, `description`*, `actions`* (array `minItems:1` of `actionSchema`) | Strategic topics + concrete actions |
 | `DESCRIPTION_TO_ACTION_SCHEMA` (`:483`) | `title`*, `text`*, `kind`*, `invitees`, `chatStarter` | Freeform intent → structured command |
-| `NEXT_SPEAKER_SCHEMA` (`:497`) | `nextSpeaker`* | Whose turn in a chat |
 | `EVENT_CONSOLIDATOR_SCHEMA` (`:507`) | `summary`* | Continuity-safe history summary |
 | `GAME_MASTER_SCHEMA` (`:551`) | `summary`*, `impacts`* | GM intervention + world effects |
 | `IDLE_DIPLOMACY_SCHEMA` (`:468`) | `chat`* (`null \| createdChatSchema`) | At most one idle note, or `null` for silence |
@@ -333,7 +333,7 @@ After the schema walk passes, `validateGameplayPayload` runs task-specific check
 |---|---|---|
 | `jumpForward` / `autoJumpForward` | `stopDate` non-blank; every event's `date`/`title`/`description` non-blank after trim; **at least one of** events or a non-empty summary | `:866` |
 | `pregameHistory` | every event's `date`/`title`/`description` non-blank; `summary` non-blank | `:892` |
-| `descriptionToAction`, `nextSpeaker`, `eventConsolidator`, `interactiveCreation`, `interactiveExecutor`, `interactiveSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
+| `descriptionToAction`, `eventConsolidator`, `interactiveCreation`, `interactiveExecutor`, `interactiveSummary`, `gameMaster` | a per-task list of top-level fields must be non-blank after trim (`requiredTextByTask`, `:906`) | `:915` |
 | `interactiveCreation` | `choices` distinct (`validateDistinctChoices`) | `:921` |
 | `interactiveExecutor` | `nextChoices` **must be empty when `resolved`**; must have **≥2** when unresolved; must be distinct | `:926` |
 | `countryStatSheet` | deep no-blank-strings (`findBlankString`); **gdpBreakdown sum = 100** | `:937` |

@@ -100,7 +100,7 @@ Applied on `onMove` **and** `onIdle`, so the soft ratio is in effect from the ve
 
 ## 3. The base style (`buildWorldStyle`)
 
-`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe)` (`World.jsx:57`) returns a MapLibre style JSON. It picks **one of four** branches:
+`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled)` (`World.jsx`) returns a MapLibre style JSON. It picks **one of four** branches:
 
 | # | Condition | Sources | Layers |
 |---|---|---|---|

@@ -40,3 +40,13 @@ test("GM Preview exposes exact Political Actor operations instead of hiding PWv2
   assert.match(source, /data-gm-political-actor-ops="true"/);
   assert.match(source, /Political Actor \/ PWv2/);
 });
+
+
+test("GM Preview exposes canonical Puppet operations instead of hiding world.puppets mutations", () => {
+  assert.match(source, /const puppetUpdates = Array\.isArray\(transaction\?\.puppetUpdates\)/);
+  assert.match(source, /countChip\("subordinations", puppetUpdates\.length\)/);
+  assert.match(source, /data-gm-puppet-updates="true"/);
+  assert.match(source, /subsectionTitle\("Subordinations", puppetUpdates\.length, "world\.puppets"\)/);
+  assert.match(source, /entry\.overlord.*entry\.puppet/s);
+  assert.match(source, /Loyalty:/);
+});

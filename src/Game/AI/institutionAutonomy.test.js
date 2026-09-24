@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   autonomousInstitutionBallotDirective,
   collectAutonomousInstitutionBallotWork,
+  institutionBallotWorkForProposal,
+  interactiveInstitutionBallotDirective,
   unresolvedNpcVotersForProposal,
 } from "./institutionAutonomy.js";
 
@@ -55,4 +57,67 @@ test("autonomous ballot directive requires exact native votes without unrelated 
   assert.match(directive, /each listed government MUST cast exactly one institution_vote/i);
   assert.match(directive, /Do not act for the human player/i);
   assert.match(directive, /prevents duplicates/i);
+});
+
+test("interactive ballot work targets one exact proposal even when the player is only the applicant", () => {
+  const applicantWorld = {
+    institutions: {
+      schemaVersion: 1,
+      byId: {
+        "baltic-union": {
+          ...structuredClone(institution),
+          proposals: {
+            older: {
+              ...structuredClone(institution.proposals.p1),
+              id: "older",
+              title: "Older ballot",
+            },
+            accession: {
+              ...structuredClone(institution.proposals.p1),
+              id: "accession",
+              title: "Romania accession",
+              voting: {
+                ...structuredClone(institution.proposals.p1.voting),
+                ballots: {},
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const work = institutionBallotWorkForProposal(applicantWorld, "baltic-union", "accession", "Romania");
+  assert.equal(work?.proposalId, "accession");
+  assert.deepEqual(work?.actors, ["Republic of Latvia", "Republic of Lithuania", "Republic of Estonia"]);
+});
+
+
+test("interactive ballot work uses the full 48-action formal batch before deferring overflow", () => {
+  const voters = Array.from({ length: 52 }, (_, index) => `Government ${index + 1}`);
+  const largeInstitution = {
+    ...structuredClone(institution),
+    members: voters.map((polity) => ({ polity, status: "member" })),
+    proposals: {
+      bigVote: {
+        id: "bigVote",
+        title: "Large council ballot",
+        status: "voting",
+        voting: { openedDate: "2014-08-19", eligibleVoters: voters, ballots: {} },
+      },
+    },
+  };
+  const largeWorld = { institutions: { schemaVersion: 1, byId: { "baltic-union": largeInstitution } } };
+  const work = institutionBallotWorkForProposal(largeWorld, "baltic-union", "bigVote", "Applicant");
+  assert.equal(work?.actors.length, 48);
+  assert.deepEqual(work?.actors, voters.slice(0, 48));
+  assert.match(interactiveInstitutionBallotDirective(work), /fully reserved for the required ballots/i);
+});
+
+test("interactive ballot directive allows a few short statements but still requires every NPC ballot", () => {
+  const [work] = collectAutonomousInstitutionBallotWork(world, "Republic of Latvia");
+  const directive = interactiveInstitutionBallotDirective(work);
+  assert.match(directive, /Each listed government MUST cast exactly one institution_vote/);
+  assert.match(directive, /up to THREE governments/i);
+  assert.match(directive, /send_message/);
+  assert.match(directive, /Do not act for the human player/);
 });

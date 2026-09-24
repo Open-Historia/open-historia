@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createPoliticalWorldV2Checkpoint } from "./checkpoint.js";
-import { deriveNextPoliticalWorldV2Task, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
+import { acceptedPoliticalWorldV2ActorTargets, deriveNextPoliticalWorldV2Task, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
 
 const inputs = { polities: ["A", "B", "C"] };
 const completeActor = (polityKey) => ({
@@ -99,24 +99,38 @@ test("exhausted actor targets are deferred instead of blocking later polities", 
   ]);
 });
 
-test("actor retries shrink once, then defer exhausted targets and continue the world", () => {
-  const polities = Array.from({ length: 12 }, (_, index) => `P${index + 1}`);
+test("actor retries use the full 12-polity first pass and a bounded 6-polity retry batch", () => {
+  const polities = Array.from({ length: 18 }, (_, index) => `P${index + 1}`);
   const checkpoint = base();
   let task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs: { polities } });
-  assert.equal(task.targets.length, 8);
+  assert.equal(task.targets.length, 12);
 
-  checkpoint.attempts["political-actor:P1"] = 1;
-  checkpoint.attempts["political-actor:P2"] = 1;
+  for (const polity of polities.slice(0, 6)) checkpoint.attempts[`political-actor:${polity}`] = 1;
   task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs: { polities } });
-  assert.deepEqual(task.targets, ["P1", "P2"]);
+  assert.deepEqual(task.targets, polities.slice(0, 6));
 
-  checkpoint.attempts["political-actor:P1"] = 2;
-  checkpoint.attempts["political-actor:P2"] = 2;
+  for (const polity of polities.slice(0, 6)) checkpoint.attempts[`political-actor:${polity}`] = 2;
   task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs: { polities } });
-  assert.deepEqual(task.targets, ["P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"]);
+  assert.deepEqual(task.targets, polities.slice(6, 18));
 });
 
-test("when every unresolved actor is exhausted there is no actionable task but failures stay diagnostic", () => {
+test("a staged actor is not accepted merely because a patch applied when native completeness still says it is shallow", () => {
+  const checkpoint = base(["A"]);
+  checkpoint.stagedWorld.politicalActors.byPolity.A = {
+    polityKey: "A",
+    politicalSystem: { type: "unspecified", representation: "none" },
+    government: { rulingPartyIds: [], coalitionPartyIds: [] },
+    parties: [],
+    powerBlocs: [],
+    goals: ["Preserve stability"],
+  };
+  assert.deepEqual(acceptedPoliticalWorldV2ActorTargets({ checkpoint, inputs: { ...inputs, polities: ["A"], scenarioDate: "2014-03-22" }, targets: ["A"] }), []);
+
+  checkpoint.stagedWorld.politicalActors.byPolity.A = completeActor("A");
+  assert.deepEqual(acceptedPoliticalWorldV2ActorTargets({ checkpoint, inputs: { ...inputs, polities: ["A"], scenarioDate: "2014-03-22" }, targets: ["A"] }), ["A"]);
+});
+
+test("when every unresolved actor is exhausted the scheduler preserves failures and advances independent work", () => {
   const checkpoint = base();
   checkpoint.attempts = {
     "political-actor:A": 3,
@@ -124,13 +138,44 @@ test("when every unresolved actor is exhausted there is no actionable task but f
     "political-actor:C": 3,
   };
   const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
-  assert.equal(task, null);
+  assert.equal(task.type, "institution-discovery");
   const summary = summarizePoliticalWorldV2Worklist({ checkpoint, inputs });
-  assert.equal(summary.pending, 0);
+  assert.equal(summary.pending, 1);
   assert.equal(summary.failed, 3);
   assert.equal(summary.deferred.length, 3);
 });
 
+test("deferred actor gaps do not head-of-line block alignment for actor-ready polities", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B"];
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.attempts["political-actor:C"] = 2;
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "governing-alignment");
+  assert.deepEqual(task.targets, ["A", "B"]);
+});
+
+test("once ready-polity alignment is done, a deferred actor does not block independent institution work", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B"];
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.attempts["political-actor:C"] = 2;
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "institution-discovery");
+});
+
+
+test("an exhausted institution-discovery gate does not run dependent institution stages but allows independent power work", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.attempts["institution-discovery:global"] = 2;
+  checkpoint.stagedWorld.powerStatus.byPolity = {};
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "power-evidence");
+  assert.deepEqual(task.targets, ["A", "B", "C"]);
+});
 
 test("null fallback power scores remain actionable instead of counting as completed evidence", () => {
   const checkpoint = base();

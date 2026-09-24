@@ -8,6 +8,9 @@ test("Institutions workspace exposes a live founding wizard instead of scenario-
   const source = read("./InstitutionsWorkspace.jsx");
   assert.match(source, /data-institution-founding-wizard="true"/);
   assert.match(source, /＋ Found institution/);
+  assert.match(source, /Create the institution first\. Let diplomacy decide who joins it\./);
+  assert.match(source, /Advanced settings/);
+  assert.match(source, /Hide advanced settings/);
   assert.match(source, /Political character/);
   assert.match(source, /Geographic scope/);
   assert.match(source, /Primary threat \/ adversary model/);
@@ -15,7 +18,8 @@ test("Institutions workspace exposes a live founding wizard instead of scenario-
   assert.match(source, /data-polity-multi-picker="true"/);
   assert.match(source, /data-polity-picker-results="true"/);
   assert.match(source, /Search governments…/);
-  assert.match(source, /Selected governments are stored by their exact scenario identity/);
+  assert.doesNotMatch(source, /current PWv2/);
+  assert.match(source, /current Political World/);
   assert.match(source, /Member vote required/);
   assert.match(source, /Direct after acceptance/);
   assert.match(source, /Notice required/);
@@ -31,9 +35,9 @@ test("membership lifecycle controls remain native formal actions and cover acces
   assert.match(source, /Request observer status/);
   assert.match(source, /Send invitation/);
   assert.match(source, /Withdraw from institution/);
-  assert.match(source, /Propose suspend/);
-  assert.match(source, /Propose reinstate/);
-  assert.match(source, /Propose expel/);
+  assert.match(source, /Propose suspension/);
+  assert.match(source, /Propose reinstatement/);
+  assert.match(source, /Propose expulsion/);
   assert.match(source, /Propose dissolution/);
   assert.match(source, /Membership constitution/);
   assert.match(source, /Membership history/);
@@ -88,13 +92,16 @@ test("group lifecycle loading shows a neutral table-level indicator instead of b
   assert.match(source, /data-lifecycle-group-thinking="true"/);
   assert.match(source, /lifecycleGroupThinking = isLifecycleConversation && isLoading && !speakingCountry && !stagedLifecycleSpeaker && countries\.length > 1/);
   assert.match(source, /Considering membership/);
-  assert.match(source, /!lifecycleGroupThinking \? countries\[0\] : null/);
+  assert.match(source, /!lifecycleGroupThinking && !ordinaryGroupThinking \? countries\[0\] : null/);
+  assert.match(source, /data-diplomacy-group-thinking="true"/);
 });
 
-test("both overview and members lifecycle cards track Opening state by exact case id", () => {
+test("members lifecycle cards track Opening state by exact case id without duplicating the controls on Overview", () => {
   const source = read("./InstitutionsWorkspace.jsx");
   const matches = source.match(/opening=\{busy === `open-lifecycle:\$\{entry\.id\}`\}/g) ?? [];
-  assert.ok(matches.length >= 2, `expected card-specific opening state in both lifecycle surfaces, got ${matches.length}`);
+  assert.equal(matches.length, 1, `expected one canonical lifecycle-card surface, got ${matches.length}`);
+  assert.match(source, /data-institution-members-workspace="true"/);
+  assert.match(source, /data-institution-overview="focused"/);
 });
 
 test("resolved membership negotiations replace Request response with a canonical outcome panel", () => {
@@ -123,7 +130,43 @@ test("fully resolved lifecycle hearings become terminal read-only history", () =
   assert.match(source, /data-lifecycle-terminal-history="true"/);
 });
 
+test("main-menu settings, gameplay-only idle diplomacy and terminal lifecycle cleanup use existing native seams", () => {
+  const main = read("./main.jsx");
+  const library = read("./libraryBar.jsx");
+  const chat = read("./chat.jsx");
+  assert.match(main, /<LibraryTopBar onOpenSettings=/);
+  assert.match(library, /const LibraryTopBar = \(\{ onOpenSettings \}\) =>/);
+  assert.match(library, /onClick=\{onOpenSettings\}/);
+  assert.match(library, /isMobile \? "⚙" : "Settings"/);
+  assert.match(main, /if \(hasNoGames \|\| mainMenuOpen\) return undefined;/);
+  assert.match(main, /\[hasNoGames, mainMenuOpen\]/);
+  assert.match(chat, /const leaveActiveChat = \(\) =>/);
+  assert.match(chat, /institutionLifecycleConversationState\(worldSnapshot/);
+  assert.match(chat, /lifecycleState\.resolvedCases\?\.length === lifecycleState\.cases\.length/);
+  assert.match(chat, /lifecycleState\.awaitingApprovalCases\?\.length === 0/);
+  assert.match(chat, /onBack=\{leaveActiveChat\}/);
+});
+
 test("Council workspace excludes lifecycle negotiations from the persistent Council channel", () => {
   const source = read("./InstitutionsWorkspace.jsx");
   assert.match(source, /chat\?\.institutionId && !\(chat\?\.lifecycleInstitutionId && list\(chat\?\.lifecycleCaseIds\)\.length\)/);
+});
+
+test("institution detail UI keeps Overview focused and moves dense controls into their dedicated tabs", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  assert.match(source, /data-institution-current-business="true"/);
+  assert.match(source, /data-institution-recent-activity="true"/);
+  assert.match(source, /Table a matter/);
+  assert.match(source, /Open Council/);
+  assert.match(source, /data-institution-members-workspace="true"/);
+  assert.match(source, /data-institution-charter-workspace="true"/);
+  assert.doesNotMatch(source, /\["Live agenda", String\(view\?\.activeProposals/);
+  assert.doesNotMatch(source, /backed by Beta's current one-request group diplomacy/);
+});
+
+test("institution workspace keeps a readable typography floor across every tab", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  const sizes = [...source.matchAll(/fontSize: "([0-9.]+)rem"/g)].map((match) => Number(match[1]));
+  const tooSmall = sizes.filter((size) => Number.isFinite(size) && size < 0.58);
+  assert.deepEqual(tooSmall, []);
 });

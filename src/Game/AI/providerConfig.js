@@ -211,7 +211,6 @@ export const AI_TASK_ROUTING = [
     { key: "gameMaster", label: "Game Master", hint: "High-tier model (direct world edits)", group: "Player" },
     { key: "actions", label: "Action suggestions", hint: "Small/mid-tier: short suggestions", group: "Player" },
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
-    { key: "nextSpeaker", label: "Next speaker", hint: "Smallest model: single-field pick", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },

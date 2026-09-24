@@ -78,13 +78,13 @@ test("geopolitical baseline is exact-date universal and closes membership identi
 });
 
 test("Scenario Editor keeps one normal Generate/Apply Political World workflow while preserving advanced diagnostics", () => {
-  assert.match(panel, />Generate Political World</);
-  assert.match(panel, /"Apply Political World"/);
-  assert.match(panel, /Advanced \/ repair tools/);
+  assert.match(panel, /onClick=\{generatePoliticalWorld\}/);
+  assert.match(panel, /onClick=\{applyPoliticalWorld\}/);
+  assert.match(panel, /Advanced generation settings & repair tools/);
   assert.match(panel, /Generate Missing Politics/);
   assert.match(panel, /Repair Governing Alignment/);
   assert.match(panel, /Generate Geopolitical Baseline/);
-  assert.match(panel, /Apply Political World is blocked/);
+  assert.match(panel, /Apply to Scenario is blocked/);
   assert.match(panel, /Download Combined Diagnostic/);
   assert.match(pipeline, /persisted yet\. This is the key seam/);
   assert.match(generator, /kind: "geopolitical-baseline-diagnostic"/);

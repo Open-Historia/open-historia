@@ -29,8 +29,14 @@ export const setRegionClickInterceptor = (fn) => {
     _clickInterceptor = typeof fn === "function" ? fn : null;
 };
 
-// Passive tap on every normal region click (the Stats tab watches which country
-// the player is inspecting). Never consumes the click — popups still open.
+// Stable browser event for passive consumers of a committed normal region
+// selection. Unlike the legacy module-global observer below, this survives
+// lazy chunk / HMR module boundaries and allows multiple listeners without
+// changing the click-consumption contract.
+export const REGION_SELECTED_EVENT = "oh:region-selected";
+
+// Legacy passive tap retained for compatibility with any synchronous consumers.
+// Never consumes the click — popups still open.
 let _clickObserver = null;
 
 // WHO IS PLAYING, and why it is read here rather than per click. What the card
@@ -128,6 +134,11 @@ const resolveLiveSelectionProps = async (props) => {
 const commitRegionSelection = (props) => {
     if (!props || typeof props !== "object") return;
 
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+        try {
+            window.dispatchEvent(new CustomEvent(REGION_SELECTED_EVENT, { detail: props }));
+        } catch { /* passive listeners must never break clicks */ }
+    }
     try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
 
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;

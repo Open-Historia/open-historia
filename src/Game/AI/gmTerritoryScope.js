@@ -10,6 +10,7 @@ const normalize = (value) => clean(value)
 
 const BROAD_SCOPE_CUE = /^(?:all|every|entire|whole|full)$/;
 const TERRITORY_NOUN = /^(?:territor(?:y|ies)|regions?|states?|provinces?|lands?|areas?)$/;
+const TERRITORY_PRESERVATION_VERB = /^(?:keep|keeps|kept|keeping|retain|retains|retained|retaining|preserve|preserves|preserved|preserving|remain|remains|remained|remaining|stay|stays|stayed|staying)$/;
 // Words allowed between the cue and the country's own words: "all OF THE north
 // korean states". "all of ITS provinces" names no country and never expands.
 const PHRASE_FILLER = new Set(["of", "the", "its", "their", "own"]);
@@ -145,11 +146,26 @@ export const requestDemandsExhaustiveTerritorialScope = (request) => {
   for (const tokens of clauseTokens(request)) {
     for (let index = 0; index < tokens.length; index += 1) {
       if (!BROAD_SCOPE_CUE.test(tokens[index])) continue;
+      const nounOffset = tokens.slice(index + 1).findIndex((token) => TERRITORY_NOUN.test(token));
+      if (nounOffset < 0) continue;
+      const nounIndex = index + 1 + nounOffset;
+
+      // Exhaustive words also appear in preservation constraints such as
+      // "Lithuania keeps all of its territory". That sentence explicitly asks
+      // for NO territorial mutation, so forcing territorialScopes would turn a
+      // Puppet-only GM request into an unrelated map transaction. Treat a nearby
+      // preservation verb as a no-change qualifier, not as a scope command.
+      const preservationBeforeCue = tokens
+        .slice(Math.max(0, index - 3), index)
+        .some((token) => TERRITORY_PRESERVATION_VERB.test(token));
+      const preservationAfterNoun = TERRITORY_PRESERVATION_VERB.test(tokens[nounIndex + 1] || "");
+      if (preservationBeforeCue || preservationAfterNoun) continue;
+
       // The explicit territory noun is the strongest signal. "all of France" is
       // also exhaustive, but the legacy single-country detector already handles
       // that form; this guard is aimed at the ambiguous/group forms that otherwise
       // degrade into representative province lists.
-      if (tokens.slice(index + 1).some((token) => TERRITORY_NOUN.test(token))) return true;
+      return true;
     }
   }
   return false;

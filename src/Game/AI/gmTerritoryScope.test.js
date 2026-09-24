@@ -80,6 +80,15 @@ test("broad multi-geography GM requests require the native exhaustive-scope enve
   assert.equal(requestDemandsExhaustiveTerritorialScope("transfer Harju to Estonia"), false);
 });
 
+test("territorial preservation language does not manufacture an exhaustive mutation", () => {
+  assert.equal(
+    requestDemandsExhaustiveTerritorialScope("Make Lithuania an open satellite state of Latvia. Lithuania remains a separate sovereign country and keeps all of its territory."),
+    false,
+  );
+  assert.equal(requestDemandsExhaustiveTerritorialScope("Lithuania retains all of its territory after becoming a client state"), false);
+  assert.equal(requestDemandsExhaustiveTerritorialScope("all Lithuanian territory remains Lithuanian"), false);
+});
+
 test("multi-geography GM scope expands every rendered region across all named base countries", () => {
   const baltic = [
     { id: "EST.1", name: "Harju", country: "Estonia", countryCode: "EST" },

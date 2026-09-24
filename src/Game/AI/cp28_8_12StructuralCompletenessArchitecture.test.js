@@ -22,6 +22,8 @@ test("GM exhaustive territory uses territorialScopes and native base-geography e
   assert.match(gameplay, /requestDemandsExhaustiveTerritorialScope\(request\)/);
   assert.match(gameplay, /resolveGameMasterBaseGeographyScope\(scope\.baseCountries, catalog\)/);
   assert.match(prompts, /EXHAUSTIVE TERRITORY IS A SET CONTRACT/);
+  assert.match(prompts, /ONLY WHEN TERRITORY ACTUALLY CHANGES/);
+  assert.match(prompts, /keeps all of its territory/);
   assert.match(prompts, /territorialScopesJson/);
   assert.match(prompts, /Rendered base-geography catalog/);
 });

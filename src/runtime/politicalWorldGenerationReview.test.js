@@ -73,6 +73,71 @@ test("balanced relevance gives player/belligerents full, existing actors rich, a
   assert.equal(relevance["Republic X"].depth, "standard");
 });
 
+test("balanced relevance promotes both sides of an active Puppet relationship to rich political depth", () => {
+  const world = {
+    ...scenarioDetails.data.world,
+    wars: [],
+    ownerCodes: [...scenarioDetails.data.world.ownerCodes, "Overlord State", "Puppet Republic"],
+    puppets: [{
+      id: "dependency-1",
+      overlord: "Overlord State",
+      puppet: "Puppet Republic",
+      kind: "client",
+      loyalty: 60,
+      secrecy: "covert",
+      status: "active",
+    }],
+  };
+
+  const relevance = buildScenarioPoliticalRelevance({
+    world,
+    playerPolity: "Kingdom of Poland",
+    mode: POLITICAL_WORLD_GENERATION_MODES.BALANCED,
+  });
+  assert.equal(relevance["Overlord State"].depth, "rich");
+  assert.equal(relevance["Puppet Republic"].depth, "rich");
+
+  const disabled = buildScenarioPoliticalRelevance({
+    world,
+    playerPolity: "Kingdom of Poland",
+    mode: POLITICAL_WORLD_GENERATION_MODES.BALANCED,
+    puppetStates: false,
+  });
+  assert.equal(disabled["Overlord State"].depth, "standard");
+  assert.equal(disabled["Puppet Republic"].depth, "standard");
+});
+
+test("scenario Political World generation respects a disabled Puppet States feature", () => {
+  const details = {
+    ...scenarioDetails,
+    scenario: {
+      ...scenarioDetails.scenario,
+      features: { puppetStates: { enabled: false } },
+    },
+    data: {
+      ...scenarioDetails.data,
+      world: {
+        ...scenarioDetails.data.world,
+        wars: [],
+        ownerCodes: [...scenarioDetails.data.world.ownerCodes, "Overlord State", "Puppet Republic"],
+        puppets: [{
+          id: "dependency-1",
+          overlord: "Overlord State",
+          puppet: "Puppet Republic",
+          kind: "client",
+          loyalty: 60,
+          secrecy: "open",
+          status: "active",
+        }],
+      },
+    },
+  };
+
+  const inputs = buildScenarioPoliticalGenerationInputs(details, { mode: POLITICAL_WORLD_GENERATION_MODES.BALANCED });
+  assert.equal(inputs.relevanceByPolity["Overlord State"].depth, "standard");
+  assert.equal(inputs.relevanceByPolity["Puppet Republic"].depth, "standard");
+});
+
 test("simulation-ready mode makes ordinary sovereign polities rich without promoting peripheral landless entries", () => {
   const relevance = buildScenarioPoliticalRelevance({
     world: { ...scenarioDetails.data.world, wars: [] },
@@ -197,6 +262,55 @@ test("reviewed entity expansion is explicit and preserves authored party fields"
   assert.equal(allowed.ok, true);
   assert.equal(allowed.politicalActors.byPolity["Republic X"].parties.length, 2);
   assert.equal(allowed.politicalActors.byPolity["Republic X"].parties[0].ideology, "Authored ideology");
+});
+
+test("generator-owned roster repair can add a missing party and upgrade native fallback support without weakening authored protection", () => {
+  const existing = {
+    byPolity: {
+      "Republic X": {
+        polityKey: "Republic X",
+        politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+        government: { form: "Parliamentary republic", headOfGovernment: "Leader X", rulingPartyIds: [] },
+        parties: [
+          { id: "a", name: "Party A", support: { percent: 40, basis: "generated-estimate" } },
+          { id: "b", name: "Party B", support: { percent: 20, basis: "native-fallback-estimate" } },
+        ],
+      },
+    },
+  };
+  const proposal = {
+    schemaVersion: 1,
+    polityKey: "Republic X",
+    scenarioDate: "2067-04-19",
+    depth: "rich",
+    provenance: { source: "generated", confidence: "high", generatedAt: "2026-09-22T00:00:00Z" },
+    sourceAsOf: "2067-04-19",
+    actorPatch: {
+      parties: [
+        { id: "b", name: "Party B", support: { percent: 25, basis: "generated-estimate" } },
+        { id: "c", name: "Party C", support: { percent: 20, basis: "generated-estimate" } },
+      ],
+    },
+  };
+
+  const blocked = applyReviewedPoliticalGeneration({
+    scenarioDate: "2067-04-19",
+    politicalActors: existing,
+    reviews: [{ selected: true, proposal, allowEntityExpansion: false }],
+  });
+  assert.equal(blocked.ok, true);
+  assert.deepEqual(blocked.politicalActors.byPolity["Republic X"].parties.map((party) => party.id), ["a", "b"]);
+
+  const repaired = applyReviewedPoliticalGeneration({
+    scenarioDate: "2067-04-19",
+    politicalActors: existing,
+    reviews: [{ selected: true, proposal, allowEntityExpansion: true }],
+  });
+  assert.equal(repaired.ok, true, JSON.stringify(repaired.errors));
+  const parties = repaired.politicalActors.byPolity["Republic X"].parties;
+  assert.deepEqual(parties.map((party) => party.id), ["a", "b", "c"]);
+  assert.deepEqual(parties.find((party) => party.id === "b").support, { percent: 25, basis: "generated-estimate" });
+  assert.deepEqual(parties.find((party) => party.id === "c").support, { percent: 20, basis: "generated-estimate" });
 });
 
 test("15-polity generation test preset prioritizes a fixed diverse geopolitical stress set at rich depth", async () => {

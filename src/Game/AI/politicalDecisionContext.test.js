@@ -242,6 +242,7 @@ test("Phase009A builds a bounded actor-relative political decision capsule", () 
   assert.equal(context.bilateral.agreements[0].id, "mutual-consultation");
 
   assert.match(context.text, /KNOWLEDGE BOUNDARY/);
+  assert.match(context.text, /CURRENT-STATE AUTHORITY: this capsule is the actor's canonical current political state\. Scenario\/world-before-round-one temperament is starting context only/);
   assert.match(context.text, /Government ideology: Security-minded liberal conservatism/);
   assert.match(context.text, /goals: Secure privileged access to the northern ports/);
   assert.match(context.text, /foreign policy: Pressure the regional alliance for concessions/);
@@ -398,11 +399,44 @@ test("tight World Director-sized capsules prioritize C4, governing-party motives
   });
 
   assert.ok(context.text.length <= 1700);
+  assert.match(context.text, /CURRENT-STATE AUTHORITY: this capsule is the actor's canonical current political state\. Scenario\/world-before-round-one temperament is starting context only/);
   assert.match(context.text, /Disposition: .*assert high.*risk high.*escalate high/i);
   assert.match(context.text, /Governing force: Governing Party/);
   assert.match(context.text, /foreign policy: Pressure the regional alliance for concessions/);
   assert.match(context.text, /Goals: Preserve the frontier buffer/);
   assert.match(context.text, /Belief — Counterpart State \[FOCUS\]: Threat very high/);
+});
+
+
+
+test("compact decision capsules use the caller's task focus to surface later canonical strategy rows without reordering canonical state", () => {
+  const world = makeWorld();
+  const actor = world.politicalActors.byPolity["Actor Republic"];
+  actor.fears.push("Fuel-price shock could fracture the governing coalition");
+  actor.domesticPressures.push("Port exporters demand immediate relief from maritime restrictions");
+
+  const before = structuredClone(actor);
+  const context = buildPoliticalDecisionContext(world, "Actor Republic", {
+    counterpartPolity: "Counterpart State",
+    decisionFocusText: "We propose restoring maritime export access and emergency fuel-price relief for port trade.",
+    maxChars: 1700,
+  });
+
+  assert.match(context.text, /Goals: Protect export access/);
+  assert.match(context.text, /Fears: Fuel-price shock could fracture the governing coalition/);
+  assert.match(context.text, /Domestic pressure: Port exporters demand immediate relief from maritime restrictions/);
+  assert.deepEqual(world.politicalActors.byPolity["Actor Republic"], before, "focus selection must stay projection-only");
+});
+
+test("compact decision capsules preserve authored order when the caller supplies no usable task focus", () => {
+  const context = buildPoliticalDecisionContext(makeWorld(), "Actor Republic", {
+    counterpartPolity: "Counterpart State",
+    maxChars: 1700,
+  });
+
+  assert.match(context.text, /Goals: Preserve the frontier buffer; Keep alliance guarantees credible/);
+  assert.match(context.text, /Fears: Alliance abandonment/);
+  assert.match(context.text, /Domestic pressure: Nationalist media demands a firmer response/);
 });
 
 test("bounded multi-actor wrapper deduplicates aliases, skips missing actors, and respects maxActors", () => {

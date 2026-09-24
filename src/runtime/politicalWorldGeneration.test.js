@@ -93,6 +93,60 @@ test("missing-only merge preserves authored values and explicit empty lists", ()
   assert.deepEqual(merged.actor.traits, { riskTolerance: 62 });
 });
 
+test("sparse-actor hydration may fill normalization placeholders without opening a real authored roster", () => {
+  const existing = {
+    polityKey: "Republic X",
+    politicalSystem: { type: "unspecified", representation: "none" },
+    government: { rulingPartyIds: [], coalitionPartyIds: [] },
+    parties: [],
+    powerBlocs: [],
+    goals: ["Preserve the authored strategic baseline"],
+  };
+  const proposal = {
+    schemaVersion: 1,
+    polityKey: "Republic X",
+    scenarioDate: "2014-03-22",
+    depth: "standard",
+    provenance: { source: "generated", confidence: "high" },
+    actorPatch: {
+      politicalSystem: { type: "parliamentary_republic", representation: "electoral", regimeCharacter: "democratic" },
+      government: {
+        form: "Parliamentary republic",
+        ideology: "Liberal democratic coalition",
+        rulingPartyIds: ["unity"],
+        coalitionPartyIds: ["reform"],
+      },
+      parties: [
+        { id: "unity", name: "Unity Party", support: { percent: 55, basis: "generated-estimate" } },
+        { id: "reform", name: "Reform Party", support: { percent: 45, basis: "generated-estimate" } },
+      ],
+    },
+  };
+
+  const closed = validatePoliticalGenerationProposal(proposal, {
+    polityKey: "Republic X",
+    scenarioDate: "2014-03-22",
+    depth: "standard",
+    existingActor: existing,
+  });
+  assert.equal(closed.ok, false, "default missing-only merge must still preserve explicitly closed authored state");
+
+  const hydrated = validatePoliticalGenerationProposal(proposal, {
+    polityKey: "Republic X",
+    scenarioDate: "2014-03-22",
+    depth: "standard",
+    existingActor: existing,
+    fillSparseActorPlaceholders: true,
+  });
+  assert.equal(hydrated.ok, true, hydrated.errors?.join("\n"));
+  assert.equal(hydrated.actor.politicalSystem.type, "parliamentary_republic");
+  assert.equal(hydrated.actor.politicalSystem.representation, "electoral");
+  assert.deepEqual(hydrated.actor.government.rulingPartyIds, ["unity"]);
+  assert.deepEqual(hydrated.actor.government.coalitionPartyIds, ["reform"]);
+  assert.deepEqual(hydrated.actor.parties.map((party) => party.id), ["unity", "reform"]);
+  assert.deepEqual(hydrated.actor.goals, ["Preserve the authored strategic baseline"]);
+});
+
 test("reviewed entity expansion may add new parties while still preserving authored party fields", () => {
   const existing = {
     polityKey: "Republic X",
@@ -641,4 +695,31 @@ test("external reference dates obey an exclusive divergence authority instead of
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => error.includes("reference date 2008-01-01") && error.includes("before 1963-11-22")));
   assert.equal(result.errors.some((error) => error.includes("1963-11-21")), false);
+});
+
+
+test("generated estimates may upgrade native fallback landscape metrics without overwriting authored support", () => {
+  const existing = {
+    polityKey: "Republic X",
+    parties: [
+      { id: "fallback", name: "Fallback Party", support: { percent: 20, basis: "native-fallback-estimate" } },
+      { id: "authored", name: "Authored Party", support: { percent: 45, basis: "authored" } },
+    ],
+  };
+  const merged = mergeMissingPoliticalActor(existing, {
+    parties: [
+      { id: "fallback", support: { percent: 30, basis: "generated-estimate" } },
+      { id: "authored", support: { percent: 55, basis: "generated-estimate" } },
+    ],
+  }, { allowEntityExpansion: true });
+
+  assert.deepEqual(merged.actor.parties.find((party) => party.id === "fallback").support, {
+    percent: 30,
+    basis: "generated-estimate",
+  });
+  assert.deepEqual(merged.actor.parties.find((party) => party.id === "authored").support, {
+    percent: 45,
+    basis: "authored",
+  });
+  assert.ok(merged.appliedPaths.some((path) => path.includes("parties[fallback].support")));
 });

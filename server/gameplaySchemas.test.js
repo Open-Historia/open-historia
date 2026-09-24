@@ -173,7 +173,7 @@ test("does not fabricate events when the model omitted them, and leaves other ta
   assert.match(validation.error, /events/i);
 
   const untouched = { result: { speaker: "France" } };
-  assert.equal(normalizeGameplayPayload("nextSpeaker", untouched), untouched);
+  assert.equal(normalizeGameplayPayload("unknownTask", untouched), untouched);
   assert.equal(normalizeGameplayPayload("jumpForward", null), null);
 });
 

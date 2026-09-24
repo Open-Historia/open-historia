@@ -32,8 +32,8 @@ test("autonomous formal pass targets only unresolved voters and keeps player sov
   assert.match(autonomy, /Native governance independently validates every ballot and prevents duplicates/);
 });
 
-test("Institution UI explains that NPC ballots also advance after completed turns", () => {
+test("Institution UI explains immediate Council ballots and the post-turn safety net", () => {
   const ui = read("../GameUI/InstitutionsWorkspace.jsx");
-  assert.match(ui, /autonomously after a completed turn/i);
-  assert.match(ui, /prevents duplicate votes/i);
+  assert.match(ui, /one bounded Council round immediately prompts unresolved eligible AI ballots/i);
+  assert.match(ui, /post-turn follow-up/i);
 });

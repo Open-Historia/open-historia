@@ -80,7 +80,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   // migrated). Note the provider is spelled with its hyphen in these keys.
   store.set("openai-compatible_model_jumpForward", "qwen3-big");
   store.set("openai-compatible_model_actions", "qwen3-big");
-  store.set("openai-compatible_model_nextSpeaker", "qwen3");
+  store.set("openai-compatible_model_descriptionToAction", "qwen3");
   store.set("gemini_model_advisor", "gemini-3.5-flash");
 
   const connections = config.getConnections().map(({ id, ...rest }) => rest);
@@ -97,7 +97,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   ]);
   assert.equal(config.getTaskPick("jumpForward"), list[1].id);
   assert.equal(config.getTaskPick("actions"), list[1].id);
-  assert.equal(config.getTaskPick("nextSpeaker"), list[0].id);
+  assert.equal(config.getTaskPick("descriptionToAction"), list[0].id);
   assert.equal(config.getTaskPick("advisor"), "");
 
   // Once only: the old settings are never read again.

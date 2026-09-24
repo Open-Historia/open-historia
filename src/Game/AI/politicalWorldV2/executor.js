@@ -21,10 +21,13 @@ import {
   validateHistoricalVerificationPayload,
   validateTemporalSentinelPayload,
 } from "../politicalWorldGeneratorCore.js";
+import { POLITICAL_GENERATION_NEEDS } from "../../../runtime/politicalWorldGeneration.js";
 import { applyReviewedPoliticalGeneration } from "../../../runtime/politicalWorldGenerationReview.js";
 import { normalizeInstitutions, validateInstitutionTemporalBaseline } from "../../../runtime/institutions.js";
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
 import { acceptedPoliticalWorldV2Targets, createPoliticalWorldV2Job } from "./jobGraph.js";
+import { applyValidatedHistoricalCorrectionToStagedActor } from "./historicalCorrectionStaging.js";
+import { historicalChallengeStillAppliesToEntry, rebasePoliticalWorldVerificationEntry } from "./verificationEntry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -68,20 +71,34 @@ const boundedCallModel = (baseCallModel, consumeModelCall, maxCalls = 1) => {
   };
 };
 
-const taskProviderCallCeiling = (type) => (
-  type === "political-actor" || type === "governing-alignment" ? 2 : 1
-);
+// v2 owns retry scheduling at the checkpoint/worklist boundary. A single
+// resumable task may spend at most one provider call; failed targets are
+// retried later with smaller batches and preserved native feedback. Keeping a
+// second retry loop inside the domain generators multiplied call cost and made
+// the session budget substantially understate actual retry amplification.
+const taskProviderCallCeiling = () => 1;
+
+const entryFillsSparseActorPlaceholders = (entry) => entry?.item?.sparsePlaceholderHydration === true;
 
 const reviewsFromGeneration = (generation, {
   allowEntityExpansion = false,
+  allowEntityExpansionByPolity = {},
   fillEmptyGovernmentPartyRefs = false,
-} = {}) => array(generation?.proposals).map((entry) => ({
-  selected: true,
-  proposal: entry.proposal,
-  actorPatch: entry.proposal?.actorPatch,
-  allowEntityExpansion,
-  fillEmptyGovernmentPartyRefs,
-}));
+} = {}) => array(generation?.proposals).map((entry) => {
+  const polityKey = clean(entry?.item?.polityKey || entry?.proposal?.polityKey);
+  return {
+    selected: true,
+    proposal: entry.proposal,
+    actorPatch: entry.proposal?.actorPatch,
+    // Proposal validation already grants entity expansion per polity when the
+    // actor is generator-owned rather than authored scenario canon. Staging
+    // must honor that same authorization or a valid repair can be accepted by
+    // the generator and then rejected while materializing its new party id.
+    allowEntityExpansion: allowEntityExpansion === true || allowEntityExpansionByPolity?.[polityKey] === true,
+    fillEmptyGovernmentPartyRefs,
+    fillSparseActorPlaceholders: entryFillsSparseActorPlaceholders(entry),
+  };
+});
 
 const applyPoliticalGenerationToWorld = (world, generation, scenarioDate, options = {}) => {
   const reviews = reviewsFromGeneration(generation, options);
@@ -118,7 +135,9 @@ const generationEntriesForTargets = (checkpoint, targets) => {
   const byKey = new Map();
   for (const [polity, entry] of Object.entries(checkpoint?.generationEntriesByPolity || {})) {
     const key = clean(polity || entry?.item?.polityKey);
-    if (key && wanted.has(key)) byKey.set(key, clone(entry));
+    if (!key || !wanted.has(key)) continue;
+    const stagedActor = checkpoint?.stagedWorld?.politicalActors?.byPolity?.[key];
+    byKey.set(key, rebasePoliticalWorldVerificationEntry(entry, stagedActor));
   }
   // Legacy fallback retained only for isolated executor tests/helpers. v3 normal
   // execution never depends on persisted jobs.
@@ -273,10 +292,10 @@ export const createPoliticalWorldV2Executor = ({
         contextByPolity: inputs?.contextByPolity || {},
         allowEntityExpansionByPolity,
         maxBatchSize: Math.max(1, job.targets.length),
-        // Reuse the proven Phase006B bounded salvage loop inside one deterministic
-        // v2 work item. Attempt 2 only contains the unresolved polities from
-        // attempt 1, so this improves reliability without regenerating successes.
-        maxAttempts: 2,
+        // The deterministic v2 worklist owns corrective retries. Keep this domain
+        // invocation to one provider call so accepted work checkpoints immediately
+        // and a retry cannot silently double-spend the per-run budget.
+        maxAttempts: 1,
         prioritizeQuantitativeLandscapeBackfill: false,
         verifyHistoricalIdentity: false,
         behaviorallyCompleteStandard: true,
@@ -307,7 +326,7 @@ export const createPoliticalWorldV2Executor = ({
         relevanceByPolity: inputs?.relevanceByPolity || {},
         scenarioContext: inputs?.scenarioContext,
         contextByPolity: inputs?.contextByPolity || {},
-        maxAttempts: 2,
+        maxAttempts: 1,
         callModel: trackedCallModel,
         signal,
       });
@@ -427,7 +446,18 @@ export const createPoliticalWorldV2Executor = ({
       if (!entries.length) {
         return { kind: job.type, acceptedPolities: [...job.targets], unresolvedPolities: [], confirmedPolities: [...job.targets], correctedPolities: [], warnings: [] };
       }
-      const correctionRequiredPolities = new Set(array(job?.payload?.correctionRequiredPolities).map(clean).filter(Boolean));
+      const requestedCorrectionRequiredPolities = new Set(array(job?.payload?.correctionRequiredPolities).map(clean).filter(Boolean));
+      const correctionRequiredPolities = new Set();
+      const staleCorrectionObligations = [];
+      for (const polityKey of requestedCorrectionRequiredPolities) {
+        const entry = entries.find((candidate) => clean(candidate?.item?.polityKey) === polityKey);
+        const challenge = checkpoint?.verification?.challenges?.[polityKey];
+        if (!entry || !challenge || historicalChallengeStillAppliesToEntry(challenge, entry)) {
+          correctionRequiredPolities.add(polityKey);
+        } else {
+          staleCorrectionObligations.push(polityKey);
+        }
+      }
       const prompt = buildPoliticalWorldHistoricalVerificationPrompt({
         scenarioDate,
         historyAuthority: inputs?.historyAuthority || null,
@@ -471,7 +501,10 @@ export const createPoliticalWorldV2Executor = ({
         acceptedPolities: unique([...confirmedPolities, ...correctedPolities]),
         unresolvedPolities,
         diagnostics: checked.diagnostics,
-        warnings: checked.warnings,
+        warnings: [
+          ...array(checked.warnings),
+          ...staleCorrectionObligations.map((polityKey) => `Discarded stale temporal-correction obligation for ${polityKey} because the challenged generated fact changed in current staged canon; exact-date verification rechecked the new candidate.`),
+        ],
       };
     }
 
@@ -533,7 +566,10 @@ export const createPoliticalWorldV2Executor = ({
     }
 
     if (job.type === "political-actor") {
-      const applied = applyPoliticalGenerationToWorld(stagedWorld, result.generation, scenarioDate, { allowEntityExpansion });
+      const applied = applyPoliticalGenerationToWorld(stagedWorld, result.generation, scenarioDate, {
+        allowEntityExpansion,
+        allowEntityExpansionByPolity,
+      });
       stagedWorld = applied.world;
       const stagingRejectedPolities = unique(applied.errors.map((entry) => clean(entry?.polityKey)).filter(Boolean));
       if (stagingRejectedPolities.length) {
@@ -618,23 +654,24 @@ export const createPoliticalWorldV2Executor = ({
     if (job.type === "historical-verification") {
       const correctedEntries = array(result.verificationEntries).filter((entry) => entry?.historicalVerification?.verdict === "corrected");
       if (correctedEntries.length) {
-        // Rebuild corrected actors from the original pre-generation baseline,
-        // then replace only those generated actor records in staged canon. This
-        // permits a verifier to overwrite its own generated identity without
-        // granting it authority over authored scenario fields.
-        const corrected = applyPoliticalGenerationToWorld(
-          { politicalActors: clone(inputs?.politicalActors || {}) },
-          { proposals: correctedEntries, failures: [], warnings: array(result.warnings) },
-          scenarioDate,
-          { allowEntityExpansion },
-        );
-        if (corrected.errors.length) throw new Error(`Historical correction staging failed: ${corrected.errors.map((entry) => clean(entry?.error || entry)).filter(Boolean).join("; ")}`);
-        stagedWorld.politicalActors = clone(stagedWorld.politicalActors || { schemaVersion: corrected.world?.politicalActors?.schemaVersion, byPolity: {} });
+        // Exact-date corrections are scoped to fields the generator itself
+        // materialized. Apply that validated correction directly to the CURRENT
+        // staged actor so a later incremental verification entry cannot rebuild
+        // the polity from an older sparse baseline and erase already-accepted
+        // generated fields. Authored fields remain protected because the
+        // validator carries only generated-owned applied paths into this step.
+        stagedWorld.politicalActors = clone(stagedWorld.politicalActors || { schemaVersion: 1, byPolity: {} });
         stagedWorld.politicalActors.byPolity = { ...(stagedWorld.politicalActors.byPolity || {}) };
         for (const entry of correctedEntries) {
           const polityKey = clean(entry?.item?.polityKey);
-          const correctedActor = corrected.world?.politicalActors?.byPolity?.[polityKey];
-          if (polityKey && correctedActor) stagedWorld.politicalActors.byPolity[polityKey] = clone(correctedActor);
+          if (!polityKey) continue;
+          const currentActor = stagedWorld.politicalActors.byPolity?.[polityKey];
+          const correctedActor = applyValidatedHistoricalCorrectionToStagedActor({
+            currentActor,
+            correctionEntry: entry,
+          });
+          if (!correctedActor) throw new Error(`Historical correction staging failed for ${polityKey}: validated correction did not produce a staged Political Actor.`);
+          stagedWorld.politicalActors.byPolity[polityKey] = clone(correctedActor);
         }
       }
       const unresolved = array(result.unresolvedPolities);

@@ -1575,16 +1575,6 @@ export const DEMAND_CHECK_SCHEMA = {
   additionalProperties: false,
 };
 
-export const NEXT_SPEAKER_SCHEMA = {
-  type: "object",
-  description: "The exact participant who should speak next in the diplomatic chat.",
-  properties: {
-    nextSpeaker: textSchema("Exact name of one chat participant other than the most recent speaker."),
-  },
-  required: ["nextSpeaker"],
-  additionalProperties: false,
-};
-
 // One turn of a diplomatic thread, acting for EVERY AI participant at once
 // (AI/chatActions.js). A four-way chat used to cost four requests for one
 // player message — one to pick the speaker, one per leader who answered — and
@@ -1615,7 +1605,7 @@ const chatActionSchema = {
       enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
-    content: textSchema("send_message: what it says, in its leader's voice. Match the length and tone of what it answers."),
+    content: textSchema("send_message: spoken message only, in its leader's voice. Match the length and tone of what it answers. actorName already identifies the speaker; never prefix content with the polity name plus a colon or dash."),
     targetEntryId: textSchema("add_reaction: the id of the message reacted to, copied from the transcript."),
     emoji: textSchema("add_reaction: one emoji."),
     title: textSchema("rename_chat: the new title."),
@@ -2920,7 +2910,6 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
-  nextSpeaker: NEXT_SPEAKER_SCHEMA,
   demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
@@ -2976,12 +2965,6 @@ export const DEMAND_CHECK_TOOL = makeTool(
   "submit_demand_check",
   "Submit what this reply does about a demand between an overlord and its own puppet state.",
   DEMAND_CHECK_SCHEMA,
-);
-
-export const NEXT_SPEAKER_TOOL = makeTool(
-  "submit_next_speaker",
-  "Submit the exact diplomatic chat participant who should speak next.",
-  NEXT_SPEAKER_SCHEMA,
 );
 
 export const EVENT_CONSOLIDATOR_TOOL = makeTool(
@@ -3095,7 +3078,6 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
   descriptionToAction: DESCRIPTION_TO_ACTION_TOOL,
-  nextSpeaker: NEXT_SPEAKER_TOOL,
   demandCheck: DEMAND_CHECK_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
@@ -3857,7 +3839,6 @@ export const validateGameplayPayload = (taskKey, value) => {
 
   const requiredTextByTask = {
     descriptionToAction: ["title", "text", "kind"],
-    nextSpeaker: ["nextSpeaker"],
     eventConsolidator: ["summary"],
     interactiveCreation: ["title", "premise", "opening"],
     interactiveExecutor: ["summary"],

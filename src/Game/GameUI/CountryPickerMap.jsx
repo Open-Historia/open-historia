@@ -18,7 +18,6 @@ import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { APP_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
-
 const codeToColor = (code) => {
   let h = 0;
   for (let i = 0; i < code.length; i += 1) h = (h * 31 + code.charCodeAt(i)) >>> 0;
@@ -112,7 +111,6 @@ const buildBaseLayer = (customBackground) => {
   }
   return new TileLayer({ source: new XYZ({ url: ESRI_DARK_GRAY_TILES, maxZoom: 16, wrapX: false }) });
 };
-
 const CountryPickerMap = ({
   countryOptions,
   onPickCountry,
@@ -150,7 +148,6 @@ const CountryPickerMap = ({
   const [query, setQuery] = useState("");
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
-
   // Refs the once-created map's handlers read at click time — so switching mode or
   // toggling a region never rebuilds the map.
   const modeRef = useRef(selectionMode);
@@ -222,8 +219,7 @@ const CountryPickerMap = ({
         zoom: true,
         zoomOptions: { zoomInClassName: "ol-zoom-in oh-tap", zoomOutClassName: "ol-zoom-out oh-tap" },
       }),
-      layers: [baseLayer, layer],
-      view: new View({
+      layers: [baseLayer, layer],      view: new View({
         center: fromLonLat([0, 20]),
         zoom: 2,
         minZoom: 1,
@@ -390,8 +386,7 @@ const CountryPickerMap = ({
         // map and the list before the player had seen either.
         <input
           autoFocus={!isTouchPrimary()}
-          className="oh-tap-row"
-          value={query}
+          className="oh-tap-row"          value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search countries…"
           style={{

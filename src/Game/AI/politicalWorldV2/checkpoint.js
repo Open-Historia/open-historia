@@ -2,6 +2,10 @@
 
 export const POLITICAL_WORLD_V2_CHECKPOINT_KIND = "political-world-checkpoint-v2";
 export const POLITICAL_WORLD_V2_CHECKPOINT_VERSION = 5;
+export const POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING = 100;
+export const POLITICAL_WORLD_V2_LEGACY_OVERRUN_ALLOWANCE = 60;
+export const POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE = 20;
+export const POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION = 2;
 
 export const POLITICAL_WORLD_V2_JOB_STATUSES = Object.freeze([
   "pending",
@@ -87,6 +91,7 @@ export const createPoliticalWorldV2Checkpoint = ({
   stagedWorld = {},
   sourceRoundZeroContext = null,
   maxModelCalls = null,
+  totalModelCallCeiling = POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING,
   now = new Date().toISOString(),
 } = {}) => ({
   kind: POLITICAL_WORLD_V2_CHECKPOINT_KIND,
@@ -105,6 +110,10 @@ export const createPoliticalWorldV2Checkpoint = ({
   maxModelCalls: Number.isFinite(Number(maxModelCalls)) && Number(maxModelCalls) >= 0
     ? Math.trunc(Number(maxModelCalls))
     : null,
+  totalModelCallCeiling: Number.isFinite(Number(totalModelCallCeiling)) && Number(totalModelCallCeiling) >= 0
+    ? Math.trunc(Number(totalModelCallCeiling))
+    : POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING,
+  totalModelCallCeilingVersion: POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION,
   stages: { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending" },
   coverage: {
     "political-actor": [],
@@ -164,6 +173,28 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
   next.maxModelCalls = Number.isFinite(Number(next.maxModelCalls)) && Number(next.maxModelCalls) >= 0
     ? Math.trunc(Number(next.maxModelCalls))
     : null;
+  const previousTotalCeilingVersion = Math.max(0, Math.trunc(Number(next.totalModelCallCeilingVersion) || 0));
+  if (Number.isFinite(Number(next.totalModelCallCeiling)) && Number(next.totalModelCallCeiling) >= 0) {
+    next.totalModelCallCeiling = Math.trunc(Number(next.totalModelCallCeiling));
+  } else {
+    // v5 checkpoints created before the lifetime safety ceiling may already be
+    // above the new limit. Preserve that expensive staged work and grant one
+    // bounded migration window to finish it; fresh checkpoints are capped at 100.
+    next.totalModelCallCeiling = next.modelCalls > POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING
+      ? next.modelCalls + POLITICAL_WORLD_V2_LEGACY_OVERRUN_ALLOWANCE
+      : POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING;
+  }
+  // CP2 fixed historical-verification staging that could erase already-accepted
+  // generated actor fields on legacy rescued runs. Only checkpoints that were
+  // already grandfathered above the normal 100-call ceiling receive one extra
+  // bounded repair window. Fresh/current checkpoints stay hard-capped at 100.
+  if (
+    previousTotalCeilingVersion < POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION
+    && next.totalModelCallCeiling > POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING
+  ) {
+    next.totalModelCallCeiling += POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE;
+  }
+  next.totalModelCallCeilingVersion = POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION;
   next.stages = { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending", ...object(next.stages) };
   next.coverage = Object.fromEntries(Object.entries(object(next.coverage)).map(([type, targets]) => [clean(type), [...new Set(array(targets).map(clean).filter(Boolean))]]).filter(([type]) => type));
   next.membership = { resolvedInstitutionIds: [...new Set(array(next?.membership?.resolvedInstitutionIds).map(clean).filter(Boolean))] };

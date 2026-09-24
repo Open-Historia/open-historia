@@ -565,6 +565,34 @@ const canonicalizeGeneratedEntityCollectionShapes = (actorPatch) => {
   return actorPatch;
 };
 
+const canonicalizeGeneratedLandscapeMetricForRepresentation = (actorPatch) => {
+  if (!isPlainObject(actorPatch)) return actorPatch;
+  const representation = clean(actorPatch?.politicalSystem?.representation).toLocaleLowerCase();
+  if (representation !== GENERATED_REPRESENTATIONS.ELECTORAL || !Array.isArray(actorPatch.parties)) return actorPatch;
+
+  actorPatch.parties = actorPatch.parties.map((party) => {
+    if (!isPlainObject(party)) return party;
+    const next = clone(party);
+    if (next.influence === undefined) return next;
+
+    // The provider is explicitly asked for electoral support, but live retries
+    // sometimes put the same generated percentage under influenceEstimate.
+    // Electoral party influence is not canonical. Recover that transport-level
+    // metric alias when support is absent, then discard influence so the native
+    // invariant remains strict rather than spending another provider call on a
+    // field-name mistake.
+    if (next.support === undefined && isPlainObject(next.influence)) {
+      const percent = Number(next.influence.percent);
+      if (Number.isFinite(percent) && percent >= 0 && percent <= 100) {
+        next.support = { percent: Math.round(percent * 10) / 10, basis: "generated-estimate" };
+      }
+    }
+    delete next.influence;
+    return next;
+  });
+  return actorPatch;
+};
+
 const canonicalizeWireActorPatch = (value) => {
   if (!isPlainObject(value)) return value;
   const out = clone(value);
@@ -609,6 +637,7 @@ const canonicalizeWireActorPatch = (value) => {
   canonicalizeTopLevelRepresentationEntities(out);
   canonicalizeRepresentationAliases(out);
   if (out.politicalSystem != null) out.politicalSystem = canonicalizeGeneratedPoliticalSystem(out.politicalSystem, out);
+  canonicalizeGeneratedLandscapeMetricForRepresentation(out);
 
   for (const collection of ["parties", "powerBlocs"]) {
     if (!Array.isArray(out[collection])) continue;
@@ -693,7 +722,13 @@ const representationEntityFieldScope = (needs, collection) => {
       "publicPriorities", "publicForeignPolicy", "publicDescription", "color",
     ];
     for (const key of common) fields.add(key);
-    if (collection === "powerBlocs") {
+    if (collection === "parties") {
+      // Generated electoral roster breadth is validated by named support
+      // coverage. A representation_entities-only retry must therefore be able
+      // to carry support estimates for newly added/corrected parties even when
+      // the existing roster already has a numerically complete landscape.
+      fields.add("support");
+    } else if (collection === "powerBlocs") {
       for (const key of ["influence", "kind", "status"]) fields.add(key);
     }
   }
@@ -1040,11 +1075,14 @@ const requestedActorPatchScopeInstruction = (needsInput) => {
   return `ACTORPATCH SCOPE THIS CALL — output ONLY these canonical paths; omit every other field entirely: ${parts.join("; ")}.`;
 };
 
+const fillSparseActorPlaceholdersForItem = (item) => item?.sparsePlaceholderHydration === true;
+
 const itemBlock = (item, { politicalActors, contextByPolity, previousErrors, allowEntityExpansionByPolity, politicalSystemLocks }) => {
   const existing = compactExistingActor(politicalActors?.byPolity?.[item.polityKey]);
   const localContext = contextByPolity?.[item.polityKey];
   const errors = previousErrors?.[item.polityKey] ?? [];
-  const hasAuthoredRoster = Array.isArray(existing?.parties) || Array.isArray(existing?.powerBlocs);
+  const hasAuthoredRoster = fillSparseActorPlaceholdersForItem(item) !== true
+    && (Array.isArray(existing?.parties) || Array.isArray(existing?.powerBlocs));
   const profileInstruction = responseProfileInstruction(item, existing);
   const governingInstruction = governingStructureInstruction(item, existing);
   const strategicInstruction = strategicContextInstruction(item, existing);
@@ -1557,7 +1595,7 @@ export const buildPoliticalWorldGenerationPrompt = ({
     + `- Non-electoral systems use power blocs/court/elite/military/revolutionary/colonial structures as appropriate. Their quantitative_landscape percentages mean estimated political influence/control, never electoral polling.\n`
     + `- COLLECTION SHAPE IS STRICT: actorPatch.parties and actorPatch.powerBlocs MUST ALWAYS be JSON arrays of entity objects, including on corrective retries. NEVER return a keyed object/map/dictionary such as {"democratic-party": {...}}. Every entity object carries its own stable id field.\n`
     + `- Parties and power blocs require stable lowercase slug-like ids that survive renames. Government party references use those exact ids.\n`
-    + `- For competitive electoral systems, political significance—not a fixed party count—controls roster breadth. ALWAYS materialize every ruling/governing/formal coalition or confidence-support force needed to explain the current government, even when small. Then include individually significant opposition forces and continue until the named modeled parties explain at least ${POLITICAL_GENERATED_ELECTORAL_NAMED_COVERAGE_MIN}% of estimated support. Only the genuinely diffuse remainder belongs in Other. Set government.rulingPartyIds/coalitionPartyIds to the stable ids you generated when those roles are known. When quantitative_landscape is requested, provide supportEstimate for EVERY represented party so native coverage validation does not mistake fallback arithmetic for evidence that the roster is broad enough.\n`
+    + `- For competitive electoral systems, political significance—not a fixed party count—controls roster breadth. ALWAYS materialize every ruling/governing/formal coalition or confidence-support force needed to explain the current government, even when small. Then include individually significant opposition forces and continue until the named modeled parties explain at least ${POLITICAL_GENERATED_ELECTORAL_NAMED_COVERAGE_MIN}% of estimated support. Only the genuinely diffuse remainder belongs in Other. Set government.rulingPartyIds/coalitionPartyIds to the stable ids you generated when those roles are known. When quantitative_landscape is requested, provide supportEstimate for EVERY represented party. When representation_entities is requested for an electoral roster, supportEstimate is also allowed and should accompany every returned/new party so native named-coverage validation can prove the repaired roster is broad enough instead of relying on fallback arithmetic.\n`
     + `- behavioralDisposition and politicalPressures are native runtime-derived state and MUST NEVER appear in actorPatch.\n`
     + `- Structured leader traits belong in top-level actorPatch.traits, not nested under leader, and describe the operative primary political decision-maker defined above. If leader is an object, keep it to officeholder identity fields such as id/name/title. Traits use bounded 0-100 values and MUST use only the canonical registered keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Do not force every key; omit dimensions the evidence does not establish.\n`
     + `- Hidden politicalResponse profiles may use organization/credibility/inertia/resilience 0-100 and sparse issues. Issue position/strainResponse are -100..100; sensitivity is 0-100. Only encode issues that materially distinguish the entity.\n`
@@ -2204,7 +2242,10 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
       const completedLandscape = completeGeneratedPoliticalLandscapePatch(
         context.politicalActors?.byPolity?.[entry.item.polityKey] ?? null,
         mergedPatch,
-        { allowEntityExpansion: context.allowEntityExpansionByPolity?.[entry.item.polityKey] === true },
+        {
+          allowEntityExpansion: context.allowEntityExpansionByPolity?.[entry.item.polityKey] === true,
+          fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(entry.item),
+        },
       );
       mergedPatch = completedLandscape.patch;
       for (const warning of completedLandscape.warnings) warnings.push(`${polityKey}: ${warning}`);
@@ -2216,6 +2257,7 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
       depth: entry.item.depth,
       existingActor: context.politicalActors?.byPolity?.[entry.item.polityKey] ?? null,
       allowEntityExpansion: context.allowEntityExpansionByPolity?.[entry.item.polityKey] === true,
+      fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(entry.item),
       historyAuthority: context.historyAuthority || null,
     });
     const errors = [...(validation.errors ?? [])];
@@ -2239,6 +2281,9 @@ export const validateHistoricalVerificationPayload = ({ payload, entries, contex
         verdict: "corrected",
         confidence: diagnostic.confidence,
         issue: diagnostic.issue,
+        correctionScopes: [...diagnostic.correctionScopes],
+        replaceRepresentationEntities: diagnostic.replaceRepresentationEntities === true,
+        correctionPatch: clone(scoped),
       },
     };
     diagnostic.status = "corrected";
@@ -3190,7 +3235,10 @@ const validateBatchResponse = (payload, items, context) => {
       const completedLandscape = completeGeneratedPoliticalLandscapePatch(
         context.politicalActors?.byPolity?.[item.polityKey] ?? null,
         actorPatch,
-        { allowEntityExpansion: context.allowEntityExpansionByPolity?.[item.polityKey] === true },
+        {
+          allowEntityExpansion: context.allowEntityExpansionByPolity?.[item.polityKey] === true,
+          fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(item),
+        },
       );
       actorPatch = completedLandscape.patch;
       for (const warning of completedLandscape.warnings) warnings.push(`${polityKey}: ${warning}`);
@@ -3213,6 +3261,7 @@ const validateBatchResponse = (payload, items, context) => {
       depth: item.depth,
       existingActor: context.politicalActors?.byPolity?.[item.polityKey] ?? null,
       allowEntityExpansion: context.allowEntityExpansionByPolity?.[item.polityKey] === true,
+      fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(item),
       historyAuthority: context.historyAuthority || null,
     });
     const errors = [...(validation.errors ?? [])];
@@ -3462,6 +3511,7 @@ const finalizeLandscapeFastItem = (item, {
   const seedPatch = buildLandscapeFastSeedPatch(existingActor, estimates);
   const completed = completeGeneratedPoliticalLandscapePatch(existingActor, seedPatch, {
     allowEntityExpansion: allowEntityExpansionByPolity?.[item.polityKey] === true,
+    fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(item),
   });
   const envelope = {
     schemaVersion: POLITICAL_WORLD_GENERATION_SCHEMA_VERSION,
@@ -3481,6 +3531,7 @@ const finalizeLandscapeFastItem = (item, {
     depth: item.depth,
     existingActor,
     allowEntityExpansion: allowEntityExpansionByPolity?.[item.polityKey] === true,
+    fillSparseActorPlaceholders: fillSparseActorPlaceholdersForItem(item),
   });
   const errors = [...(validation.errors ?? [])];
   if (!errors.length && assessPoliticalGenerationNeeds(validation.actor, item.depth).includes(POLITICAL_GENERATION_NEEDS.QUANTITATIVE_LANDSCAPE)) {

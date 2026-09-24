@@ -2118,6 +2118,7 @@ const createGame = ({
   description,
   eyebrow,
   features,
+  gamePatch,
   heroSubtitle,
   heroTitle,
   id,
@@ -2144,6 +2145,20 @@ const createGame = ({
     const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
     sourceScenario = getScenarioSummary(nextScenarioId);
     seedGameJsonFilesFromScenario(resolvedGameId, nextScenarioId);
+  }
+
+  // The starting country and difficulty the player picked, written before the
+  // game can become the active one. They used to follow in a second request,
+  // after `setActive` had already switched to the game — so the opening cover
+  // and the HUD named the scenario's default country (Modern Day's United
+  // States) until the patch landed. Same merge and canonicalisation as
+  // updateGame's gamePatch.
+  if (gamePatch && typeof gamePatch === "object") {
+    mergeJsonAsset(
+      getGameJsonPath(resolvedGameId, "game"),
+      canonicalizeGameCountry(gamePatch, readJsonFile(getGameJsonPath(resolvedGameId, "world"), JSON_ASSET_DEFAULTS.world)),
+      JSON_ASSET_DEFAULTS.game,
+    );
   }
 
   const createdAt = new Date().toISOString();

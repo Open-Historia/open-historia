@@ -14,6 +14,7 @@ import {
   planMetricTextSupport,
   planTerritorialTextSupport,
   polityTextOpacityAtZoom,
+  scalePolityTextSupportPoints,
 } from "./polityTextLayout.js";
 import { optimizeTerritorialArcPlacement } from "./polityTextPlacement.js";
 
@@ -404,6 +405,7 @@ export const measurePolityTextRenderRecord = ({
       metricPlan,
       placementTask,
       fallbackSupportPoints,
+      visualScaleCenter: [anchorCoordinate.x, anchorCoordinate.y],
     };
   }
 
@@ -458,6 +460,7 @@ export const finalizePolityTextRenderRecord = ({
     requestedFontPxAtZoom4,
     placementTask,
     fallbackSupportPoints,
+    visualScaleCenter,
   } = plan;
 
   // The production PTR path resolves territorial search in a dedicated worker.
@@ -466,7 +469,13 @@ export const finalizePolityTextRenderRecord = ({
   const optimized = placementTask
     ? (placementResolved ? optimizedPlacement : optimizeTerritorialArcPlacement(placementTask))
     : null;
-  const supportPoints = optimized?.points ?? fallbackSupportPoints;
+  const placedSupportPoints = optimized?.points ?? fallbackSupportPoints;
+  const supportPoints = plan.hasTerritorialEnvelope
+    ? scalePolityTextSupportPoints({
+        points: placedSupportPoints,
+        center: optimized?.center ?? visualScaleCenter,
+      })
+    : placedSupportPoints;
   const supportLength = cumulativeArcLengths(supportPoints).total;
   if (!(supportLength > 0)) return null;
 

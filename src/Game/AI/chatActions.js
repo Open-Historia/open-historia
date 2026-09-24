@@ -1,7 +1,7 @@
 /*! Open Historia — one request speaks for every AI participant © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// A four-way chat used to cost four requests for one player message: one to
-// decide who speaks next (the `nextSpeaker` task) and one for each leader who
-// answered, capped at three. On a free key — a few hundred requests a day
+// A four-way chat used to cost several requests for one player message: a
+// standalone speaker-selection request plus one request per leader who answered,
+// capped at three. On a free key — a few hundred requests a day
 // (requestBudget.js) — a single afternoon of diplomacy was the day's allowance.
 //
 // So a turn of a thread is ONE request that returns an ordered ACTION BATCH,
@@ -52,6 +52,21 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
 const clip = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 const fold = (value) => asText(value).toLowerCase();
+const escapeRegex = (value) => String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Structured chat actions already carry the speaker in actorName. Models still
+// sometimes mirror transcript notation and return `France: ...` inside content,
+// which makes the UI render the polity twice. Strip only an exact leading actor
+// display name plus punctuation; aliases and later mentions are deliberately left
+// untouched so normalization can never eat real speech.
+export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
+    const text = asText(content);
+    const actor = asText(actorName);
+    if (!text || !actor) return text;
+    const prefix = new RegExp(`^${escapeRegex(actor)}\\s*(?::|[-–—])\\s*`, "iu");
+    return text.replace(prefix, "").trim();
+};
+
 // An option's label, usable as its ref when the model gave none.
 const refFromLabel = (label) => fold(label).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 
@@ -68,7 +83,10 @@ export const normalizeChatAction = (entry) => {
     const base = { type, actorName };
 
     if (type === "send_message") {
-        const content = clip(asText(entry.content ?? entry.text ?? entry.message), MESSAGE_MAX_CHARS);
+        const content = clip(
+            stripRedundantChatSpeakerPrefix(entry.content ?? entry.text ?? entry.message, actorName),
+            MESSAGE_MAX_CHARS,
+        );
         return content ? { ...base, content } : null;
     }
     if (type === "add_reaction") {
@@ -319,7 +337,7 @@ export const describeChatActionFeedback = ({ rejected = [], unansweredPolls = []
 // One request answers for the whole table, but a table does not talk all at
 // once. A batch's events are shown in steps: the first message at once (the
 // request was the wait for it), and each later message only after its speaker
-// has been seen typing for CHAT_REVEAL_PAUSE_MS. A step is a message and what
+// has been seen typing for a short, natural 1-3 second pause. A step is a message and what
 // follows it up to the next message (a reaction, a vote, a newcomer); what
 // comes before the first message goes with the first. A batch with fewer than
 // two messages is one step.
@@ -329,7 +347,15 @@ export const describeChatActionFeedback = ({ rejected = [], unansweredPolls = []
 // the reveal has not reached, and the next turn is told whose lines went
 // unsaid (describeChatCutIn).
 
-export const CHAT_REVEAL_PAUSE_MS = 5000;
+export const CHAT_REVEAL_MIN_PAUSE_MS = 1000;
+export const CHAT_REVEAL_MAX_PAUSE_MS = 3000;
+
+export const randomChatRevealPauseMs = (random = Math.random) => {
+    const raw = Number(typeof random === "function" ? random() : 0);
+    const sample = Number.isFinite(raw) ? Math.max(0, Math.min(0.999999999999, raw)) : 0;
+    return CHAT_REVEAL_MIN_PAUSE_MS
+        + Math.floor(sample * (CHAT_REVEAL_MAX_PAUSE_MS - CHAT_REVEAL_MIN_PAUSE_MS + 1));
+};
 
 export const planChatReveal = (events) => {
     const steps = [];

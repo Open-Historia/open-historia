@@ -133,6 +133,9 @@ test("WebGL context loss remains instrumented for freeze diagnostics", () => {
   assert.match(world, /webglcontextlost/);
   assert.match(world, /webglcontextrestored/);
   assert.match(world, /recordMapTrace\("gpu:webgl-lost"/);
+  assert.match(world, /recordMapTrace\("gpu:webgl-released"/);
+  assert.match(world, /mapInstance\?\._removed \|\| !canvas\.isConnected/);
+  assert.match(world, /setTimeout\(\(\) => \{/);
   assert.match(world, /recordMapTrace\("gpu:webgl-restored"/);
   assert.match(world, /canvas\.addEventListener\("webglcontextlost", onLost\)/);
   assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
@@ -143,6 +146,17 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /loadNatGeoDarkStyle/);
   assert.match(world, /effectiveBasemap === "natgeo-dark"/);
   assert.match(world, /"atlas-relief-dark"/);
+  assert.match(world, /basemapId === "midnight-terrain"/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.96/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.16/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.92/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.20/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-contrast": 0\.38/);
+  assert.match(world, /5\.40, 0\.70[\s\S]*?6\.50, 0\.74[\s\S]*?12, 0\.78/);
+  assert.match(world, /"#000205"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*previewFilter: "brightness\(0\.15\) saturate\(0\.14\) contrast\(1\.10\)"/);
   assert.match(natGeoDarkStyle, /3d1a30626bbc46c582f148b9252676ce/);
   assert.match(natGeoDarkStyle, /classifyNatGeoDarkLabelLayer/);
   assert.match(natGeoDarkStyle, /kind === "street"/);
@@ -171,6 +185,8 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /noteBasemapTransitionProgress\(94\)/);
   assert.match(runtimeAssets, /id: "natgeo-dark"/);
   assert.match(editorBasemaps, /id: "natgeo-dark"/);
+  assert.match(runtimeAssets, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
 });
 
 test("label geometry is worker-owned and Nations never fits live polity polygons on the main thread", () => {

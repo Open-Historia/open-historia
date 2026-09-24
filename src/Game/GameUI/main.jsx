@@ -289,7 +289,11 @@ const Main = ({
   // command, or interactive event stage is in flight, never overlaps itself, and stays
   // silent on any failure. Hidden tabs don't roll the dice.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    // The main menu owns Scenario Workshop / Map Editor as overlays while the
+    // previously active campaign may still exist underneath. Idle diplomacy is
+    // gameplay activity, not background app activity, so do not let a country
+    // message the player while they are browsing/editing outside the campaign.
+    if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
@@ -297,7 +301,7 @@ const Main = ({
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [hasNoGames]);
+  }, [hasNoGames, mainMenuOpen]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
@@ -492,7 +496,10 @@ const Main = ({
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
-      <LibraryTopBar />
+      <LibraryTopBar onOpenSettings={() => {
+        setSettingsInitialSection("general");
+        setIsSettingsOpen(true);
+      }} />
       <DateWidget
         activePanel={activeBottomPanel}
         mapRef={mapRef}
@@ -586,8 +593,7 @@ const Main = ({
           countryName={activeCountryName || activeGame?.country || ""}
           // The game's own cover when it uploaded one, else its scenario's
           // (the server already folds the two into the game's coverImageUrl).
-          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}
-          phase={gameLoading.phase}
+          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}          phase={gameLoading.phase}
         />
       </Presence>
       <Presence open={showApiPrompt}>

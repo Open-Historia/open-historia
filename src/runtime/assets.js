@@ -92,6 +92,10 @@ export const ESRI_BASEMAPS = [
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
   { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "atlas-relief-dark", label: "Atlas Relief - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  // Very dark, label-free physical canvas for political overlays. World.jsx
+  // composes this from World Terrain Base + ETOPO relief, so no baked country
+  // names or modern political borders sit underneath live OpenHistoria canon.
+  { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },

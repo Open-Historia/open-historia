@@ -27,9 +27,18 @@ test("deterministic worklist has fixed domain order and bounded batches", () => 
   const power = worklist.indexOf('type: "power-evidence"');
   const verification = worklist.indexOf('type: "historical-verification"');
   assert.ok(actor < alignment && alignment < institutions && institutions < membership && membership < agreements && agreements < power && power < verification);
-  assert.match(worklist, /politicalActor: 8/);
+  assert.match(worklist, /politicalActor: 12/);
   assert.match(worklist, /temporalSentinel: 12/);
   assert.match(worklist, /historicalVerification: 4/);
+});
+
+test("Political World v2 enforces a lifetime call ceiling and accepts actor work only after native behavioral completeness", () => {
+  const checkpoint = fs.readFileSync(new URL("./checkpoint.js", import.meta.url), "utf8");
+  assert.match(checkpoint, /POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING = 100/);
+  assert.match(checkpoint, /POLITICAL_WORLD_V2_LEGACY_OVERRUN_ALLOWANCE = 60/);
+  assert.match(runner, /total-model-call-budget/);
+  assert.match(runner, /acceptedPoliticalWorldV2ActorTargets/);
+  assert.match(worklist, /behaviorallyIncompletePoliticalWorldV2Actors/);
 });
 
 test("simple runner derives the next task from canon instead of spawning child repair jobs", () => {
@@ -50,13 +59,15 @@ test("v2 Apply remains atomic and materializes canonical owning ledgers only", (
 });
 
 
-test("bounded domain failures defer targets instead of blocking the whole deterministic run", () => {
+test("bounded domain failures defer targets without silently reopening them on ordinary Resume", () => {
   assert.match(worklist, /politicalWorldV2TargetExhausted/);
   assert.match(worklist, /retryableTargets/);
   assert.doesNotMatch(runner, /bounded-failure:/);
   assert.match(runner, /pauseReason = summary\?\.deferred\?\.length \? "bounded-unresolved"/);
-  assert.match(pipeline, /checkpoint\.attempts = \{\};/);
-  assert.match(panel, /deferred .* stubborn target/i);
+  assert.doesNotMatch(pipeline, /checkpoint\.attempts = \{\};/);
+  assert.match(pipeline, /retryDeferred === true/);
+  assert.match(pipeline, /resetDeferredPoliticalWorldV2Attempts/);
+  assert.match(panel, /Retry Deferred Targets/);
 });
 
 test("provider/executor throws pause the deterministic session instead of penalizing polity attempts", () => {
@@ -65,14 +76,15 @@ test("provider/executor throws pause the deterministic session instead of penali
   assert.doesNotMatch(runner, /catch \(error\)[\s\S]{0,500}bumpAttempts\(current, task\.type/);
 });
 
-test("actor work items reuse the proven bounded native retry loop while preserving checkpoint feedback", () => {
-  assert.match(runner, /taskProviderCallCeiling/);
+test("v2 owns retries at the checkpoint boundary so one work item can spend only one provider call", () => {
+  assert.match(runner, /taskProviderCallCeiling = \(\) => 1/);
   assert.match(runner, /callsRemaining < taskCallCeiling/);
   assert.match(runner, /retryContext/);
   assert.match(runner, /actorFailureErrors/);
   const executor = fs.readFileSync(new URL("./executor.js", import.meta.url), "utf8");
   assert.match(executor, /boundedCallModel/);
-  assert.match(executor, /maxAttempts: 2/);
+  assert.match(executor, /const taskProviderCallCeiling = \(\) => 1/);
+  assert.match(executor, /maxAttempts: 1/);
   assert.match(executor, /retryErrorsByPolity: checkpoint\?\.retryContext\?\.politicalActor/);
 });
 
@@ -82,6 +94,8 @@ test("PWV2 party coverage is a political-actor Canonical Gate invariant without 
   assert.match(worklist, /requireRepresentationCoverage: true/);
   assert.match(executor, /requireRepresentationCoverage: true/);
   assert.match(executor, /allowEntityExpansion === true \|\| !authoredActors\?\.\[polity\]/);
+  assert.match(executor, /allowEntityExpansionByPolity\?\.\[polityKey\] === true/);
+  assert.match(executor, /applyPoliticalGenerationToWorld\(stagedWorld, result\.generation, scenarioDate, \{[\s\S]{0,180}allowEntityExpansionByPolity/);
   assert.match(executor, /generatePoliticalGoverningAlignmentRepair/);
   assert.doesNotMatch(executor, /missingCoalitionEntities/);
 });
@@ -94,6 +108,14 @@ test("v2 temporal sentinel forwards challenged semantic paths into the existing 
   assert.doesNotMatch(worklist, /semantic-verification/);
 });
 
+test("v2 exact-date verification rebases stale proposal material to current staged generated canon before honoring sticky challenges", () => {
+  const executor = fs.readFileSync(new URL("./executor.js", import.meta.url), "utf8");
+  assert.match(executor, /rebasePoliticalWorldVerificationEntry/);
+  assert.match(executor, /historicalChallengeStillAppliesToEntry/);
+  assert.match(executor, /staleCorrectionObligations/);
+  assert.match(executor, /challenged generated fact changed in current staged canon/);
+});
+
 test("v2 reference bootstrap is mandatory canon input and completed checkpoints can rebase only Canon Context", () => {
   assert.match(pipeline, /reconcilePoliticalWorldV2ReferenceState/);
   assert.match(pipeline, /rebasePoliticalWorldV2ReferenceCanon/);
@@ -101,5 +123,14 @@ test("v2 reference bootstrap is mandatory canon input and completed checkpoints 
   assert.match(pipeline, /expectedReferenceInstitutionIds/);
   assert.match(pipeline, /missingReferenceInstitutionIds/);
   assert.match(panel, /Always reload the saved scenario before v2 starts\/resumes/);
-  assert.match(panel, /Saved Canon Context does not match the editor's active reference knowledge/);
+  assert.match(panel, /Saved (?:Canon Context|world context) does not match the editor's active reference knowledge/);
+});
+
+test("late actor repair invalidates stale downstream alignment/verification and exact-date corrections remain durable", () => {
+  assert.match(runner, /invalidateDownstreamActorCoverage/);
+  assert.match(runner, /\["governing-alignment", "historical-verification"\]/);
+  assert.match(runner, /clearAttempts\(checkpoint, "temporal-sentinel", accepted\)/);
+  assert.match(runner, /delete checkpoint\.verification\?\.challenges\?\.\[polity\]/);
+  assert.match(runner, /storeHistoricalVerificationEntries/);
+  assert.match(runner, /checkpoint\.generationEntriesByPolity\[polity\] = clone\(entry\)/);
 });

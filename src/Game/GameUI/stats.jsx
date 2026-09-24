@@ -12,10 +12,11 @@ import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
+import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
-import { setRegionClickObserver } from "../Selection/Regions.jsx";
+import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
@@ -419,7 +420,7 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
     </div>
 );
 
-const DiplomacySection = ({ world, targetCountry }) => {
+const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
     const diplomacy = useMemo(() => {
         if (!world || !targetCountry) return null;
         const target = canonicalPolityKey(targetCountry, world);
@@ -474,13 +475,34 @@ const DiplomacySection = ({ world, targetCountry }) => {
             .filter(Boolean)
             .sort((left, right) => compareGameDates(right.lastUpdatedDate || right.startedDate || "", left.lastUpdatedDate || left.startedDate || ""));
 
+        // Puppet truth stays in the canonical relationship ledger, but player-facing diplomacy must
+        // never read that ledger directly. The shared resolver enforces covert
+        // knowledge and loyalty visibility consistently with the map, Advisor
+        // and diplomatic chat. Unknown covert arrangements therefore leave no
+        // trace in this drawer.
+        const viewer = canonicalPolityKey(viewerPolity, world) || cleanText(viewerPolity);
+        const subordination = viewer ? puppetSummaryFor(world, viewer, target) : null;
+        const subordinates = viewer
+            ? livePuppetsFor(world, viewer)
+                .filter((row) => lowerText(canonicalPolityKey(row?.overlord, world)) === targetKey)
+                .map((row) => ({
+                    ...row,
+                    puppetKey: canonicalPolityKey(row?.puppet, world) || cleanText(row?.puppet),
+                    puppetName: polityDisplayName(world, row?.puppet),
+                    kindLabel: puppetKindLabel(row?.kind),
+                }))
+                .sort((left, right) => left.puppetName.localeCompare(right.puppetName))
+            : [];
+
         return {
             relations,
             agreements,
             currentWars,
+            subordination,
+            subordinates,
             activeAgreements: agreements.filter((agreement) => lowerText(agreement.status) === "active").length,
         };
-    }, [world, targetCountry]);
+    }, [world, targetCountry, viewerPolity]);
 
     if (!diplomacy) return null;
 
@@ -492,6 +514,51 @@ const DiplomacySection = ({ world, targetCountry }) => {
         <DiplomacyMetric label="Active agreements" value={diplomacy.activeAgreements} tone="#34d399" />
         <DiplomacyMetric label="Conflicts" value={diplomacy.currentWars.length} tone={diplomacy.currentWars.length ? "#f87171" : "#94a3b8"} />
         </div>
+
+        {diplomacy.subordination && (
+            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: "0.65rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.56rem", fontWeight: 850, letterSpacing: "0.05em", textTransform: "uppercase" }}>Subordination</div>
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 850, marginTop: "0.28rem" }}>{diplomacy.subordination.headline}</div>
+            <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.22rem" }}>{diplomacy.subordination.meaning}</div>
+            {diplomacy.subordination.facts.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.28rem", marginTop: "0.45rem" }}>
+                {diplomacy.subordination.facts.map((fact) => (
+                    <span key={fact} style={{ backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "999px", color: "rgba(255,255,255,0.68)", fontSize: "0.58rem", padding: "0.15rem 0.38rem" }}>{fact}</span>
+                ))}
+                </div>
+            )}
+            {diplomacy.subordination.provenance && (
+                <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", fontStyle: "italic", lineHeight: 1.4, marginTop: "0.4rem" }}>{diplomacy.subordination.provenance}</div>
+            )}
+            </div>
+        )}
+
+        {diplomacy.subordinates.length > 0 && (
+            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>Subordinate states</div>
+            {diplomacy.subordinates.map((row) => {
+                const facts = [
+                    row.loyaltyBand,
+                    row.startedDate ? `Since ${row.startedDate}` : "",
+                    row.secrecy === "covert" ? "Covert" : "Openly known",
+                    row.fromIntelligence ? "From intelligence" : "",
+                ].filter(Boolean);
+                return (
+                    <div key={row.id || `${row.overlord}-${row.puppetKey}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                    <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.puppetName}</div>
+                    {facts.length > 0 && (
+                        <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.14rem" }}>{facts.join(" · ")}</div>
+                    )}
+                    </div>
+                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#c084fc" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
+                    </div>
+                    </div>
+                );
+            })}
+            </div>
+        )}
 
         <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.55rem 0.65rem" }}>
@@ -1542,18 +1609,27 @@ const StatsPaneBody = ({ active }) => {
     }, [active, activeGameId]);
 
     // While the pane is showing, clicking any country on the map inspects it.
+    // Listen through the committed browser event rather than the old module-global
+    // callback seam: the map and Country pane can live in separate lazy/HMR module
+    // instances, while the window event remains one stable runtime boundary.
     useEffect(() => {
-        if (!active) return undefined;
-        setRegionClickObserver((props) => {
-            // One namespace: the owning country's NAME. The gid0/GID_0 tail is the
-            // region's GADM provenance — a code — so falling through to it used to
-            // hand this pane "RUS" for an unowned region while every owned one gave
-            // a name. The sheet is keyed by country, and the two never matched.
-            const gid0 = String(props?.gid0 || props?.GID_0 || "").trim();
-            const country = String(props?.owner || "").trim() || COUNTRY_NAMES[gid0] || gid0;
+        if (!active || typeof window === "undefined") return undefined;
+        const onRegionSelected = (event) => {
+            const props = event?.detail;
+            if (!props || typeof props !== "object") return;
+
+            // Prefer live ownership, but normalize stock ISO/GADM codes back into
+            // the same canonical polity namespace the Stats sheet uses. COUNTRY is
+            // retained as a safe fallback for stock regions without an owner field.
+            const gid0 = cleanText(props.gid0 || props.GID_0);
+            const owner = cleanText(props.owner);
+            const ownerName = COUNTRY_NAMES[owner] || owner;
+            const rawCountry = ownerName || cleanText(props.COUNTRY) || COUNTRY_NAMES[gid0] || gid0;
+            const country = canonicalPolityKey(rawCountry, worldSnapshotRef.current) || rawCountry;
             if (country) setTargetCountry(country);
-        });
-        return () => setRegionClickObserver(null);
+        };
+        window.addEventListener(REGION_SELECTED_EVENT, onRegionSelected);
+        return () => window.removeEventListener(REGION_SELECTED_EVENT, onRegionSelected);
     }, [active]);
 
     const loadSheet = useCallback(async ({ force = false, forceReassess = false } = {}) => {
@@ -2084,7 +2160,7 @@ const StatsPaneBody = ({ active }) => {
             )}
 
             {statsView === "diplomacy" && worldSnapshot && (
-                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} />
+                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} viewerPolity={player.code} />
             )}
 
             {statsView === "diplomacy" && !worldSnapshot && (

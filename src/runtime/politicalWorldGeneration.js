@@ -526,6 +526,14 @@ export const buildPoliticalGenerationPlan = ({
       depth,
       needs,
       hasExistingActor: Boolean(actor),
+      // Normalization materializes an unknown sparse actor as
+      // politicalSystem={type:"unspecified",representation:"none"} plus empty
+      // roster/government-ref arrays. That shape is not authored closure. Carry
+      // the distinction through the generation item so v2 may hydrate only
+      // those placeholders without opening a real authored empty roster.
+      sparsePlaceholderHydration: Boolean(actor)
+        && clean(actor?.politicalSystem?.type).toLocaleLowerCase() === "unspecified"
+        && clean(actor?.politicalSystem?.representation).toLocaleLowerCase() === POLITICAL_REPRESENTATIONS.NONE,
     });
   }
 
@@ -643,8 +651,8 @@ const validateReferenceList = (value, knownIds, path, errors) => {
   }
 };
 
-const mergeEntityArray = (existing, generated, path, appliedPaths, { allowEntityExpansion }) => {
-  if (!Array.isArray(existing)) {
+const mergeEntityArray = (existing, generated, path, appliedPaths, { allowEntityExpansion, fillSparseActorPlaceholders }) => {
+  if (!Array.isArray(existing) || (fillSparseActorPlaceholders === true && existing.length === 0 && generated.length > 0)) {
     appliedPaths.push(path);
     return clone(generated);
   }
@@ -666,13 +674,42 @@ const mergeEntityArray = (existing, generated, path, appliedPaths, { allowEntity
 };
 
 const EMPTY_GOVERNMENT_PARTY_REF_PATHS = new Set(["government.rulingPartyIds", "government.coalitionPartyIds"]);
+const SPARSE_POLITICAL_SYSTEM_PLACEHOLDERS = Object.freeze({
+  "politicalSystem.type": new Set(["", "unspecified"]),
+  "politicalSystem.representation": new Set(["", POLITICAL_REPRESENTATIONS.NONE]),
+});
 
 const mergeMissingValue = (existing, generated, path, appliedPaths, options) => {
   if (!isPlainObject(generated)) return existing;
   const out = isPlainObject(existing) ? clone(existing) : {};
   for (const [key, generatedValue] of Object.entries(generated)) {
     const nextPath = path ? `${path}.${key}` : key;
+    const sparsePlaceholders = SPARSE_POLITICAL_SYSTEM_PLACEHOLDERS[nextPath];
+    if (
+      options?.fillSparseActorPlaceholders === true
+      && sparsePlaceholders
+      && sparsePlaceholders.has(clean(out[key]).toLocaleLowerCase())
+      && clean(generatedValue)
+    ) {
+      out[key] = clone(generatedValue);
+      appliedPaths.push(nextPath);
+      continue;
+    }
     if (!hasOwn(out, key)) {
+      out[key] = clone(generatedValue);
+      appliedPaths.push(nextPath);
+      continue;
+    }
+    // Native fallback percentages are explicitly provisional generator-owned
+    // placeholders. A later provider estimate may upgrade that one metric to a
+    // generated-estimate, but authored/campaign percentages remain immutable.
+    if (
+      (key === "support" || key === "influence")
+      && isPlainObject(out[key])
+      && clean(out[key].basis).toLocaleLowerCase() === "native-fallback-estimate"
+      && isPlainObject(generatedValue)
+      && clean(generatedValue.basis).toLocaleLowerCase() === "generated-estimate"
+    ) {
       out[key] = clone(generatedValue);
       appliedPaths.push(nextPath);
       continue;
@@ -684,7 +721,7 @@ const mergeMissingValue = (existing, generated, path, appliedPaths, options) => 
     // filled from an already-existing party roster. Non-empty canonical refs
     // remain immutable and all other empty authored arrays stay closed.
     if (
-      options?.fillEmptyGovernmentPartyRefs === true
+      (options?.fillEmptyGovernmentPartyRefs === true || options?.fillSparseActorPlaceholders === true)
       && EMPTY_GOVERNMENT_PARTY_REF_PATHS.has(nextPath)
       && Array.isArray(out[key])
       && out[key].length === 0
@@ -709,7 +746,7 @@ const mergeMissingValue = (existing, generated, path, appliedPaths, options) => 
 export const mergeMissingPoliticalActor = (
   existingActor,
   generatedPatch,
-  { allowEntityExpansion = false, fillEmptyGovernmentPartyRefs = false } = {},
+  { allowEntityExpansion = false, fillEmptyGovernmentPartyRefs = false, fillSparseActorPlaceholders = false } = {},
 ) => {
   const appliedPaths = [];
   const actor = mergeMissingValue(
@@ -720,6 +757,7 @@ export const mergeMissingPoliticalActor = (
     {
       allowEntityExpansion: allowEntityExpansion === true,
       fillEmptyGovernmentPartyRefs: fillEmptyGovernmentPartyRefs === true,
+      fillSparseActorPlaceholders: fillSparseActorPlaceholders === true,
     },
   );
   return { actor, appliedPaths };
@@ -787,10 +825,10 @@ const setGeneratedLandscapeMetric = (patch, targetEntity, { collection, metric, 
 // estimates are scaled down when they oversubscribe the remaining 100%; omitted
 // estimates get a bounded native fallback so no represented actor silently lands
 // at an undefined/0% starting state.
-export const completeGeneratedPoliticalLandscapePatch = (existingActor, generatedPatch, { allowEntityExpansion = false } = {}) => {
+export const completeGeneratedPoliticalLandscapePatch = (existingActor, generatedPatch, { allowEntityExpansion = false, fillSparseActorPlaceholders = false } = {}) => {
   if (!isPlainObject(generatedPatch)) return { patch: generatedPatch, warnings: [] };
   const out = clone(generatedPatch);
-  const merged = mergeMissingPoliticalActor(existingActor, out, { allowEntityExpansion }).actor;
+  const merged = mergeMissingPoliticalActor(existingActor, out, { allowEntityExpansion, fillSparseActorPlaceholders }).actor;
   const polityKey = clean(existingActor?.polityKey || merged?.polityKey);
   const actor = normalizePoliticalActorRecord({ ...merged, ...(polityKey ? { polityKey } : {}) }, polityKey);
   const representation = actorRepresentation(actor);
@@ -881,6 +919,7 @@ export const validatePoliticalGenerationProposal = (proposal, {
   existingActor = null,
   allowEntityExpansion = false,
   fillEmptyGovernmentPartyRefs = false,
+  fillSparseActorPlaceholders = false,
   historyAuthority = null,
 } = {}) => {
   const errors = [];
@@ -982,6 +1021,7 @@ export const validatePoliticalGenerationProposal = (proposal, {
   const mergedPreview = mergeMissingPoliticalActor(existingActor, patch, {
     allowEntityExpansion,
     fillEmptyGovernmentPartyRefs,
+    fillSparseActorPlaceholders,
   });
   const normalizedActor = normalizePoliticalActorRecord(
     { ...mergedPreview.actor, polityKey: expectedPolityKey },

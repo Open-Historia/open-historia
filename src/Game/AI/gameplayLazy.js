@@ -55,7 +55,6 @@ export const endActiveInteractive = async (...args) => (await gameplay()).endAct
 export const setAsideActiveInteractive = async (...args) => (await gameplay()).setAsideActiveInteractive(...args);
 
 // --- Chat and diplomacy -----------------------------------------------------
-export const chooseNextDiplomaticSpeaker = async (...args) => (await gameplay()).chooseNextDiplomaticSpeaker(...args);
 // One request acts for every AI participant in a thread (AI/chatActions.js).
 export const runChatActionBatch = async (...args) => (await gameplay()).runChatActionBatch(...args);
 export const checkDemandReply = async (...args) => (await gameplay()).checkDemandReply(...args);

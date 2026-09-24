@@ -20,11 +20,14 @@ test("main time skip derives bounded PWv2 actors from Beta world initiative atte
 test("main time skip keeps player political pressure as evidence, never sovereign consent", () => {
   assert.match(gameplay, /internal pressure may produce non-sovereign social, party, institutional or public developments/);
   assert.match(gameplay, /it is NOT consent or authority to invent a new executive, parliamentary, diplomatic, military, territorial or other sovereign choice/);
-  assert.match(gameplay, /userMessage:\s*\[lastTurnReceipt, gmChangeNarration, politicalDecisionContext,/);
+  assert.match(gameplay, /userMessage:\s*\[lastTurnReceipt, gmChangeNarration, (?:normalizeString\(evaluation\?\.sharedDirective\), )?politicalDecisionContext,/);
 });
 
 test("one-request group diplomacy receives compartmentalized actor-private PWv2 capsules", () => {
   assert.match(gameplay, /actorPolities:\s*aiParticipants/);
+  assert.match(gameplay, /decisionFocusText:\s*politicalDecisionFocusText/);
+  assert.match(gameplay, /normalizeString\(playerMessage\)/);
+  assert.match(gameplay, /normalizeString\(focusProposal\?\.summary\)/);
   assert.match(gameplay, /PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA/);
   assert.match(gameplay, /Do not reveal one participant's private politics to another/);
 });

@@ -106,6 +106,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pendingLogoDataUrl, setPendingLogoDataUrl] = useState("");
+  const [memberEntry, setMemberEntry] = useState("");
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -126,6 +127,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId(institution?.id || "");
     setDraft(institutionAuthoringDraft(institution));
     setPendingLogoDataUrl("");
+    setMemberEntry("");
     setDirty(false);
     setMessage("");
   };
@@ -135,6 +137,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId("");
     setDraft(institutionAuthoringDraft(null));
     setPendingLogoDataUrl("");
+    setMemberEntry("");
     setDirty(true);
     setMessage("");
   };
@@ -199,22 +202,55 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     : "";
   const previewUrl = pendingLogoDataUrl || storedLogoPreview;
 
+  const memberNames = useMemo(() => {
+    const seen = new Set();
+    return String(draft.membersText || "")
+      .split(/[\n,;]+/g)
+      .map((entry) => entry.trim())
+      .filter((entry) => {
+        const key = entry.toLocaleLowerCase();
+        if (!entry || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [draft.membersText]);
+
+  const setMemberNames = (names) => edit("membersText", names.join("\n"));
+
+  const addMember = () => {
+    const next = memberEntry.trim();
+    if (!next) return;
+    const exists = memberNames.some((entry) => entry.toLocaleLowerCase() === next.toLocaleLowerCase());
+    if (!exists) setMemberNames([...memberNames, next]);
+    setMemberEntry("");
+  };
+
+  const removeMember = (name) => {
+    setMemberNames(memberNames.filter((entry) => entry.toLocaleLowerCase() !== name.toLocaleLowerCase()));
+  };
+
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.9rem", padding: "0.9rem" }}>
       <div style={{ alignItems: "flex-start", display: "flex", gap: "0.7rem", justifyContent: "space-between" }}>
         <div>
-          <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.9rem", fontWeight: 800 }}>Premade institutions & logos</div>
+          <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", fontWeight: 800 }}>Institutions</div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>
-            Create or edit canonical organizations before play. Presentation stays institution-owned; Political World may later enrich memberships and governance without replacing your identity or logo choice.
+            Create institutions that already exist when the scenario begins. Political World generation may enrich membership and governance later, but it will preserve the identity and artwork you author here.
           </div>
         </div>
         <button onClick={createNew} style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(139,92,246,0.38)", flex: "0 0 auto" }} type="button">
-          + Institution
+          + Create institution
         </button>
       </div>
 
-      <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "minmax(9.5rem, 0.9fr) minmax(0, 2fr)", marginTop: "0.8rem" }}>
-        <div style={{ display: "grid", gap: "0.35rem", maxHeight: "28rem", overflow: "auto", paddingRight: "0.2rem" }}>
+      {!rows.length && !selectedId && (
+        <div style={{ background: "rgba(124,58,237,0.07)", border: "1px solid rgba(167,139,250,0.18)", borderRadius: 12, color: "rgba(237,233,254,0.86)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}>
+          <strong>No institutions created yet.</strong> Add one manually if it must exist at scenario start, or leave this empty and let Political World generation establish relevant institutions later.
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "minmax(9.5rem, 0.78fr) minmax(0, 2.22fr)", marginTop: "0.8rem" }}>
+        <div style={{ display: "grid", gap: "0.35rem", maxHeight: "31rem", overflow: "auto", paddingRight: "0.2rem" }}>
           {rows.map((institution) => {
             const selected = institution.id === selectedId;
             return (
@@ -237,92 +273,131 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               </button>
             );
           })}
-          {!rows.length && <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem", lineHeight: 1.45 }}>No canonical institutions yet. Create one here or let Political World discover them.</div>}
+          {!rows.length && <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.67rem", lineHeight: 1.45, padding: "0.3rem 0.15rem" }}>Your scenario has no authored institutions yet.</div>}
         </div>
 
         <div style={{ minWidth: 0 }}>
-          <div style={{ alignItems: "center", display: "flex", gap: "0.7rem", marginBottom: "0.75rem" }}>
-            <InstitutionLogoPreview draft={draft} previewUrl={previewUrl} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800 }}>{draft.name || "New institution"}</div>
-              <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{draft.id ? `Canonical id: ${draft.id}` : "Id will be derived from the name when saved."}</div>
+          <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: "0.72rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.06em", marginBottom: "0.6rem", textTransform: "uppercase" }}>Identity</div>
+            <div style={{ alignItems: "center", display: "flex", gap: "0.7rem", marginBottom: "0.7rem" }}>
+              <InstitutionLogoPreview draft={draft} previewUrl={previewUrl} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.82rem", fontWeight: 800 }}>{draft.name || "New institution"}</div>
+                <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{draft.shortName || "Name the institution to begin."}</div>
+              </div>
             </div>
-          </div>
+            <div style={{ display: "grid", gap: "0.62rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={labelStyle}>Name</label>
+                <input onChange={(event) => edit("name", event.target.value)} placeholder="e.g. Northern League" style={inputStyle} value={draft.name} />
+              </div>
+              <div>
+                <label style={labelStyle}>Short name</label>
+                <input onChange={(event) => edit("shortName", event.target.value)} placeholder="NL" style={inputStyle} value={draft.shortName} />
+              </div>
+              <div>
+                <label style={labelStyle}>Type</label>
+                <select onChange={(event) => edit("kind", event.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} value={draft.kind}>
+                  {INSTITUTION_KINDS.map((kind) => <option key={kind} value={kind}>{kindLabel(kind)}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Founded</label>
+                <input onChange={(event) => edit("foundedDate", event.target.value)} placeholder="YYYY-MM-DD" style={inputStyle} value={draft.foundedDate} />
+              </div>
+              <div>
+                <label style={labelStyle}>Dissolved</label>
+                <input onChange={(event) => edit("dissolvedDate", event.target.value)} placeholder="Leave blank if active" style={inputStyle} value={draft.dissolvedDate} />
+              </div>
+            </div>
+          </section>
 
-          <div style={{ display: "grid", gap: "0.62rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={labelStyle}>Name</label>
-              <input onChange={(event) => edit("name", event.target.value)} placeholder="e.g. Northern League" style={inputStyle} value={draft.name} />
+          <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, marginTop: "0.65rem", padding: "0.72rem" }}>
+            <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+              <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>Members</div>
+              <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem" }}>{memberNames.length} added</div>
             </div>
-            <div>
-              <label style={labelStyle}>Short name</label>
-              <input onChange={(event) => edit("shortName", event.target.value)} placeholder="NL" style={inputStyle} value={draft.shortName} />
+            <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.25rem" }}>Add the polities that belong to this institution at scenario start. Existing roles and statuses are preserved when you edit an institution.</div>
+            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.55rem" }}>
+              <input
+                onChange={(event) => setMemberEntry(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  addMember();
+                }}
+                placeholder="Type a polity name"
+                style={{ ...inputStyle, flex: 1 }}
+                value={memberEntry}
+              />
+              <button disabled={!memberEntry.trim()} onClick={addMember} style={{ ...actionButtonStyle, opacity: memberEntry.trim() ? 1 : 0.45 }} type="button">Add</button>
             </div>
-            <div>
-              <label style={labelStyle}>Kind</label>
-              <select onChange={(event) => edit("kind", event.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} value={draft.kind}>
-                {INSTITUTION_KINDS.map((kind) => <option key={kind} value={kind}>{kindLabel(kind)}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Founded</label>
-              <input onChange={(event) => edit("foundedDate", event.target.value)} placeholder="YYYY-MM-DD" style={inputStyle} value={draft.foundedDate} />
-            </div>
-            <div>
-              <label style={labelStyle}>Dissolved</label>
-              <input onChange={(event) => edit("dissolvedDate", event.target.value)} placeholder="blank if active" style={inputStyle} value={draft.dissolvedDate} />
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={labelStyle}>Aliases</label>
-              <input onChange={(event) => edit("aliasesText", event.target.value)} placeholder="Comma-separated names" style={inputStyle} value={draft.aliasesText} />
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={labelStyle}>Members</label>
-              <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One polity name per line" style={{ ...inputStyle, minHeight: "5.4rem", resize: "vertical" }} value={draft.membersText} />
-              <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.45, marginTop: "0.25rem" }}>Existing member roles/statuses are preserved when the same polity remains listed. New entries start as ordinary members.</div>
-            </div>
-          </div>
+            {memberNames.length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.55rem" }}>
+                {memberNames.map((name) => (
+                  <span key={name.toLocaleLowerCase()} style={{ alignItems: "center", background: "rgba(255,255,255,0.055)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "999px", display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
+                    {name}
+                    <button aria-label={`Remove ${name}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.65rem", marginTop: "0.5rem" }}>No starting members added.</div>
+            )}
+            <details style={{ marginTop: "0.55rem" }}>
+              <summary style={{ color: "rgba(255,255,255,0.48)", cursor: "pointer", fontSize: "0.64rem" }}>Bulk edit member list</summary>
+              <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One polity name per line" style={{ ...inputStyle, minHeight: "5rem", marginTop: "0.4rem", resize: "vertical" }} value={draft.membersText} />
+            </details>
+          </section>
 
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)", marginTop: "0.75rem", paddingTop: "0.7rem" }}>
-            <label style={labelStyle}>Built-in historical emblem</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-              {Object.keys(BUILTIN_INSTITUTION_LOGOS).map((badgeKey) => (
-                <button
-                  key={badgeKey}
-                  onClick={() => {
+          <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, marginTop: "0.65rem", padding: "0.72rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.66rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>Visual identity</div>
+            <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.55rem" }}>
+              <div>
+                <label style={labelStyle}>Historical emblem</label>
+                <select
+                  onChange={(event) => {
+                    const badgeKey = event.target.value;
                     setPendingLogoDataUrl("");
                     setDirty(true);
                     setDraft((current) => ({ ...current, badgeKey, logoUrl: "", logoAsset: false }));
                   }}
-                  style={{ ...actionButtonStyle, background: draft.badgeKey === badgeKey && !draft.logoUrl ? "rgba(124,58,237,0.28)" : "rgba(255,255,255,0.04)", minHeight: "1.8rem" }}
-                  type="button"
+                  style={{ ...inputStyle, colorScheme: "dark" }}
+                  value={draft.logoUrl || draft.logoAsset ? "" : draft.badgeKey}
                 >
-                  {badgeKey.toUpperCase()}
-                </button>
-              ))}
-              <button onClick={() => { setPendingLogoDataUrl(""); setDirty(true); setDraft((current) => ({ ...current, badgeKey: "", logoAsset: false })); }} style={{ ...actionButtonStyle, minHeight: "1.8rem" }} type="button">None</button>
+                  <option value="">None / custom logo</option>
+                  {Object.keys(BUILTIN_INSTITUTION_LOGOS).map((badgeKey) => <option key={badgeKey} value={badgeKey}>{badgeKey.toUpperCase()}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Custom logo URL or asset path</label>
+                <input onChange={(event) => { setPendingLogoDataUrl(""); setDirty(true); setMessage(""); setDraft((current) => ({ ...current, badgeKey: "", logoUrl: event.target.value, logoAsset: false })); }} placeholder="logos/my-alliance.svg or https://..." style={inputStyle} value={draft.logoUrl} />
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                <button onClick={() => fileRef.current?.click()} style={actionButtonStyle} type="button">Upload small logo</button>
+                <button onClick={() => { setPendingLogoDataUrl(""); setDirty(true); setDraft((current) => ({ ...current, badgeKey: "", logoUrl: "", logoAsset: false })); }} style={actionButtonStyle} type="button">Clear logo</button>
+                <input accept=".gif,.jpeg,.jpg,.png,.webp" onChange={uploadLogo} ref={fileRef} style={{ display: "none" }} type="file" />
+              </div>
+              <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.45 }}>
+                PNG, JPEG, WebP and GIF uploads up to 256 KB can travel with the scenario. Use an asset path or URL for SVG or larger artwork.
+              </div>
             </div>
-          </div>
+          </section>
 
-          <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.65rem" }}>
-            <div>
-              <label style={labelStyle}>Custom logo URL / asset path</label>
-              <input onChange={(event) => { setPendingLogoDataUrl(""); setDirty(true); setMessage(""); setDraft((current) => ({ ...current, logoUrl: event.target.value, logoAsset: false })); }} placeholder="logos/my-alliance.svg or https://..." style={inputStyle} value={draft.logoUrl} />
+          <details style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, marginTop: "0.65rem", padding: "0.62rem 0.72rem" }}>
+            <summary style={{ color: "rgba(255,255,255,0.62)", cursor: "pointer", fontSize: "0.69rem", fontWeight: 700 }}>Advanced details</summary>
+            <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.6rem" }}>
+              <div>
+                <label style={labelStyle}>Aliases</label>
+                <input onChange={(event) => edit("aliasesText", event.target.value)} placeholder="Comma-separated alternate names" style={inputStyle} value={draft.aliasesText} />
+              </div>
+              <div>
+                <label style={labelStyle}>Author note</label>
+                <textarea onChange={(event) => edit("note", event.target.value)} placeholder="Optional note for scenario authors" style={{ ...inputStyle, minHeight: "4.2rem", resize: "vertical" }} value={draft.note} />
+              </div>
+              {draft.id && <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem" }}>Canonical id: {draft.id}</div>}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
-              <button onClick={() => fileRef.current?.click()} style={actionButtonStyle} type="button">Embed small raster logo</button>
-              <button onClick={() => { setPendingLogoDataUrl(""); setDirty(true); setDraft((current) => ({ ...current, logoUrl: "", logoAsset: false })); }} style={actionButtonStyle} type="button">Clear custom logo</button>
-              <input accept=".gif,.jpeg,.jpg,.png,.webp" onChange={uploadLogo} ref={fileRef} style={{ display: "none" }} type="file" />
-            </div>
-            <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.45 }}>
-              Small raster uploads are stored in the scenario's dedicated institution-logo asset (256 KB max), so world.json stays light. SVG and larger artwork should use a normal public/scenario asset path or URL.
-            </div>
-          </div>
-
-          <div style={{ marginTop: "0.65rem" }}>
-            <label style={labelStyle}>Author note</label>
-            <textarea onChange={(event) => edit("note", event.target.value)} style={{ ...inputStyle, minHeight: "4.2rem", resize: "vertical" }} value={draft.note} />
-          </div>
+          </details>
 
           {message && (
             <div style={{ background: /saved/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.65rem", padding: "0.55rem 0.65rem" }}>

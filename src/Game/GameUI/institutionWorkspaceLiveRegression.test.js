@@ -78,7 +78,8 @@ test("institution council keeps the governance-sized Continuum presentation over
   assert.match(chat, /Review agenda →/);
   assert.match(chat, /Institution record/);
   assert.match(chat, /Council message/);
-  assert.match(chat, /Speak instead/);
+  assert.doesNotMatch(chat, /Speak instead/);
+  assert.match(chat, /runChatActionBatch/);
   assert.match(chat, /Formal business →/);
   assert.match(chat, /onInstitutionNavigate/);
 });

@@ -17,6 +17,10 @@ import {
   buildRoundZeroCanonContext,
   buildRoundZeroCanonContextText,
 } from "./roundZeroCanonContext.js";
+import {
+  isFeatureEnabled,
+  normalizeFeatureSettings,
+} from "../../server/gameFeatures.js";
 
 export { collectScenarioPoliticalPolities } from "./scenarioPolities.js";
 
@@ -71,14 +75,29 @@ const activeBelligerents = (world, resolve) => {
   return out;
 };
 
+const activePuppetParticipants = (world, resolve, enabled = true) => {
+  const out = new Set();
+  if (!enabled) return out;
+  for (const row of Array.isArray(world?.puppets) ? world.puppets : []) {
+    if (clean(row?.status || "active").toLocaleLowerCase() !== "active") continue;
+    const overlord = resolve(row?.overlord);
+    const puppet = resolve(row?.puppet);
+    if (overlord) out.add(overlord);
+    if (puppet) out.add(puppet);
+  }
+  return out;
+};
+
 export const buildScenarioPoliticalRelevance = ({
   world = {},
   playerPolity = "",
   mode = POLITICAL_WORLD_GENERATION_MODES.BALANCED,
+  puppetStates = true,
 } = {}) => {
   const resolve = polityAliasResolver(world);
   const player = resolve(playerPolity);
   const belligerents = activeBelligerents(world, resolve);
+  const puppetParticipants = activePuppetParticipants(world, resolve, puppetStates);
   const existingActors = new Set(Object.keys(world?.politicalActors?.byPolity ?? {}).map(resolve).filter(Boolean));
   const relevanceByPolity = {};
 
@@ -94,7 +113,7 @@ export const buildScenarioPoliticalRelevance = ({
       };
       continue;
     }
-    if (mode === POLITICAL_WORLD_GENERATION_MODES.BALANCED && existingActors.has(key)) {
+    if (mode === POLITICAL_WORLD_GENERATION_MODES.BALANCED && (existingActors.has(key) || puppetParticipants.has(key))) {
       relevanceByPolity[key] = { depth: POLITICAL_GENERATION_DEPTHS.RICH };
       continue;
     }
@@ -180,6 +199,7 @@ export const buildScenarioPoliticalGenerationInputs = (details, {
 } = {}) => {
   const world = details?.data?.world ?? {};
   const game = details?.data?.game ?? {};
+  const scenarioFeatures = normalizeFeatureSettings(details?.scenario?.features);
   const polities = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
   const roundZeroContext = roundZeroContextFromDetails(details);
   return {
@@ -193,6 +213,7 @@ export const buildScenarioPoliticalGenerationInputs = (details, {
       world,
       playerPolity: game.country,
       mode,
+      puppetStates: isFeatureEnabled(scenarioFeatures, "puppetStates"),
     }),
     scenarioContext: scenarioContextFromDetails(details),
     contextByPolity: polityContextByKey(world, polities),
@@ -283,6 +304,7 @@ export const applyReviewedPoliticalGeneration = ({
       existingActor: normalized.byPolity[polityKey] ?? null,
       allowEntityExpansion: review.allowEntityExpansion === true,
       fillEmptyGovernmentPartyRefs: review.fillEmptyGovernmentPartyRefs === true,
+      fillSparseActorPlaceholders: review.fillSparseActorPlaceholders === true,
     });
     if (!validation.ok) {
       errors.push({ polityKey, errors: [...validation.errors] });

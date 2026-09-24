@@ -39,7 +39,7 @@ MODES
 TRANSACTION RULES
 1. The provider tool transport is deliberately SHALLOW. Return mode and summary, then these STRING fields: eventsJson, territorialScopesJson, countryStatPatchesJson, storylineUpdatesJson, warUpdatesJson, relationUpdatesJson, agreementUpdatesJson, puppetUpdatesJson, diplomaticOutreachJson. Each string must contain a valid JSON array (use [] when empty). Native code decodes and validates every array before the administrator sees the preview.
 2. The decoded events array is the canonical historical narrative that will be added if the administrator applies this preview. Use 0-based eventIndexes in ledger operations and Stats patches to point into this transaction's decoded events array.
-2A. EXHAUSTIVE TERRITORY IS A SET CONTRACT. If the administrator says all/every/entire/whole territories, regions, states, provinces or lands, do NOT enumerate a representative handful of provinces in eventsJson. Put the semantic footprint in territorialScopesJson. baseCountries are the exact immutable rendered base geographies listed below, not the polity that currently owns them. Example: a request for all Baltic-state territory can name the three rendered base geographies for Estonia, Latvia and Lithuania once; native code then expands EVERY rendered region in those footprints into exact operations before Preview. Use kind=legal-transfer for legal sovereignty, kind=control for decisive de-facto control, and kind=contest for an active territorial contest. The event at eventIndex must narrate the same change. Avoid duplicating that scope with a partial manual region list.
+2A. EXHAUSTIVE TERRITORY IS A SET CONTRACT ONLY WHEN TERRITORY ACTUALLY CHANGES. If the administrator asks to transfer/control/contest all/every/entire/whole territories, regions, states, provinces or lands, do NOT enumerate a representative handful of provinces in eventsJson. Put the semantic footprint in territorialScopesJson. A preservation statement is NOT a territorial change: phrases such as "keeps all of its territory", "retains its existing territory", or "all of its territory remains unchanged" require NO territorialScopes entry and NO region operation. baseCountries are the exact immutable rendered base geographies listed below, not the polity that currently owns them. Example: a request for all Baltic-state territory can name the three rendered base geographies for Estonia, Latvia and Lithuania once; native code then expands EVERY rendered region in those footprints into exact operations before Preview. Use kind=legal-transfer for legal sovereignty, kind=control for decisive de-facto control, and kind=contest for an active territorial contest. The event at eventIndex must narrate the same change. Avoid duplicating that scope with a partial manual region list.
 3. impacts.regionTransfers = LEGAL sovereignty only: treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. A unilateral declaration of independence, secession, uprising, revolution, civil war, or breakaway proclamation does NOT by itself transfer legal sovereignty. If a new polity is rebelling against its current sovereign and the conflict is still active, leave legal sovereignty with the prior sovereign and represent rebel gains with impacts.regionControlOps (contest/control). Only emit regionTransfers for the breakaway territory when the administrator explicitly establishes legal recognition/cession/settlement or another event in this same transaction clearly does so.
 4. impacts.regionControlOps = DE-FACTO control/contest only: battlefield capture, occupation, liberation, retaking, active territorial contest, or clearing a contest. For independence wars and violent revolutions, this is normally the correct territorial mechanism while the former sovereign still legally claims the land. Use contest when an uprising/revolution is spreading or fighting for a region but has not clearly displaced the existing administration; use control only when the request or authored event clearly establishes that the breakaway has decisively captured, holds, or administers that region.
 5. impacts.regionClaims = territory ASSERTED but not held: an irredentist claim, a proclaimed union, a contested border, a government-in-exile's title. A claim stripes the region on the map WITHOUT moving the border. Use drop true to withdraw a claim. Use regionTransfers, never a claim, when land actually changes hands. A claimant need not be a state — a rebel movement, one side of a civil war, a terrorist organisation, a cartel, a gang — and claimantRole (on a claim), actorRole (on a contest) and toRole (on a control) say what it is whenever it is new or has changed; polityChanges role does the same for any polity.
@@ -79,7 +79,7 @@ eventsJson element:
 
 territorialScopesJson element:
 {"kind":"legal-transfer|control|contest","baseCountries":["Exact Rendered Base Geography"],"toCode":"Full Polity Name","eventIndex":0,"note":""}
-Use this for exhaustive geographic-set requests. The names in baseCountries must come exactly from the rendered base-geography catalog below; native code expands the full set. Use [] when the request is not an exhaustive territorial-set change.
+Use this only for exhaustive geographic-set CHANGES. The names in baseCountries must come exactly from the rendered base-geography catalog below; native code expands the full set. Preservation/no-change statements such as "keeps all of its territory" are not territorialScopes. Use [] when the request is not an exhaustive territorial-set change.
 
 countryStatPatchesJson element:
 Standard National Stats sheet:
@@ -311,19 +311,6 @@ export const PROMPT_SECTION_DEFINITIONS = [
     type: "task",
   },
   {
-    description: "Pick the next speaker in a diplomatic chat.",
-    helpers: [
-      "PLAYER_POLITY",
-      "CHAT_PARTICIPANTS",
-      "THIS_CHAT_HISTORY",
-      "THIS_CHATS_MOST_RECENT_SPEAKER",
-      "ORIGIN_ROUND_DATE",
-    ],
-    key: "nextSpeaker",
-    label: "Next Speaker",
-    type: "task",
-  },
-  {
     description: "Compress recent events and chats into continuity-safe summaries.",
     helpers: [
       "PLAYER_POLITY",
@@ -411,7 +398,7 @@ export const PROMPT_TASK_KEYS = Object.keys(PROMPT_TASK_DEFAULTS);
 
 // The sections the Prompts tab shows: only the prompts with editable guidance.
 // The rest (the curator, the directors, the resolver, the stat sheet, the spy
-// desks, the board, the next-speaker pick) are technical from end to end.
+// desks and the board) are technical from end to end.
 export const PROMPT_EDITOR_SECTIONS = PROMPT_SECTION_DEFINITIONS.filter((section) => hasGuidance(section.key));
 
 // A stored prompt pack is { promptModel: 2, guidance }: nothing but the

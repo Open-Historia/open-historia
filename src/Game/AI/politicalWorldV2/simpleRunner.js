@@ -4,7 +4,7 @@ import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
 import { normalizePoliticalWorldV2Checkpoint, recordPoliticalWorldV2ModelCall, setCheckpointQuality } from "./checkpoint.js";
 import { createPoliticalWorldV2Executor } from "./executor.js";
 import { evaluatePoliticalWorldV2Quality } from "./quality.js";
-import { deriveNextPoliticalWorldV2Task, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
+import { acceptedPoliticalWorldV2ActorTargets, deriveNextPoliticalWorldV2Task, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -19,9 +19,7 @@ const taskTargets = (task) => array(task?.targets).map(clean).filter(Boolean);
 const attemptKey = (type, target) => `${clean(type)}:${clean(target || "global")}`;
 const coverageSet = (checkpoint, key) => new Set(array(checkpoint?.coverage?.[key]).map(clean).filter(Boolean));
 
-const taskProviderCallCeiling = (task) => (
-  task?.type === "political-actor" || task?.type === "governing-alignment" ? 2 : 1
-);
+const taskProviderCallCeiling = () => 1;
 
 const providerPauseReason = (error) => {
   const message = clean(error?.message || error).toLocaleLowerCase();
@@ -75,7 +73,38 @@ const storeActorGenerationEntries = (checkpoint, result) => {
   }
 };
 
-const applySimpleAccounting = (checkpoint, task, result, stagedWorld) => {
+const storeHistoricalVerificationEntries = (checkpoint, result) => {
+  checkpoint.generationEntriesByPolity = checkpoint.generationEntriesByPolity && typeof checkpoint.generationEntriesByPolity === "object"
+    ? checkpoint.generationEntriesByPolity
+    : {};
+  for (const entry of array(result?.verificationEntries)) {
+    const polity = clean(entry?.item?.polityKey || entry?.proposal?.polityKey);
+    const verdict = clean(entry?.historicalVerification?.verdict).toLocaleLowerCase();
+    if (polity && ["confirmed", "corrected"].includes(verdict)) {
+      checkpoint.generationEntriesByPolity[polity] = clone(entry);
+    }
+  }
+};
+
+const invalidateDownstreamActorCoverage = (checkpoint, targets) => {
+  const accepted = uniqueClean(targets);
+  if (!accepted.length) return;
+  for (const key of ["governing-alignment", "historical-verification"]) {
+    const covered = coverageSet(checkpoint, key);
+    let changed = false;
+    for (const polity of accepted) changed = covered.delete(polity) || changed;
+    if (changed) checkpoint.coverage[key] = [...covered];
+  }
+  // A newly changed actor needs fresh downstream work. Prior verification
+  // challenges/attempt exhaustion describe the old actor and must not suppress
+  // the new temporal-sentinel/alignment pass.
+  clearAttempts(checkpoint, "governing-alignment", accepted);
+  clearAttempts(checkpoint, "historical-verification", accepted);
+  clearAttempts(checkpoint, "temporal-sentinel", accepted);
+  for (const polity of accepted) delete checkpoint.verification?.challenges?.[polity];
+};
+
+export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inputs = {}) => {
   const next = checkpoint;
   next.stagedWorld = clone(stagedWorld);
   next.stages = next.stages && typeof next.stages === "object" ? next.stages : {};
@@ -86,10 +115,16 @@ const applySimpleAccounting = (checkpoint, task, result, stagedWorld) => {
 
   if (task.type === "political-actor") {
     storeActorGenerationEntries(next, result);
-    const declaredRejected = new Set(uniqueClean([...array(result?.unresolvedPolities), ...array(result?.stagingRejectedPolities)]));
-    const accepted = taskTargets(task).filter((polity) => !declaredRejected.has(polity) && next.stagedWorld?.politicalActors?.byPolity?.[polity]);
+    const declaredRejected = uniqueClean([...array(result?.unresolvedPolities), ...array(result?.stagingRejectedPolities)]);
+    const accepted = acceptedPoliticalWorldV2ActorTargets({
+      checkpoint: next,
+      inputs,
+      targets: taskTargets(task),
+      rejected: declaredRejected,
+    });
     const unresolved = taskTargets(task).filter((polity) => !accepted.includes(polity));
     recordCoverage(next, "political-actor", accepted);
+    invalidateDownstreamActorCoverage(next, accepted);
     clearAttempts(next, task.type, accepted);
     const feedback = retryBucket(next, "politicalActor");
     for (const polity of accepted) delete feedback[polity];
@@ -138,6 +173,7 @@ const applySimpleAccounting = (checkpoint, task, result, stagedWorld) => {
       }
     }
   } else if (task.type === "historical-verification") {
+    storeHistoricalVerificationEntries(next, result);
     recordCoverage(next, "historical-verification", array(result?.acceptedPolities));
     clearAttempts(next, task.type, array(result?.acceptedPolities));
     for (const polity of array(result?.acceptedPolities)) delete next.verification.challenges[polity];
@@ -167,7 +203,8 @@ export const runSimplePoliticalWorldV2 = async ({
   if (!current) throw new Error("Invalid Political World v2 checkpoint");
   const budget = Math.max(0, Math.trunc(Number(maxModelCalls) || 0));
   const startCalls = Number(current.modelCalls) || 0;
-  const limit = startCalls + budget;
+  const sessionLimit = startCalls + budget;
+  const totalLimit = Math.max(0, Math.trunc(Number(current.totalModelCallCeiling) || 0));
 
   const executor = createPoliticalWorldV2Executor({ inputs, allowEntityExpansion, ...(callModel ? { callModel } : {}), signal });
 
@@ -201,6 +238,14 @@ export const runSimplePoliticalWorldV2 = async ({
       await persist();
       return current;
     }
+    if ((Number(current.modelCalls) || 0) >= totalLimit) {
+      current.status = "paused";
+      current.pauseReason = "total-model-call-budget";
+      current.lastError = `Political World generation reached its lifetime safety ceiling of ${totalLimit} AI calls. Completed work is saved; inspect unresolved targets instead of blindly spending more calls.`;
+      current.currentTask = null;
+      await persist();
+      return current;
+    }
     const task = deriveNextPoliticalWorldV2Task({ checkpoint: current, inputs });
     if (!task) {
       const summary = summarizePoliticalWorldV2Worklist({ checkpoint: current, inputs });
@@ -214,15 +259,20 @@ export const runSimplePoliticalWorldV2 = async ({
       await persist();
       return current;
     }
-    const callsRemaining = Math.max(0, limit - (Number(current.modelCalls) || 0));
+    const usedCalls = Number(current.modelCalls) || 0;
+    const sessionCallsRemaining = Math.max(0, sessionLimit - usedCalls);
+    const totalCallsRemaining = Math.max(0, totalLimit - usedCalls);
+    const callsRemaining = Math.min(sessionCallsRemaining, totalCallsRemaining);
     const taskCallCeiling = taskProviderCallCeiling(task);
-    // Actor/alignment work deliberately reuses the proven two-attempt native
-    // salvage loop. Do not start such a task unless the session budget can
-    // contain its whole bounded retry window; otherwise a budget pause could
-    // discard valid records accepted by attempt 1 before the helper returns.
+    // Every deterministic work item is a one-call transaction. Do not start a
+    // task unless both the per-session budget and the lifetime safety envelope can
+    // contain it; corrective retries remain later checkpointed work items.
     if (callsRemaining < taskCallCeiling) {
       current.status = "paused";
-      current.pauseReason = "model-call-budget";
+      current.pauseReason = totalCallsRemaining < taskCallCeiling ? "total-model-call-budget" : "model-call-budget";
+      if (current.pauseReason === "total-model-call-budget") {
+        current.lastError = `Political World generation reached its lifetime safety ceiling of ${totalLimit} AI calls. Completed work is saved; inspect unresolved targets instead of blindly spending more calls.`;
+      }
       current.currentTask = null;
       await persist();
       return current;
@@ -235,7 +285,13 @@ export const runSimplePoliticalWorldV2 = async ({
     await persist();
 
     const consumeModelCall = async () => {
-      if ((Number(current.modelCalls) || 0) >= limit) {
+      const used = Number(current.modelCalls) || 0;
+      if (used >= totalLimit) {
+        const error = new Error("Political World v2 lifetime model-call safety ceiling reached.");
+        error.code = "POLITICAL_WORLD_V2_TOTAL_BUDGET";
+        throw error;
+      }
+      if (used >= sessionLimit) {
         const error = new Error("Political World v2 model-call budget reached for this run.");
         error.code = "POLITICAL_WORLD_V2_BUDGET";
         throw error;
@@ -247,7 +303,7 @@ export const runSimplePoliticalWorldV2 = async ({
     try {
       const result = await executor.executeJob(task, clone(current), { consumeModelCall });
       const applied = await executor.applyJobResult({ checkpoint: clone(current), job: task, result: clone(result) });
-      current = applySimpleAccounting(current, task, result, applied?.stagedWorld ?? current.stagedWorld);
+      current = applySimpleAccounting(current, task, result, applied?.stagedWorld ?? current.stagedWorld, inputs);
       current.currentTask = null;
       await persist();
     } catch (error) {
@@ -258,9 +314,12 @@ export const runSimplePoliticalWorldV2 = async ({
         await persist();
         return current;
       }
-      if (error?.code === "POLITICAL_WORLD_V2_BUDGET") {
+      if (error?.code === "POLITICAL_WORLD_V2_BUDGET" || error?.code === "POLITICAL_WORLD_V2_TOTAL_BUDGET") {
         current.status = "paused";
-        current.pauseReason = "model-call-budget";
+        current.pauseReason = error.code === "POLITICAL_WORLD_V2_TOTAL_BUDGET" ? "total-model-call-budget" : "model-call-budget";
+        if (current.pauseReason === "total-model-call-budget") {
+          current.lastError = `Political World generation reached its lifetime safety ceiling of ${totalLimit} AI calls. Completed work is saved; inspect unresolved targets instead of blindly spending more calls.`;
+        }
         current.currentTask = null;
         await persist();
         return current;

@@ -14,9 +14,9 @@ test("scenario Politics editor exposes premade canonical institution and logo au
 
   assert.match(library, /InstitutionAuthoringPanel/);
   assert.match(library, /details=\{details\}/);
-  assert.match(panel, /Premade institutions & logos/);
+  assert.match(panel, /Create institutions that already exist when the scenario begins/);
   assert.match(panel, /worldPatch:\s*\{\s*institutions:/);
-  assert.match(panel, /Embed small raster logo/);
+  assert.match(panel, /Upload small logo/);
   assert.match(panel, /BUILTIN_INSTITUTION_LOGOS/);
   assert.match(core, /normalizeInstitutionRecord/);
   assert.match(core, /membersText/);

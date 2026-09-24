@@ -113,7 +113,6 @@ test("the parsed summary counts beta's payload shape", () => {
     storylineUpdateCount: 1,
     stopDate: "2014-05-01",
   });
-  assert.equal(normalizeParsedSummary("nextSpeaker", { speaker: "FR" }), null);
   assert.equal(normalizeParsedSummary("x", null), null);
   assert.equal(normalizeParsedSummary("eventConsolidator", { summary: "s" }).eventCount, 0);
 });

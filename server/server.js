@@ -247,7 +247,6 @@ const sendAssetMissing = (res, error) => {
   }
   sendError(res, 404, error);
 };
-
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
 // The CORS allowlist above lets the Android connect screen (on the WebView's own
 // origin) *probe* this server — a GET. Without this guard, any web page the

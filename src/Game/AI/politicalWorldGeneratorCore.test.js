@@ -494,6 +494,45 @@ test("review-authorized roster expansion can generate into an explicitly authore
   assert.equal(result.proposals[0].validation.actor.government.form, "Parliamentary republic");
 });
 
+test("normalized sparse seed actors hydrate unknown system and empty rosters without opening explicitly authored empty rosters", async () => {
+  const prompts = [];
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: { "Republic X": {
+      politicalSystem: { type: "unspecified", representation: "none" },
+      government: { rulingPartyIds: [], coalitionPartyIds: [] },
+      parties: [],
+      powerBlocs: [],
+      goals: ["Preserve authored strategic goal"],
+    } } },
+    relevanceByPolity: { "Republic X": { depth: "minimal" } },
+    maxAttempts: 1,
+    callModel: async (_system, history) => {
+      prompts.push(history[0].parts[0].text);
+      return { toolInput: { proposals: [{
+        polityKey: "Republic X",
+        actorPatch: {
+          politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+          government: { form: "Parliamentary republic", rulingPartyIds: ["unity"] },
+          parties: [
+            { id: "unity", name: "Unity Party", support: { percent: 60, basis: "generated-estimate" } },
+            { id: "reform", name: "Reform Party", support: { percent: 40, basis: "generated-estimate" } },
+          ],
+        },
+      }] } };
+    },
+  });
+  assert.equal(result.plan.items[0].sparsePlaceholderHydration, true);
+  assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
+  assert.match(prompts[0], /ROSTER AUTHORITY: no existing Political Actor roster exists/);
+  assert.equal(result.proposals[0].validation.actor.politicalSystem.type, "parliamentary_republic");
+  assert.equal(result.proposals[0].validation.actor.politicalSystem.representation, "electoral");
+  assert.deepEqual(result.proposals[0].validation.actor.government.rulingPartyIds, ["unity"]);
+  assert.equal(result.proposals[0].validation.actor.parties.length, 2);
+  assert.deepEqual(result.proposals[0].validation.actor.goals, ["Preserve authored strategic goal"]);
+});
+
 test("live model government aliases and nested political-system extras are normalized/projected instead of rejecting valid governing structure", async () => {
   const result = await generatePoliticalWorldProposalsCore({
     scenarioDate: "2014-03-22",
@@ -1837,6 +1876,9 @@ test("history-only exact-date verification surgically repairs future-informed se
 
   assert.equal(calls, 2);
   assert.equal(rechecked.historicalVerification.corrected, 1, JSON.stringify(rechecked.historicalVerification));
+  assert.deepEqual(rechecked.proposals[0].historicalVerification.correctionScopes, ["strategic_semantics", "governing_semantics", "perceptions", "domestic_semantics"]);
+  assert.equal(rechecked.proposals[0].historicalVerification.replaceRepresentationEntities, false);
+  assert.deepEqual(rechecked.proposals[0].historicalVerification.correctionPatch.goals, ["Maintain political stability", "Pursue broad economic restructuring"]);
   const patch = rechecked.proposals[0].proposal.actorPatch;
   assert.deepEqual(patch.goals, ["Maintain political stability", "Pursue broad economic restructuring"]);
   assert.deepEqual(patch.fears, originalPatch.fears);
@@ -4047,4 +4089,90 @@ test("quantitative landscape backfill obeys the same divergent reference boundar
   assert.match(systemPrompt, /TARGET START-WORLD DATE: 2400-01-01/);
   assert.match(systemPrompt, /only BEFORE 2300-05-01/);
   assert.match(systemPrompt, /Never import post-boundary facts from an external\/reference canon/i);
+});
+
+test("representation_entities-only repair may carry party support needed to prove generated electoral coverage", async () => {
+  let promptText = "";
+  const polityKey = "Republic X";
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: [polityKey],
+    politicalActors: { byPolity: {
+      [polityKey]: {
+        politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+        government: { form: "Parliamentary republic", headOfGovernment: "Leader X", rulingPartyIds: ["a"] },
+        parties: [
+          { id: "a", name: "Party A", support: { percent: 40, basis: "generated-estimate" } },
+          { id: "b", name: "Party B", support: { percent: 20, basis: "generated-estimate" } },
+        ],
+      },
+    } },
+    relevanceByPolity: { [polityKey]: { depth: "minimal" } },
+    allowEntityExpansionByPolity: { [polityKey]: true },
+    maxBatchSize: 1,
+    maxAttempts: 1,
+    requireRepresentationCoverage: true,
+    generatedAt: fixedNow,
+    callModel: async (_systemPrompt, history) => {
+      promptText = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { proposals: [{
+        polityKey,
+        confidence: "high",
+        sourceAsOf: "2014-03-22",
+        referenceDates: ["2014-03-22"],
+        actorPatchJson: JSON.stringify({
+          parties: [
+            { id: "c", name: "Party C", supportEstimate: 20 },
+          ],
+        }),
+      }] } };
+    },
+  });
+
+  assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
+  assert.deepEqual(result.proposals[0].item.needs, [POLITICAL_GENERATION_NEEDS.REPRESENTATION_ENTITIES]);
+  assert.match(promptText, /party keys: .*support/i);
+  assert.equal(result.proposals[0].proposal.actorPatch.parties[0].support.percent, 20);
+  assert.equal(result.proposals[0].proposal.actorPatch.parties[0].support.basis, "generated-estimate");
+  assert.equal(
+    result.diagnostics[0].polities[0].droppedPaths.includes("actorPatch.parties[0].support"),
+    false,
+    "coverage evidence must survive requested-scope projection on a roster-only repair",
+  );
+});
+
+test("electoral party influenceEstimate is recovered as generated support instead of burning a retry on the wrong metric key", async () => {
+  const polityKey = "Republic Y";
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: [polityKey],
+    politicalActors: { byPolity: {} },
+    relevanceByPolity: { [polityKey]: { depth: "minimal" } },
+    maxBatchSize: 1,
+    maxAttempts: 1,
+    requireRepresentationCoverage: true,
+    generatedAt: fixedNow,
+    callModel: async () => ({ toolInput: { proposals: [{
+      polityKey,
+      confidence: "high",
+      sourceAsOf: "2014-03-22",
+      referenceDates: ["2014-03-22"],
+      actorPatchJson: JSON.stringify({
+        politicalSystem: { type: "parliamentary_republic", representation: "electoral" },
+        government: { form: "Parliamentary republic", headOfGovernment: "Leader Y", rulingPartyIds: ["a"] },
+        parties: [
+          { id: "a", name: "Party A", influenceEstimate: 45 },
+          { id: "b", name: "Party B", influenceEstimate: 35 },
+        ],
+      }),
+    }] } }),
+  });
+
+  assert.equal(result.generatedPolities, 1, JSON.stringify(result.failures));
+  const parties = result.proposals[0].proposal.actorPatch.parties;
+  assert.deepEqual(parties.map((party) => party.support), [
+    { percent: 45, basis: "generated-estimate" },
+    { percent: 35, basis: "generated-estimate" },
+  ]);
+  assert.ok(parties.every((party) => party.influence === undefined));
 });

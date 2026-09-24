@@ -113,6 +113,30 @@ const reconcileDeterministicV2State = (checkpoint, inputs) => {
   return next;
 };
 
+export const resetDeferredPoliticalWorldV2Attempts = (checkpoint, inputs) => {
+  const next = clone(checkpoint);
+  if (!next || typeof next !== "object") return { checkpoint: next, resetCount: 0 };
+  const summary = summarizePoliticalWorldV2Worklist({ checkpoint: next, inputs });
+  const deferred = array(summary?.deferred);
+  next.attempts = next.attempts && typeof next.attempts === "object" ? next.attempts : {};
+  let resetCount = 0;
+  for (const entry of deferred) {
+    const kind = clean(entry?.kind);
+    const target = clean(entry?.target || "global");
+    if (!kind || !target) continue;
+    const key = `${kind}:${target}`;
+    if (!Object.prototype.hasOwnProperty.call(next.attempts, key)) continue;
+    delete next.attempts[key];
+    resetCount += 1;
+  }
+  if (resetCount) {
+    next.status = "ready";
+    next.pauseReason = "";
+    next.lastError = "";
+  }
+  return { checkpoint: next, resetCount };
+};
+
 export const bootstrapPoliticalWorldV2StagedWorld = ({ inputs } = {}) => {
   const scenarioDate = clean(inputs?.scenarioDate);
   let world = {
@@ -143,6 +167,7 @@ export const generateOrResumePoliticalWorldV2 = async ({
   qualityMode = "canonical",
   maxModelCalls = 20,
   allowEntityExpansion = false,
+  retryDeferred = false,
   callModel,
   signal = null,
   onProgress = null,
@@ -205,11 +230,14 @@ export const generateOrResumePoliticalWorldV2 = async ({
     checkpoint.pauseReason = "";
     checkpoint.lastError = "";
     checkpoint.currentTask = null;
-    // Attempts are deliberately per explicit Generate/Resume session. A target
-    // that exhausted its bounded retries is deferred for the rest of that
-    // session so the world can keep progressing, then receives a fresh bounded
-    // window only when the user explicitly resumes later.
-    checkpoint.attempts = {};
+    // Preserve bounded-attempt history across ordinary Resume sessions. A
+    // session budget pause must not silently turn the same deterministic failure
+    // into another full retry window. Deferred targets are reopened only through
+    // the explicit repair action, which clears attempts for those targets alone
+    // while retaining native validation feedback.
+    if (retryDeferred === true) {
+      checkpoint = resetDeferredPoliticalWorldV2Attempts(checkpoint, inputs).checkpoint;
+    }
   }
 
   const persistAndReport = async (next, summary = null) => {
@@ -303,6 +331,7 @@ export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = 
     status: clean(checkpoint?.status),
     pauseReason: clean(checkpoint?.pauseReason),
     modelCalls: Number(checkpoint?.modelCalls) || 0,
+    totalModelCallCeiling: Number(checkpoint?.totalModelCallCeiling) || 0,
     modelCallsByType: clone(checkpoint?.modelCallsByType || {}),
     modelCallsByStage: clone(checkpoint?.modelCallsByStage || {}),
     qualityMode: clean(checkpoint?.qualityMode),

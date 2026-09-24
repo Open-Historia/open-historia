@@ -48,6 +48,7 @@ import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet 
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runtime/politicalWorldCapability.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import {
@@ -1129,8 +1130,7 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
   </button>
 );
 
-const SectionTabs = ({ currentSection, sections, setSection, touch }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
+const SectionTabs = ({ badges = {}, currentSection, sections, setSection, touch }) => (  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
     {sections.map((sectionKey) => (
       <button
         key={sectionKey}
@@ -1148,6 +1148,11 @@ const SectionTabs = ({ currentSection, sections, setSection, touch }) => (
         type="button"
       >
         {editorSectionLabels[sectionKey] || sectionKey}
+        {badges[sectionKey] && (
+          <span style={{ background: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.28)", borderRadius: "999px", color: "#fde68a", fontSize: "0.57rem", fontWeight: 800, marginLeft: "0.32rem", padding: "0.12rem 0.35rem" }}>
+            {badges[sectionKey]}
+          </span>
+        )}
       </button>
     ))}
   </div>
@@ -1194,7 +1199,16 @@ const EditorDrawer = ({
   // Two fields to a row leave a phone under 140 px for each, too narrow for a
   // date or a font name, so there the fields stack.
   const formColumns = isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))";
-
+  const editorPoliticalWorld = kind === "scenario"
+    ? politicalWorldCapability(details?.data?.world ?? {}, {
+      polityCount: Array.isArray(details?.data?.world?.ownerCodes) ? details.data.world.ownerCodes.length : 0,
+    })
+    : null;
+  const sectionBadges = editorPoliticalWorld?.status === POLITICAL_WORLD_CAPABILITY.ABSENT
+    ? { politics: "No world" }
+    : editorPoliticalWorld?.status === POLITICAL_WORLD_CAPABILITY.SPARSE
+      ? { politics: "Partial" }
+      : {};
   return (
     <div
       style={{
@@ -1237,8 +1251,7 @@ const EditorDrawer = ({
         </button>
       </div>
 
-      <SectionTabs currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
-
+      <SectionTabs badges={sectionBadges} currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
       {editorSection === "overview" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
@@ -1382,14 +1395,10 @@ const EditorDrawer = ({
 
       {editorSection === "politics" && kind === "scenario" && (
         <>
-          <InstitutionAuthoringPanel
-            details={details}
-            onDetailsChange={onDetailsChange}
-          />
           <Suspense
             fallback={
               <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem", color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>
-                Loading political world tools...
+                Loading Political World tools...
               </div>
             }
           >
@@ -1399,6 +1408,10 @@ const EditorDrawer = ({
               onDetailsChange={onDetailsChange}
             />
           </Suspense>
+          <InstitutionAuthoringPanel
+            details={details}
+            onDetailsChange={onDetailsChange}
+          />
         </>
       )}
 
@@ -1574,7 +1587,7 @@ const EditorDrawer = ({
   );
 };
 
-const LibraryTopBar = () => {
+const LibraryTopBar = ({ onOpenSettings }) => {
   const {
     activeGame,
     activeGameId,
@@ -1697,17 +1710,18 @@ const LibraryTopBar = () => {
     // the remounted menu must come up closed, over the new game.
     setMenuOpen(false);
     try {
+      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+      // startDate/gameDate/round (the "Undated" bug). It rides on the create
+      // itself: patched in a second request, after `setActive` had switched to
+      // the game, the opening cover and the HUD named the scenario's default
+      // country until it landed.
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       const details = await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
+        ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
-      // startDate/gameDate/round (the "Undated" bug).
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
-      if (Object.keys(gamePatch).length) {
-        await saveGame(details.game.id, { gamePatch });
-      }
       await openGameEditor(details.game.id);
     } catch (nextError) {
       setMenuOpen(true);
@@ -1730,6 +1744,10 @@ const LibraryTopBar = () => {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
         scenarioId: scenario.id,
+        // The faction's name from the first moment the game is active (the
+        // opening cover reads it); the save below writes it again once the
+        // faction is in the world it resolves against.
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
       const gameId = details.game.id;
@@ -2657,12 +2675,10 @@ const LibraryTopBar = () => {
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
+      ...(seed.game?.country ? { gamePatch: { country: seed.game.country } } : null),
       setActive: true,
     });
     const newGameId = gameDetails.game.id;
-    if (seed.game?.country) {
-      await saveGame(newGameId, { gamePatch: { country: seed.game.country } });
-    }
 
     // Tear down all the library UI so the freshly-activated game is visible.
     setIsMapEditorOpen(false);
@@ -2930,8 +2946,7 @@ const LibraryTopBar = () => {
         {(countryPicker) => (
         <div
           onClick={closeCountryPicker}
-          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}
-        >
+          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}        >
           {/* On a phone the card takes the whole visible height rather than 80%
               of it: the search, the map, the list and the buttons need every
               row a phone has. */}
@@ -3054,8 +3069,7 @@ const LibraryTopBar = () => {
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>
-                      {playGameId ? "Done" : "Cancel"}
+                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>                      {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
                 )}
@@ -3227,6 +3241,17 @@ const LibraryTopBar = () => {
 
             {!isMobile && (
               <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem", justifyContent: "flex-end" }}>
+                {typeof onOpenSettings === "function" && (
+                  <button
+                    className="oh-tap-row"
+                    onClick={onOpenSettings}
+                    style={touchFit({ ...actionButtonStyle, flexShrink: 0, padding: undefined }, touch)}
+                    title={isMobile ? "Settings" : undefined}
+                    type="button"
+                  >
+                    {isMobile ? "⚙" : "Settings"}
+                  </button>
+                )}
                 {tabActions.map(({ label, run }) => (
                   // padding: undefined leaves these the browser's own padding in
                   // place of the pill's, as they have always had.
@@ -3240,10 +3265,16 @@ const LibraryTopBar = () => {
 
           <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? `1.1rem calc(0.8rem + ${SAFE_RIGHT}) calc(2.5rem + ${SAFE_BOTTOM}) calc(0.8rem + ${SAFE_LEFT})` : `1.5rem calc(1.6rem + ${SAFE_RIGHT}) calc(3rem + ${SAFE_BOTTOM}) calc(1.6rem + ${SAFE_LEFT})` }}>
             {/* Phones: the tab's actions head the page, by name. In the bar they
-                were a bare ⟳ and ⬆ named only by a tooltip, which a finger
+                would be icon-only controls named by a tooltip, which a finger
                 never sees, and the bar has no room for words beside the tabs. */}
-            {isMobile && tabActions.length > 0 && (
+            {isMobile && (typeof onOpenSettings === "function" || tabActions.length > 0) && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.1rem" }}>
+                {typeof onOpenSettings === "function" && (
+                  <button className="oh-tap-row" onClick={onOpenSettings} style={touchFit(actionButtonStyle, touch)} type="button">
+                    <span aria-hidden="true">⚙</span>
+                    Settings
+                  </button>
+                )}
                 {tabActions.map(({ icon, label, phoneLabel, run }) => (
                   <button key={label} className="oh-tap-row" onClick={run} style={touchFit(actionButtonStyle, touch)} type="button">
                     <span aria-hidden="true">{icon}</span>

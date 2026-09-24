@@ -1,5 +1,6 @@
 /*! Open Historia Continuum — bounded PWv2 context for idle/event diplomacy. */
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import { livePuppetsFor } from "../../runtime/puppets.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import { sharedInstitutionRoutesForPlayer } from "./institutionIdleRouting.js";
 
@@ -60,6 +61,17 @@ export const buildIdleDiplomacyPoliticalDecisionSet = (
   }
 
   for (const chat of list(bundle?.chats).filter((entry) => lower(entry?.status) !== "closed")) addList(chat?.countries);
+
+  // Direct subordination is high-salience political context for the player, but
+  // candidate selection must use the player's knowledge rather than canonical
+  // omniscience. The shared resolver hides undiscovered covert relationships and
+  // the feature-off state, while still making the player's own overlord/puppets
+  // impossible to lose behind generic relations or fallback actors.
+  for (const row of livePuppetsFor(world, player)) {
+    if (row.role === "overlord") add(row.puppet);
+    else if (row.role === "puppet") add(row.overlord);
+  }
+
   for (const route of sharedInstitutionRoutesForPlayer(world, player, { limit: 6 })) addList(route?.members);
 
   for (const relation of list(world?.relations)) {

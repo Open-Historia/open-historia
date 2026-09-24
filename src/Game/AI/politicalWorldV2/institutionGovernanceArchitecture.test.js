@@ -13,7 +13,7 @@ const [executor, worklist, checkpoint, quality, rebase, generator] = await Promi
 ]);
 
 test("PWv2 schedules one global institution-governance stage after membership and before agreements", () => {
-  const membership = worklist.indexOf("if (membership.unresolvedInstitutionIds.length)");
+  const membership = worklist.indexOf("const institutionId = membership.unresolvedInstitutionIds.find");
   const governance = worklist.indexOf('stages?.institutionGovernance !== "complete"', membership);
   const agreements = worklist.indexOf('stages?.agreements !== "complete"', governance);
   assert.ok(membership >= 0 && governance > membership && agreements > governance);
@@ -21,7 +21,7 @@ test("PWv2 schedules one global institution-governance stage after membership an
 });
 
 test("institution governance is bounded to one provider call and applied through the native charter owner", () => {
-  assert.match(executor, /const taskProviderCallCeiling = \(type\) => \([\s\S]*\? 2 : 1/);
+  assert.match(executor, /const taskProviderCallCeiling = \(\) => 1;/);
   assert.match(executor, /job\.type === "institution-governance"[\s\S]*generateGeopoliticalInstitutionGovernanceJob/);
   assert.match(executor, /job\.type === "institution-governance"[\s\S]*applyGeopoliticalInstitutionGovernanceBaseline/);
   assert.doesNotMatch(executor, /job\.type === "institution-governance"[\s\S]{0,800}for\s*\([^)]*institution[^)]*\)[\s\S]{0,400}callModel/);

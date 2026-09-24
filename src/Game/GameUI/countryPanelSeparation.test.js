@@ -37,3 +37,23 @@ test("Country Editor visibly exposes the canonical PWv2 editor surface", () => {
   assert.match(cheats, /Power blocs \/ non-party actors/);
   assert.match(cheats, /applyPoliticalEditorStateToWorld/);
 });
+
+test("Country pane follows committed region selections through a stable runtime event", () => {
+  const stats = read("stats.jsx");
+  const regions = read("../Selection/Regions.jsx");
+  assert.match(regions, /REGION_SELECTED_EVENT = "oh:region-selected"/);
+  assert.match(regions, /dispatchEvent\(new CustomEvent\(REGION_SELECTED_EVENT, \{ detail: props \}\)\)/);
+  assert.match(stats, /window\.addEventListener\(REGION_SELECTED_EVENT, onRegionSelected\)/);
+  assert.match(stats, /window\.removeEventListener\(REGION_SELECTED_EVENT, onRegionSelected\)/);
+  assert.match(stats, /const rawCountry = ownerName \|\| cleanText\(props\.COUNTRY\) \|\| COUNTRY_NAMES\[gid0\] \|\| gid0/);
+});
+
+test("Country Diplomacy presents Puppet relationships through the shared visibility boundary", () => {
+  const stats = read("stats.jsx");
+  assert.match(stats, /livePuppetsFor, puppetKindLabel, puppetSummaryFor/);
+  assert.match(stats, /viewerPolity=\{player\.code\}/);
+  assert.match(stats, />Subordination</);
+  assert.match(stats, />Subordinate states</);
+  assert.doesNotMatch(stats, /world\.puppets/);
+  assert.doesNotMatch(stats, /row\.loyalty\b(?!Band)/);
+});

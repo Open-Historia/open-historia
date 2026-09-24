@@ -7,6 +7,10 @@ import {
   createPoliticalWorldV2Checkpoint,
   normalizePoliticalWorldV2Checkpoint,
   recordPoliticalWorldV2ModelCall,
+  POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING,
+  POLITICAL_WORLD_V2_LEGACY_OVERRUN_ALLOWANCE,
+  POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE,
+  POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION,
 } from "./checkpoint.js";
 import {
   addPoliticalWorldV2Jobs,
@@ -34,6 +38,31 @@ test("checkpoint records provider calls by task type and high-level stage withou
   });
   assert.deepEqual(normalized.modelCallsByType, { "political-actor": 2, "temporal-sentinel": 1 });
   assert.deepEqual(normalized.modelCallsByStage, { politics: 2, verification: 1 });
+});
+
+test("fresh checkpoints stay hard-capped at 100 while pre-CP2 overrun work receives one bounded correction-repair migration", () => {
+  const fresh = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  assert.equal(POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING, 100);
+  assert.equal(POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION, 2);
+  assert.equal(fresh.totalModelCallCeiling, 100);
+  assert.equal(fresh.totalModelCallCeilingVersion, 2);
+
+  const lowLegacy = { ...fresh, totalModelCallCeiling: undefined, totalModelCallCeilingVersion: undefined, modelCalls: 42 };
+  const lowMigrated = normalizePoliticalWorldV2Checkpoint(lowLegacy);
+  assert.equal(lowMigrated.totalModelCallCeiling, 100);
+  assert.equal(lowMigrated.totalModelCallCeilingVersion, 2);
+
+  const overrunLegacy = { ...fresh, totalModelCallCeiling: undefined, totalModelCallCeilingVersion: undefined, modelCalls: 295 };
+  const migrated = normalizePoliticalWorldV2Checkpoint(overrunLegacy);
+  assert.equal(POLITICAL_WORLD_V2_LEGACY_OVERRUN_ALLOWANCE, 60);
+  assert.equal(POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE, 20);
+  assert.equal(migrated.totalModelCallCeiling, 375);
+  assert.equal(migrated.modelCalls, 295);
+
+  const cp1RescuedAtCeiling = { ...fresh, totalModelCallCeiling: 355, totalModelCallCeilingVersion: undefined, modelCalls: 355 };
+  const cp2Migrated = normalizePoliticalWorldV2Checkpoint(cp1RescuedAtCeiling);
+  assert.equal(cp2Migrated.totalModelCallCeiling, 375);
+  assert.equal(normalizePoliticalWorldV2Checkpoint(cp2Migrated).totalModelCallCeiling, 375, "the repair allowance is a one-time migration, not a renewable budget");
 });
 
 test("political fingerprint ignores map styling but invalidates political inputs", () => {

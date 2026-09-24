@@ -6,10 +6,10 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
-import { checkDemandReply, chooseNextDiplomaticSpeaker, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
+import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
 import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
-import { CHAT_REVEAL_PAUSE_MS, describeChatCutIn, planChatReveal } from "../AI/chatActions.js";
+import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
 import { isChatGenerationLikely } from "../AI/simulationStatus.js";
@@ -49,6 +49,8 @@ import { UNSEEN_EVENTS_CHANGED, withoutUnseenChats, withoutUnseenIntercepts, wit
 import { unseenEventIdsFor, useUnseenEventIds } from "./useUnseenEvents.js";
 import InstitutionsWorkspace, { Emblem as InstitutionEmblem, Facts as InstitutionFacts, SmallPill as InstitutionPill } from "./InstitutionsWorkspace.jsx";
 import { buildInstitutionDiplomacyView } from "../../runtime/institutionalDiplomacyView.js";
+import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGovernance.js";
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
@@ -888,6 +890,17 @@ const TypingBubble = ({ speaker, code, hint = "", label = "Thinking" }) => {
     );
 };
 
+const GroupThinkingBubble = ({ count = 0 }) => (
+    <div data-diplomacy-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+    <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
+        {count > 1 ? `${count} governments` : "Government"}
+    </span>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.08)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
+        <span>Considering the reply</span><ThinkingDots />
+    </div>
+    </div>
+);
+
 const LifecycleThinkingBubble = ({ count = 0 }) => (
     <div data-lifecycle-group-thinking="true" style={{ display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
     <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
@@ -1080,8 +1093,7 @@ const useTouchDisarm = (armed, setArmed) => {
     }, [armed, canHover, setArmed]);
 };
 
-const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, embeddedInstitution = false }) => {
-    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
     useTouchDisarm(confirmingDelete, setConfirmingDelete);
@@ -1141,11 +1153,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // what the leader is sent. The stored thread keeps it all along.
     const unseen = useUnseenEventIds();
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
-    const [phase, setPhase]                     = useState("player");
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
-    const [pendingCountry, setPendingCountry]   = useState(null);
-    const [remainingQueue, setRemainingQueue]   = useState([]);
     const [speakingCountry, setSpeakingCountry] = useState(null);
     const [lifecycleCaseOverrides, setLifecycleCaseOverrides] = useState({});
     const [lifecycleRevealInProgress, setLifecycleRevealInProgress] = useState(false);
@@ -1177,8 +1186,6 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         && !lifecycleRevealInProgress;
     const lifecycleHasRecordedResponse = lifecycleState.cases.some((entry) => Boolean(entry?.decision) || String(entry?.status || "pending").toLowerCase() !== "pending");
 
-    const nextSpeakerIdx    = useRef(0);
-    const lastPlayerMessage = useRef("");
     // What the last batch got wrong, told to the next one (AI/chatActions.js
     // describeChatActionFeedback). Kept on the view: it is about the exchange,
     // not the saved thread.
@@ -1320,7 +1327,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const scroller = messagesScrollRef.current;
             if (!scroller) return;
             scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-        }, [messages, isLoading, phase, typingNext]);
+        }, [messages, isLoading, typingNext]);
 
         const pushMessages = (updated) => {
             messagesRef.current = updated;
@@ -1392,12 +1399,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         };
 
         // The rest of a group turn, a line at a time (chatReveal.js): each
-        // speaker is seen typing for CHAT_REVEAL_PAUSE_MS, then says the line.
+        // speaker is seen typing for a fresh 1-3 second pause, then says the line.
         const sayLater = (reveal, steps) => {
             revealRef.current = reveal;
             reveal.controller = startChatReveal({
                 steps,
-                pauseMs: CHAT_REVEAL_PAUSE_MS,
+                pauseMs: () => randomChatRevealPauseMs(),
                 onTyping: (step) => setTypingNext(step
                     ? { speaker: step.speaker, code: countries.find((country) => (country.name || "").toLowerCase() === step.speaker.toLowerCase())?.code || "" }
                     : null),
@@ -1436,15 +1443,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
 
         const isPlayerCountry = (country) => countryMatchesIdentity(country, playerCountry);
 
-        const fetchLeaderResponse = async (country, playerMessage, queueAfter) => {
-            // Captured before the request, not in the catch: by the time an
-            // error lands, offerNextCountry may already have rotated the index
-            // on, and a retry has to replay this turn from where it started.
-            const speakerIdxAtStart = nextSpeakerIdx.current;
+        const fetchLeaderResponse = async (country, playerMessage) => {
             if (isPlayerCountry(country)) {
-                setPendingCountry(null);
-                setRemainingQueue([]);
-                setPhase("player");
                 return;
             }
             setIsLoading(true);
@@ -1504,77 +1504,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     retry: {
                         country: { name: country.name, code: country.code ?? "" },
                         playerMessage,
-                        queue: queueAfter.map(({ name, code }) => ({ name, code: code ?? "" })),
-                        speakerIdx: speakerIdxAtStart,
                     },
                 }]);
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
-            if (queueAfter.length > 0) {
-                offerNextCountry(queueAfter);
-            } else {
-                setPhase("player");
-            }
-        };
-
-        const buildRoundQueue = () => {
-            const n = countries.length;
-            if (n === 0) return [];
-            const s = nextSpeakerIdx.current % n;
-            return [...countries.slice(s), ...countries.slice(0, s)];
-        };
-
-        const buildResponsiveQueue = async (updatedMessages) => {
-            const rotatedQueue = buildRoundQueue();
-            const suggestedSpeaker = await chooseNextDiplomaticSpeaker({
-                chat: {
-                    ...chat,
-                    messages: updatedMessages,
-                },
-                excludeSpeaker: updatedMessages.at(-1)?.speaker || updatedMessages.at(-1)?.role || "",
-            }).catch(() => "");
-
-            if (!suggestedSpeaker) {
-                return rotatedQueue;
-            }
-
-            const suggestedCountry = rotatedQueue.find((country) => country.name.toLowerCase() === suggestedSpeaker.toLowerCase());
-            if (!suggestedCountry) {
-                return rotatedQueue;
-            }
-
-            return [
-                suggestedCountry,
-                ...rotatedQueue.filter((country) => country.name !== suggestedCountry.name),
-            ];
-        };
-
-        const offerNextCountry = (queue) => {
-            const [next, ...rest] = queue;
-            if (!next || countries.length === 0) {
-                setPhase("player");
-                return;
-            }
-            nextSpeakerIdx.current = (nextSpeakerIdx.current + 1) % countries.length;
-            if (isPlayerCountry(next)) {
-                setPendingCountry(null);
-                setRemainingQueue([]);
-                setPhase("player");
-                return;
-            }
-            setPendingCountry(next);
-            setRemainingQueue(rest);
-            setPhase("pending");
         };
 
         // A GROUP turn in one request (AI/chatActions.js): every AI participant
         // acts in a single answer — who speaks, who only reacts, who brings
-        // someone in, who calls a vote — instead of one request to pick the
-        // speaker and one per leader after it. A failure falls back to the
-        // rotation below, which is the behaviour this replaces.
-        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false } = {}) => {
+        // someone in, who calls a vote — instead of a separate speaker-selection
+        // request followed by one request per leader. This is the only group-chat
+        // response path; failure is surfaced rather than reviving the old sequence.
+        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "" } = {}) => {
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
@@ -1588,6 +1531,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     catchUp: asked?.catchUp || "",
                     time: asked?.time || "",
                     lifecycleResponseRequested,
+                    formalBusinessRequested,
+                    formalBusinessInteractive,
+                    institutionDebateRequested,
+                    institutionProposalId,
                 });
                 const newEvents = outcome?.newEvents ?? [];
                 const spoken = newEvents.filter((event) => event.kind === "message");
@@ -1623,6 +1570,18 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     });
                     const newMessageIds = spoken.map((event) => event.id).filter(Boolean);
                     await presentCommittedLifecycleReplies(projectedMessages, newMessageIds);
+                    const openedVote = outcome.lifecycle
+                        ?.map((entry) => entry?.proposal)
+                        .find((proposal) => proposal?.id && String(proposal?.status || "").toLowerCase() === "voting");
+                    if (openedVote && chat.lifecycleInstitutionId) {
+                        void Promise.resolve(onInstitutionBusinessOpened?.({
+                            institutionId: chat.lifecycleInstitutionId,
+                            proposalId: openedVote.id,
+                            kind: "vote",
+                            delayMs: randomChatRevealPauseMs(),
+                            source: "lifecycle-acceptance",
+                        })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${openedVote.id}.`, error, { problem: true }));
+                    }
                 } else {
                     const [first, ...later] = planChatReveal(newEvents);
                     const reveal = {
@@ -1638,11 +1597,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     }
                     if (later.length) sayLater(reveal, later);
                 }
-                setPhase("player");
                 return true;
             } catch (error) {
-                logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; falling back to the rotation.`, error, { problem: true });
-                return false;
+                const message = error?.message || "The group response could not be generated.";
+                logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; no legacy sequential fallback exists.`, error, { problem: true });
+                pushMessages([...nextMessages, {
+                    role: "error", speaker: "System", text: message, time: asked?.time || gameDate,
+                }]);
+                return true;
             } finally {
                 setIsLoading(false);
                 setSpeakingCountry(null);
@@ -1754,7 +1716,6 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
-            lastPlayerMessage.current = text;
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
@@ -1767,30 +1728,24 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             }];
             pushMessages(nextMessages);
             onSent?.({ messageId, time: moment.date || gameDate });
-            // One request for the whole table. Only for a group: a one-on-one
-            // chat is already a single request, and its streaming reply is what
-            // the player watches arrive.
-            if ((isGroup || (chat.lifecycleCaseIds?.length && chat.lifecycleInstitutionId)) && await runGroupTurn(text, nextMessages)) return;
-            const queue = await buildResponsiveQueue(nextMessages);
-            // Who was asked, and in what order. A group chat sends the same
-            // message to each leader in turn, so "France answered as if it had
-            // heard Prussia's reply" is a question about this order — and the
-            // order is chosen by a model call (chooseNextDiplomaticSpeaker) that
-            // can quietly fall back to plain rotation.
-            logDebugEvent("diplomacy",
-                `Player sent in chat #${chat.id}; reply order: ${queue.map((country) => country.name).join(" → ") || "(nobody)"}.`,
-                undefined, { verbose: true });
-            if (queue.length === 0) {
-                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid participants.", time: gameDate }]);
+            // Groups and institution conversations have one canonical response path:
+            // runChatActionBatch decides who speaks, reacts, votes or stays silent in
+            // the same AI request that writes the turn. There is no legacy sequential
+            // group-chat fallback. A one-on-one thread has exactly one AI counterpart,
+            // so native code selects it directly and makes only the diplomacy request.
+            if (isGroup || (chat.lifecycleCaseIds?.length && chat.lifecycleInstitutionId)) {
+                await runGroupTurn(text, nextMessages);
                 return;
             }
-            if (isGroup) {
-                // At most three NPC replies to one player message; the rotation
-                // ends at the player's own slot as it always did.
-                offerNextCountry(queue.filter((country) => !isPlayerCountry(country)).slice(0, MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE));
-            } else {
-                await fetchLeaderResponse(queue[0], text, []);
+            const counterpart = countries.find((country) => !isPlayerCountry(country));
+            if (!counterpart) {
+                pushMessages([...nextMessages, { role: "error", speaker: "System", text: "This chat has no valid counterpart.", time: gameDate }]);
+                return;
             }
+            logDebugEvent("diplomacy",
+                `Player sent in chat #${chat.id}; one-on-one counterpart: ${counterpart.name}.`,
+                undefined, { verbose: true });
+            await fetchLeaderResponse(counterpart, text);
         };
 
         const handleLifecycleContinue = async () => {
@@ -1817,6 +1772,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     },
                 });
                 onLifecycleResult?.(result);
+                if (result?.proposal?.id && String(result.proposal.status || "").toLowerCase() === "voting") {
+                    void Promise.resolve(onInstitutionBusinessOpened?.({
+                        institutionId: chat.lifecycleInstitutionId,
+                        proposalId: result.proposal.id,
+                        kind: "vote",
+                        delayMs: randomChatRevealPauseMs(),
+                        source: "lifecycle-acceptance",
+                    })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${result.proposal.id}.`, error, { problem: true }));
+                }
             } catch (error) {
                 logDebugEvent("diplomacy", `Player institution lifecycle response failed in chat #${chat.id}.`, error, { problem: true });
                 pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: error?.message || "The institution response could not be recorded.", time: gameDate }]);
@@ -1835,33 +1799,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!retry) return;
             logDebugEvent("diplomacy", `Retrying ${retry.country?.name || "a leader"}'s reply in chat #${chat.id}.`, undefined, { verbose: true });
             pushMessages(messagesRef.current.filter((_, i) => i !== index));
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            setPhase("player");
-            nextSpeakerIdx.current = retry.speakerIdx ?? nextSpeakerIdx.current;
-            lastPlayerMessage.current = retry.playerMessage;
-            await fetchLeaderResponse(retry.country, retry.playerMessage, retry.queue ?? []);
-        };
-
-        const handleSpeakInstead = () => {
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            setPhase("player");
-        };
-
-        const handleLetSpeak = async () => {
-            const country = pendingCountry;
-            const rest    = remainingQueue;
-            setPendingCountry(null);
-            setRemainingQueue([]);
-            await fetchLeaderResponse(country, lastPlayerMessage.current, rest);
+            await fetchLeaderResponse(retry.country, retry.playerMessage);
         };
 
         // One-request lifecycle turns ask every unresolved government at the table
         // in the same model call. Do not pretend the first roster entry alone is
         // "thinking" while that grouped request is in flight.
         const lifecycleGroupThinking = isLifecycleConversation && isLoading && !speakingCountry && !stagedLifecycleSpeaker && countries.length > 1;
-        const typingSpeaker = stagedLifecycleSpeaker ?? speakingCountry ?? (!lifecycleGroupThinking ? countries[0] : null);
+        const ordinaryGroupThinking = isGroup && !isLifecycleConversation && isLoading && !speakingCountry;
+        const typingSpeaker = stagedLifecycleSpeaker ?? speakingCountry ?? (!lifecycleGroupThinking && !ordinaryGroupThinking ? countries[0] : null);
         // What the reveal has reached, each with its place in the stored thread
         // (a retry replays the stored message at that index).
         const shownEntries = messages
@@ -2022,40 +1968,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             {strandedDemands.map(renderDemandCard)}
             {isLoading && lifecycleGroupThinking
                 ? <LifecycleThinkingBubble count={lifecycleState.responseCases.length || countries.length} />
-                : isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
+                : isLoading && ordinaryGroupThinking
+                    ? <GroupThinkingBubble count={countries.length} />
+                    : isLoading && typingSpeaker && <TypingBubble speaker={typingSpeaker.name} code={typingSpeaker.code} />}
             {!isLoading && typingNext && (
                 <TypingBubble speaker={typingNext.speaker} code={typingNext.code} label="Typing" hint="Send a message now to cut in: what is still to come will not be said." />
             )}
             <div ref={messagesEndRef} />
             </div>
 
-            {phase === "pending" && !isLoading && pendingCountry ? (
-                <div style={{ padding: "0.75rem 1rem 0.9rem", borderTop: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(0,0,0,0.15)", flexShrink: 0 }}>
-                <p style={{ margin: "0 0 0.55rem 0", fontSize: "0.78rem", color: "rgba(255,255,255,0.35)", textAlign: "center" }}>
-                <CountryTurnLabel country={pendingCountry} remaining={remainingQueue.length} />
-                </p>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                className="oh-tap-row"
-                onClick={handleSpeakInstead}
-                style={{ flex: 1, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.8)", fontSize: "0.9rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.11)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.2)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.12)"; }}
-                >{isInstitutionCouncil ? "Speak instead" : "Speak"}</button>
-                <button
-                className="oh-tap-row"
-                onClick={handleLetSpeak}
-                style={{ flex: 2, padding: "0.58rem 0.7rem", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.88)", fontSize: "0.82rem", fontWeight: 600, cursor: "pointer", fontFamily: "sans-serif", transition: "all 0.12s ease" }}
-                onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.28)"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.15)"; }}
-                >Let {pendingCountry.name} speak →</button>
-                </div>
-                </div>
-            ) : lifecycleTerminal ? (
-                <div data-lifecycle-terminal-history="true" style={{ padding: ".62rem 1rem .76rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(13,13,16,.46)", flexShrink: 0 }}>
+            {lifecycleTerminal ? (                <div data-lifecycle-terminal-history="true" style={{ padding: ".62rem 1rem .76rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: "rgba(13,13,16,.46)", flexShrink: 0 }}>
                     <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />
                 </div>
-            ) : phase === "player" && !isLoading ? (
+            ) : !isLoading ? (
                 <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
@@ -2111,15 +2036,6 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         );
 };
 
-const CountryTurnLabel = ({ country, remaining }) => {
-    const flagUrl = useCountryFlagUrl({ code: country.code, name: country.name });
-    return (
-        <>
-        <FlagImg url={flagUrl} alt={country.name} size="0.95em" /> <strong style={{ color: "rgba(255,255,255,0.65)", fontWeight: 600 }}>{country.name}</strong> would like to respond
-        {remaining > 0 && <span style={{ color: "rgba(255,255,255,0.22)" }}> · {remaining} more after</span>}
-        </>
-    );
-};
 
 // ── Conversation date separators ────────────────────────────────────────────
 
@@ -2163,7 +2079,6 @@ const CHAT_INITIAL_RENDER_WINDOW = 12;
 const CHAT_RENDER_WINDOW_STEP = 40;
 // A group chat takes at most this many NPC replies to one player message; the
 // floor then returns to the player rather than letting a six-way table monologue.
-const MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE = 3;
 
 // ── Incoming diplomacy notifications ──────────────────────────────────────────
 //
@@ -3157,6 +3072,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const [chats, setChats]                       = useState([]);
     const [activeChat, setActiveChat]             = useState(null);
     const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
+    const institutionAutomationInFlight = useRef(new Set());
+    const [institutionAutomation, setInstitutionAutomation] = useState([]);
     const [showSelector, setShowSelector]         = useState(false);
     // On a phone, Back closes the country picker before the panel under it
     // (runtime/backToClose.js; main.jsx does the panel). Only while the panel
@@ -3442,7 +3359,26 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     const adoptInstitutionalResult = (result) => {
-        if (Array.isArray(result?.chats)) setChats(result.chats);
+        if (Array.isArray(result?.chats)) {
+            setChats(result.chats);
+        } else if (result?.channel) {
+            // Background Council automation does not run through ConversationView,
+            // so there is no local thread-update callback to publish the committed
+            // channel immediately. Merge the authoritative channel returned by
+            // native governance instead of waiting on an asynchronous runtime reread.
+            // Otherwise a successful debate can finish, clear its "considering" banner,
+            // and still leave the embedded Council showing its pre-request transcript.
+            const committedChannel = result.channel;
+            setChats((prev) => {
+                const channelId = String(committedChannel?.id || "");
+                if (!channelId) return prev;
+                const index = prev.findIndex((chat) => String(chat?.id || "") === channelId);
+                if (index < 0) return [committedChannel, ...prev];
+                const next = [...prev];
+                next[index] = committedChannel;
+                return next;
+            });
+        }
         if (result?.channel) {
             setHeldUnreadId(null);
             setChatReadState(shownVersion(result.channel), true);
@@ -3454,6 +3390,73 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             setActiveChat(result.createdChat);
         }
         void refreshRuntimeState(["world", "chat", "events"]);
+    };
+
+    const runInstitutionCouncilTurn = async ({
+        institutionId = "", proposalId = "", kind = "debate", playerComment = "", delayMs = 0, source = "player",
+    } = {}) => {
+        const id = String(institutionId || "").trim();
+        const proposal = String(proposalId || "").trim();
+        const mode = kind === "vote" ? "vote" : "debate";
+        if (!id || !proposal) return null;
+        const key = `${id}:${proposal}:${mode}`;
+        if (institutionAutomationInFlight.current.has(key)) return null;
+        institutionAutomationInFlight.current.add(key);
+        // Capture the campaign identity BEFORE any presentation delay. If the
+        // player switches saves while an automatic Council round is waiting,
+        // every native write below must fail closed against the old game rather
+        // than discovering the new game id after the delay and writing into it.
+        const expectedGameId = String(getLibraryState()?.activeGameId || "");
+        try {
+            if (Number(delayMs) > 0) {
+                await new Promise((resolve) => window.setTimeout(resolve, Math.max(0, Number(delayMs) || 0)));
+            }
+            setInstitutionAutomation((current) => [
+                ...current.filter((entry) => entry.key !== key),
+                { key, institutionId: id, proposalId: proposal, kind: mode },
+            ]);
+            let materialized = await ensureInstitutionalChannel({
+                institutionId: id,
+                playerCountry,
+                date: gameDate,
+                expectedGameId,
+            });
+            // Publish the native Council channel immediately. The model may take
+            // several seconds to reason, but the institution workspace should
+            // already show that formal business is actively being considered.
+            adoptInstitutionalResult(materialized);
+            const comment = String(playerComment || "").trim();
+            if (comment) {
+                const spoken = await commitInstitutionalPlayerMessage({
+                    institutionId: id,
+                    playerCountry,
+                    text: comment,
+                    date: gameDate,
+                    expectedGameId,
+                });
+                adoptInstitutionalResult(spoken);
+                materialized = { ...materialized, channel: spoken.channel || materialized.channel };
+            }
+            const result = await runChatActionBatch({
+                chat: materialized.channel,
+                playerCountry,
+                time: gameDate,
+                institutionDebateRequested: mode === "debate",
+                institutionProposalId: proposal,
+                formalBusinessRequested: mode === "vote",
+                formalBusinessInteractive: mode === "vote",
+                useCanonicalState: true,
+            });
+            adoptInstitutionalResult({ ...result, channel: result?.channel || materialized.channel });
+            logDebugEvent("diplomacy", `Institution ${mode} round completed for ${id}/${proposal}.`, { source }, { verbose: true });
+            return result;
+        } catch (error) {
+            logDebugEvent("diplomacy", `Institution ${mode} round failed for ${id}/${proposal}.`, error, { problem: true });
+            throw error;
+        } finally {
+            institutionAutomationInFlight.current.delete(key);
+            setInstitutionAutomation((current) => current.filter((entry) => entry.key !== key));
+        }
     };
 
     const navigateInstitution = (institutionId, section = "overview") => {
@@ -3508,6 +3511,30 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             return updated;
         });
         if (activeChat?.id === id) setActiveChat(null);
+    };
+
+    // Lifecycle invitation/application threads are purpose-built negotiations,
+    // not permanent diplomatic channels. Once every linked case is genuinely
+    // terminal, leaving the thread closes it automatically so Contacts does not
+    // fill up with one-purpose accession conversations. Pending-approval cases
+    // stay open because the institution still has formal business to resolve.
+    const leaveActiveChat = () => {
+        if (!activeChat) return;
+        const lifecycleState = activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length
+            ? institutionLifecycleConversationState(worldSnapshot, {
+                institutionId: activeChat.lifecycleInstitutionId,
+                caseIds: activeChat.lifecycleCaseIds,
+            })
+            : null;
+        const lifecycleTerminal = Boolean(
+            lifecycleState?.cases?.length
+            && lifecycleState.resolvedCases?.length === lifecycleState.cases.length
+            && lifecycleState.awaitingApprovalCases?.length === 0,
+        );
+        const institutionId = activeChat.institutionId;
+        if (lifecycleTerminal) handleDeleteChat(activeChat.id);
+        else setActiveChat(null);
+        if (institutionId) navigateInstitution(institutionId, "overview");
     };
 
     // Open (or reuse) a 1-on-1 chat with a country requested from the region popup
@@ -3651,11 +3678,11 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={() => activeChat.institutionId ? navigateInstitution(activeChat.institutionId, "overview") : setActiveChat(null)} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
-                onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} />
+                onInstitutionNavigate={(section) => { const institutionId = activeChat.institutionId || activeChat.lifecycleInstitutionId; if (institutionId) navigateInstitution(institutionId, section); }} onLifecycleResult={adoptInstitutionalResult} onInstitutionBusinessOpened={runInstitutionCouncilTurn} />
             ) : (
                 <>
                 <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
@@ -3700,6 +3727,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                         onAdoptResult={adoptInstitutionalResult}
                         onOpenCouncil={openInstitutionCouncil}
                         onOpenLifecycleChat={openInstitutionLifecycleChat}
+                        onRequestCouncilTurn={runInstitutionCouncilTurn}
+                        councilAutomation={institutionAutomation}
                         onCouncilVisibleChange={setVisibleCouncilChatId}
                         renderCouncil={(channel) => (
                             <ConversationView
@@ -3715,6 +3744,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                 onDraftApplied={() => setComposerDraft(null)}
                                 onInstitutionNavigate={(section) => navigateInstitution(channel.institutionId, section)}
                                 onLifecycleResult={adoptInstitutionalResult}
+                                onInstitutionBusinessOpened={runInstitutionCouncilTurn}
                                 embeddedInstitution
                             />
                         )}

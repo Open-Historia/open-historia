@@ -25,12 +25,13 @@ test("province paint is valid for both GeoJSON and stock vector layers", () => {
     ],
   });
   assert.deepEqual(errors, []);
+  assert.equal(buildProvinceOutlinePaint(true)["line-color"], "rgba(205, 218, 228, 0.64)");
 });
 
 test("overview has no province strokes, including the start of the fade", () => {
   const paint = buildProvinceOutlinePaint(true);
-  assert.equal(PROVINCE_OUTLINE_MIN_ZOOM, 6.5);
-  for (const zoom of [0, 2.25, 3.5, 4.2, 5, 6, 6.49, 6.5]) {
+  assert.equal(PROVINCE_OUTLINE_MIN_ZOOM, 4.15);
+  for (const zoom of [0, 2.25, 3.5, 4.0, 4.14, 4.15]) {
     assert.equal(evaluate(paint, "line-opacity", zoom), 0, `zoom ${zoom}`);
   }
 });
@@ -41,13 +42,13 @@ test("local grid fades in smoothly and stays subpixel through maximum zoom", () 
   for (let zoom = PROVINCE_OUTLINE_MIN_ZOOM; zoom <= 24; zoom += 0.05) {
     const opacity = evaluate(paint, "line-opacity", zoom);
     const width = evaluate(paint, "line-width", zoom);
-    assert.ok(opacity >= previous && opacity <= 0.45);
-    assert.ok(opacity - previous < 0.02, `no opacity jump at ${zoom}`);
-    assert.ok(width >= 0.25 && width <= 0.5, `hairline at ${zoom}`);
+    assert.ok(opacity >= previous && opacity <= 0.58);
+    assert.ok(opacity - previous < 0.04, `no opacity jump at ${zoom}`);
+    assert.ok(width >= 0.40 && width <= 0.72, `subordinate local border at ${zoom}`);
     previous = opacity;
   }
-  assert.equal(evaluate(paint, "line-opacity", 7.5), 0.25);
-  assert.equal(evaluate(paint, "line-width", 16), 0.5);
+  assert.equal(evaluate(paint, "line-opacity", 4.45), 0.18);
+  assert.equal(evaluate(paint, "line-width", 16), 0.72);
 });
 
 test("inactive or not-yet-known worlds never show province strokes", () => {
