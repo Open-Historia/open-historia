@@ -21,6 +21,7 @@ import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nati
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
 import {
   buildPlayerFocusDirective,
+  citeNarratedOrders,
   collectPlayerMaterial,
   combinedShares,
   createPlayerEventTest,
@@ -6686,8 +6687,15 @@ const applySimulationResult = async ({
     { originDate: baseGame.gameDate, targetDate: normalizeString(result.stopDate) || baseGame.gameDate },
   );
   const spareForFocus = createSpareTest(focusMaterial);
+  // An order the jump carried out without citing it is cited here, before the
+  // filler gates, so the event is spared as an order's answer and settleOrders
+  // resolves the order instead of carrying it over to be retold next jump.
+  const citedEvents = citeNarratedOrders(baseActions, dedupedEvents, {
+    isPlayerEvent: applyFocus.isPlayerEvent,
+    playerNames: applyFocus.playerNames,
+  });
   const mainCuration = await curateGeneratedEventsWithHidden({
-    events: dedupedEvents,
+    events: citedEvents,
     priorEvents,
     game: baseGame,
     world: baseWorld,

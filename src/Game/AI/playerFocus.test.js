@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  citeNarratedOrders,
   PLAYER_FOCUS_DEFAULT,
   buildPlayerFocusDirective,
   collectPlayerMaterial,
@@ -248,4 +249,63 @@ test("the share the jump is told is capped by what the player actually has going
     playerName: PLAYER,
   });
   assert.match(plentyText, /75%/, "with plenty going on the level's own share is what it asks for");
+});
+
+// --- Orders carried out without being cited ---
+// From a player's log: the treaty was ratified five times because no event
+// cited the order, so it stayed overdue and every jump retold it.
+
+const nigeriaOrder = {
+  id: "order-nigeria",
+  status: "planned",
+  title: "Finalize and Ratify the Nigerian Imperial Accession Treaty",
+  text: "Dispatch diplomatic envoys to Abuja to conclude the final legislative review.",
+};
+const britishEvent = createPlayerEventTest({ playerNames: ["British Empire"] });
+
+test("a Player event that carries an order's subject cites it, and the order settles", () => {
+  const events = [
+    {
+      title: "British Crown Ratifies the Nigerian Imperial Accession Treaty in Abuja",
+      description: "British and Nigerian delegates formally signed the Imperial Development Accord.",
+      playerRelated: true,
+      impacts: {},
+    },
+    { title: "South Korean Financial Commission Announces Export Modernization Initiative", description: "Seoul unveiled a package.", impacts: {} },
+  ];
+  const cited = citeNarratedOrders([nigeriaOrder], events, { isPlayerEvent: britishEvent, playerNames: ["British Empire"] });
+  assert.deepEqual(cited[0].impacts.actionIds, ["order-nigeria"]);
+  assert.deepEqual(cited[1], events[1]);
+  assert.equal(settleOrders([nigeriaOrder], cited)[0].status, "resolved");
+});
+
+test("an event that only shares the player's name and a word or two cites nothing", () => {
+  const events = [{
+    title: "British Admiralty Advances Portsmouth Leviathan Hull Assembly",
+    description: "Imperial shipyards accelerated fabrication.",
+    playerRelated: true,
+    impacts: {},
+  }];
+  const cited = citeNarratedOrders([nigeriaOrder], events, { isPlayerEvent: britishEvent, playerNames: ["British Empire"] });
+  assert.equal(cited, events);
+});
+
+test("an order the model already cited is left alone, and so is an event citing another order", () => {
+  const already = [{
+    title: "British Crown Ratifies the Nigerian Imperial Accession Treaty",
+    playerRelated: true,
+    impacts: { actionIds: ["order-other"] },
+  }];
+  assert.equal(citeNarratedOrders([nigeriaOrder], already, { isPlayerEvent: britishEvent }), already);
+  const answered = [{ title: "Nigerian Accession", playerRelated: true, impacts: { actionIds: ["order-nigeria"] } }];
+  assert.equal(citeNarratedOrders([nigeriaOrder], answered, { isPlayerEvent: britishEvent }), answered);
+});
+
+test("a world event that happens to share the order's words cites nothing", () => {
+  const events = [{
+    title: "Ghana Debates Nigerian Imperial Accession Treaty Precedent",
+    description: "Accra's parliament discussed the ratification.",
+    impacts: {},
+  }];
+  assert.equal(citeNarratedOrders([nigeriaOrder], events, { isPlayerEvent: () => false }), events);
 });

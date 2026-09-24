@@ -229,6 +229,60 @@ export const playerFocusShortfall = (events, { focus, isPlayerEvent = () => fals
 // answered by the conversation opening. Only an ordinary order needs an event.
 export const actionNeedsEvent = (action) => asText(action?.kind) !== "chat" && !action?.unitRevert;
 
+// An order the jump plainly carried out but forgot to cite. The model wrote
+// "British Crown Ratifies the Nigerian Imperial Accession Treaty" for the order
+// "Finalize and Ratify the Nigerian Imperial Accession Treaty" without its id;
+// the order stayed overdue, the next jump was told to answer it, and the treaty
+// was ratified five times over two months. A Player event that carries the
+// order's own subject — most of the distinctive words of its title — is taken
+// as the answer and cites it, so settleOrders resolves it the first time.
+//
+// Conservative on purpose: only a Player event that cites no order at all, only
+// when the title has at least three distinctive words and the event carries most
+// of them, and each order goes to the one event that matches it best.
+const ORDER_VERB_WORDS = new Set([
+  "enact", "authorize", "authorise", "establish", "launch", "finalize", "finalise",
+  "convene", "order", "begin", "initiate", "create", "formally", "officially",
+  "immediately", "approve", "direct", "start", "issue",
+]);
+const ORDER_STEM_LENGTH = 5;
+const ORDER_MIN_STEMS = 3;
+const ORDER_MIN_SHARE = 0.6;
+
+const stemsOf = (text, excluded) => new Set(
+  fold(text).trim().split(" ")
+    .filter((word) => word.length >= 4 && !ORDER_VERB_WORDS.has(word) && !excluded.has(word))
+    .map((word) => word.slice(0, ORDER_STEM_LENGTH)),
+);
+
+export const citeNarratedOrders = (actions, events, { isPlayerEvent = () => false, playerNames = [] } = {}) => {
+  const list = asArray(events);
+  const cited = new Set(list.flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
+  // The player's own name is in every Player event; it says nothing about which order.
+  const excluded = new Set(playerNames.flatMap((name) => fold(name).trim().split(" ")).filter(Boolean));
+  const orders = asArray(actions).filter((action) =>
+    asText(action?.status) === "planned" && actionNeedsEvent(action) && asText(action?.id) && !cited.has(asText(action.id)));
+  const answers = new Map();
+  for (const order of orders) {
+    const wanted = stemsOf(order.title, excluded);
+    if (wanted.size < ORDER_MIN_STEMS) continue;
+    let best = null;
+    list.forEach((event, index) => {
+      if (asArray(event?.impacts?.actionIds).length || !isPlayerEvent(event)) return;
+      const have = stemsOf(`${asText(event?.title)} ${asText(event?.description)}`, excluded);
+      const shared = [...wanted].filter((stem) => have.has(stem)).length;
+      const share = shared / wanted.size;
+      if (shared < ORDER_MIN_STEMS || share < ORDER_MIN_SHARE) return;
+      if (!best || share > best.share) best = { index, share };
+    });
+    if (best) answers.set(best.index, [...(answers.get(best.index) || []), asText(order.id)]);
+  }
+  if (!answers.size) return list;
+  return list.map((event, index) => (answers.has(index)
+    ? { ...event, impacts: { ...(event?.impacts || {}), actionIds: answers.get(index) } }
+    : event));
+};
+
 export const settleOrders = (actions, events) => {
   const answered = new Set(asArray(events).flatMap((event) => asArray(event?.impacts?.actionIds)).map(asText).filter(Boolean));
   return asArray(actions).map((action) => {
