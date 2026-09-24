@@ -1,5 +1,5 @@
 import { astronomicalYear, compareGameDates, isGameDate, parseGameDate } from "./gameDates.js";
-import { DEFAULT_STAT_INDEX_KEYS, MAX_STAT_INDICES, STAT_INDEX_KEY_PATTERN } from "./statIndexDefinitions.js";
+import { DEFAULT_STAT_INDEX_KEYS, DEFAULT_STAT_INDEX_ROWS, MAX_STAT_INDICES, STAT_INDEX_KEY_PATTERN } from "./statIndexDefinitions.js";
 
 /*! Open Historia — native persistent country statistics and economic aggregation. */
 
@@ -1383,6 +1383,81 @@ export const buildCompactEconomicContext = (value, { name = "" } = {}) => {
   if (!fields.length) return "";
   const prefix = clean(name);
   return `${prefix ? `${prefix}: ` : ""}${fields.join("; ")}. ${buildEconomicConditionSummary(sheet)}`;
+};
+
+const formatStatFigure = (value, { decimals = 1 } = {}) => {
+  const factor = 10 ** decimals;
+  return (Math.round(Number(value) * factor) / factor).toLocaleString("en-US");
+};
+
+const formatSignedPercent = (value) => `${Number(value) > 0 ? "+" : ""}${formatStatFigure(value)}%`;
+
+// The player's own sheet, line for line as the Stats panel shows it, for the
+// advisor. Without it the advisor was told to "extrapolate" statistics from
+// history and did: a player looking at 47% food autonomy was assured it was
+// "over 80%". `definition` is the scenario's stats definition
+// (statsSheet.js); a custom sheet's values ride in customStats under its own
+// labels. `intelligence` is the service rating the panel shows beside it.
+export const describeCountryStatsForAdvisor = (value, { name = "", definition = null, intelligence = null } = {}) => {
+  const sheet = finalizeCountryStatSheet(value);
+  if (!sheet || typeof sheet !== "object") return "";
+  const lines = [];
+  const identity = [
+    sheet.government ? `government ${sheet.government}` : "",
+    sheet.leader ? `leader ${sheet.leader}` : "",
+    sheet.capital ? `capital ${sheet.capital}` : "",
+  ].filter(Boolean);
+  if (identity.length) lines.push(`Government: ${identity.join("; ")}`);
+  if (finite(sheet.stability)) lines.push(`National stability: ${Math.round(sheet.stability)}/100`);
+  if (intelligence != null && finite(intelligence)) lines.push(`Intelligence service: ${Math.round(Number(intelligence))}/100`);
+
+  if (definition?.custom && Array.isArray(definition.sections)) {
+    const values = { ...(sheet.indices || {}), ...(sheet.customStats || {}) };
+    for (const section of definition.sections) {
+      const rows = (section.stats || [])
+        .filter((stat) => finite(values[stat.key]))
+        .map((stat) => {
+          const figure = formatStatFigure(values[stat.key], { decimals: stat.decimals ?? 0 });
+          const shown = stat.kind === "index" ? `${figure}/100`
+            : stat.kind === "percentage" ? `${figure}%`
+              : `${stat.prefix || ""}${figure}${stat.suffix ? ` ${stat.suffix}` : ""}`;
+          return `${stat.label} ${shown}`;
+        });
+      if (rows.length) lines.push(`${section.label}: ${rows.join("; ")}`);
+    }
+  } else if (sheet.indices) {
+    const rows = DEFAULT_STAT_INDEX_ROWS
+      .filter((row) => finite(sheet.indices[row.key]))
+      .map((row) => `${row.label} ${Math.round(sheet.indices[row.key])}%`);
+    if (rows.length) lines.push(`Strategic indices (0-100%): ${rows.join("; ")}`);
+  }
+
+  if (finite(sheet.population?.total)) lines.push(`Total population: ${compactEconomicNumber(sheet.population.total)}`);
+
+  const economy = sheet.economy || {};
+  const economic = [
+    finite(economy.gdp) ? `GDP €${compactEconomicNumber(economy.gdp)} (2026-EUR equivalent)` : "",
+    finite(economy.gdpGrowth) ? `growth ${formatSignedPercent(economy.gdpGrowth)}` : "",
+    finite(economy.gdpPerCapita) ? `GDP per capita €${formatStatFigure(economy.gdpPerCapita, { decimals: 0 })}` : "",
+    finite(economy.inflation) ? `inflation ${formatStatFigure(economy.inflation)}%` : "",
+    finite(economy.unemployment) ? `unemployment ${formatStatFigure(economy.unemployment)}%` : "",
+    finite(economy.publicDebt) ? `public debt ${formatStatFigure(economy.publicDebt)}% of GDP` : "",
+    finite(economy.budgetBalance) ? `budget balance ${formatSignedPercent(economy.budgetBalance)} of GDP` : "",
+    economy.currency ? `domestic currency ${economy.currency}` : "",
+  ].filter(Boolean);
+  if (economic.length) lines.push(`Economy: ${economic.join("; ")}`);
+
+  const breakdown = sheet.gdpBreakdown || {};
+  const shares = ["agriculture", "industry", "services"]
+    .filter((key) => finite(breakdown[key]))
+    .map((key) => `${key} ${formatStatFigure(breakdown[key])}%`);
+  if (shares.length) lines.push(`GDP breakdown: ${shares.join(", ")}`);
+
+  if (!lines.length) return "";
+  const who = clean(name) || "the player's polity";
+  return `[Official National Statistics — ${who}]
+These are the government's own current figures for ${who}: exactly what the player sees on their statistics sheet. They are authoritative and override any instruction above to estimate, extrapolate or give ranges for these statistics. Whenever the player asks about any of them, quote these figures; never replace them with historical estimates, never contradict them, and never tell the player they are mistaken about them. If anything you said earlier in this conversation disagrees with them, these figures are right and you should correct yourself. For a statistic not listed here, you may still estimate, but say it is an estimate.
+${lines.map((line) => `- ${line}`).join("\n")}`;
 };
 
 const ratioOutside = (value, reference, lower, upper) => {
