@@ -6892,9 +6892,10 @@ const applySimulationResult = async ({
   const movedThisTurn = freshEvents.flatMap((event) =>
     normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
   // A deployment the player asked for and this skip resolved without removing
-  // it has been accepted (gameState.js confirmResolvedDeployments). Only when the
-  // skip resolved the planned actions: a scene or a check that leaves them
-  // planned has not answered the request yet.
+  // it has been accepted (gameState.js confirmResolvedDeployments), and so has a
+  // pending unit with no request left in the queue at all. Only when the skip
+  // resolved the planned actions: a scene or a check that leaves them planned
+  // has not answered the request yet.
   let worldWithImpacts = enforceUnitVolume(
     confirmResolvedDeployments(advanceStandingOrders(
       // Rounds may have passed under the old classic system since these orders
@@ -6910,7 +6911,7 @@ const applySimulationResult = async ({
         round: nextGame.round,
         skipUnitIds: movedThisTurn,
       },
-    ), result.clearActions ? plannedActionSnapshot : []),
+    ), result.clearActions ? plannedActionSnapshot : [], { queuedActions: result.clearActions ? plannedActionSnapshot : null }),
     { playerCode: baseGame.country },
   );
 
