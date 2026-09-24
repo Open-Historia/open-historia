@@ -521,7 +521,7 @@ const ProjectCard = memo(({ project, gameDate, round, eventTitles, expanded, bus
       </div>
 
       {flags.nextMilestone && (
-        <div data-no-translate style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", marginTop: "0.45rem" }}>
+        <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.7rem", marginTop: "0.45rem" }}>
           {flags.nextMilestone.repeat ? "↻" : "▸"} Next: {flags.nextMilestone.title}
           {flags.nextMilestone.date ? ` — ${flags.nextMilestone.date}` : ""}
           {flags.nextMilestone.repeat && (

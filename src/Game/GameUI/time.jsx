@@ -1415,7 +1415,6 @@ const TimelineSkipPanel = ({
         }}
         />
         <select
-        data-no-translate
         className="oh-tap-row"
         value={customUnit}
         onChange={(event) => setCustomUnit(event.target.value)}

@@ -3,6 +3,12 @@ import DEFAULT_PROMPTS from "./defaultPrompts.json";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import { POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE } from "../../runtime/politicalActorOps.js";
 import {
+  localizeGuidanceTree,
+  localizedPassages,
+  promptTranslationsVersion,
+  withoutLocalizedDefaults,
+} from "../../runtime/promptTranslations.js";
+import {
   PROMPT_MODEL_VERSION,
   buildGuidanceDefaults,
   composePrompt,
@@ -411,21 +417,43 @@ export const PROMPT_EDITOR_SECTIONS = PROMPT_SECTION_DEFINITIONS.filter((section
 // are used.
 export const PROMPT_GUIDANCE_DEFAULTS = Object.freeze(buildGuidanceDefaults(DEFAULT_PROMPTS));
 
-export const normalizePromptGuidance = (rawPack) => normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS);
+// The same defaults in the player's language: every passage the language pack
+// translates (runtime/promptTranslations.js), the English one where it has
+// none. English, or before the pack has loaded, this is the English tree.
+let localizedDefaults = { version: -1, tree: PROMPT_GUIDANCE_DEFAULTS };
+export const localizedGuidanceDefaults = () => {
+  const version = promptTranslationsVersion();
+  if (localizedDefaults.version !== version) {
+    localizedDefaults = { version, tree: localizeGuidanceTree(PROMPT_GUIDANCE_DEFAULTS) };
+  }
+  return localizedDefaults.tree;
+};
+
+// An edit identical to the default in the player's language is no edit
+// (withoutLocalizedDefaults), as one identical to the English default is not.
+export const normalizePromptGuidance = (rawPack) => {
+  const guidance = normalizePackGuidance(rawPack, PROMPT_GUIDANCE_DEFAULTS);
+  const localized = localizedGuidanceDefaults();
+  return localized === PROMPT_GUIDANCE_DEFAULTS ? guidance : withoutLocalizedDefaults(guidance, localized);
+};
 
 // The runtime pack: the composed prompts the game renders, plus the guidance
 // they were composed from (what the Prompts tab edits). The helpers are always
-// the defaults; they are the technical placeholder map.
+// the defaults; they are the technical placeholder map. Each passage the
+// author left alone is the default in the player's language; each one they
+// wrote is theirs, whatever language they wrote it in.
 export const normalizePromptPack = (rawPrompts) => {
   const guidance = normalizePromptGuidance(rawPrompts);
+  const localized = localizedGuidanceDefaults();
+  const passages = (defaults, edits) => (localized === PROMPT_GUIDANCE_DEFAULTS ? edits : localizedPassages(defaults, edits));
   return {
     promptModel: PROMPT_MODEL_VERSION,
     guidance,
-    advisor: composePrompt("advisor", PROMPT_ADVISOR_DEFAULT, guidance.advisor),
+    advisor: composePrompt("advisor", PROMPT_ADVISOR_DEFAULT, passages(localized.advisor, guidance.advisor)),
     helpers: { ...PROMPT_HELPER_DEFAULTS },
-    leader: composePrompt("leader", PROMPT_LEADER_DEFAULT, guidance.leader),
+    leader: composePrompt("leader", PROMPT_LEADER_DEFAULT, passages(localized.leader, guidance.leader)),
     tasks: Object.fromEntries(
-      PROMPT_TASK_KEYS.map((key) => [key, composePrompt(key, PROMPT_TASK_DEFAULTS[key], guidance.tasks[key])]),
+      PROMPT_TASK_KEYS.map((key) => [key, composePrompt(key, PROMPT_TASK_DEFAULTS[key], passages(localized.tasks?.[key], guidance.tasks[key]))]),
     ),
   };
 };

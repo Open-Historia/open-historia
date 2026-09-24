@@ -339,6 +339,16 @@ const ownerFoldKey = (value) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
 
+// The same fold for a label as the player reads it, which may be in any script
+// (runtime/translator.js): folded to a-z, every Chinese, Arabic or Cyrillic name
+// was "" and "collided" with every other, so each fell back to its English owner.
+const labelFoldKey = (value) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
 // ---- Disputed-region stripes ------------------------------------------------
 // A region whose `claimants` list names the countries contesting it renders
 // striped in their colors (current administrator first). The stripe tile's
@@ -1354,11 +1364,11 @@ const WorldMap = ({ isGlobe = false }) => {
     // identity only for the colliding labels.
     const counts = new Map();
     for (const label of labels.values()) {
-      const key = ownerFoldKey(label);
+      const key = labelFoldKey(label);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     for (const [owner, label] of labels) {
-      if ((counts.get(ownerFoldKey(label)) ?? 0) > 1) labels.set(owner, owner);
+      if ((counts.get(labelFoldKey(label)) ?? 0) > 1) labels.set(owner, owner);
     }
     return Object.fromEntries(labels);
     // labelEpoch intentionally rebakes translated strings after i18n updates.

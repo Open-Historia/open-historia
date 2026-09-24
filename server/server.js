@@ -348,11 +348,14 @@ app.get("/api/ui-settings", (_req, res) => {
 });
 
 // Language packs. Two layers merge:
-//  - shipped packs (public/lang/<code>.json, arrive with updates) seed the
-//    top languages so common strings never need an AI call;
+//  - shipped packs (public/lang/<code>.json, arrive with updates) hold every
+//    fixed string of the interface (scripts/i18n/), so it never needs an AI
+//    call in those languages;
 //  - saved packs (server/data/lang/<code>.json) accumulate every translation
-//    generated at runtime. They live under server/data, which the update
-//    script never touches, so they survive updates. Saved entries win.
+//    generated at runtime: what a scenario or a player made. They live under
+//    server/data, which the update script never touches, so they survive
+//    updates. Shipped entries win: a saved entry for a string a pack now
+//    covers is an older AI translation, made before the pack had it.
 const shippedLangDir = fs.existsSync(path.join(distDir, "lang"))
   ? path.join(distDir, "lang")
   : path.join(__dirname, "../public/lang");
@@ -379,7 +382,7 @@ app.get("/api/lang/:code", (req, res) => {
   if (!isLangCode(code)) {
     return sendError(res, 400, "Invalid language code.");
   }
-  res.json({ ...readLangPack(shippedLangDir, code), ...readLangPack(savedLangDir, code) });
+  res.json({ ...readLangPack(savedLangDir, code), ...readLangPack(shippedLangDir, code) });
 });
 
 app.put("/api/lang/:code", largeJsonParser, (req, res) => {
@@ -393,10 +396,12 @@ app.put("/api/lang/:code", largeJsonParser, (req, res) => {
       return sendError(res, 400, "Body must be { entries: { source: translation } }.");
     }
     const saved = readLangPack(savedLangDir, code);
+    // What the shipped pack covers is not saved again (it would never be read).
+    const shipped = readLangPack(shippedLangDir, code);
     let added = 0;
     for (const [source, translated] of Object.entries(entries)) {
       if (typeof source === "string" && typeof translated === "string" &&
-          source.length <= 3000 && translated.length <= 6000) {
+          source.length <= 3000 && translated.length <= 6000 && !Object.hasOwn(shipped, source)) {
         if (saved[source] !== translated) {
           saved[source] = translated;
           added += 1;

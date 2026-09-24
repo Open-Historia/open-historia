@@ -55,7 +55,9 @@ import {
     normalizeStructuredMode,
 } from "../AI/structuredMode.js";
 import {
+    DEFAULT_LANGUAGE,
     getLanguageOptions,
+    hasShippedPack,
     languageDisplayName,
     getStoredChatLanguage,
     getStoredLanguage,
@@ -203,7 +205,11 @@ function groupProviders(options) {
     return groups;
 }
 
-const LanguagePicker = ({ label, current, onSelect, saving = false, helperText }) => {
+// A language whose interface ships translated (runtime/i18n.js): no AI request
+// is spent on the game's own text in it.
+const isBuiltInLanguage = (code) => code === DEFAULT_LANGUAGE || hasShippedPack(code);
+
+const LanguagePicker = ({ label, current, onSelect, saving = false, helperText, markBuiltIn = false }) => {
     const [query, setQuery] = useState("");
     const options = getLanguageOptions();
     const normalizedQuery = query.trim().toLowerCase();
@@ -236,7 +242,7 @@ const LanguagePicker = ({ label, current, onSelect, saving = false, helperText }
         )}
         {filtered.map((option) => (
             <option key={option.code} value={option.code} style={{ color: "black" }}>
-            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}
+            {option.name}{option.native && option.native !== option.name ? ` — ${option.native}` : ""}{markBuiltIn && isBuiltInLanguage(option.code) ? " ✓" : ""}
             </option>
         ))}
         </select>
@@ -269,7 +275,16 @@ const LanguageSelector = () => {
     };
 
     return (
-        <LanguagePicker label="UI language" current={current} onSelect={applyLanguage} saving={saving} />
+        <LanguagePicker
+        label="UI language"
+        current={current}
+        onSelect={applyLanguage}
+        saving={saving}
+        markBuiltIn
+        helperText={isBuiltInLanguage(current)
+            ? "Languages marked ✓ ship with the game translated. What scenarios add (names, descriptions, custom stats) is translated by your AI model, once."
+            : "This language is translated by your AI model as you play, once per string. Languages marked ✓ ship with the game translated."}
+        />
     );
 };
 
@@ -882,7 +897,7 @@ const FallbackListSection = () => {
         {filling && <FillPanel connections={connections} onDone={() => setFilling(false)} />}
         <div style={{ ...fieldGroupStyle, marginTop: "0.9rem" }}>
         <label style={labelStyle}>When a model is rate limited</label>
-        <select data-no-translate value={view.rateLimitPolicy} onChange={(event) => setRateLimitPolicy(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+        <select value={view.rateLimitPolicy} onChange={(event) => setRateLimitPolicy(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
         <option value="next" style={{ color: "black" }}>Use the next one straight away (default)</option>
         <option value="wait" style={{ color: "black" }}>Wait, then try it again</option>
         </select>
@@ -990,7 +1005,7 @@ const TaskPicks = () => {
                 {AI_TASK_ROUTING.filter((entry) => entry.group === group).map(({ key, label, hint }) => (
                     <div key={key} style={fieldGroupStyle}>
                     <label style={labelStyle}>{label}</label>
-                    <select data-no-translate value={withConnection.some((entry) => entry.id === picks[key]) ? picks[key] : ""} onChange={(event) => update(key, event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                    <select value={withConnection.some((entry) => entry.id === picks[key]) ? picks[key] : ""} onChange={(event) => update(key, event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
                     <option value="" style={{ color: "black" }}>Start at the top of the list</option>
                     {withConnection.map((entry, index) => (
                         <option key={entry.id} value={entry.id} style={{ color: "black" }}>{index + 1}. {entry.resolved.label}</option>
@@ -2199,7 +2214,7 @@ const SettingsWorkspace = ({
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Settings</span>
                             {context?.scenarioName && <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.72rem", fontWeight: 700 }}>{context.scenarioName}</span>}
                         </div>
-                        <div data-no-translate style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <div style={{ color: "rgba(255,255,255,0.3)", fontSize: "0.61rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game preferences"}
                         </div>
                     </div>
@@ -2530,7 +2545,7 @@ const SettingsMenu = ({
                     <div style={{ alignItems: "baseline", display: "flex", flexWrap: "wrap", gap: "0.35rem 0.55rem" }}>
                         <span style={{ color: "#f8fafc", fontSize: "0.92rem", fontWeight: 900 }}>{context?.scenarioName || context?.gameName || "Open Historia"}</span>
                     </div>
-                    <div data-no-translate style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem", marginTop: "0.15rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ color: "rgba(255,255,255,0.34)", fontSize: "0.61rem", marginTop: "0.15rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {[context?.countryName ? `Playing as ${context.countryName}` : "", context?.date || ""].filter(Boolean).join(" · ") || "Game menu"}
                     </div>
                 </div>
