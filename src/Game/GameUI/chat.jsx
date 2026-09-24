@@ -469,7 +469,7 @@ const PollCard = ({ poll, playerCountry, onVote }) => {
                     </button>
                 );
             })}
-            <span data-no-translate style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem" }}>
+            <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.68rem" }}>
                 {total === 0 ? "Nobody has voted yet" : `${total} vote${total === 1 ? "" : "s"} cast`}
                 {mine ? "" : " · your vote is yours to cast"}
             </span>
@@ -601,7 +601,7 @@ const DemandCard = ({ demand, playerCountry, busy = false, onAnswer, onAcceptAlt
             )}
 
             {!settled && !myMovePuppet && !myMoveOverlord && (
-                <span data-no-translate style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
+                <span style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.68rem" }}>
                     {demand?.status === "countered"
                         ? `Waiting for ${demand?.by} to consider the alternative`
                         : `Waiting for ${demand?.target}'s answer`}

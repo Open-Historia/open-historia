@@ -147,7 +147,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
           {gameName || scenarioName || "Open Historia"}
         </div>
         {(scenarioName || countryName) && (
-          <div data-no-translate style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.85rem", marginTop: "0.3rem", textShadow }}>
+          <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.85rem", marginTop: "0.3rem", textShadow }}>
             {[scenarioName, countryName].filter(Boolean).join(" · ")}
           </div>
         )}
