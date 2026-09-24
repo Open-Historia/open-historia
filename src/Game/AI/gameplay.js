@@ -968,6 +968,7 @@ const validateSegmentStorylines = (candidate, {
   const selectedBinding = bindSelectedStorylineEvents(candidate, {
     selectedStorylines: analysis?.attentionStorylines,
     world,
+    gameCountry,
   });
   if (selectedBinding.bound) {
     console.info(

@@ -1514,7 +1514,7 @@ const storylineEventStructuredActors = (event) => {
   ].map(normalizeString).filter(Boolean);
 };
 
-const scoreStorylineEventLink = (update, event, world) => {
+const scoreStorylineEventLink = (update, event, world, { ignoreActor = "" } = {}) => {
   const eventText = storylineLinkText([
     event?.id,
     event?.title,
@@ -1541,6 +1541,7 @@ const scoreStorylineEventLink = (update, event, world) => {
   }
 
   for (const participant of normalizeArray(update?.participants).map(normalizeString).filter(Boolean)) {
+    if (ignoreActor && worldActorsEquivalent(participant, ignoreActor, world || {}, "")) continue;
     const structuredHit = structuredActors.some((actor) =>
       worldActorsEquivalent(participant, actor, world || {}, "")
     );
@@ -1614,6 +1615,12 @@ export const bindSelectedStorylineEvents = (
   {
     selectedStorylines = [],
     world = {},
+    // The player's polity. Once the player joins a storyline (a mediator, say),
+    // naming the player would otherwise be enough to bind: every event about the
+    // player's own programmes landed in a Gulf crisis because it said "British".
+    // The player's link to a storyline has to come from the storyline's own
+    // subject, not from the player being in it.
+    gameCountry = "",
     minScore = 6,
     ambiguityMargin = 4,
   } = {},
@@ -1648,7 +1655,7 @@ export const bindSelectedStorylineEvents = (
       .map((storyline) => ({
         storyline,
         id: normalizeString(storyline?.id),
-        score: scoreStorylineEventLink(storyline, event, world),
+        score: scoreStorylineEventLink(storyline, event, world, { ignoreActor: gameCountry }),
       }))
       .filter((row) => row.id && row.score >= minScore)
       .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
