@@ -753,6 +753,35 @@ const salvageUnboundAgreementUpdates = (
   return { updates: kept, repaired, dropped, retainedUnbound };
 };
 
+// A Puppet line the model forgot to tie to its event is thrown away at apply
+// (applyPuppetUpdates), so an accession the timeline narrated never happened on
+// the ledger. Repair it the way relations and agreements are repaired: only an
+// unbound line, only to the ONE event that names both parties, and never on the
+// GM preview. A line the model did tie keeps the event it named.
+const salvageUnboundPuppetUpdates = (updates, events, world) => {
+  const normalizedEvents = normalizeEvents(events);
+  let repaired = 0;
+  const output = bindPuppetUpdatesToEvents(updates, normalizedEvents).map((update) => {
+    if (linkedEvents(update, normalizedEvents).length) return update;
+    const parties = [update?.overlord, update?.puppet].filter(Boolean);
+    const inferredIndex = inferUniqueDiplomaticEventIndex({
+      events: normalizedEvents,
+      actorAliases: parties.map((party) => politySearchAliases(party, world)),
+      subjectText: `${update?.op || ""} ${update?.kind || ""} ${update?.note || ""}`,
+      minimumActorHits: Math.max(1, parties.length),
+    });
+    if (inferredIndex < 0) return update;
+    const eventId = clean(normalizedEvents[inferredIndex]?.id);
+    repaired += 1;
+    console.warn(
+      `[OH diplomacy native binding] bound puppet ${update?.op || "?"} ${update?.overlord || "?"} -> ${update?.puppet || "?"} ` +
+      `to event${inferredIndex + 1} from native causal evidence.`,
+    );
+    return { ...update, eventIndexes: [inferredIndex], eventIds: eventId ? [eventId] : [] };
+  });
+  return { updates: output, repaired };
+};
+
 export const bindDiplomaticLedgerToCausalEvents = (
   candidate,
   {
@@ -807,6 +836,9 @@ export const bindDiplomaticLedgerToCausalEvents = (
   candidate.relationUpdates = relationUpdates;
   candidate.agreementUpdates = agreementUpdates;
 
+  const puppetBinding = salvageUnboundPuppetUpdates(candidate?.puppetUpdates, events, world);
+  if (puppetBinding.repaired) candidate.puppetUpdates = puppetBinding.updates;
+
   return {
     relationUpdates,
     agreementUpdates,
@@ -816,6 +848,7 @@ export const bindDiplomaticLedgerToCausalEvents = (
     repairedAgreements: agreementBinding.repaired,
     droppedAgreements: agreementBinding.dropped,
     retainedUnboundAgreements: agreementBinding.retainedUnbound || 0,
+    repairedPuppets: puppetBinding.repaired,
   };
 };
 
