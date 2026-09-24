@@ -16,6 +16,7 @@ import {
   tallyAppliedEvents,
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
+import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
 import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
 import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
@@ -59,6 +60,7 @@ import {
 import {
   createWorldEventScopeClassifier,
   deriveWorldExplorationAudit,
+  previewScreenedEvent,
   screenGeneratedWorldEvents,
   stripWorldSweepAudit,
   validateWorldExplorationAudit,
@@ -815,6 +817,69 @@ const describeWithheldEvent = (row) => {
   return `"${title}" — ${words}${detail}.`;
 };
 
+// The live preview of a skip, with each card the engine's own checks will keep
+// off the timeline marked as it arrives (runtime/filedEvents.js), instead of the
+// card vanishing when the turn lands. Only the checks that judge one event on
+// its own and need no request: the screen's single-event rules and a word-for-
+// word repeat of the record. The curator's verdicts come with the review, after
+// the writing, and reach the panel as the turn's filed cards.
+//
+// One marked copy per streamed event, cached on the event: the panel keys its
+// cards on the objects it is handed, and a fresh copy on every arrival would
+// throw away every card's memo for the whole skip.
+const markStreamedEvents = (show, { world, game, priorEvents }) => {
+  const marked = new WeakMap();
+  const prior = normalizeEvents(priorEvents);
+  return (list) => show(normalizeArray(list).map((event) => {
+    if (!event || typeof event !== "object") return event;
+    if (!marked.has(event)) {
+      let mark = null;
+      try {
+        mark = dedupeGeneratedEvents(prior, [event]).length === 0
+          ? previewFiledMark({ fate: "reject", route: "EXACT_DUPLICATE" })
+          : previewFiledMark(previewScreenedEvent(event, { world, game }));
+      } catch {
+        mark = null; // a preview never costs a turn
+      }
+      marked.set(event, mark ? { ...event, filed: mark } : event);
+    }
+    return marked.get(event);
+  }));
+};
+
+// The cards for a screen's or curator's removals. A row names its route; a
+// Hidden row carries the whole event, and a withheld one only its id and title,
+// so it is found again in the events the pass was given.
+const filedEventsFromRows = (droppedRows, hiddenRows, sourceEvents) => {
+  const hiddenById = new Map();
+  const hiddenByTitle = new Map();
+  for (const row of normalizeArray(hiddenRows)) {
+    const id = normalizeString(row?.event?.id);
+    const title = normalizeString(row?.event?.title).toLowerCase();
+    if (id) hiddenById.set(id, row.event);
+    if (title) hiddenByTitle.set(title, row.event);
+  }
+  const sourceById = new Map();
+  const sourceByTitle = new Map();
+  for (const event of normalizeArray(sourceEvents)) {
+    const id = normalizeString(event?.id);
+    const title = normalizeString(event?.title).toLowerCase();
+    if (id && !sourceById.has(id)) sourceById.set(id, event);
+    if (title && !sourceByTitle.has(title)) sourceByTitle.set(title, event);
+  }
+  return normalizeArray(droppedRows)
+    .map((row) => {
+      const id = normalizeString(row?.id);
+      const title = normalizeString(row?.title).toLowerCase();
+      const event = row?.event
+        || (id && (hiddenById.get(id) || sourceById.get(id)))
+        || (title && (hiddenByTitle.get(title) || sourceByTitle.get(title)))
+        || null;
+      return toFiledEvent(row, event);
+    })
+    .filter(Boolean);
+};
+
 // One jump segment's ledger records, checked against the world as the earlier
 // segments left it. Strict while a retry remains (the model gets the exact
 // error), salvaged on the final attempt: an ambiguous combat event is dropped
@@ -1072,6 +1137,7 @@ const screenSegmentPayload = (payload, {
     );
     // Runs only on an accepted segment, so these go straight onto the turn's receipt.
     for (const entry of screened.dropped) noteReceipt(state.receipt, "withheld", describeWithheldEvent(entry));
+    state.filedEvents.push(...filedEventsFromRows(screened.dropped, screened.hidden, taggedEvents));
   }
   payload.events = screened.events;
   // Canonical events the screen kept off the timeline still happened: the board
@@ -6635,12 +6701,17 @@ const applySimulationResult = async ({
   // impacts, or land in this turn's record (also see the [New Developments Only]
   // directive in buildTemplateVariables).
   const priorEvents = normalizeEvents(baseEvents);
+  // The events the player watched arrive but that will not be on the timeline,
+  // kept as cards so they do not simply vanish (runtime/filedEvents.js): the
+  // segments' screen first, then the repeats and the curator below.
+  const filedEvents = [...normalizeArray(result.filedEvents)];
   const dedupedEvents = dedupeGeneratedEvents(priorEvents, generatedEvents);
   if (dedupedEvents.length < generatedEvents.length) {
     const fresh = new Set(dedupedEvents);
     for (const event of generatedEvents) {
       if (fresh.has(event)) continue;
       noteReceipt(receipt, "withheld", `"${normalizeString(event?.title)}" — word for word an event already on the record; restating history adds nothing.`);
+      filedEvents.push(toFiledEvent({ route: "EXACT_DUPLICATE" }, event));
     }
   }
 
@@ -6706,6 +6777,7 @@ const applySimulationResult = async ({
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
+  filedEvents.push(...filedEventsFromRows(mainCuration.dropped, mainCuration.hidden, citedEvents));
   // Canonical events the curator (and the breadth repair's own screen and
   // curator) kept off the timeline. They still happened; the board pass reads
   // them alongside the segments' screened-out ones (result.hiddenEvents).
@@ -6869,6 +6941,9 @@ const applySimulationResult = async ({
           date: nextGame.gameDate,
           eventIds: freshEvents.map((event) => event.id),
           fallbackReason: normalizeString(result.generation?.fallbackReason),
+          // Written but kept off the timeline: the Events panel shows them greyed
+          // under the turn instead of letting the cards vanish.
+          ...(filedEvents.length ? { filedEvents: normalizeFiledEvents(filedEvents) } : {}),
           fromDate: baseGame.gameDate,
           mode: normalizeString(result.mode) || "jump",
           plannedActions: plannedActionSnapshot,
@@ -12204,7 +12279,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         ...(segmentCount > 1
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
-        ...(showEvents ? { onPartialEvents: showEvents } : {}),
+        ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
         signal,
         // The jump IS the game, and its deadline is runJsonTask's for every task:
         // silence, not elapsed time, so a long segment is never mistaken for a
@@ -13170,6 +13245,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     breadthRepairContext: selectBreadthRepairContext(state, context),
     generation: state.generation,
     hiddenEvents: state.hiddenEvents,
+    filedEvents: state.filedEvents,
     boardProvisionalEventIds: state.boardProvisionalEventIds,
     receipt: state.receipt,
   };
@@ -13309,6 +13385,9 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     // events that passed the consequence check only on a Board entry — both for
     // the board pass (applySimulationResult).
     hiddenEvents: [],
+    // Every event the screen kept off the timeline or rejected, as the card the
+    // Events panel shows in its place (runtime/filedEvents.js).
+    filedEvents: [],
     boardProvisionalEventIds: [],
     // Every storyline any segment selected, and what the skip's one motion
     // repair pass may spend (repairSkipStorylineMotion).

@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
+import { previewScreenedEvent, screenGeneratedWorldEvents } from "./nativeWorldIntegrity.js";
 
 const routinePatrol = (actionIds = []) => ({
   id: "routine-patrol",
@@ -65,4 +65,19 @@ test("a quiet inspection report that mentions patrols is still kept off the time
   });
   assert.equal(screened.events.length, 0);
   assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
+});
+
+// The live preview marks a streamed card with the rule that will judge it when
+// the turn lands, and changes nothing about the event it looks at.
+test("the live preview gives a streamed card the screen's own verdict", () => {
+  const patrol = routinePatrol();
+  const before = structuredClone(patrol);
+  assert.deepEqual(previewScreenedEvent(patrol), {
+    fate: "hide",
+    route: "ROUTINE_MILITARY_PRECURATION",
+    reason: "routine military continuation with no native material consequence",
+  });
+  assert.deepEqual(patrol, before);
+  assert.equal(previewScreenedEvent(routinePatrol(["order-frontier-patrol"])), null);
+  assert.equal(previewScreenedEvent(null), null);
 });

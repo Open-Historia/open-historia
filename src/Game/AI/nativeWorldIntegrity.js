@@ -1933,6 +1933,37 @@ const applyLowTrajectoryFeedGuard = ({
   return { events: kept, dropped, hidden };
 };
 
+// The rules that judge one event on its own, in the order the screen applies
+// them: a rejection (it cannot have happened) or a visibility rule (it happened,
+// but is too routine for the timeline). The batch rules — the low-trajectory
+// feed guard — need the whole segment and are not here. Shared with the live
+// preview (previewScreenedEvent), so a card marked while the model is still
+// writing is marked by exactly the rule that will judge it when the turn lands.
+const singleEventScreenVerdict = (event, { world = {}, game = {} } = {}) => {
+  const wartimeReason = falseNonBelligerentWartimeReason(event, world, normalizeString(game?.country));
+  if (wartimeReason) return { fate: "reject", route: "NON_BELLIGERENT_WARTIME_CAUSALITY", reason: wartimeReason };
+  const routineReason = routineMilitaryNoDeltaReason(event);
+  if (routineReason) return { fate: "hide", route: "ROUTINE_MILITARY_PRECURATION", reason: routineReason };
+  const administrativeReason = routineAdministrativeNoDeltaReason(event);
+  if (administrativeReason) return { fate: "hide", route: "ROUTINE_ADMINISTRATIVE_PROCESS", reason: administrativeReason };
+  return null;
+};
+
+// What the screen will do with one streamed event, before the turn lands: null
+// to keep it, or { fate, route, reason }. Quiet (the screen's log line is for
+// the real pass) and pure. Sanitized the way the screen sanitizes, since a no-op
+// control op stripped there is not an impact that could keep an event. The
+// segment's storyline tags are not known yet, so an event the model later ties
+// to a storyline can still be kept: this is a preview.
+export const previewScreenedEvent = (event, { world = {}, game = {} } = {}) => {
+  if (!event || typeof event !== "object") return null;
+  const sanitized = sanitizeNoOpRegionControlOps(
+    sanitizeDuplicatePolityUpdates(sanitizeProcessOnlyPolityUpdates(event).event, world).event,
+    world,
+  ).event;
+  return singleEventScreenVerdict(sanitized, { world, game });
+};
+
 export const screenGeneratedWorldEvents = ({
   events = [],
   priorEvents = [],
@@ -1972,33 +2003,20 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const event = controlSanitized.event;
+    const verdict = singleEventScreenVerdict(event, { world, game });
 
-    const wartimeReason = falseNonBelligerentWartimeReason(
-      event,
-      world,
-      normalizeString(game?.country),
-    );
-
-    if (wartimeReason) {
+    if (verdict?.fate === "reject") {
       dropped.push({
         id: normalizeString(event?.id),
         title: normalizeString(event?.title),
-        route: "NON_BELLIGERENT_WARTIME_CAUSALITY",
-        reason: wartimeReason,
+        route: verdict.route,
+        reason: verdict.reason,
       });
       continue;
     }
 
-    const routineReason = routineMilitaryNoDeltaReason(event);
-
-    if (routineReason) {
-      keepOffTimeline(event, "ROUTINE_MILITARY_PRECURATION", routineReason);
-      continue;
-    }
-
-    const administrativeReason = routineAdministrativeNoDeltaReason(event);
-    if (administrativeReason) {
-      keepOffTimeline(event, "ROUTINE_ADMINISTRATIVE_PROCESS", administrativeReason);
+    if (verdict?.fate === "hide") {
+      keepOffTimeline(event, verdict.route, verdict.reason);
       continue;
     }
 
