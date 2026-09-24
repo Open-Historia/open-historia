@@ -237,9 +237,16 @@ export const excerptAroundError = (body, message, radius = 140) => {
 // talking ABOUT the format rather than using it, and salvaging would act on
 // something it never meant to send.
 //
+// `streaming` says the reply is still arriving. An open fence then is not a
+// broken block but one whose end has not come yet: its text is hidden from the
+// bubble and nothing is salvaged or warned about. The final reply is parsed
+// again once complete, and that parse is the one that counts. Without this every
+// chunk of a streaming ```projects block logged "unterminated ... nothing
+// salvageable" and re-ran the repair walk over it.
+//
 // Returns `reason` describing why nothing came back, so the UI can say something
 // better than "it didn't work" and a bug report has something to go on.
-export const extractFencedJson = (text, lang, { salvageTruncated = false } = {}) => {
+export const extractFencedJson = (text, lang, { salvageTruncated = false, streaming = false } = {}) => {
   const regex = new RegExp("```" + lang + "\\s*([\\s\\S]*?)```");
   const match = text.match(regex);
 
@@ -268,11 +275,12 @@ export const extractFencedJson = (text, lang, { salvageTruncated = false } = {})
     return { rest: text.replace(regex, ""), json, truncated: false, reason, dropped, excerpt };
   }
 
-  if (!salvageTruncated) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
+  if (!salvageTruncated && !streaming) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   const openRegex = new RegExp("```" + lang + "\\s*");
   const open = text.match(openRegex);
   if (!open) return { rest: text, json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
+  if (streaming) return { rest: text.slice(0, open.index), json: null, truncated: false, reason: "", dropped: 0, excerpt: "" };
 
   // Everything after the opening fence is the (incomplete) payload. Report
   // `truncated` even when the repair works, so the caller can tell the player the

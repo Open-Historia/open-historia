@@ -84,7 +84,10 @@ import {
 } from "./promptContext.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
-import { foreignAgentBrief } from "../../runtime/spycraft.js";
+import { foreignAgentBrief, intelligenceOf } from "../../runtime/spycraft.js";
+import { describeCountryStatsForAdvisor, normalizeCountryStatsHistory } from "../../runtime/countryStats.js";
+import { describeWorldLedgersForAdvisor, polityEntry } from "./advisorLedgers.js";
+import { loadStatSheetDefinition } from "../../runtime/statsSheet.js";
 import { renderReminders } from "../../runtime/gmChanges.js";
 import { describeGoalForAdvisor, playerGoalOf } from "../../runtime/playerGoal.js";
 import { describeReportsForPrompt, normalizeReports } from "../../runtime/reports.js";
@@ -2845,6 +2848,24 @@ A Puppet is a separate country holding its own territory and sovereignty, whose 
 ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 };
 
+// The sheet the Stats panel reads (world.countryStats, keyed by the player's
+// country), with the scenario's own labels when it defines a custom sheet, and
+// the recorded samples its Advanced statistics chart. A definition that fails
+// to load still leaves the standard figures.
+async function describePlayerStatsForAdvisor(worldData, country) {
+    const name = String(country || "").trim();
+    const sheet = polityEntry(worldData?.countryStats, name);
+    if (!sheet) return "";
+    const definition = await loadStatSheetDefinition().catch(() => null);
+    return describeCountryStatsForAdvisor(sheet, {
+        name,
+        definition,
+        intelligence: intelligenceOf(worldData, name),
+        history: polityEntry(normalizeCountryStatsHistory(worldData?.countryStatsHistory), name),
+    });
+}
+
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
@@ -2874,6 +2895,7 @@ async function buildAdvisorSystemPrompt() {
         advisorMessages: CONVERSATION_IN_TURNS,
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
+    const officialStats = await describePlayerStatsForAdvisor(worldData, gameData?.country || "");
 
     // The briefing and the rules also ride inside the world summary; keep one
     // copy of each, as runJsonTask does for the gameplay tasks.
@@ -2901,6 +2923,11 @@ async function buildAdvisorSystemPrompt() {
         // advice serves. The advisor's alone of the conversations — a leader is
         // never told a government's aims.
         describeGoalForAdvisor(playerGoalOf(worldData, gameData?.country)),
+        // The player's own stat sheet, as the Stats panel shows it. The template
+        // tells the advisor to extrapolate statistics from history; without the
+        // real sheet it contradicted the panel the player was looking at.
+        officialStats,
+        describeWorldLedgersForAdvisor(worldData, chatData, gameData?.country || ""),
         // The Game Master's standing reminders (runtime/gmChanges.js): what is
         // true now, whatever the record says. Empty — and so absent — without any.
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
