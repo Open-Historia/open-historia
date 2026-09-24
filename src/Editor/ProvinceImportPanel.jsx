@@ -1335,9 +1335,10 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
 
         {stats && (stats.cityMarkersSkippedUnnamed || stats.cityMarkersSkippedInvalidCoordinates) ? (
           <div style={{ padding: "8px 9px", borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", fontSize: 11, lineHeight: 1.45, color: "rgba(254,215,170,0.92)" }}>
-            City marker warning:
-            {stats.cityMarkersSkippedUnnamed ? <> {Number(stats.cityMarkersSkippedUnnamed).toLocaleString()} explicit city Point{Number(stats.cityMarkersSkippedUnnamed) === 1 ? " was" : "s were"} skipped because no name was present.</> : null}
-            {stats.cityMarkersSkippedInvalidCoordinates ? <> {Number(stats.cityMarkersSkippedInvalidCoordinates).toLocaleString()} explicit city Point{Number(stats.cityMarkersSkippedInvalidCoordinates) === 1 ? " had" : "s had"} invalid coordinates.</> : null}
+            {/* A span each, so each sentence is translated whole (runtime/translator.js). */}
+            <span>City marker warning:</span>
+            {stats.cityMarkersSkippedUnnamed ? <span> {Number(stats.cityMarkersSkippedUnnamed).toLocaleString()} explicit city Point{Number(stats.cityMarkersSkippedUnnamed) === 1 ? " was" : "s were"} skipped because no name was present.</span> : null}
+            {stats.cityMarkersSkippedInvalidCoordinates ? <span> {Number(stats.cityMarkersSkippedInvalidCoordinates).toLocaleString()} explicit city Point{Number(stats.cityMarkersSkippedInvalidCoordinates) === 1 ? " had" : "s had"} invalid coordinates.</span> : null}
           </div>
         ) : null}
 

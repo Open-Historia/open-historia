@@ -6,11 +6,13 @@ import { Presence } from "./presence.jsx";
 import {
   PROMPT_EDITOR_SECTIONS,
   PROMPT_GUIDANCE_DEFAULTS,
+  localizedGuidanceDefaults,
   materializePromptPack,
   normalizePromptPack,
   serializePromptPack,
 } from "../AI/gameplayPrompts.js";
 import { guidanceSegmentsFor } from "../AI/promptGuidance.js";
+import { promptTranslationsVersion, subscribePromptTranslations } from "../../runtime/promptTranslations.js";
 import {
   activateGame,
   clearGameAsset,
@@ -373,16 +375,28 @@ const PromptSectionEditor = ({
     PROMPT_EDITOR_SECTIONS.find((section) => section.key === promptSectionKey) ??
     PROMPT_EDITOR_SECTIONS[0];
   const segments = guidanceSegmentsFor(currentSection.key);
-  const defaults =
+  // The passages in the player's language where the pack translates them
+  // (runtime/promptTranslations.js; they arrive a moment after boot). They
+  // are what the AI receives for a passage the author leaves alone, and an
+  // edit that matches either them or the English is no edit.
+  useSyncExternalStore(subscribePromptTranslations, promptTranslationsVersion, promptTranslationsVersion);
+  const localizedDefaults = localizedGuidanceDefaults();
+  const englishDefaults =
     currentSection.type === "root"
       ? PROMPT_GUIDANCE_DEFAULTS[currentSection.key] ?? {}
       : PROMPT_GUIDANCE_DEFAULTS.tasks[currentSection.key] ?? {};
+  const defaults =
+    currentSection.type === "root"
+      ? localizedDefaults[currentSection.key] ?? {}
+      : localizedDefaults.tasks?.[currentSection.key] ?? {};
   const edits =
     currentSection.type === "root"
       ? promptPack.guidance?.[currentSection.key] ?? {}
       : promptPack.guidance?.tasks?.[currentSection.key] ?? {};
   const isEdited = (segment) =>
-    typeof edits[segment.id] === "string" && edits[segment.id].trim() !== (defaults[segment.id] ?? "").trim();
+    typeof edits[segment.id] === "string"
+    && edits[segment.id].trim() !== (defaults[segment.id] ?? "").trim()
+    && edits[segment.id].trim() !== (englishDefaults[segment.id] ?? "").trim();
   const editedCount = segments.filter(isEdited).length;
   const smallButtonStyle = { ...actionButtonStyle, fontSize: "0.72rem", minHeight: "1.7rem", padding: "0 0.6rem" };
 

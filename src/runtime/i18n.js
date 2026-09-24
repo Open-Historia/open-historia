@@ -70,6 +70,21 @@ export const LANGUAGES = [
 
 const RTL_LANGUAGES = new Set(["ar", "he", "fa", "ur"]);
 
+// The languages the game ships a complete pack for (public/lang/<code>.json,
+// every fixed string of the interface, and public/lang/prompts/<code>.json,
+// the prompts' guidance passages; scripts/i18n/). In these the interface is
+// never sent to the AI: the pack has it, and a string it lacks stays English
+// rather than costing the player a request. Only what a scenario or a player
+// made (scenario and game names and descriptions, custom polities, custom
+// stats, region names on a hand-drawn map, community posts) is translated live.
+// Every other language in the picker still translates the interface live.
+export const SHIPPED_PACK_LANGUAGES = Object.freeze([
+  "ar", "bn", "de", "es", "fa", "fr", "hi", "id", "it", "ja", "ko", "nl",
+  "pl", "pt", "ru", "sv", "th", "tr", "uk", "ur", "vi", "zh",
+]);
+
+export const hasShippedPack = (code) => SHIPPED_PACK_LANGUAGES.includes(code);
+
 export const getLanguageOptions = () => LANGUAGES;
 
 export const languageDisplayName = (code) =>
