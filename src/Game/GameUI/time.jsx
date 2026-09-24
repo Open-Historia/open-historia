@@ -30,6 +30,7 @@ import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { normalizeMarkdown } from "./markdownText.js";
+import { filedFateLabel, normalizeFiledEvents } from "../../runtime/filedEvents.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
@@ -559,6 +560,8 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         // Only ever non-empty on a fallback turn (see gameplay.js) — the main
         // thing the fallback warning's "Save logging file" button attaches.
         rawResponse: entry.rawResponse || "",
+        // Written but kept off the timeline (runtime/filedEvents.js).
+        filedEvents: normalizeFiledEvents(entry.filedEvents),
         rangeLabel: formatRange(fromDate, toDate),
         round: entry.round || 0,
         source: entry.source || "ai",
@@ -838,6 +841,49 @@ const eventDisclosureKey = (event) => {
 
 // openMapChanges/onToggleMapChanges let the panel hold the disclosure instead of
 // the card. Left out, the card keeps its own.
+// What became of an event the engine kept off the timeline, in the player's
+// words (runtime/filedEvents.js): the fate, then why.
+const FiledNote = ({ fate, note }) => (
+    <div style={{ background: "rgba(148,163,184,0.1)", borderBottom: "1px solid rgba(255,255,255,0.05)", color: "rgba(226,232,240,0.86)", fontSize: "0.7rem", lineHeight: 1.4, padding: "0.45rem 1rem" }}>
+    <strong style={{ fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>{filedFateLabel(fate)}</strong>
+    {note ? <span> · {note}</span> : null}
+    </div>
+);
+
+// The events a finished turn's writer produced but the engine kept off the
+// timeline. Folded under the cards, greyed, so a card watched arriving during
+// the skip does not simply vanish when the turn lands.
+const FiledEventsSection = ({ events }) => {
+    const [open, setOpen] = useState(false);
+    if (!events.length) return null;
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={() => setOpen((value) => !value)}
+        title="Events the AI wrote for this skip that the engine's checks kept off the timeline"
+        style={{ ...ghostButtonStyle, justifyContent: "flex-start", opacity: 0.8, width: "100%" }}
+        >
+        <span>{open ? "▴" : "▾"} {events.length} event{events.length === 1 ? "" : "s"} kept off the timeline</span>
+        </button>
+        {open && events.map((event) => (
+            <div
+            key={`filed-${event.title}`}
+            style={{ border: "1px dashed rgba(255,255,255,0.14)", borderRadius: "16px", opacity: 0.6, overflow: "hidden" }}
+            >
+            <FiledNote fate={event.fate} note={event.note} />
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.75rem 1rem 0.85rem" }}>
+            {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
+            {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            </div>
+            </div>
+        ))}
+        </div>
+    );
+};
+
 const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onToggleMapChanges = null }) => {
     // The model's category tags, then what the event is about: links the map
     // can fly to when the card has them, the participants it names otherwise.
@@ -856,17 +902,22 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     const heldAbove = typeof onToggleMapChanges === "function";
     const showMapChanges = heldAbove ? Boolean(openMapChanges) : ownMapChanges;
     const toggleMapChanges = () => (heldAbove ? onToggleMapChanges() : setOwnMapChanges((open) => !open));
+    // A streamed card the engine's own checks will keep off the timeline, marked
+    // while the model is still writing (AI/gameplay.js markStreamedEvents).
+    const filed = event.filed && typeof event.filed === "object" ? event.filed : null;
 
     return (
         <div
         style={{
             background: "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: filed ? "1px dashed rgba(255,255,255,0.14)" : "1px solid rgba(255,255,255,0.08)",
             borderRadius: "16px",
             boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+            opacity: filed ? 0.6 : 1,
             overflow: "hidden",
         }}
         >
+        {filed && <FiledNote fate={filed.fate} note={filed.note} />}
         <div
         style={{
             alignItems: "center",
@@ -2053,7 +2104,13 @@ const TimelineHistoryPanel = ({
                 )}
                 </>
             )}
+            {/* Once the whole turn is revealed: what was written but kept off
+                the timeline, so no card watched arriving just disappears. */}
+            {!live && !hasMoreEvents && <FiledEventsSection events={record.filedEvents ?? []} />}
             </div>
+        )}
+        {!live && record && totalEvents === 0 && (record.filedEvents?.length ?? 0) > 0 && (
+            <div style={{ marginTop: "0.75rem" }}><FiledEventsSection events={record.filedEvents} /></div>
         )}
         {/* Under the cards, so the list reads as a finished turn's would. */}
         {progress && (
@@ -3094,7 +3151,9 @@ const DateWidget = ({
         // round, since the reveal now happens during the skip and the turn lands
         // fully revealed, the one state the staging below never covers.
         if (liveTurnRecord) {
-            const revealedLive = liveTurnRecord.events.slice(0, Math.max(1, visibleEventCount));
+            // A card the engine's checks will keep off the timeline changes nothing
+            // on the map when the turn lands, so it changes nothing here either.
+            const revealedLive = liveTurnRecord.events.slice(0, Math.max(1, visibleEventCount)).filter((event) => !event?.filed);
             if (openPanel === "history" && liveStageBase && revealedLive.length) {
                 try {
                     const { world: livePreview } = applyEventImpactsToWorld({

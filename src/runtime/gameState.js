@@ -11,6 +11,7 @@ import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryNa
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
 import { normalizeApplicationReceipt } from "./applicationReceipt.js";
+import { normalizeFiledEvents } from "./filedEvents.js";
 import { applyReportOps, normalizeReportOp, normalizeReports } from "./reports.js";
 import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
@@ -3730,11 +3731,15 @@ export const normalizeWorldState = (world) => {
         // Taken out of the spread so a malformed receipt is dropped, not kept raw;
         // and the scene a time skip used to propose (under either name), which
         // nothing reads since skips stopped proposing them.
-        const { receipt: _storedReceipt, interactive: _scene, catalyst: _formerScene, ...rest } = cloneValue(entry);
+        const { receipt: _storedReceipt, filedEvents: _storedFiled, interactive: _scene, catalyst: _formerScene, ...rest } = cloneValue(entry);
+        // Written but kept off the timeline, shown greyed under the turn
+        // (runtime/filedEvents.js). Bounded here like the receipt.
+        const filedEvents = normalizeFiledEvents(entry.filedEvents);
 
         return {
           ...rest,
           ...(receipt ? { receipt } : {}),
+          ...(filedEvents.length ? { filedEvents } : {}),
           date: normalizeOptionalString(entry.date),
           eventIds: normalizeActionParticipants(entry.eventIds),
           fallbackReason: normalizeOptionalString(entry.fallbackReason),

@@ -54,6 +54,10 @@ const ROUTINE_MILITARY_CUE_RE =
 const STRONG_MILITARY_CONSEQUENCE_RE =
   /\b(breakthrough|breaks?\s+through|captur(?:e|es|ed|ing)|seiz(?:e|es|ed|ing)|occup(?:y|ies|ied|ation)|liberat(?:e|es|ed|ion)|retreat(?:s|ed|ing)?|withdraw(?:s|al|n|ing)?|encircl(?:e|es|ed|ement)|surrender(?:s|ed|ing)?|ceasefire|armistice|collapse(?:s|d)?|destroy(?:s|ed|ing)?|annihilat(?:e|es|ed|ion)|casualt(?:y|ies)|loss(?:es)?|killed|wounded|captured|gain(?:s|ed)?\s+ground|advance(?:s|d|ing)?|repuls(?:e|es|ed)|defeat(?:s|ed)?|front\s+(?:breaks|collapses)|decisive\s+(?:victory|defeat)|major\s+offensive|general\s+offensive)\b/i;
 
+// A milestone reached: the one thing a routine-patrol card never reports.
+const CONCRETE_MILESTONE_RE =
+  /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
+
 // Material endogenous changes that can legitimately wake a deferred process even
 // when they do not yet carry a hard map/ledger impact. The associated storyline
 // update must ALSO move objective state (status/pressure/momentum); this regex alone
@@ -1743,6 +1747,14 @@ const routineMilitaryNoDeltaReason = (event) => {
 
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
+  // The cue is single words, so it fires on a noun in passing: a drone
+  // programme's "unmanned surface patrol vessels" hid a Project milestone as
+  // "routine military activity". Something finished or brought into service is
+  // not a routine continuation, whatever it mentions on the way.
+  if (CONCRETE_MILESTONE_RE.test(text)) return "";
+  // The player's own news is left to the curator, which judges routine
+  // military continuation with the analyst's reading rather than a word list.
+  if (event?.playerRelated === true || normalizeString(event?.kind).toLowerCase() === "player") return "";
   // An event explicitly bound to a queued player Action is the order's
   // canonical answer. Hiding it here would make settleOrders carry the
   // same order over as overdue even though the simulator cited it exactly.
@@ -1921,6 +1933,37 @@ const applyLowTrajectoryFeedGuard = ({
   return { events: kept, dropped, hidden };
 };
 
+// The rules that judge one event on its own, in the order the screen applies
+// them: a rejection (it cannot have happened) or a visibility rule (it happened,
+// but is too routine for the timeline). The batch rules — the low-trajectory
+// feed guard — need the whole segment and are not here. Shared with the live
+// preview (previewScreenedEvent), so a card marked while the model is still
+// writing is marked by exactly the rule that will judge it when the turn lands.
+const singleEventScreenVerdict = (event, { world = {}, game = {} } = {}) => {
+  const wartimeReason = falseNonBelligerentWartimeReason(event, world, normalizeString(game?.country));
+  if (wartimeReason) return { fate: "reject", route: "NON_BELLIGERENT_WARTIME_CAUSALITY", reason: wartimeReason };
+  const routineReason = routineMilitaryNoDeltaReason(event);
+  if (routineReason) return { fate: "hide", route: "ROUTINE_MILITARY_PRECURATION", reason: routineReason };
+  const administrativeReason = routineAdministrativeNoDeltaReason(event);
+  if (administrativeReason) return { fate: "hide", route: "ROUTINE_ADMINISTRATIVE_PROCESS", reason: administrativeReason };
+  return null;
+};
+
+// What the screen will do with one streamed event, before the turn lands: null
+// to keep it, or { fate, route, reason }. Quiet (the screen's log line is for
+// the real pass) and pure. Sanitized the way the screen sanitizes, since a no-op
+// control op stripped there is not an impact that could keep an event. The
+// segment's storyline tags are not known yet, so an event the model later ties
+// to a storyline can still be kept: this is a preview.
+export const previewScreenedEvent = (event, { world = {}, game = {} } = {}) => {
+  if (!event || typeof event !== "object") return null;
+  const sanitized = sanitizeNoOpRegionControlOps(
+    sanitizeDuplicatePolityUpdates(sanitizeProcessOnlyPolityUpdates(event).event, world).event,
+    world,
+  ).event;
+  return singleEventScreenVerdict(sanitized, { world, game });
+};
+
 export const screenGeneratedWorldEvents = ({
   events = [],
   priorEvents = [],
@@ -1960,33 +2003,20 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const event = controlSanitized.event;
+    const verdict = singleEventScreenVerdict(event, { world, game });
 
-    const wartimeReason = falseNonBelligerentWartimeReason(
-      event,
-      world,
-      normalizeString(game?.country),
-    );
-
-    if (wartimeReason) {
+    if (verdict?.fate === "reject") {
       dropped.push({
         id: normalizeString(event?.id),
         title: normalizeString(event?.title),
-        route: "NON_BELLIGERENT_WARTIME_CAUSALITY",
-        reason: wartimeReason,
+        route: verdict.route,
+        reason: verdict.reason,
       });
       continue;
     }
 
-    const routineReason = routineMilitaryNoDeltaReason(event);
-
-    if (routineReason) {
-      keepOffTimeline(event, "ROUTINE_MILITARY_PRECURATION", routineReason);
-      continue;
-    }
-
-    const administrativeReason = routineAdministrativeNoDeltaReason(event);
-    if (administrativeReason) {
-      keepOffTimeline(event, "ROUTINE_ADMINISTRATIVE_PROCESS", administrativeReason);
+    if (verdict?.fate === "hide") {
+      keepOffTimeline(event, verdict.route, verdict.reason);
       continue;
     }
 
