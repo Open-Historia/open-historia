@@ -6528,8 +6528,12 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
     return null;
   }
 
+  // Whether an event invites a reaction, and what came of it, is the Event
+  // Editor's to write. The schema has no such field, but not every provider
+  // holds a model to its schema.
+  const { npcReaction, ...generated } = normalized;
   return {
-    ...normalized,
+    ...generated,
     id: normalized.id || `generated-event-${index}`,
   };
 };
