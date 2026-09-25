@@ -148,6 +148,18 @@ test("simulation-ready mode makes ordinary sovereign polities rich without promo
   assert.equal(relevance["Lunar Free State"].depth, "rich", "active custom polity remains politically real even when currently landless");
 });
 
+test("scenario generation canonicalizes legacy unpadded saved dates before Political World generation", () => {
+  const details = {
+    ...scenarioDetails,
+    data: {
+      ...scenarioDetails.data,
+      game: { ...scenarioDetails.data.game, startDate: "1939-9-1", gameDate: "1939-9-1" },
+    },
+  };
+  const inputs = buildScenarioPoliticalGenerationInputs(details);
+  assert.equal(inputs.scenarioDate, "1939-09-01");
+});
+
 test("scenario generation inputs use saved scenario canon and bounded polity-specific authored context", () => {
   const inputs = buildScenarioPoliticalGenerationInputs(scenarioDetails, { mode: "balanced", maxBatchSize: 9 });
   assert.equal(inputs.scenarioDate, "2067-04-19");

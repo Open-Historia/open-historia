@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadScenarioDetails, saveScenario } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { normalizeGameDate } from "../../runtime/gameDates.js";
 import { activeReferencePackIds, normalizeCanonContext, readScenarioCanon } from "../../runtime/scenarioCanon.js";
 import {
   POLITICAL_WORLD_CAPABILITY,
@@ -152,7 +153,10 @@ const patchSummary = (text) => {
   }
 };
 
-const savedScenarioDate = (details) => clean(details?.data?.game?.startDate || details?.data?.game?.gameDate);
+const savedScenarioDate = (details) => {
+  const raw = clean(details?.data?.game?.startDate || details?.data?.game?.gameDate);
+  return normalizeGameDate(raw) || raw;
+};
 
 const formatDuration = (milliseconds) => {
   const seconds = Math.max(0, Math.round(Number(milliseconds) / 1000));
@@ -379,7 +383,8 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   }, [details]);
 
   const scenarioDate = inputs?.scenarioDate ?? "";
-  const unsavedDate = clean(formState?.gameDate);
+  const unsavedDateRaw = clean(formState?.gameDate);
+  const unsavedDate = normalizeGameDate(unsavedDateRaw) || unsavedDateRaw;
   const dateMismatch = Boolean(unsavedDate && scenarioDate && unsavedDate !== scenarioDate);
   const polityCount = inputs?.polities?.length ?? 0;
   const actorCount = Object.keys(inputs?.politicalActors?.byPolity ?? {}).length;
@@ -403,9 +408,38 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     ? (Number(v2Checkpoint.worklistSummary.pending) || 0) + (Number(v2Checkpoint.worklistSummary.running) || 0)
     : v2Jobs.filter((job) => job?.status === "pending" || job?.status === "running").length;
   const v2Unresolved = Array.isArray(v2Checkpoint?.quality?.unresolved) ? v2Checkpoint.quality.unresolved : [];
+  const v2UnresolvedPolityKeys = [...new Set(v2Unresolved.map((entry) => clean(entry?.polityKey)).filter(Boolean))];
+  const v2UnresolvedPolityCount = v2UnresolvedPolityKeys.length;
+  const v2RetryPolityCount = v2UnresolvedPolityCount || v2FailedJobs;
+  const v2NeedsRetry = Boolean(
+    v2Checkpoint?.status === "paused"
+      && v2Checkpoint?.pauseReason === "bounded-unresolved"
+      && v2RetryPolityCount > 0
+  );
+  const v2Counts = v2Checkpoint?.quality?.counts || {};
+  const v2TotalPolities = Number(v2Counts.polities) || polityCount;
+  const v2PolitiesReady = v2TotalPolities
+    ? Math.max(0, Math.min(
+        v2TotalPolities,
+        Number(v2Counts.politicalActors) || 0,
+        Number(v2Counts.memberships) || 0,
+        Number(v2Counts.governingAlignment) || 0,
+        Number(v2Counts.powerEvidence) || 0,
+      ))
+    : 0;
   const progressTotal = Number(progressInfo?.totalPolities) || 0;
   const progressResolved = Math.max(0, Math.min(progressTotal, Number(progressInfo?.resolvedPolities) || 0));
+  const progressReadyPolities = progressInfo?.v2 && progressTotal
+    ? Math.max(0, Math.min(
+        progressTotal,
+        Number(progressInfo?.resolvedPolities) || 0,
+        Number(progressInfo?.memberships) || 0,
+        Number(progressInfo?.governingAlignment) || 0,
+        Number(progressInfo?.powerEvidence) || 0,
+      ))
+    : progressResolved;
   const progressPercent = progressTotal ? Math.round((progressResolved / progressTotal) * 100) : 0;
+  const progressReadyPercent = progressTotal ? Math.round((progressReadyPolities / progressTotal) * 100) : 0;
   const progressEtaMs = progressResolved > 0 && Number(progressInfo?.elapsedMs) > 0
     ? (Number(progressInfo.elapsedMs) / progressResolved) * (progressTotal - progressResolved)
     : null;
@@ -449,7 +483,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           if (visibleCheckpoint) {
             setRunKind("political-world-v2");
             if (visibleCheckpoint?.pauseReason === "reference-canon-rebase") {
-              setProgress("Political World generation checkpoint recovered. Canon Context changed; Resume will reconcile reference institutions without regenerating accepted Political Actors.");
+              setProgress("Political World progress recovered. Scenario context changed; Continue Generation will refresh reference institutions without rebuilding completed political actors.");
             }
           }
         }
@@ -587,22 +621,26 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         const referenceSummary = Number(counts.referenceInstitutionsExpected) > 0
           ? ` Reference scope: ${counts.referenceInstitutionsMaterialized ?? 0}/${counts.referenceInstitutionsExpected ?? 0} expected institutions materialized.`
           : "";
-        setProgress(`Political World generation passed its quality checks: ${counts.politicalActors ?? 0}/${counts.polities ?? polityCount} Political Actors, ${counts.memberships ?? 0}/${counts.polities ?? polityCount} membership profiles, ${counts.institutions ?? 0} institutions, ${counts.agreements ?? 0} agreements and ${counts.powerEvidence ?? 0}/${counts.polities ?? polityCount} power records.${referenceSummary} ${sessionCalls} AI call(s) used this run. Review, then apply it to the scenario.`);
+        setProgress(`Political World ready. ${counts.politicalActors ?? 0} of ${counts.polities ?? polityCount} polities completed.${referenceSummary} ${sessionCalls} AI request${sessionCalls === 1 ? "" : "s"} used this run. Review the summary, then apply it to the scenario.`);
       } else if (next.status === "paused" && next.pauseReason === "model-call-budget") {
-        setProgress(`Political World generation paused cleanly after ${sessionCalls} AI call(s) this run. Progress is saved; press Resume Generation whenever you want to continue.`);
+        setProgress(`Generation paused after ${sessionCalls} AI request${sessionCalls === 1 ? "" : "s"}. Completed work is saved. Continue Generation when you're ready.`);
       } else if (next.status === "paused" && next.pauseReason === "total-model-call-budget") {
-        setProgress(next.lastError || "Political World generation reached its lifetime AI-call safety ceiling. Completed work is saved; inspect unresolved targets before spending more calls.");
+        setProgress(next.lastError || "Generation paused at the AI-request safety limit. Completed work is saved. Review the unfinished polities before continuing.");
       } else if (next.status === "paused" && next.pauseReason === "aborted") {
-        setProgress("Political World generation paused. Completed work is saved.");
+        setProgress("Generation paused. Completed work is saved.");
       } else if (next.status === "paused" && next.pauseReason === "bounded-unresolved") {
-        const deferred = Number(next.worklistSummary?.failed) || 0;
-        setProgress(`Political World generation deferred ${deferred} stubborn target(s) after bounded retries. Completed work is saved; normal Resume keeps those retry limits and continues independent unfinished work. Use Retry Deferred Targets only when you want another bounded attempt at the deferred set.`);
+        const unresolvedPolities = [...new Set((Array.isArray(next.quality?.unresolved) ? next.quality.unresolved : []).map((entry) => clean(entry?.polityKey)).filter(Boolean))].length
+          || Number(next.worklistSummary?.failed)
+          || 0;
+        setProgress(`Generation paused. ${unresolvedPolities} ${unresolvedPolities === 1 ? "polity needs" : "polities need"} another attempt. Completed work is saved. Continue Generation retries only unfinished polities.`);
       } else if (next.status === "paused" && ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error"].includes(next.pauseReason)) {
-        setProgress(next.lastError || "Political World generation paused because the current provider task could not complete. No unresolved polity was penalized for this provider failure.");
+        setProgress(next.lastError || "Generation paused because the current AI provider could not complete a step. Completed work is saved; continue after the provider issue is resolved.");
       } else {
-        const unresolved = next.quality?.unresolved?.length ?? 0;
+        const unresolvedPolities = [...new Set((Array.isArray(next.quality?.unresolved) ? next.quality.unresolved : []).map((entry) => clean(entry?.polityKey)).filter(Boolean))].length;
         const blockers = next.quality?.blockingErrors?.length ?? 0;
-        setProgress(`Political World generation stopped with ${unresolved} unresolved item(s) and ${blockers} blocking job error(s). Completed work remains saved.`);
+        setProgress(blockers
+          ? `Generation stopped because ${blockers} blocking error${blockers === 1 ? " needs" : "s need"} attention. Completed work is saved.`
+          : `Generation paused with ${unresolvedPolities} ${unresolvedPolities === 1 ? "polity" : "polities"} unfinished. Completed work is saved.`);
       }
     } catch (nextError) {
       if (nextError?.name === "AbortError") setProgress("Political World generation paused. Completed work remains saved.");
@@ -776,7 +814,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       if (runKind === "political-world-v2") {
         if (!v2Checkpoint) throw new Error("Political World generation checkpoint is missing.");
         if (freshDate !== v2Checkpoint.scenarioDate) {
-          throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Resume from a fresh v2 checkpoint.`);
+          throw new Error(`Scenario start date changed from ${v2Checkpoint.scenarioDate} to ${freshDate || "<blank>"}. Start a fresh Political World generation for the new date.`);
         }
         const { applyPoliticalWorldV2Checkpoint, discardPoliticalWorldV2Checkpoint } = await import("../AI/politicalWorldV2/pipeline.js");
         const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
@@ -791,7 +829,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         await discardPoliticalWorldV2Checkpoint(details.scenario.id);
         onDetailsChange?.(saved);
         const counts = v2Checkpoint.quality?.counts || {};
-        setProgress(`Applied Political World to the scenario: ${counts.politicalActors ?? 0} Political Actors, ${counts.institutions ?? 0} institutions, ${counts.agreements ?? 0} standing agreements and ${counts.powerEvidence ?? 0} power records.`);
+        setProgress(`Political World added to scenario - ${counts.politicalActors ?? 0} polities, ${counts.institutions ?? 0} institutions, ${counts.agreements ?? 0} agreements.`);
         setV2Checkpoint(null);
         setProgressInfo(null);
         return;
@@ -1415,23 +1453,33 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       </div>
 
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.55rem", marginTop: "0.85rem" }}>
-        <button disabled={busy || applying || geopoliticalApplying || dateMismatch} onClick={generatePoliticalWorld} style={{ ...buttonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(167,139,250,0.34)", minWidth: "11.5rem", opacity: busy || applying || geopoliticalApplying || dateMismatch ? 0.55 : 1 }} type="button">
-          {busy && runKind === "political-world-v2" ? "Building Political World…" : (v2Checkpoint && !v2Ready ? "Resume Generation" : "Generate Political World")}
-        </button>
+        {!v2Ready && (
+          <button disabled={busy || applying || geopoliticalApplying || dateMismatch} onClick={() => generatePoliticalWorld({ retryDeferred: v2NeedsRetry })} style={{ ...buttonStyle, background: "rgba(124,58,237,0.3)", borderColor: "rgba(167,139,250,0.34)", minWidth: "11.5rem", opacity: busy || applying || geopoliticalApplying || dateMismatch ? 0.55 : 1 }} type="button">
+            {busy && runKind === "political-world-v2" ? "Building Political World…" : (v2Checkpoint ? "Continue Generation" : "Generate Political World")}
+          </button>
+        )}
         <button disabled={!applyReady || busy || applying || geopoliticalApplying || dateMismatch} onClick={applyPoliticalWorld} style={{ ...buttonStyle, background: "rgba(34,197,94,0.22)", borderColor: "rgba(74,222,128,0.34)", minWidth: "10.5rem", opacity: !applyReady || busy || applying || geopoliticalApplying || dateMismatch ? 0.5 : 1 }} type="button">
           {applying ? "Applying to Scenario…" : "Apply to Scenario"}
         </button>
-        {busy && <button onClick={cancel} style={{ ...buttonStyle, background: "rgba(127,29,29,0.3)" }} type="button">Cancel</button>}
+        {busy && <button onClick={cancel} style={{ ...buttonStyle, background: "rgba(127,29,29,0.3)" }} type="button">Pause</button>}
       </div>
       <div style={{ color: "rgba(255,255,255,0.52)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
-        Generation saves its progress as a staged preview. Resume continues unfinished work without resetting bounded validation retries. Nothing is written to the scenario until Apply to Scenario succeeds.
+        {busy && runKind === "political-world-v2"
+          ? "Progress is saved as you go. You can pause and continue later."
+          : v2NeedsRetry
+            ? `${v2RetryPolityCount} ${v2RetryPolityCount === 1 ? "polity needs" : "polities need"} another attempt. Completed work is saved. Continue Generation retries only unfinished polities. You can close the editor and continue later.`
+            : v2Ready
+              ? "Generation is complete. Review the summary below, then apply it to the scenario."
+              : v2Checkpoint
+                ? "Completed work is saved. Continue Generation picks up unfinished work only. You can close the editor and come back later."
+                : "Generation is staged for review and saves progress as it goes. Nothing is written to the scenario until Apply to Scenario succeeds."}
       </div>
 
       <details style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, marginTop: "0.7rem", padding: "0.55rem 0.65rem" }}>
         <summary style={{ color: "rgba(255,255,255,0.62)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 700 }}>Advanced generation settings & repair tools</summary>
         <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.65rem" }}>
           <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
-            Maximum AI calls this run
+            Maximum AI requests this run
             <input
               disabled={busy || applying}
               max="200"
@@ -1454,7 +1502,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           {result && !busy && runKind !== "governing-alignment-repair" && runKind !== "political-world-unified" && <button disabled={applying || dateMismatch} onClick={recheckHistory} style={buttonStyle} type="button">Re-check Timeline Canon</button>}
           {result && !busy && runKind !== "political-world-unified" && <button onClick={downloadRunLog} style={buttonStyle} type="button">Download Run Log</button>}
           {geopoliticalResult && runKind !== "political-world-unified" && <button onClick={downloadGeopoliticalDiagnostic} style={buttonStyle} type="button">Download Geopolitical Diagnostic</button>}
-          {v2FailedJobs > 0 && <button disabled={busy || applying || dateMismatch} onClick={() => generatePoliticalWorld({ retryDeferred: true })} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Retry Deferred Targets</button>}
+          {v2NeedsRetry && <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem" }}>Use Continue Generation above to retry unfinished polities.</span>}
           {v2Checkpoint && <button onClick={downloadPoliticalWorldV2Diagnostic} style={buttonStyle} type="button">Download Generation Diagnostic</button>}
         </div>
         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
@@ -1475,16 +1523,18 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, marginTop: "0.7rem", padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", fontSize: "0.7rem", gap: "0.6rem", justifyContent: "space-between" }}>
             <span style={{ color: "rgba(255,255,255,0.76)", fontWeight: 700 }}>
-              Generation progress: {progressInfo.canonicalResolved ?? 0}/{progressInfo.canonicalTotal ?? 0} ({progressInfo.canonicalPercent ?? 0}%)
+              {progressReadyPolities} of {progressInfo.totalPolities ?? polityCount} polities ready
             </span>
-            <span style={{ color: "rgba(255,255,255,0.52)" }}>{progressInfo.modelCalls ?? 0}{progressInfo.totalModelCallCeiling ? `/${progressInfo.totalModelCallCeiling}` : ""} AI call(s) total</span>
+            <span style={{ color: "rgba(255,255,255,0.52)" }}>
+              {progressInfo.modelCalls ?? 0} AI request{Number(progressInfo.modelCalls) === 1 ? "" : "s"} used{progressInfo.totalModelCallCeiling ? ` · Safety limit: ${progressInfo.totalModelCallCeiling}` : ""}
+            </span>
           </div>
           <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}>
-            <div style={{ background: "rgba(139,92,246,0.9)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressInfo.canonicalPercent ?? 0}%` }} />
+            <div style={{ background: "rgba(139,92,246,0.9)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressReadyPercent}%` }} />
           </div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
-            Actors: {progressInfo.resolvedPolities ?? 0}/{progressInfo.totalPolities ?? polityCount} · memberships: {progressInfo.memberships ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.membershipInstitutionsTotal ? ` (${progressInfo.membershipInstitutionsResolved ?? 0}/${progressInfo.membershipInstitutionsTotal} institutions resolved)` : ""} · alignment: {progressInfo.governingAlignment ?? 0}/{progressInfo.totalPolities ?? polityCount} · power: {progressInfo.powerEvidence ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.verificationRequired ? ` · verified: ${progressInfo.verified ?? 0}/${progressInfo.verificationTargets ?? 0}` : ""}<br />
-            Work queue: {progressInfo.pendingJobs ?? 0} remaining · {progressInfo.failedJobs ?? 0} deferred · {progressInfo.unresolvedCount ?? 0} unresolved item(s)
+            Political actors: {progressInfo.resolvedPolities ?? 0}/{progressInfo.totalPolities ?? polityCount} · memberships: {progressInfo.memberships ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.membershipInstitutionsTotal ? ` (${progressInfo.membershipInstitutionsResolved ?? 0}/${progressInfo.membershipInstitutionsTotal} institutions resolved)` : ""} · governments & coalitions: {progressInfo.governingAlignment ?? 0}/{progressInfo.totalPolities ?? polityCount} · power: {progressInfo.powerEvidence ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.verificationRequired ? ` · verified: ${progressInfo.verified ?? 0}/${progressInfo.verificationTargets ?? 0}` : ""}<br />
+            {progressInfo.pendingJobs ?? 0} step{Number(progressInfo.pendingJobs) === 1 ? "" : "s"} remaining
           </div>
         </div>
       )}
@@ -1542,28 +1592,32 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       {v2Checkpoint && !busy && runKind === "political-world-v2" && (
         <div style={{ background: v2Ready ? "rgba(34,197,94,0.08)" : "rgba(124,58,237,0.09)", border: `1px solid ${v2Ready ? "rgba(74,222,128,0.24)" : "rgba(167,139,250,0.24)"}`, borderRadius: 12, marginTop: "0.8rem", padding: "0.75rem" }}>
           <div style={{ alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "space-between" }}>
-            <div style={{ color: v2Ready ? "#bbf7d0" : "#ede9fe", fontSize: "0.78rem", fontWeight: 800 }}>Political World generation checkpoint</div>
-            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem" }}>{clean(v2Checkpoint.status) || "ready"}</div>
+            <div style={{ color: v2Ready ? "#bbf7d0" : "#ede9fe", fontSize: "0.78rem", fontWeight: 800 }}>
+              {v2Ready ? "Political World ready" : (v2NeedsRetry ? "Generation paused" : "Generation progress saved")}
+            </div>
+            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem" }}>{v2Ready ? "ready" : (v2NeedsRetry ? "needs another attempt" : "saved")}</div>
           </div>
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
-            Work queue: {v2PendingJobs} remaining{v2FailedJobs ? ` · ${v2FailedJobs} deferred` : ""} · AI calls: {v2Checkpoint.modelCalls ?? 0}{v2Checkpoint.totalModelCallCeiling ? `/${v2Checkpoint.totalModelCallCeiling}` : ""}<br />
-            Political Actors: {v2Checkpoint.quality?.counts?.politicalActors ?? 0}/{v2Checkpoint.quality?.counts?.polities ?? polityCount} · memberships: {v2Checkpoint.quality?.counts?.memberships ?? 0}/{v2Checkpoint.quality?.counts?.polities ?? polityCount} · governing alignment: {v2Checkpoint.quality?.counts?.governingAlignment ?? 0}/{v2Checkpoint.quality?.counts?.polities ?? polityCount}<br />
-            Institutions: {v2Checkpoint.quality?.counts?.institutions ?? 0} · agreements: {v2Checkpoint.quality?.counts?.agreements ?? 0} · power evidence: {v2Checkpoint.quality?.counts?.powerEvidence ?? 0}/{v2Checkpoint.quality?.counts?.polities ?? polityCount}
+            {v2PolitiesReady} of {v2TotalPolities} polities ready{v2NeedsRetry
+              ? ` · ${v2RetryPolityCount} ${v2RetryPolityCount === 1 ? "polity needs" : "polities need"} another attempt`
+              : (v2UnresolvedPolityCount ? ` · ${v2UnresolvedPolityCount} ${v2UnresolvedPolityCount === 1 ? "polity unfinished" : "polities unfinished"}` : "")}<br />
+            Political actors: {v2Counts.politicalActors ?? 0}/{v2TotalPolities} · memberships: {v2Counts.memberships ?? 0}/{v2TotalPolities} · governments & coalitions: {v2Counts.governingAlignment ?? 0}/{v2TotalPolities} · power: {v2Counts.powerEvidence ?? 0}/{v2TotalPolities}<br />
+            Institutions: {v2Counts.institutions ?? 0} · agreements: {v2Counts.agreements ?? 0} · {v2Checkpoint.modelCalls ?? 0} AI request{Number(v2Checkpoint.modelCalls) === 1 ? "" : "s"} used{v2Checkpoint.totalModelCallCeiling ? ` · safety limit: ${v2Checkpoint.totalModelCallCeiling}` : ""}
           </div>
           {v2Ready ? (
             <div style={{ color: "#bbf7d0", fontSize: "0.7rem", marginTop: "0.45rem" }}>Quality checks passed. The Political World is ready to apply to the scenario.</div>
           ) : (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
               {v2Checkpoint.pauseReason === "model-call-budget"
-                ? "Paused at this run's AI-call budget. Resume continues unfinished work only."
+                ? "Generation paused at this run's AI-request limit. Completed work is saved. Continue Generation continues unfinished polities."
                 : v2Checkpoint.pauseReason === "total-model-call-budget"
-                  ? (v2Checkpoint.lastError || "Paused at the lifetime AI-call safety ceiling. Completed work is saved; inspect unresolved targets before spending more calls.")
+                  ? (v2Checkpoint.lastError || "Generation paused at the AI-request safety limit. Completed work is saved.")
                   : v2Checkpoint.pauseReason === "bounded-unresolved"
-                  ? `Deferred ${v2FailedJobs} stubborn target(s) after bounded retries. Resume preserves those retry limits and continues independent unfinished work; use Retry Deferred Targets for another bounded attempt.`
-                  : ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error"].includes(v2Checkpoint.pauseReason)
-                    ? (v2Checkpoint.lastError || "The current AI provider task paused before producing a usable result. Resume after the provider issue is resolved.")
-                    : `${v2Unresolved.length} item(s) remain unresolved.`}
-              {v2Unresolved.length > 0 && <div style={{ marginTop: "0.25rem" }}>Sample: {v2Unresolved.slice(0, 8).map((entry) => `${entry.polityKey} (${entry.kind})`).join(" · ")}{v2Unresolved.length > 8 ? "…" : ""}</div>}
+                    ? `${v2RetryPolityCount} ${v2RetryPolityCount === 1 ? "polity needs" : "polities need"} another attempt. Completed work is saved. Continue Generation retries only the unfinished polities.`
+                    : ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error"].includes(v2Checkpoint.pauseReason)
+                      ? (v2Checkpoint.lastError || "Generation paused because the current AI provider could not complete a step. Completed work is saved; continue after the provider issue is resolved.")
+                      : `${v2UnresolvedPolityCount} ${v2UnresolvedPolityCount === 1 ? "polity remains" : "polities remain"} unfinished. Completed work is saved.`}
+              {v2UnresolvedPolityKeys.length > 0 && <div style={{ marginTop: "0.25rem" }}>Still unfinished: {v2UnresolvedPolityKeys.slice(0, 8).join(" · ")}{v2UnresolvedPolityKeys.length > 8 ? "…" : ""}</div>}
             </div>
           )}
         </div>

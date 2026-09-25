@@ -3561,9 +3561,11 @@ export const generatePoliticalWorldProposalsCore = async ({
   behaviorallyCompleteStandard = false,
   requireRepresentationCoverage = false,
   // v2 may deliberately perform one provider call per resumable work item.
-  // Carry native validation feedback across those external attempts so a retry
-  // is actually corrective instead of asking the model the same question again.
+  // Carry native validation feedback and field-level political-system locks
+  // across those external attempts so a retry is actually corrective instead
+  // of asking the model the same question again or losing a proven-valid field.
   retryErrorsByPolity = {},
+  retryPoliticalSystemLocksByPolity = {},
   callModel,
   generatedAt = () => new Date().toISOString(),
   signal,
@@ -3586,6 +3588,7 @@ export const generatePoliticalWorldProposalsCore = async ({
   const warnings = [];
   const batchResults = [];
   const diagnostics = [];
+  const retryPoliticalSystemLocks = {};
 
   const fastItems = plan.items
     .map((item) => prioritizedQuantitativeLandscapeFastItem(item, prioritizeQuantitativeLandscapeBackfill))
@@ -3607,7 +3610,10 @@ export const generatePoliticalWorldProposalsCore = async ({
         ? retryErrorsByPolity[item.polityKey].map((error) => clean(error)).filter(Boolean).slice(0, 8)
         : []])
       .filter(([, errors]) => errors.length));
-    const politicalSystemLocks = {};
+    const politicalSystemLocks = Object.fromEntries(initialItems
+      .map((item) => [item.polityKey, retryPoliticalSystemLocksByPolity?.[item.polityKey]])
+      .filter(([, lock]) => isRetryPoliticalSystemLock(lock))
+      .map(([polityKey, lock]) => [polityKey, clone(lock)]));
     const acceptedKeys = new Set();
     let attempts = 0;
 
@@ -3711,6 +3717,8 @@ export const generatePoliticalWorldProposalsCore = async ({
     }
 
     for (const item of unresolved) {
+      const retryLock = politicalSystemLocks[item.polityKey];
+      if (isRetryPoliticalSystemLock(retryLock)) retryPoliticalSystemLocks[item.polityKey] = clone(retryLock);
       failures.push({
         polityKey: item.polityKey,
         depth: item.depth,
@@ -3970,6 +3978,7 @@ export const generatePoliticalWorldProposalsCore = async ({
     batches: batchResults,
     diagnostics,
     historicalVerification,
+    retryPoliticalSystemLocksByPolity: retryPoliticalSystemLocks,
     quantitativeLandscapeFastPath: {
       enabled: fastItems.length > 0,
       requested: fastItems.length,

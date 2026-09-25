@@ -40,6 +40,16 @@ test("checkpoint records provider calls by task type and high-level stage withou
   assert.deepEqual(normalized.modelCallsByStage, { politics: 2, verification: 1 });
 });
 
+test("checkpoint normalization preserves external corrective political-system locks", () => {
+  const checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  checkpoint.retryContext.politicalActor["Republic X"] = ["representation=party_state requires explicit one-party evidence"];
+  checkpoint.retryContext.politicalSystemLocks["Republic X"] = { type: "dominant_party_republic" };
+  const normalized = normalizePoliticalWorldV2Checkpoint(checkpoint);
+  assert.deepEqual(normalized.retryContext.politicalSystemLocks, {
+    "Republic X": { type: "dominant_party_republic" },
+  });
+});
+
 test("fresh checkpoints stay hard-capped at 100 while pre-CP2 overrun work receives one bounded correction-repair migration", () => {
   const fresh = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
   assert.equal(POLITICAL_WORLD_V2_DEFAULT_TOTAL_MODEL_CALL_CEILING, 100);
