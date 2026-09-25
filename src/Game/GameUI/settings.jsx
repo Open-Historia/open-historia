@@ -92,6 +92,11 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
+import {
+    APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
+    appUpdateCheckDescription,
+    requestAppUpdateCheck,
+} from "../../runtime/appUpdateManualCheck.js";
 
 const baseStyle = {
     position: "fixed",
@@ -2321,6 +2326,7 @@ const SettingsMenu = ({
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
+    const [updateCheckResult, setUpdateCheckResult] = useState({ status: "idle" });
     // The small menu's card: measured when a section opens so the workspace can
     // grow out of it, and told the button's size so it can grow out of the
     // button (the --oh-grow-* ratios the CSS keyframes read). Coming back from
@@ -2366,6 +2372,18 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+
+    useEffect(() => {
+        const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
+        window.addEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+        return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+    }, []);
+
+    const checkForUpdatesNow = () => {
+        if (updateCheckResult.status === "checking") return;
+        setUpdateCheckResult({ status: "checking" });
+        if (!requestAppUpdateCheck()) setUpdateCheckResult({ status: "unsupported" });
+    };
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
     // The field shows the keystrokes; the setting stores them trimmed. Storing
     // on every keystroke through setMapSettingValue's trim and echoing the
@@ -2478,6 +2496,13 @@ const SettingsMenu = ({
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
                     <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    <QuickAction
+                        title={updateCheckResult.status === "checking" ? "Checking for updates…" : "Check for updates"}
+                        description={appUpdateCheckDescription(updateCheckResult)}
+                        symbol="↻"
+                        tone="blue"
+                        onClick={checkForUpdatesNow}
+                    />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
