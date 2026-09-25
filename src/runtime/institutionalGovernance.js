@@ -13,6 +13,7 @@ import {
   normalizeInstitutionVotingRule,
   resolveInstitutionRecord,
 } from "./institutions.js";
+import { stableAsciiId } from "./stableId.js";
 import {
   mutateCanonicalTurnState,
   normalizeChatEntry,
@@ -24,12 +25,7 @@ import { getPoliticalProfile } from "./politicalActors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
-const slug = (value) => lower(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 96);
+const slug = (value) => stableAsciiId(value, { maxLength: 96 });
 const list = (value) => Array.isArray(value) ? value : [];
 const clone = (value) => {
   if (value == null || typeof value !== "object") return value;

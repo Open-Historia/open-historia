@@ -72,6 +72,21 @@ const vote = (world, polity, choice, authority = polity === "A" ? "player" : "np
   government, playerCountry: "A", authority,
 });
 
+test("a non-Latin proposal title receives a stable canonical id", () => {
+  const result = createInstitutionProposal({
+    world: makeWorld(simpleRule),
+    institutionId: "council",
+    date: "2000-01-01",
+    proposal: {
+      title: "Вступление Великобритании в качестве наблюдателя",
+      summary: "Предоставить Лондону статус наблюдателя.",
+      createdBy: "A",
+    },
+  });
+  assert.match(result.proposal.id, /^u-[a-z0-9]+$/);
+  assert.equal(result.proposal.title, "Вступление Великобритании в качестве наблюдателя");
+});
+
 test("unconfigured institution fails closed with a typed migration signal instead of inventing a majority rule", () => {
   const world = formalizedProposalWorld(null);
   assert.throws(
