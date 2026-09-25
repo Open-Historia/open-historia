@@ -78,7 +78,9 @@ test("geopolitical baseline is exact-date universal and closes membership identi
 });
 
 test("Scenario Editor keeps one normal Generate/Apply Political World workflow while preserving advanced diagnostics", () => {
-  assert.match(panel, /onClick=\{generatePoliticalWorld\}/);
+  assert.match(panel, /onClick=\{\(\) => generatePoliticalWorld\(\{ retryDeferred: v2NeedsRetry \}\)\}/);
+  assert.match(panel, /v2Checkpoint \? "Continue Generation" : "Generate Political World"/);
+  assert.match(panel, /Continue Generation retries only unfinished polities/);
   assert.match(panel, /onClick=\{applyPoliticalWorld\}/);
   assert.match(panel, /Advanced generation settings & repair tools/);
   assert.match(panel, /Generate Missing Politics/);
