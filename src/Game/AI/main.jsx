@@ -97,6 +97,7 @@ import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
+import { beginAiRequestScope } from "./aiRequestControl.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -2508,6 +2509,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
         }
     };
 
+    const requestScope = beginAiRequestScope(providerOpts.signal);
+    providerOpts.signal = requestScope.signal;
+
     try {
         // The Fallback list (fallbackRunner.js): the task's own pick first,
         // then the list from the top, moving down only past an entry that is
@@ -2618,6 +2622,8 @@ export async function callAI(systemPrompt, history, opts = {}) {
             capture.error = cancelled ? "cancelled" : String(error?.message || error);
         }
         throw error;
+    } finally {
+        requestScope.finish();
     }
 }
 
