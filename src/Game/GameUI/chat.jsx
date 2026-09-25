@@ -3,7 +3,7 @@ import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dedupeByName } from "../../runtime/countryList.js";
+import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
@@ -30,6 +30,7 @@ import {
     getNationColors,
     getNationFlags,
     loadCountryNames as loadCachedCountryNames,
+    loadRegionCatalog,
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -223,6 +224,25 @@ const findCommunityFlagPost = (posts, { code, name }) => {
 // The read-only world view: resolvePolityFlag needs the polity records
 // (aliases, mapRefs, legacy flags) to find an authored flag by identity.
 const getWorldForFlags = () => readWorldStateView().catch(() => ({}));
+
+// Who holds land, read from the map each time a picker opens, so a country
+// absorbed a moment ago is already gone from it (countryList.js). Null until
+// read, and on any failure: the pickers then list everyone rather than hide a
+// country on a guess.
+const useLandHolders = (active) => {
+    const [state, setState] = useState({ holders: null, world: null });
+    useEffect(() => {
+        if (!active) return undefined;
+        let cancelled = false;
+        Promise.all([loadRegionCatalog(), readWorldStateView()])
+            .then(([regions, world]) => {
+                if (!cancelled) setState({ holders: landHolderNames(regions, world), world });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active]);
+    return state;
+};
 
 const resolveFlagImageUrl = ({ code, name } = {}) => {
     if (!code && !name) return Promise.resolve(null);
@@ -2761,6 +2781,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [openedAssessments, setOpenedAssessments] = useState({});
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
+    const landHolders = useLandHolders(choosing);
     const [error, setError]           = useState("");
     const [section, setSection]       = useState("overview");
     const [countryQuery, setCountryQuery] = useState("");
@@ -2862,7 +2883,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
     }
 
-    const candidates = countryRows.filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
+    const candidates = pickableCountries(countryRows, landHolders)
+        .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
     const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
     const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
@@ -3347,9 +3369,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         };
     }, [isOpen, hasLoadedInitialData]);
 
+    const landHolders = useLandHolders(showSelector);
     const availableCountries = useMemo(
-        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
-                                       [countries, playerCountry]
+        () => pickableCountries(countries, landHolders).filter(country => !countryMatchesIdentity(country, playerCountry)),
+                                       [countries, landHolders, playerCountry]
     );
 
     const handleMessagesUpdate = (chatId, newMessages) => {
@@ -3695,10 +3718,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 leaves 0.5rem at the right, since it starts 1rem in (the dock's
                 0.5rem, then its own); and a 10rem floor, as 24rem is taller
                 than a phone held sideways. Every inset is 0 on a desktop.
-                Desktop keeps the 58rem workspace on wide screens, but reserves
-                map breathing room and subtracts the live Advisor/Country drawer
-                width on narrower displays instead of stacking both over the map. */}
-            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(72vw - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
+                Beside an open Advisor/Country drawer the width also gives up the
+                drawer's live width (dragging its edge updates it in the same
+                frame), so the two meet with the same 0.5rem gap and never stack.
+                Nothing else is held back: the panel shrinks only once the drawer
+                would really reach it, not the moment the drawer opens. */}
+            <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem - var(--oh-right-drawer-safe-offset, 0px)))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>

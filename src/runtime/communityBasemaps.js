@@ -322,7 +322,7 @@ export const installCommunityBasemap = async (post) => {
   });
 };
 
-// runtime/saveFile.js: a download in a browser, the share sheet in the app.
+// runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the app.
 const downloadFile = (blob, fileName) => saveBlobToDisk(blob, fileName);
 
 const safeName = (name) =>

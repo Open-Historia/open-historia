@@ -403,8 +403,8 @@ export const exportTelemetryCsv = (records) => {
   return rows.join("\n");
 };
 
-// runtime/saveFile.js: a download in a browser, the share sheet in the Android
-// app. Loaded on demand so this module stays importable under `node --test`.
+// runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the
+// Android app. Loaded on demand so this module stays importable under `node --test`.
 export const downloadFile = async (filename, content, mimeType = "application/json") => {
   if (typeof document === "undefined") return;
   const { saveTextToDisk } = await import("../../runtime/saveFile.js");

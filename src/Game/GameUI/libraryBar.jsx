@@ -62,6 +62,7 @@ import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js
 import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { acceptFor } from "../../runtime/fileAccept.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -400,8 +401,8 @@ const buildGameEditorState = (details) => {
 };
 
 // Scenario exports and JSON bundles save through runtime/saveFile.js like every
-// other file: the anchor with the deferred revoke in a browser, the share sheet
-// in the Android app. (The copy that lived here revoked the object URL in the
+// other file: the anchor with the deferred revoke in a browser, Downloads/Open
+// Historia in the Android app. (The copy that lived here revoked the object URL in the
 // same task as the click, which Firefox treats as a cancelled download.)
 
 const saveJsonBundleToDisk = (bundle, fileName) => {
@@ -573,7 +574,7 @@ const PromptSectionEditor = ({
                   Import all prompts
                 </button>
                 <input
-                  accept=".json,application/json"
+                  accept={acceptFor(".json,application/json")}
                   onChange={handlePromptImportFile}
                   ref={promptFileInputRef}
                   style={{ display: "none" }}
@@ -950,8 +951,8 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    // Offered everywhere, the Android app included: runtime/saveFile.js writes
-    // the zip through the Filesystem plugin and opens the share sheet there.
+    // Offered everywhere, the Android app included: runtime/saveFile.js saves
+    // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
     [exporting ? "Exporting…" : "Export", runExport, exporting],
   ];
 
@@ -1700,7 +1701,7 @@ const EditorDrawer = ({
                       ref={(node) => {
                         fileInputsRef.current[assetKey] = node;
                       }}
-                      accept={(kind === "scenario" ? scenarioAssetAccept : gameAssetAccept)[assetKey]}
+                      accept={acceptFor((kind === "scenario" ? scenarioAssetAccept : gameAssetAccept)[assetKey])}
                       onChange={(event) => onFileSelect(assetKey, event)}
                       style={{ display: "none" }}
                       type="file"
@@ -3377,7 +3378,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
       <input
         ref={importScenarioInputRef}
-        accept=".json,application/json,.zip,application/zip"
+        accept={acceptFor(".json,application/json,.zip,application/zip")}
         onChange={handleImportScenarioFile}
         style={{ display: "none" }}
         type="file"
@@ -3387,7 +3388,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           because its restore points and any map ride beside it. */}
       <input
         ref={importGameInputRef}
-        accept=".zip,application/zip"
+        accept={acceptFor(".zip,application/zip")}
         onChange={handleImportGameFile}
         style={{ display: "none" }}
         type="file"

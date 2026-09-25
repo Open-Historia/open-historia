@@ -137,7 +137,7 @@ test("the Workshop document re-keys its registry, colours, flags, tags and city 
   const next = renamePolityInDocument(doc, "Austria", "Austria-Hungary");
   assert.deepEqual(Object.keys(next.polities).sort(), ["Austria-Hungary", "Bavaria"]);
   assert.equal(next.polities["Austria-Hungary"].note, "Habsburg");
-  assert.deepEqual(next.polities["Austria-Hungary"].formerNames, ["Austria"]);
+  assert.equal("formerNames" in next.polities["Austria-Hungary"], false, "a Workshop rename keeps no old name");
   assert.deepEqual(next.colorOverrides, { "Austria-Hungary": [1, 2, 3] });
   assert.deepEqual(next.flags, { "Austria-Hungary": "data:png" });
   assert.deepEqual(next.tags, { "Austria-Hungary": ["monarchy"], Bavaria: ["catholic"] });
@@ -283,4 +283,27 @@ test("the Workshop's rename keeps the country's own colour, flag and tags over l
   assert.deepEqual(next.colorOverrides, { "Austria-Hungary": [1, 2, 3] });
   assert.deepEqual(next.flags, {});
   assert.deepEqual(next.tags, { "Austria-Hungary": ["monarchy"] });
+});
+
+// The user (2026-09-24): "when renaming a country in the map editor, it shouldnt
+// save the previous names". Nothing in the document refers to the old name after
+// the rename, so the record keeps none — not as a former name, not as an alias —
+// including names an earlier rename had saved. A rename in play still keeps them.
+test("a Workshop rename keeps no previous name, while a rename in play does", () => {
+  const doc = {
+    polities: {
+      Prussia: { name: "Prussia", code: "Prussia", aliases: ["Prussia", "Brandenburg", "Borussia"], formerNames: ["Brandenburg"], status: "active", note: "" },
+    },
+  };
+  const renamed = renamePolityInDocument(doc, "Prussia", "German Empire").polities["German Empire"];
+  assert.equal("formerNames" in renamed, false);
+  assert.deepEqual(renamed.aliases, ["Borussia"], "an alias that was never its name stays");
+  assert.equal(renamed.name, "German Empire");
+  assert.equal(renamed.code, "German Empire");
+  const twice = renamePolityInDocument(renamePolityInDocument(doc, "Prussia", "German Empire"), "German Empire", "Reich").polities.Reich;
+  assert.equal("formerNames" in twice, false, "renaming again leaves nothing behind either");
+  assert.deepEqual(twice.aliases, ["Borussia"]);
+
+  const world = renamePolityInWorld({ polityOverrides: { Prussia: { name: "Prussia", aliases: [] } } }, "Prussia", "German Empire").world;
+  assert.deepEqual(world.polityOverrides["German Empire"].formerNames, ["Prussia"], "history made in play still folds onto the country");
 });
