@@ -141,6 +141,23 @@ test("WebGL context loss remains instrumented for freeze diagnostics", () => {
   assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
 });
 
+test("country fills are written again when MapLibre rebuilds the sources holding their feature-state", () => {
+  // A restored WebGL context, or a style MapLibre cannot diff (3D Terrain),
+  // brings every source back as a new object with no feature-state. The
+  // applied-fill ledgers go with the old objects, or the whole map stays grey.
+  assert.match(nations, /mapInstance\.on\("styledata", schedule\)/);
+  assert.match(nations, /if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /seen\.custom && seen\.custom !== next\.custom\) \|\| \(seen\.repair && seen\.repair !== next\.repair/);
+  assert.match(nations, /appliedCustomFillStateRef\.current = new Map\(\);\s*setCustomFillSourceEpoch/);
+  assert.match(nations, /if \(seen\.tiles && seen\.tiles !== next\.tiles\) \{\s*appliedTileFillStateRef\.current = new Map\(\);\s*setTileFillSourceEpoch/);
+  assert.match(nations, /\}, \[\s*customFillSourceEpoch,\s*customFlag,/);
+  assert.match(nations, /shouldMountStockRegions, tileFillSourceEpoch\]\);/);
+  // A pass still slicing when its ledger was reset must not put the old one back.
+  assert.match(nations, /if \(appliedCustomFillStateRef\.current === applied\) appliedCustomFillStateRef\.current = appliedAfterSync;/);
+  assert.match(nations, /if \(appliedTileFillStateRef\.current === applied\) appliedTileFillStateRef\.current = appliedAfterSync;/);
+  assert.doesNotMatch(nations, /^\s*applied(Custom|Tile)FillStateRef\.current = appliedAfterSync;/m);
+});
+
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
   assert.match(world, /basemapId === "ocean-dark"/);
   assert.match(world, /loadNatGeoDarkStyle/);
