@@ -503,6 +503,7 @@ const eventDiplomaticSearchText = (event) => {
   const structuredActors = [
     ...array(event?.combatants),
     ...array(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
+    ...array(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
     ...array(impacts?.createdChats).flatMap((chat) => [chat?.speaker, ...array(chat?.countries)]),
   ];
   return diplomaticSearchText([
@@ -2033,9 +2034,30 @@ export const buildBoundedDiplomaticContext = (
   requested.forEach(pushActor);
 
   // Freeze the caller-selected attention set before one-hop expansion. Actors
-  // pulled in by a commitment or war may be shown, but they must not recursively
-  // pull in their own diplomatic graph.
+  // pulled in by a subordination, commitment or war may be shown, but they must
+  // not recursively pull in their own diplomatic graph.
   const seedActorKeys = new Set(actorKeys);
+
+  // A live Puppet relationship is a direct canonical dependency, not a generic
+  // bilateral mood. Pull the counterpart into the same bounded attention slice
+  // before looser agreement/war expansion so a seed actor never appears without
+  // the polity that currently directs it (or whose will it currently directs).
+  // This is whole-world simulator context, so canonical truth is intentional;
+  // actor-relative chat/Advisor surfaces continue to use runtime/puppets.js.
+  if (puppetStates) {
+    for (const row of array(world.puppets)) {
+      if (lower(row?.status || "active") !== "active") continue;
+      const overlord = canonicalDiplomaticPolity(row?.overlord, world);
+      const puppet = canonicalDiplomaticPolity(row?.puppet, world);
+      if (!overlord || !puppet) continue;
+      const overlordSeed = seedActorKeys.has(politySetKey(overlord));
+      const puppetSeed = seedActorKeys.has(politySetKey(puppet));
+      if (!overlordSeed && !puppetSeed) continue;
+      if (overlordSeed) pushActor(puppet);
+      if (puppetSeed) pushActor(overlord);
+      if (actors.length >= maxActors) break;
+    }
+  }
 
   // Formal commitments and current wars can pull in a directly connected actor,
   // but the whole context remains bounded.

@@ -10,7 +10,7 @@ import { decodeGameMasterTransportPayload } from "./gameplaySchemas.js";
 
 test("well-formed transport text decodes as before", () => {
   const { payload, error } = decodeGameMasterTransportPayload({
-    mode: "world-intervention", summary: "s", eventsJson: '[{"title":"x"}]', countryStatPatchesJson: "[]", storylineUpdatesJson: "[]",
+    mode: "world-intervention", summary: "s", eventsJson: '[{"title":"x"}]', territorialScopesJson: "[]", countryStatPatchesJson: "[]", storylineUpdatesJson: "[]",
     warUpdatesJson: "[]", relationUpdatesJson: "[]", agreementUpdatesJson: "[]", diplomaticOutreachJson: "[]",
   });
   assert.equal(error, "");
@@ -21,6 +21,7 @@ test("a remark after the array, a trailing comma and smart quotes are salvaged",
   const { payload, error } = decodeGameMasterTransportPayload({
     mode: "direct", summary: "s",
     eventsJson: '[{"title":"x",}]',
+    territorialScopesJson: '[{“kind”:“legal-transfer”,“baseCountries”:[“Estonia”,“Latvia”,“Lithuania”],“toCode”:“The Baltic Union”,“eventIndex”:0,“note”:“all Baltic territory”}]',
     countryStatPatchesJson: "[] // none",
     storylineUpdatesJson: "[{“id”:“s1”}]",
     warUpdatesJson: "[]", relationUpdatesJson: "[]", agreementUpdatesJson: "[]", diplomaticOutreachJson: "[]",
@@ -29,11 +30,15 @@ test("a remark after the array, a trailing comma and smart quotes are salvaged",
   assert.deepEqual(payload.events, [{ title: "x" }]);
   assert.deepEqual(payload.countryStatPatches, []);
   assert.deepEqual(payload.storylineUpdates, [{ id: "s1" }]);
+  assert.deepEqual(payload.territorialScopes, [{
+    kind: "legal-transfer", baseCountries: ["Estonia", "Latvia", "Lithuania"],
+    toCode: "The Baltic Union", eventIndex: 0, note: "all Baltic territory",
+  }]);
 });
 
 test("a text with no array in it is still an error naming the field", () => {
   const { payload, error } = decodeGameMasterTransportPayload({
-    mode: "direct", summary: "s", eventsJson: "not json at all", countryStatPatchesJson: "[]", storylineUpdatesJson: "[]",
+    mode: "direct", summary: "s", eventsJson: "not json at all", territorialScopesJson: "[]", countryStatPatchesJson: "[]", storylineUpdatesJson: "[]",
     warUpdatesJson: "[]", relationUpdatesJson: "[]", agreementUpdatesJson: "[]", diplomaticOutreachJson: "[]",
   });
   assert.equal(payload, null);

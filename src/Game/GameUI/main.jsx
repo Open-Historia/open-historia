@@ -89,6 +89,9 @@ const baseStyle = {
 const LazyAdvisorPanel = lazy(() =>
   import("./advisor").then((module) => ({ default: module.AdvisorPanel })),
 );
+const LazyCountryPanel = lazy(() =>
+  import("./countryPanel.jsx").then((module) => ({ default: module.CountryPanel })),
+);
 const LazyCheatsPanel = lazy(() =>
   import("./cheats").then((module) => ({ default: module.CheatsPanel })),
 );
@@ -215,6 +218,7 @@ const Main = ({
   const [shouldLoadDebugConsole, setShouldLoadDebugConsole] = useState(false);
   const [isInteractiveOpen, setIsInteractiveOpen] = useState(false);
   const [isAdvisorOpen, setIsAdvisorOpen] = useState(false);
+  const [isCountryOpen, setIsCountryOpen] = useState(false);
   const [advisorWidth, setAdvisorWidth] = useState(readAdvisorWidth);
   // A starter message queued for the advisor's input box — set when something
   // OUTSIDE the advisor panel (the Actions panel's "Help brainstorm actions"
@@ -224,6 +228,7 @@ const Main = ({
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
+  const [shouldLoadCountry, setShouldLoadCountry] = useState(false);
   const [isFullscreenEnabled, setIsFullscreenEnabled] = useState(false);
   const [showWebGLWarning, setShowWebGLWarning] = useState(false);
 
@@ -271,10 +276,11 @@ const Main = ({
       isSettingsOpen && "settings",
       isCheatsOpen && "cheats",
       isAdvisorOpen && "advisor",
+      isCountryOpen && "country",
       isForcesOpen && "forces",
     ].filter(Boolean);
     logDebugEvent("ui", `Open panels: ${open.length ? open.join(", ") : "(none)"}`, undefined, { verbose: true });
-  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isForcesOpen]);
+  }, [activeBottomPanel, isSettingsOpen, isCheatsOpen, isAdvisorOpen, isCountryOpen, isForcesOpen]);
 
   // Idle diplomacy drip: each real-world minute the game is open (and has a
   // running game), there is a small chance a polity messages the player's
@@ -283,7 +289,11 @@ const Main = ({
   // command, or interactive event stage is in flight, never overlaps itself, and stays
   // silent on any failure. Hidden tabs don't roll the dice.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    // The main menu owns Scenario Workshop / Map Editor as overlays while the
+    // previously active campaign may still exist underneath. Idle diplomacy is
+    // gameplay activity, not background app activity, so do not let a country
+    // message the player while they are browsing/editing outside the campaign.
+    if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
@@ -291,7 +301,7 @@ const Main = ({
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [hasNoGames]);
+  }, [hasNoGames, mainMenuOpen]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each
   // minute the tab is visible, at odds that work out to roughly one report
@@ -313,6 +323,10 @@ const Main = ({
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
   }, [isAdvisorOpen]);
+
+  useEffect(() => {
+    if (isCountryOpen) setShouldLoadCountry(true);
+  }, [isCountryOpen]);
 
   useEffect(() => {
     localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
@@ -364,6 +378,7 @@ const Main = ({
   }, []);
 
   const openAdvisor = useCallback((seedPrompt) => {
+    setIsCountryOpen(false);
     setIsAdvisorOpen(true);
     if (typeof seedPrompt === "string" && seedPrompt) setPendingAdvisorPrompt(seedPrompt);
   }, []);
@@ -421,13 +436,14 @@ const Main = ({
   const isMobile = useIsMobile();
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
+  const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
       right: `calc(${advisorCssWidth} + 0.5rem + ${SAFE_RIGHT})`,
-      transform: isAdvisorOpen ? "none" : `translateX(${advisorCssWidth})`,
+      transform: rightDrawerOpen ? "none" : `translateX(${advisorCssWidth})`,
       transition: `transform ${ADVISOR_SLIDE}`,
-    }), [advisorCssWidth, isAdvisorOpen, isMobile]);
+    }), [advisorCssWidth, rightDrawerOpen, isMobile]);
   const toggleBottomPanel = useCallback((panelName) => {
     setActiveBottomPanel((currentPanel) => (
       currentPanel === panelName ? null : panelName
@@ -438,6 +454,7 @@ const Main = ({
   // (runtime/backToClose.js; with a mouse nothing changes).
   useBackToClose(Boolean(activeBottomPanel), () => setActiveBottomPanel(null));
   useBackToClose(isAdvisorOpen, () => setIsAdvisorOpen(false));
+  useBackToClose(isCountryOpen, () => setIsCountryOpen(false));
   useBackToClose(isForcesOpen, () => setIsForcesOpen(false));
   useBackToClose(isCheatsOpen, () => setIsCheatsOpen(false));
   useBackToClose(isDebugConsoleOpen, () => setIsDebugConsoleOpen(false));
@@ -450,8 +467,9 @@ const Main = ({
   // On a phone a map card and a bottom panel take turns (runtime/mobileUi.js):
   // both sit at the bottom of the screen, and a card opened by a tap on the
   // strip of map above an open panel came up underneath it, unseen. A panel
-  // opening also puts away the screen-sized sheets (the advisor, a country's
-  // panel): a diplomacy toast, which shows above them, opens the chat, and
+  // opening also puts away the screen-sized sheets (the advisor, the country
+  // drawer, a country's panel): a diplomacy toast, which shows above them,
+  // opens the chat, and
   // the chat came up underneath them.
   useEffect(() => {
     if (!isMobile || !activeBottomPanel) return undefined;
@@ -460,6 +478,7 @@ const Main = ({
     dismissFeaturePopup();
     openCountryPanel(null);
     setIsAdvisorOpen(false);
+    setIsCountryOpen(false);
     const onCardOpened = () => setActiveBottomPanel(null);
     window.addEventListener(MAP_CARD_OPENED, onCardOpened);
     return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);
@@ -477,7 +496,10 @@ const Main = ({
   return (
     <>
       {showWebGLWarning && <WebGLWarningPopup />}
-      <LibraryTopBar />
+      <LibraryTopBar onOpenSettings={() => {
+        setSettingsInitialSection("general");
+        setIsSettingsOpen(true);
+      }} />
       <DateWidget
         activePanel={activeBottomPanel}
         mapRef={mapRef}
@@ -492,7 +514,14 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         mapRef={mapRef}
       />
-      <Other dockStyle={advisorDockStyle} />
+      <Other
+        dockStyle={advisorDockStyle}
+        active={isCountryOpen}
+        onToggle={() => {
+          setIsAdvisorOpen(false);
+          setIsCountryOpen((open) => !open);
+        }}
+      />
       <Search mapRef={mapRef} />
       <ForcesPanel
         mapRef={mapRef}
@@ -503,7 +532,10 @@ const Main = ({
       <AdvisorButton
         isAdvisorOpen={isAdvisorOpen}
         dockStyle={advisorDockStyle}
-        onToggle={() => setIsAdvisorOpen(!isAdvisorOpen)}
+        onToggle={() => {
+          setIsCountryOpen(false);
+          setIsAdvisorOpen((open) => !open);
+        }}
       />
       <Suspense fallback={null}>
         {shouldLoadAdvisor && (
@@ -520,6 +552,17 @@ const Main = ({
             onOpenProjects={() => { setActiveBottomPanel("projects"); if (isMobile) setIsAdvisorOpen(false); }}
             requestedPrompt={pendingAdvisorPrompt}
             onConsumeRequest={() => setPendingAdvisorPrompt("")}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {shouldLoadCountry && (
+          <LazyCountryPanel
+            open={isCountryOpen}
+            onClose={() => setIsCountryOpen(false)}
+            width={advisorCssWidth}
+            onResize={handleAdvisorResize}
+            onResizeEnd={handleAdvisorResizeEnd}
           />
         )}
       </Suspense>
@@ -550,8 +593,7 @@ const Main = ({
           countryName={activeCountryName || activeGame?.country || ""}
           // The game's own cover when it uploaded one, else its scenario's
           // (the server already folds the two into the game's coverImageUrl).
-          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}
-          phase={gameLoading.phase}
+          coverUrl={activeGame?.coverImageUrl || runtimeScenario?.coverImageUrl || ""}          phase={gameLoading.phase}
         />
       </Presence>
       <Presence open={showApiPrompt}>

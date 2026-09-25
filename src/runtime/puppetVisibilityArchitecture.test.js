@@ -5,21 +5,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-// THE DRIFT GUARD. Four surfaces answer "is this country a Puppet, and what am
-// I allowed to know about it": the country panel, the diplomacy markers, the map
-// popup card and the advisor's prompt. Four callers deciding that separately is
-// how the game ends up contradicting itself about the player's own empire —
+// THE DRIFT GUARD. Five surfaces answer "is this country a Puppet, and what am
+// I allowed to know about it": the legacy country panel, the new Country drawer,
+// diplomacy markers, the map popup card and the advisor's prompt. Five callers
+// deciding separately is how the game ends up contradicting itself about the player's own empire —
 // showing a satellite in the popup that the panel denies, or briefing the
 // advisor on a secret the player never discovered.
 //
 // So: nothing but runtime/puppets.js and the world normalizer may read
-// world.puppets directly. This test is what keeps the fifth surface honest when
+// world.puppets directly. This test is what keeps the next surface honest when
 // somebody adds one later.
 
 const read = (path) => fs.readFileSync(new URL(path, import.meta.url), "utf8");
 
 const SURFACES = [
-    ["the country panel", "../Game/Selection/CountryPanel.jsx"],
+    ["the legacy country panel", "../Game/Selection/CountryPanel.jsx"],
+    ["the Country drawer diplomacy tab", "../Game/GameUI/stats.jsx"],
     ["the diplomacy markers", "../Game/GameUI/chat.jsx"],
     ["the advisor's own directive", "../Game/AI/main.jsx"],
     ["the map popup card", "../Game/Selection/Regions.jsx"],
@@ -86,7 +87,7 @@ test("Loyalty never reaches a surface as a bare number", () => {
     const summary = puppets.slice(puppets.indexOf("export const puppetSummaryFor"));
     assert.match(summary, /loyaltyBand/);
     assert.doesNotMatch(summary, /row\.loyalty\b(?!Band)/);
-    for (const path of ["../Game/Selection/CountryPanel.jsx", "../Game/Selection/Regions.jsx"]) {
+    for (const path of ["../Game/Selection/CountryPanel.jsx", "../Game/GameUI/stats.jsx", "../Game/Selection/Regions.jsx"]) {
         assert.match(read(path), /puppetSummaryFor/);
         assert.doesNotMatch(read(path), /row\.loyalty\b(?!Band)/);
     }

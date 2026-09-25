@@ -10,6 +10,7 @@ const normalize = (value) => clean(value)
 
 const BROAD_SCOPE_CUE = /^(?:all|every|entire|whole|full)$/;
 const TERRITORY_NOUN = /^(?:territor(?:y|ies)|regions?|states?|provinces?|lands?|areas?)$/;
+const TERRITORY_PRESERVATION_VERB = /^(?:keep|keeps|kept|keeping|retain|retains|retained|retaining|preserve|preserves|preserved|preserving|remain|remains|remained|remaining|stay|stays|stayed|staying)$/;
 // Words allowed between the cue and the country's own words: "all OF THE north
 // korean states". "all of ITS provinces" names no country and never expands.
 const PHRASE_FILLER = new Set(["of", "the", "its", "their", "own"]);
@@ -132,6 +133,104 @@ export const detectExplicitBaseTerritoryScope = (request, catalog = []) => {
     countryName: winner.name,
     regionIds: winner.regions.map((region) => clean(region?.id)).filter(Boolean),
   };
+};
+
+
+// A broad GM instruction such as "all Baltic territories" or "every Ukrainian
+// region" is a set-level contract, not permission for the model to sample a few
+// representative provinces. The exact semantic membership of a named region group
+// may still need the model to spell out its base geographies, but once the request
+// uses exhaustive language the provider MUST use the native territorialScopes
+// envelope so JavaScript can expand and verify the complete rendered footprint.
+export const requestDemandsExhaustiveTerritorialScope = (request) => {
+  for (const tokens of clauseTokens(request)) {
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (!BROAD_SCOPE_CUE.test(tokens[index])) continue;
+      const nounOffset = tokens.slice(index + 1).findIndex((token) => TERRITORY_NOUN.test(token));
+      if (nounOffset < 0) continue;
+      const nounIndex = index + 1 + nounOffset;
+
+      // Exhaustive words also appear in preservation constraints such as
+      // "Lithuania keeps all of its territory". That sentence explicitly asks
+      // for NO territorial mutation, so forcing territorialScopes would turn a
+      // Puppet-only GM request into an unrelated map transaction. Treat a nearby
+      // preservation verb as a no-change qualifier, not as a scope command.
+      const preservationBeforeCue = tokens
+        .slice(Math.max(0, index - 3), index)
+        .some((token) => TERRITORY_PRESERVATION_VERB.test(token));
+      const preservationAfterNoun = TERRITORY_PRESERVATION_VERB.test(tokens[nounIndex + 1] || "");
+      if (preservationBeforeCue || preservationAfterNoun) continue;
+
+      // The explicit territory noun is the strongest signal. "all of France" is
+      // also exhaustive, but the legacy single-country detector already handles
+      // that form; this guard is aimed at the ambiguous/group forms that otherwise
+      // degrade into representative province lists.
+      return true;
+    }
+  }
+  return false;
+};
+
+const baseGeographyGroups = (catalog = []) => {
+  const groups = new Map();
+  for (const region of Array.isArray(catalog) ? catalog : []) {
+    const id = clean(region?.id);
+    const code = clean(region?.countryCode);
+    const name = clean(region?.country);
+    const key = normalize(code || name);
+    if (!id || !key || !name) continue;
+    const row = groups.get(key) || { code, name, regions: [] };
+    row.regions.push(region);
+    groups.set(key, row);
+  }
+  return [...groups.values()];
+};
+
+const geographyTokenMatches = (token, group) => {
+  const folded = normalize(token);
+  if (!folded) return false;
+  if (folded === normalize(group.code) || folded === normalize(group.name)) return true;
+  const requestedWords = countryWords(token);
+  const groupWords = countryWords(group.name);
+  if (!requestedWords.length || !groupWords.length) return false;
+  return requestedWords.every((word) => groupWords.some((candidate) => tokenMatches(candidate, word)))
+    && groupWords.every((word) => requestedWords.some((candidate) => tokenMatches(word, candidate)));
+};
+
+// Resolve the model's compact GM scope declaration against immutable rendered
+// base geography, never against the polity that happens to own the land today.
+// This is the multi-geography counterpart to detectExplicitBaseTerritoryScope: a
+// request may say "the Baltic states" and the model can name Estonia, Latvia and
+// Lithuania once; native code then expands EVERY rendered region in those three
+// footprints. Missing/ambiguous names fail closed before preview.
+export const resolveGameMasterBaseGeographyScope = (baseCountries, catalog = []) => {
+  const groups = baseGeographyGroups(catalog);
+  const requested = [...new Set((Array.isArray(baseCountries) ? baseCountries : [])
+    .map(clean).filter(Boolean))];
+  if (!requested.length) return { regions: [], countries: [], error: "territorial scope requires at least one base country/geography" };
+
+  const countries = [];
+  const regions = [];
+  const seenRegionIds = new Set();
+  for (const token of requested) {
+    const matches = groups.filter((group) => geographyTokenMatches(token, group));
+    if (matches.length !== 1) {
+      const suffix = matches.length
+        ? `matched more than one rendered base geography: ${matches.map((entry) => entry.name).join(", ")}`
+        : "did not match any rendered base geography";
+      return { regions: [], countries: [], error: `base geography "${token}" ${suffix}` };
+    }
+    const group = matches[0];
+    countries.push({ code: group.code, name: group.name, count: group.regions.length });
+    for (const region of group.regions) {
+      const id = clean(region?.id);
+      if (!id || seenRegionIds.has(id)) continue;
+      seenRegionIds.add(id);
+      regions.push(region);
+    }
+  }
+
+  return { countries, regions, error: "" };
 };
 
 export const scopeContainsRegion = (scope, regionId) =>

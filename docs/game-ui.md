@@ -112,8 +112,8 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 | Data | `chats` from `readChatsState`/`writeChatsState`; player country + date polled from `JSON_URLS.game` every 5 s | `src/runtime/gameState.js` |
 | Country list | `loadCountryNames()` (PMTiles-derived), filtered to exclude the player | `src/runtime/assets.js` |
 | Live sync | While open, polls stored chats every 5 s and merges additions (jump invitations, idle drip) without clobbering the active conversation | — |
-| Send | `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }` (the leader appends a hidden `DIPLOMATIC_MEMORY:` line, stored on the reply as `memorySummary` and fed back as system-side context — `runtime/diplomaticEnvelope.js`); multi-country chats rotate speakers via `chooseNextDiplomaticSpeaker`, at most 3 NPC replies per player message | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js` |
-| Group turn UI | `phase` = `player`/`pending`/`leader`; "Let X speak →" vs "Speak" buttons offer each queued country | `ConversationView` |
+| Send | One-on-one sends directly to the sole AI counterpart via `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }`. Group/institution conversations use `runChatActionBatch` as the single canonical AI request: that batch decides which AI participants speak/react/vote/stay silent and their order. There is no standalone speaker-selection request or sequential group fallback. | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js`, `src/Game/AI/chatActions.js` |
+| Group turn UI | A group turn is revealed from the one-request action batch a line at a time; the player may cut in before later planned lines are written. No queued "Let X speak" legacy phase remains. | `ConversationView`, `planChatReveal` |
 | Conversation view | A date separator opens every new game day; the last 12 messages render first with a "Show earlier" button; stacked flags on list rows; a leader's message is dated through `gameDates.js` (it used to show a day early west of Greenwich); a document delivered through diplomacy is a message like any other, its `📄` heading in bold ([§6.2-bis](#62-bis-documents-where-they-arrive)) | `ConversationView`, `ChatListItem` |
 | External trigger | `requestDiplomaticChat(country)` bridge (`chat.jsx:697`) lets the map region popup open/reuse a 1-on-1 chat | Map selection layer |
 | Reactions | Leader reactions attach an emoji to the player's last message; hover tooltip is a portal at z 99999 | — |
@@ -134,7 +134,7 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 
 ### 4.2 Menu chrome
 
-Full-page overlay at z 10046. Header is a 3-column grid: **logo/title** | **tab buttons** | **actions**.
+Full-page overlay at z 10046. Header is a centered, width-bounded 3-column grid: **logo/title** | **tab buttons** | **actions**. The desktop shell now grows to **3000px** before capping, so 2560px and 3440px displays use substantially more of the viewport instead of rendering a 1080p-era island in the middle. Card widths remain independently capped, so additional width yields more cards per row rather than oversized cards; very wide displays still retain deliberate outer gutters instead of pinning chrome to the physical screen edges.
 
 | Tab | Content | Component |
 |---|---|---|
@@ -142,7 +142,9 @@ Full-page overlay at z 10046. Header is a 3-column grid: **logo/title** | **tab 
 | Scenarios | 🔥 Most Played, 🕐 Last Updated, ✦ Your Scenarios (with `CreateScenarioTile`) | `ScenarioCard` |
 | Community | Lazy `CommunityPanel fullPage` | `communityHub.jsx` |
 
-Header action buttons (right cell): **Refresh** (`refreshLibraryCatalog({force:true})`, hidden on Community), **Import JSON** (Scenarios only → hidden file input `handleImportScenarioFile`).
+Header utility actions use the shared inline `ButtonIcon` glyphs: **Settings**, **Refresh**, and the tab-specific **Import Game** / **Import Scenario** action. The labels remain visible on desktop and use the same icon vocabulary on phones.
+
+Each `MenuRow` carries a short description plus a subtle divider. Desktop rows use a responsive grid so a populated library scales across the available width; phones retain horizontally scrollable shelves. Sparse libraries are not stretched into oversized feature cards.
 
 The Games tab's empty state ("No games yet") offers **Start from a scenario** / **Browse community scenarios** shortcuts.
 
@@ -166,7 +168,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 | Edit | `onEdit`→`openGameEditor` | `loadGameDetails` → editor drawer |
 | Clone Game | `onClone`→`handleGameClone` | `createGame({seedGameId, setActive})` → editor |
 
-**`ScenarioCard`** (`libraryBar.jsx:360`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Buttons:
+**`ScenarioCard`** (`libraryBar.jsx:360`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Cover art receives a stronger dark scrim and the title/body copy uses a dedicated multi-layer text shadow so authored scenario text stays legible over bright or detailed images without an opaque text panel. Buttons:
 
 | Button | Handler | Effect |
 |---|---|---|
@@ -279,7 +281,7 @@ While a skip runs the spinner says what it is doing, in the skip's own words as 
 
 ### 6.2-ter Group chats: one request, said a line at a time, and binding votes
 
-A group turn no longer rotates one leader at a time. `runGroupTurn` (`chat.jsx`) calls `runChatActionBatch` once for the whole table (see [group diplomacy](ai-overview.md#group-diplomacy-one-request-for-the-whole-table)); the answer is applied to the thread's event log and the panel re-renders from its projection. A failure falls back to the old rotation, which is exactly the behaviour it replaces.
+A group turn no longer rotates one leader at a time. `runGroupTurn` (`chat.jsx`) calls `runChatActionBatch` once for the whole table (see [group diplomacy](ai-overview.md#group-diplomacy-one-request-for-the-whole-table)); the answer is applied to the thread's event log and the panel re-renders from its projection. A failed group request is surfaced and leaves the canonical thread unchanged; there is no legacy sequential speaker fallback.
 
 The answer is **said a line at a time** (`planChatReveal`, `GameUI/chatReveal.js`): the first line at once, with anything before it and the reactions, votes or newcomers that follow it; then each later line after its speaker has been seen typing for five seconds — a *Typing…* bubble with the speaker's flag (`TypingBubble` with `label="Typing"`, where the request's own wait says *Thinking…*) and the hint *Send a message now to cut in: what is still to come will not be said.* The composer stays open meanwhile. **Sending a message cuts in**: the lines still to come are never said — they were never written into the thread — and the next request is told whose lines went unsaid. **Leaving the thread** (back, or another thread) is not cutting in: the rest is written at once. Each line is written onto the thread as it stands, so a vote cast in between is kept, and nothing is written once the player has switched campaign.
 
@@ -382,7 +384,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 | `annex-country` | Click a country → fold all its regions into a target | resolves current owner via overrides + `loadRegionCatalog`; writes `regionOwnershipOverrides` |
 | `annex-regions` | Click individual regions → transfer to a target | per-region `regionOwnershipOverrides` write |
 | `edit-country` / `add-country` | **Country Editor** (identity, colour, tags, reputation, the persistent stat sheet) or create a polity (name **is** the identifier) | `polityOverrides` + `colors.json`; stats through `applyCountryStatPatchToWorld` |
-| `regions` | **Region Inspector**: click a region → controller, lawful sovereign, claimants, provenance; change de-facto control (a control op), restore sovereign control, transfer legal sovereignty (a transfer), add/withdraw claims; rename on custom-geometry maps | `applyEventImpactsToWorld` with `regionTransfers` / `regionClaims` (the same seam events use); name via `regionsGeojson` |
+| `regions` | **Region Inspector**: click a region → controller, lawful sovereign, claimants (each with what it is — its `role` — editable beside it), provenance; change de-facto control (a control op), restore sovereign control, transfer legal sovereignty (a transfer), add/withdraw claims (a new claimant may be typed, with what it is); rename on custom-geometry maps | `applyEventImpactsToWorld` with `regionTransfers` / `regionClaims` (the same seam events use); name via `regionsGeojson` |
 | `edit-feature` / `add-feature` / `clear-features` | **Map Feature Editor**: runtime features (`world.markers`, with lifecycle status, owner, kind, location) and scenario cities | marker ops through `applyEventImpactsToWorld`; `citiesGeojson`; adding the first custom city flips `customCities: true` |
 
 Every tool that changes the world records one sentence of it in `world.gmChanges` after its save succeeds (`noteGmChange`; a failed note never costs the edit): the GM console's transaction, a whole-country or region-by-region annexation (one growing line), a Region Inspector edit, a country edited or created, the player's country switched, cities and map features, an event written, edited or deleted, the history document rewritten, a rollback. The next time skip opens with them.
@@ -457,7 +459,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 8 | Timeline skip panel | `time.jsx` | panel | `activeBottomPanel==="skip"` | game date, snapshots | `simulateTimelineJump`/`simulateAutoJump`/`rollBackToSnapshot` |
 | 9 | Event history panel | `time.jsx` | panel | `activeBottomPanel==="history"` | `simulationHistory`, events | `setWorldStateOverride`/`setUnitsOverride`, `fitBounds` |
 | 10 | 💬 Chat button (+ unread badge) | `chat.jsx` | button | `activeBottomPanel==="chat"` | chats store | opens `ChatPanel` |
-| 11 | Chat panel / conversation | `chat.jsx` | panel | `isOpen` | chats, country names, game | `sendDiplomaticMessage`, `writeChatsState`, `chooseNextDiplomaticSpeaker` |
+| 11 | Chat panel / conversation | `chat.jsx` | panel | `isOpen` | chats, country names, game | `sendDiplomaticMessage`, `runChatActionBatch`, `writeChatsState` |
 | 12 | ✦ Actions button | `actions.jsx` | button | `activeBottomPanel==="actions"` | — | opens `ActionsPanel` |
 | 13 | Actions panel | `actions.jsx` | panel | `isOpen` | `JSON_URLS.game`, actions | `writeActionsState`, `generateActionSuggestions`, `refinePlayerAction`, `revertUnitOrder` |
 | 14 | Forces panel + mode banner | `forces.jsx` | panel | `Main.isForcesOpen` | units, allowed types, player code | `setInteractionMode`/`clearInteractionMode`, `map.flyTo` |

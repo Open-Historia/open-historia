@@ -195,7 +195,6 @@ describe("the Desktop log routes", () => {
     assert.equal(logged.includes("Asset not found"), false, "the missing optional asset is not logged");
     assert.equal(logged.includes("Scenario not found"), true, "the missing scenario is");
   });
-
   test("another device cannot clear it", async (t) => {
     const lan = lanAddress();
     if (!lan) {

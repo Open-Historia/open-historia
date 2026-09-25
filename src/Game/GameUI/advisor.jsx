@@ -12,14 +12,17 @@ import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from ".
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
+import { buildInstitutionDrafts, institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
-import StatsPane from "./stats.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
+import { commitInstitutionGovernanceCommand, commitInstitutionalPlayerProposal, commitInstitutionalPlayerVoteRequest } from "../../runtime/institutionalGovernance.js";
+import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLifecycle.js";
+import { getLibraryState } from "../../runtime/library.js";
 
 Chart.register(...registerables);
 
@@ -73,9 +76,11 @@ const parseMessage = (rawText, { streaming = false } = {}) => {
     const chartConfig = chart.config;
     const { rest: afterActions, json: actionsRaw } = extractFencedJson(afterChart, "actions", { streaming });
     const { rest: afterDrafts, json: draftsRaw } = extractFencedJson(afterActions, "senddraft", { streaming });
-    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterDrafts, "deploy", { streaming });
+    const { rest: afterInstitutionDrafts, json: institutionDraftsRaw } = extractFencedJson(afterDrafts, "institutiondraft", { streaming });
+    const { rest: afterDeploy, json: deployRaw } = extractFencedJson(afterInstitutionDrafts, "deploy", { streaming });
     const { rest, json: projectsRaw, truncated: projectsTruncated } = extractFencedJson(afterDeploy, "projects", { salvageTruncated: true, streaming });
     const messageDrafts = Array.isArray(draftsRaw) ? buildMessageDrafts(draftsRaw, afterActions) : null;
+    const institutionDrafts = buildInstitutionDrafts(institutionDraftsRaw);
     // A deployment the advisor is recommending, ready to place with one click.
     // Filtered hard: a button that places a unit somewhere unusable is worse
     // than no button, so anything missing a real type or real coordinates goes.
@@ -92,6 +97,7 @@ const parseMessage = (rawText, { streaming = false } = {}) => {
         chartProblem: chart.problem,
         actionsProposal: Array.isArray(actionsRaw) ? actionsRaw : null,
         messageDrafts,
+        institutionDrafts: institutionDrafts.length ? institutionDrafts : null,
         deployments: deployments && deployments.length ? deployments : null,
         projectsProposal: Array.isArray(projectsRaw) ? projectsRaw : null,
         projectsTruncated,
@@ -491,7 +497,7 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
             fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
             textAlign: "left",
         }}>
-        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.country}`}
+        {handedOff ? "✓ In Diplomacy — press send there" : `✉️ Draft to ${draft.targetType === "institution-council" ? `Council · ${draft.institutionId}` : draft.targetType === "institution-lifecycle" ? `hearing · ${draft.country || draft.institutionId}` : draft.country}`}
         </button>
         </div>
     );
@@ -530,6 +536,61 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
                 ? `Placing ${deployment.name}…`
                 : `📍 Place ${deployment.name} here`}
         </button>
+    );
+};
+
+
+// A formal institution action the Advisor recommends. The model only prepares
+// this typed draft; nothing canonical happens until the human clicks here. The
+// click then goes through the same native commit functions as Institutions UI,
+// so current membership, lifecycle, proposal and ballot rules are revalidated.
+const AdvisorInstitutionDraftAction = ({ draft, completed, onExecute }) => {
+    const [status, setStatus] = useState(completed ? "completed" : "idle");
+    const [error, setError] = useState("");
+
+    useEffect(() => { if (completed) setStatus("completed"); }, [completed]);
+
+    const handleClick = async () => {
+        if (status !== "idle") return;
+        setStatus("working");
+        setError("");
+        const result = await onExecute();
+        if (result?.ok) setStatus("completed");
+        else {
+            setStatus("idle");
+            setError(result?.error || "The institution action could not be completed.");
+        }
+    };
+
+    const detail = draft.type === "table-proposal"
+        ? draft.title
+        : draft.type === "vote"
+            ? `${draft.proposalId} · ${String(draft.choice || "").toUpperCase()}`
+            : draft.type === "submit-proposal"
+                ? draft.proposalId
+                : `${draft.polity} · ${draft.requestedStatus}`;
+    const busy = status !== "idle";
+
+    return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+        <button type="button" onClick={handleClick} disabled={busy} title={detail} style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            background: status === "completed" ? "rgba(52,211,153,0.12)" : "rgba(245,158,11,0.13)",
+            border: `1px solid ${status === "completed" ? "rgba(52,211,153,0.4)" : "rgba(245,158,11,0.42)"}`,
+            borderRadius: "8px",
+            color: status === "completed" ? "rgba(167,243,208,0.95)" : "rgba(253,230,138,0.95)",
+            cursor: busy ? "default" : "pointer",
+            fontFamily: "sans-serif", fontSize: "0.76rem", fontWeight: 600, padding: "0.35rem 0.65rem",
+            textAlign: "left",
+        }}>
+        {status === "completed"
+            ? `✓ ${institutionDraftButtonLabel(draft)}`
+            : status === "working"
+                ? "Applying institution action…"
+                : `🏛️ ${institutionDraftButtonLabel(draft)}`}
+        </button>
+        {error && <span style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
     );
 };
 
@@ -650,28 +711,6 @@ const loadMessages = async () => {
         return await readJson(JSON_URLS.advisor, { defaultValue: [] });
     } catch { return []; }
 };
-
-const TabButton = ({ icon, label, active, onClick }) => (
-    <button
-    onClick={onClick}
-    style={{
-        alignItems: "center",
-        background: "none",
-        border: "none",
-        borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent",
-        color: active ? "white" : "rgba(255,255,255,0.55)",
-        cursor: "pointer",
-        display: "flex",
-        fontFamily: "sans-serif",
-        fontSize: "0.88rem",
-        fontWeight: active ? 700 : 500,
-        gap: "0.4rem",
-        padding: "0.9rem 0.85rem",
-    }}
-    >
-    <span style={{ fontSize: "1rem" }}>{icon}</span> {label}
-    </button>
-);
 
 // An advisor reply's prose, with each drafted letter's Send button rendered
 // immediately under the letter it would send.
@@ -801,10 +840,10 @@ const formatAdvisorDate = (dateStr) => {
 // new message appended, or the streaming placeholder being replaced); memo's
 // default shallow prop comparison skips everything else, including every
 // keystroke in the composer below.
-const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment }) => {
-    const { text, chartConfig, chartProblem, messageDrafts, deployments } = msg.role === "advisor"
+const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment }) => {
+    const { text, chartConfig, chartProblem, messageDrafts, institutionDrafts, deployments } = msg.role === "advisor"
         ? parseMessage(msg.text, { streaming: Boolean(msg.streaming) })
-        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, deployments: null };
+        : { text: msg.text, chartConfig: null, chartProblem: "", messageDrafts: null, institutionDrafts: null, deployments: null };
     const asWritten = msg.role === "advisor" && chatDiffers;
 
     return (
@@ -849,6 +888,18 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {msg.projectsSummary && <AdvisorProjectsCard items={msg.projectsSummary} onOpenProjects={onOpenProjects} />}
         {msg.projectsProblem && <AdvisorProjectsProblem kind={msg.projectsProblem} detail={msg.projectsDetail} excerpt={msg.projectsExcerpt} onRetry={onRetryProjects} />}
         {msg.role === "error" && <AdvisorErrorDetails message={msg.text} diagnostics={msg.diagnostics} onRetry={onRetry} retrying={retrying} />}
+        {institutionDrafts && institutionDrafts.length > 0 && (
+            <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            {institutionDrafts.map((draft, draftIndex) => (
+                <AdvisorInstitutionDraftAction
+                key={`${draft.type}:${draft.institutionId}:${draft.proposalId || draft.polity || draft.title || draftIndex}`}
+                draft={draft}
+                completed={!!msg.completedInstitutionDrafts?.includes(draftIndex)}
+                onExecute={() => onExecuteInstitutionDraft(msgIndex, draftIndex, draft)}
+                />
+            ))}
+            </div>
+        )}
         {deployments && deployments.length > 0 && (
             <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             {deployments.map((deployment, deployIndex) => (
@@ -930,7 +981,7 @@ const mergeNotices = (current, stored) => {
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -944,7 +995,7 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, chatDiffers, chatD
     {messages.map((msg, i) => (msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
-        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onPlaceDeployment={onPlaceDeployment}
+        <AdvisorMessageRow key={i} msg={msg} msgIndex={i} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
         onRetry={i === messages.length - 1 && msg.role === "error" ? onRetry : undefined} retrying={retrying} />
     )))}
 
@@ -986,7 +1037,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
-    const [activeTab, setActiveTab] = useState("advisor");
     const inputRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
@@ -1327,9 +1377,106 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // separately by the diplomacy path (AI/main.jsx), after whatever the
         // player edited in the composer — and the pair is the only way to answer
         // "the advisor drafted one thing and something else went out".
-        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${draft.country}.`, draft.text, { verbose: true });
-        requestDiplomaticChat({ name: draft.country }, { draft: draft.text });
+        const target = draft.targetType === "institution-council"
+            ? { targetType: "institution-council", institutionId: draft.institutionId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+            : draft.targetType === "institution-lifecycle"
+                ? { targetType: "institution-lifecycle", institutionId: draft.institutionId, caseId: draft.caseId, threadId: draft.threadId || "", name: draft.country || draft.institutionId }
+                : { targetType: "private", country: draft.country, name: draft.country };
+        const destination = target.targetType === "private"
+            ? draft.country
+            : `${target.targetType === "institution-council" ? "Council" : "hearing"} ${draft.institutionId}${draft.caseId ? ` / ${draft.caseId}` : ""}`;
+        logDebugEvent("advisor", `Draft handed to the Diplomacy composer for ${destination}.`, draft.text, { verbose: true });
+        requestDiplomaticChat(target, { draft: draft.text });
         stepAsideRef.current?.();
+    }, []);
+
+    // Executes one typed formal institution draft ONLY after the human clicks
+    // its button. This is the player-authority boundary: the Advisor may prepare
+    // the operation, but these native commit seams re-read and revalidate the
+    // current institution before any canonical mutation is published.
+    const handleExecuteInstitutionDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
+        try {
+            const game = await readJson(JSON_URLS.game, {
+                defaultValue: { gameDate: "", country: "" },
+                force: true,
+            });
+            const playerCountry = String(game?.country || "").trim();
+            const date = String(game?.gameDate || "").trim();
+            const expectedGameId = String(getLibraryState()?.activeGameId || "").trim();
+            if (!playerCountry) throw new Error("No player polity is active.");
+
+            if (draft.type === "table-proposal") {
+                await commitInstitutionalPlayerProposal({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    proposal: {
+                        type: draft.proposalType || "resolution",
+                        title: draft.title,
+                        summary: draft.summary || "",
+                    },
+                });
+            } else if (draft.type === "submit-proposal") {
+                await commitInstitutionalPlayerVoteRequest({
+                    institutionId: draft.institutionId,
+                    proposalId: draft.proposalId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                });
+            } else if (draft.type === "vote") {
+                await commitInstitutionGovernanceCommand({
+                    institutionId: draft.institutionId,
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "vote",
+                        proposalId: draft.proposalId,
+                        polity: playerCountry,
+                        choice: draft.choice,
+                        reason: draft.reason || "",
+                        authority: "player",
+                        finalizeWhenComplete: true,
+                        implementWhenPassed: true,
+                    },
+                });
+            } else if (draft.type === "invite") {
+                await commitInstitutionLifecycleCommand({
+                    playerCountry,
+                    date,
+                    expectedGameId,
+                    command: {
+                        type: "invite",
+                        institutionId: draft.institutionId,
+                        initiatedBy: playerCountry,
+                        polity: draft.polity,
+                        requestedStatus: draft.requestedStatus || "member",
+                        reason: draft.reason || "",
+                        authority: "player",
+                    },
+                });
+            } else {
+                throw new Error(`Unsupported Advisor institution draft ${draft.type || "<blank>"}.`);
+            }
+
+            logDebugEvent("advisor", `Player confirmed Advisor institution action: ${draft.type}.`, JSON.stringify(draft), { verbose: true });
+            setMessages((prev) => {
+                const next = prev.slice();
+                const target = next[msgIndex];
+                if (!target) return prev;
+                const completed = new Set(target.completedInstitutionDrafts || []);
+                completed.add(draftIndex);
+                next[msgIndex] = { ...target, completedInstitutionDrafts: [...completed] };
+                saveMessages(next);
+                return next;
+            });
+            return { ok: true };
+        } catch (err) {
+            console.warn("[advisor] could not execute the recommended institution action:", err);
+            return { ok: false, error: err?.message || String(err) };
+        }
     }, []);
 
     // Places one deployment the advisor recommended, through the very same
@@ -1436,26 +1583,24 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 }} />
             </div>
         )}
-        {/* Header: tabs to flip between the advisor chat and national stats. */}
-        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", padding: "0 0.75rem 0 0.35rem" }}>
-        <TabButton icon="🧭" label="Advisor" active={activeTab === "advisor"} onClick={() => setActiveTab("advisor")} />
-        <TabButton icon="📊" label="Stats" active={activeTab === "stats"} onClick={() => setActiveTab("stats")} />
+        {/* Advisor is its own system. Country/Stats lives in the separate flag drawer. */}
+        <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem", padding: "0.78rem 0.75rem" }}>
+        <span aria-hidden="true" style={{ fontSize: "1rem" }}>🧭</span>
+        <span style={{ fontSize: "0.9rem", fontWeight: 800 }}>Advisor</span>
         <div style={{ flex: 1 }} />
-        {activeTab === "advisor" && (
-            <button
-            className="oh-tap"
-            onClick={async () => {
-                if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
-                setConfirmingClear(false);
-                setMessages([]); startChat(); await saveMessages([]);
-            }}
-            title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
-            aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
-            style={confirmingClear
-                ? { background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.55)", borderRadius: "8px", color: "#fca5a5", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.8rem", fontWeight: 600, lineHeight: 1, padding: "0 0.6rem", display: "flex", alignItems: "center" }
-                : { background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
-            >{confirmingClear ? "Clear?" : "🗑"}</button>
-        )}
+        <button
+        className="oh-tap"
+        onClick={async () => {
+            if (isTouch && !confirmingClear) { setConfirmingClear(true); return; }
+            setConfirmingClear(false);
+            setMessages([]); startChat(); await saveMessages([]);
+        }}
+        title={confirmingClear ? "Tap again to clear the chat" : "Clear chat"}
+        aria-label={confirmingClear ? "Confirm clearing the chat" : "Clear chat"}
+        style={confirmingClear
+            ? { background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.55)", borderRadius: "8px", color: "#fca5a5", cursor: "pointer", fontFamily: "sans-serif", fontSize: "0.8rem", fontWeight: 600, lineHeight: 1, padding: "0 0.6rem", display: "flex", alignItems: "center" }
+            : { background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1.35rem", lineHeight: 1, padding: 0, display: "flex", alignItems: "center" }}
+        >{confirmingClear ? "Clear?" : "🗑"}</button>
         {/* The way out. On a phone the advisor is the whole screen and this ✕
             (or Back) is all that closes it, so it is finger-sized there. */}
         {onClose && (
@@ -1469,12 +1614,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         )}
         </div>
 
-        {/* National stats pane — kept mounted so flipping tabs is instant. */}
-        <div style={{ display: activeTab === "stats" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
-        <StatsPane active={isAdvisorOpen && activeTab === "stats"} />
-        </div>
-
-        <div style={{ display: activeTab === "advisor" ? "flex" : "none", flex: 1, flexDirection: "column", minHeight: 0 }}>
+        <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages — memoized as its own component so typing below (state that
             lives in AdvisorPanel) doesn't re-render the whole history on every
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
@@ -1489,6 +1629,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         onRetry={handleRetryTurn}
         retrying={isLoading}
         onDraftMessage={handleDraftMessage}
+        onExecuteInstitutionDraft={handleExecuteInstitutionDraft}
         onPlaceDeployment={handlePlaceDeployment}
         messagesEndRef={messagesEndRef}
         containerRef={messagesContainerRef}

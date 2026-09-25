@@ -80,7 +80,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   // migrated). Note the provider is spelled with its hyphen in these keys.
   store.set("openai-compatible_model_jumpForward", "qwen3-big");
   store.set("openai-compatible_model_actions", "qwen3-big");
-  store.set("openai-compatible_model_nextSpeaker", "qwen3");
+  store.set("openai-compatible_model_descriptionToAction", "qwen3");
   store.set("gemini_model_advisor", "gemini-3.5-flash");
 
   const connections = config.getConnections().map(({ id, ...rest }) => rest);
@@ -97,7 +97,7 @@ test("a player with several providers, profiles and per-task models keeps all of
   ]);
   assert.equal(config.getTaskPick("jumpForward"), list[1].id);
   assert.equal(config.getTaskPick("actions"), list[1].id);
-  assert.equal(config.getTaskPick("nextSpeaker"), list[0].id);
+  assert.equal(config.getTaskPick("descriptionToAction"), list[0].id);
   assert.equal(config.getTaskPick("advisor"), "");
 
   // Once only: the old settings are never read again.
@@ -590,4 +590,27 @@ test("quick setup needs the provider's requirement, and a self-hosted one needs 
   assert.equal(top.id, entryId);
   assert.equal(top.endpoint, "http://localhost:11434/v1");
   assert.equal(config.isFallbackListConfigured(), true);
+});
+
+test("Political World generation and verification keep independent/inherited task routing", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldGeneration"));
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "politicalWorldVerification"));
+
+  const [top] = config.getResolvedFallbackList();
+  const politics = config.addEntry({ connectionId: top.connectionId, model: "politics-model" });
+  const verification = config.addEntry({ connectionId: top.connectionId, model: "verification-model" });
+
+  config.setTaskPick("politicalWorldGeneration", politics);
+  let plan = config.resolveTaskFallbackEntries("politicalWorldGeneration");
+  assert.equal(plan.preferredEntryId, politics);
+  assert.equal(plan.implicit, false);
+
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, politics, "verification inherits generation quality when it has no own pick");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("politicalWorldVerification", verification);
+  plan = config.resolveTaskFallbackEntries("politicalWorldVerification");
+  assert.equal(plan.preferredEntryId, verification);
+  assert.equal(plan.implicit, false);
 });

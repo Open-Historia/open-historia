@@ -58,6 +58,25 @@ test("the projection is the shape every existing reader already expects", () => 
     assert.deepEqual(projected.messages[1].reactions, { Prussia: { emoji: "🤨", code: "" } });
 });
 
+test("multiple reactions from the same participant are preserved instead of overwritten", () => {
+    const projected = projectChatThread([
+        { id: "c1", kind: "chat_created", time: "1815-01-01" },
+        { id: "j1", kind: "member_joined", member: { name: "France", code: "FRA" } },
+        { id: "m1", kind: "message", by: "Player", role: "user", text: "Agreed." },
+        { id: "r1", kind: "reaction", by: "France", code: "FRA", target: "m1", emoji: "🤝" },
+        { id: "r2", kind: "reaction", by: "France", code: "FRA", target: "m1", emoji: "👍" },
+    ]);
+
+    assert.deepEqual(projected.messages[0].reactions, {
+        France: { emoji: "🤝", code: "FRA" },
+        "France#2": { emoji: "👍", code: "FRA", country: "France" },
+    });
+
+    const roundTrip = eventsFromLegacyChat({ countries: projected.countries, messages: projected.messages });
+    const reactionActors = roundTrip.filter((event) => event.kind === "reaction").map((event) => event.by);
+    assert.deepEqual(reactionActors, ["France", "France"]);
+});
+
 test("migration is idempotent: a log projected and migrated again is the same log", () => {
     const once = eventsFromLegacyChat(legacy());
     const projected = projectChatThread(once);

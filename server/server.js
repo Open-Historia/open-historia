@@ -41,6 +41,7 @@ import {
   uploadScenarioAsset,
   writeGameSnapshots,
   writeRuntimeJsonAsset,
+  writeRuntimeTurnState,
 } from "./libraryStore.js";
 import {
   createMapEditorDocument,
@@ -246,7 +247,6 @@ const sendAssetMissing = (res, error) => {
   }
   sendError(res, 404, error);
 };
-
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
 // The CORS allowlist above lets the Android connect screen (on the WebView's own
 // origin) *probe* this server — a GET. Without this guard, any web page the
@@ -304,6 +304,30 @@ const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet
   res.setHeader("Content-Length", clampedEnd - clampedStart + 1);
   res.setHeader("Content-Range", `bytes ${clampedStart}-${clampedEnd}/${totalSize}`);
   fs.createReadStream(sourcePath, { end: clampedEnd, start: clampedStart }).pipe(res);
+};
+
+const INSTITUTION_LOGO_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/i;
+const MAX_INSTITUTION_LOGO_BYTES = 512 * 1024;
+
+const sendInstitutionLogo = (res, dataUrl) => {
+  const match = INSTITUTION_LOGO_DATA_URL.exec(String(dataUrl || ""));
+  if (!match) throw new Error("Institution logo is missing or invalid.");
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > MAX_INSTITUTION_LOGO_BYTES) {
+    throw new Error("Institution logo is empty or exceeds the server size limit.");
+  }
+  const subtype = match[1].toLowerCase();
+  const contentType = subtype === "jpg" ? "image/jpeg" : `image/${subtype}`;
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Length", buffer.length);
+  res.send(buffer);
+};
+
+const readScenarioInstitutionLogoMap = (scenarioId) => {
+  const asset = resolveScenarioUploadAsset(scenarioId, "institutionLogos");
+  const parsed = JSON.parse(fs.readFileSync(asset.sourcePath, "utf8"));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 };
 
 // Global client preferences (currently the UI language) shared by every
@@ -656,6 +680,15 @@ app.put("/api/scenarios/:scenarioId/assets/:assetKey", uploadParser, (req, res) 
   }
 });
 
+app.get("/api/scenarios/:scenarioId/institution-logo/:institutionId", (req, res) => {
+  try {
+    const logos = readScenarioInstitutionLogoMap(req.params.scenarioId);
+    sendInstitutionLogo(res, logos?.[req.params.institutionId]);
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
 app.get("/api/games", (_req, res) => {
   try {
     res.json(getGameCatalog());
@@ -795,6 +828,15 @@ app.delete("/api/scenarios/:scenarioId", (req, res) => {
   }
 });
 
+app.get("/api/runtime/institution-logo/:institutionId", (req, res) => {
+  try {
+    const logos = readRuntimeJsonAsset("institutionLogos")?.data || {};
+    sendInstitutionLogo(res, logos?.[req.params.institutionId]);
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
 app.get("/api/runtime/json/:assetKey", (req, res) => {
   try {
     // Scenario geometry is served untransformed, so parsing it only to
@@ -811,6 +853,20 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
     res.send(JSON.stringify(asset.data));
   } catch (error) {
     sendError(res, 404, error);
+  }
+});
+
+app.put("/api/runtime/turn-commit", jsonParser, (req, res) => {
+  try {
+    if (!Number(req.headers["content-length"])) {
+      return sendError(res, 400, new Error("Refusing to commit turn: the request had no body."));
+    }
+    const committed = writeRuntimeTurnState(req.body);
+    res.setHeader("Cache-Control", "no-store");
+    res.type("application/json");
+    res.send(JSON.stringify(committed));
+  } catch (error) {
+    sendError(res, 400, error);
   }
 });
 

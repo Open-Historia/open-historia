@@ -1,12 +1,15 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { JSON_URLS, primeJson, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
+import { withMapClaims } from "./mapClaims.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
+import { normalizePolityRole } from "../../server/polityRole.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventAgency } from "./eventAgency.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
 import { normalizeTerritoryBasis, screenTerritoryBasis } from "./territoryBasis.js";
@@ -17,10 +20,25 @@ import { normalizeGmChanges, normalizeReminders } from "./gmChanges.js";
 import { normalizePlayerGoals } from "./playerGoal.js";
 import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeSpyOp } from "./spycraft.js";
-import { normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
+import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
 import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
-import { resolvePolityIdentity } from "./polityIdentity.js";
+import {
+  canonicalInstitutionIdentity,
+  institutionChannelParticipants,
+  normalizeInstitutions,
+} from "./institutions.js";
+import { normalizePowerStatus } from "./powerStatus.js";
+import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
+import {
+  buildPoliticalActorLegacyStatsProjection,
+  getPoliticalProfileKey,
+  normalizePoliticalActors,
+  POLITICAL_ACTORS_SCHEMA_VERSION,
+} from "./politicalActors.js";
+import { applyPoliticalActorOperation } from "./politicalActorOps.js";
+import { normalizePoliticalSimulationClock } from "./politicalClock.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import {
   DEFAULT_PATROL_RADIUS_KM,
   daysBetweenDates,
@@ -90,6 +108,13 @@ export const WORLD_DEFAULTS = {
   // and thereafter changed ONLY by the AI (polityChanges.stats), so a country's stats
   // stop regenerating/drifting every date change.
   countryStats: {},
+  // Continuum canonical political substrate. These are native world-state ledgers,
+  // not editable Stats aliases: UI/AI consumers project from them through bounded
+  // political knowledge/context seams.
+  politicalActors: { schemaVersion: POLITICAL_ACTORS_SCHEMA_VERSION, byPolity: {} },
+  politicalSimulation: normalizePoliticalSimulationClock({}),
+  institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  powerStatus: { schemaVersion: 1, byPolity: {} },
   // Per-country tags the AI has changed: owner code -> string[]. The scenario's
   // tags.json holds the map-maker's STARTING tags; this holds every change since,
   // and wins where present (see resolveCountryTags).
@@ -564,6 +589,7 @@ const normalizeReactionMap = (value) => {
 
         const emoji = normalizeOptionalString(reaction.emoji);
         const code = normalizeOptionalString(reaction.code);
+        const country = normalizeOptionalString(reaction.country);
 
         if (!emoji && !code) {
           return [name, null];
@@ -574,6 +600,7 @@ const normalizeReactionMap = (value) => {
           {
             ...(code ? { code } : {}),
             ...(emoji ? { emoji } : {}),
+            ...(country ? { country } : {}),
           },
         ];
       })
@@ -661,6 +688,7 @@ const normalizeChatCountry = (entry) => {
   return {
     code,
     name: name || code,
+    ...(normalizeOptionalString(entry.polityKey) ? { polityKey: normalizeOptionalString(entry.polityKey) } : {}),
   };
 };
 
@@ -669,10 +697,19 @@ export const normalizeChatEntry = (entry, index = 0) => {
     return null;
   }
 
+  const institutionId = normalizeOptionalString(entry.institutionId || entry.channelInstitutionId);
+  const lifecycleInstitutionId = normalizeOptionalString(entry.lifecycleInstitutionId || entry.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(entry.lifecycleCaseIds || entry.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value))
+    .filter(Boolean)
+    .slice(0, 32);
   const countries = normalizeArray(entry.countries || entry.participants)
     .map((country) => normalizeChatCountry(country))
     .filter(Boolean);
-  if (countries.length === 0) return null;
+  // Institution channels are durable institutional history. The player is
+  // implicit in every diplomatic thread, so an institution whose only active
+  // member is the player legitimately has an empty `countries` projection.
+  if (countries.length === 0 && !institutionId) return null;
 
   // The thread's event log, when it has one (runtime/chatThreads.js): who
   // joined, who left, who said what, who voted. It is the TRUTH of the thread;
@@ -688,6 +725,9 @@ export const normalizeChatEntry = (entry, index = 0) => {
   return {
     countries: projected?.countries?.length ? projected.countries : countries,
     id: normalizeOptionalString(entry.id) || generateId(`chat-${index}`),
+    ...(institutionId ? { institutionId } : {}),
+    ...(lifecycleInstitutionId ? { lifecycleInstitutionId } : {}),
+    ...(lifecycleCaseIds.length ? { lifecycleCaseIds } : {}),
     linkedEventId: normalizeOptionalString(entry.linkedEventId || entry.eventId),
     messages: projected
       ? projected.messages.map((message, messageIndex) => normalizeChatMessage(message, messageIndex)).filter(Boolean)
@@ -745,6 +785,197 @@ export const normalizeChats = (chats) =>
   normalizeArray(chats)
     .map((entry, index) => normalizeChatEntry(entry, index))
     .filter(Boolean);
+
+// ---------------------------------------------------------------------------
+// Canonical chat identity / institution membership bridge
+// ---------------------------------------------------------------------------
+// Latest Beta made diplomacy threads event-sourced (chatThreads.js) and keeps
+// the player implicit in every thread. Continuum institutions add one further
+// ownership rule: an institutional channel is identified by the institution,
+// NOT by its current member set, and its current participants are a projection
+// of the institution ledger rather than a second membership authority.
+
+const normalizedChatIdentityToken = (country, world, identityIndex = null) => {
+  const token = normalizeOptionalString(country?.polityKey || country?.name || country?.code || country);
+  if (!token) return "";
+  if (!world || typeof world !== "object") return token.toLocaleLowerCase();
+  const resolved = resolvePolityIdentity(token, world, {
+    allowUnknown: true,
+    requireActive: false,
+    identityIndex,
+  });
+  return normalizeOptionalString(resolved?.resolved || token).toLocaleLowerCase();
+};
+
+const syncThreadMembership = (entry, desiredCountries, world, identityIndex = null) => {
+  const normalizedEntry = normalizeChatEntry(entry);
+  if (!normalizedEntry) return null;
+  const baseEvents = normalizeChatEvents(
+    normalizeArray(normalizedEntry.events).length
+      ? normalizedEntry.events
+      : eventsFromLegacyChat(normalizedEntry),
+  );
+  const currentCountries = projectChatThread(baseEvents).countries || normalizedEntry.countries || [];
+  const desired = normalizeArray(desiredCountries).map(normalizeChatCountry).filter(Boolean);
+  const currentByKey = new Map();
+  const desiredByKey = new Map();
+  for (const country of currentCountries) {
+    const key = normalizedChatIdentityToken(country, world, identityIndex);
+    if (key && !currentByKey.has(key)) currentByKey.set(key, normalizeChatCountry(country));
+  }
+  for (const country of desired) {
+    const key = normalizedChatIdentityToken(country, world, identityIndex);
+    if (key && !desiredByKey.has(key)) desiredByKey.set(key, country);
+  }
+
+  const time = normalizeOptionalString(normalizedEntry.messages?.at?.(-1)?.time);
+  const changes = [];
+  for (const [key, country] of currentByKey) {
+    if (desiredByKey.has(key)) continue;
+    changes.push({
+      id: generateId(`${normalizedEntry.id || "chat"}-leave`),
+      kind: "member_left",
+      time,
+      by: "",
+      member: country,
+    });
+  }
+  for (const [key, country] of desiredByKey) {
+    if (currentByKey.has(key)) continue;
+    changes.push({
+      id: generateId(`${normalizedEntry.id || "chat"}-join`),
+      kind: "member_joined",
+      time,
+      by: "",
+      member: country,
+    });
+  }
+
+  const events = changes.length ? normalizeChatEvents([...baseEvents, ...changes]) : baseEvents;
+  return normalizeChatEntry({ ...normalizedEntry, countries: desired, events });
+};
+
+export const chatThreadIdentityKey = (entry, world, identityIndex = null) => {
+  const lifecycleInstitutionId = normalizeOptionalString(entry?.lifecycleInstitutionId || entry?.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(entry?.lifecycleCaseIds || entry?.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value)).filter(Boolean).sort();
+  if (lifecycleInstitutionId && lifecycleCaseIds.length) {
+    const canonicalId = canonicalInstitutionIdentity({ id: lifecycleInstitutionId }).id;
+    return canonicalId ? `institution-lifecycle:${canonicalId}:${lifecycleCaseIds.join(",")}` : "";
+  }
+  const institutionId = normalizeOptionalString(entry?.institutionId || entry?.channelInstitutionId);
+  if (institutionId) {
+    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
+    return canonicalId ? `institution:${canonicalId}` : "";
+  }
+  const index = identityIndex || (world && typeof world === "object" ? buildPolityIdentityIndex(world) : null);
+  const participants = normalizeArray(entry?.countries || entry?.participants)
+    .map((country) => normalizedChatIdentityToken(country, world, index))
+    .filter(Boolean);
+  const unique = [...new Set(participants)].sort();
+  return unique.length ? `participants:${unique.join("\u001f")}` : "";
+};
+
+const reconcileModernChatForPlayer = (entry, world, playerCountry = "", identityIndex = null) => {
+  const chat = normalizeChatEntry(entry);
+  if (!chat) return null;
+  const index = identityIndex || buildPolityIdentityIndex(world || {});
+  const playerKey = normalizedChatIdentityToken({ name: playerCountry }, world, index);
+  const institutionId = normalizeOptionalString(chat.institutionId || chat.channelInstitutionId);
+  const lifecycleInstitutionId = normalizeOptionalString(chat.lifecycleInstitutionId || chat.institutionLifecycleId);
+  const lifecycleCaseIds = normalizeArray(chat.lifecycleCaseIds || chat.institutionLifecycleCaseIds)
+    .map((value) => normalizeOptionalString(value)).filter(Boolean);
+  const lifecycleGovernanceThread = Boolean(institutionId && lifecycleInstitutionId && lifecycleCaseIds.length);
+
+  let desiredCountries = chat.countries;
+  // The institution's permanent Council projects participants from the canonical
+  // membership ledger. A lifecycle hearing is different: it is a temporary
+  // diplomatic table containing the applicant/invitee plus the institution's
+  // eligible governments, while institutionId merely enables native governance.
+  if (institutionId && !lifecycleGovernanceThread) {
+    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
+    desiredCountries = canonicalId ? institutionChannelParticipants(world, canonicalId) : [];
+  }
+  desiredCountries = normalizeArray(desiredCountries).filter((country) => {
+    const key = normalizedChatIdentityToken(country, world, index);
+    return !playerKey || !key || key !== playerKey;
+  });
+
+  if (!institutionId && desiredCountries.length === 0) return null;
+  return syncThreadMembership({
+    ...chat,
+    ...(institutionId ? { institutionId: canonicalInstitutionIdentity({ id: institutionId }).id } : {}),
+  }, desiredCountries, world, index);
+};
+
+export const reconcileChatsForWorld = (chats, world) =>
+  normalizeChats(chats).map((chat) => {
+    const institutionId = normalizeOptionalString(chat?.institutionId || chat?.channelInstitutionId);
+    if (!institutionId) return chat;
+    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
+    return canonicalId ? { ...chat, institutionId: canonicalId } : chat;
+  });
+
+const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", identityIndex = null) => {
+  const left = reconcileModernChatForPlayer(primary, world, playerCountry, identityIndex);
+  const right = reconcileModernChatForPlayer(incoming, world, playerCountry, identityIndex);
+  if (!left) return right;
+  if (!right) return left;
+
+  const leftEvents = normalizeArray(left.events).length ? normalizeChatEvents(left.events) : eventsFromLegacyChat(left);
+  const rightEvents = normalizeArray(right.events).length ? normalizeChatEvents(right.events) : eventsFromLegacyChat(right);
+  const rightWithoutSecondCreation = rightEvents.filter((event) => event.kind !== "chat_created");
+  const events = normalizeChatEvents([...leftEvents, ...rightWithoutSecondCreation]);
+  const merged = normalizeChatEntry({
+    ...right,
+    ...left,
+    id: left.id || right.id,
+    institutionId: left.institutionId || right.institutionId || undefined,
+    lifecycleInstitutionId: left.lifecycleInstitutionId || right.lifecycleInstitutionId || undefined,
+    lifecycleCaseIds: left.lifecycleCaseIds?.length ? left.lifecycleCaseIds : right.lifecycleCaseIds,
+    linkedEventId: left.linkedEventId || right.linkedEventId,
+    source: left.source || right.source,
+    status: left.status || right.status || "open",
+    title: left.title || right.title,
+    events,
+    // withUnloggedMessages inside normalizeChatEntry folds any messages written
+    // beside the event log while a provider call was in flight.
+    messages: [...normalizeArray(left.messages), ...normalizeArray(right.messages)],
+  });
+  return reconcileModernChatForPlayer(merged, world, playerCountry, identityIndex);
+};
+
+export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
+  const index = buildPolityIdentityIndex(world || {});
+  const reconciled = normalizeArray(chats)
+    .map((entry) => reconcileModernChatForPlayer(entry, world, playerCountry, index))
+    .filter(Boolean);
+
+  const output = [];
+  const openByIdentity = new Map();
+  for (const chat of reconciled) {
+    if (normalizeOptionalString(chat.status).toLocaleLowerCase() === "closed") {
+      output.push(chat);
+      continue;
+    }
+    const key = chatThreadIdentityKey(chat, world, index);
+    if (!key) {
+      output.push(chat);
+      continue;
+    }
+    const priorIndex = openByIdentity.get(key);
+    if (priorIndex == null) {
+      openByIdentity.set(key, output.length);
+      output.push(chat);
+      continue;
+    }
+    output[priorIndex] = mergeChatThreadRecords(output[priorIndex], chat, world, playerCountry, index);
+  }
+  return output.filter(Boolean);
+};
+
+export const mergeIncomingChats = (existing, incoming, world, { playerCountry = "" } = {}) =>
+  reconcileChatsForPlayer([...normalizeArray(existing), ...normalizeArray(incoming)], world, playerCountry);
 
 const normalizeRegionTransfer = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -811,8 +1042,14 @@ const normalizeRegionClaim = (entry) => {
     return null;
   }
 
+  // What the claimant IS, when the claim says ("a terrorist organisation", "the
+  // rebel side of the civil war"): written onto the claimant's record as its
+  // role (server/polityRole.js), so it follows the claimant everywhere. Only
+  // present when given — a claim that says nothing leaves the role alone.
+  const claimantRole = normalizePolityRole(entry.claimantRole ?? entry.role ?? entry.claimantType);
   return {
     claimantCode,
+    ...(claimantRole ? { claimantRole } : {}),
     drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
     note: normalizeOptionalString(entry.note || entry.reason),
     regionId,
@@ -839,22 +1076,27 @@ const normalizeRegionControlOp = (entry) => {
 
   if (!regionId) return null;
 
+  // What the contesting or newly controlling side is ("the rebel side of the
+  // civil war"): its role (server/polityRole.js), only when the op says.
   if (op === "contest") {
     const actorCode = toCountryName(normalizeOptionalString(entry.actorCode || entry.claimantCode || entry.toCode));
     if (!fromCode || !actorCode || fromCode.toLowerCase() === actorCode.toLowerCase()) return null;
-    return { op, regionId, regionName, fromCode, actorCode, note };
+    const actorRole = normalizePolityRole(entry.actorRole ?? entry.claimantRole ?? entry.role);
+    return { op, regionId, regionName, fromCode, actorCode, ...(actorRole ? { actorRole } : {}), note };
   }
 
   if (op === "control" || op === "control_flip") {
     const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
     if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
     const basis = normalizeTerritoryBasis(entry.basis);
+    const toRole = normalizePolityRole(entry.toRole ?? entry.role);
     return {
       op: "control",
       regionId,
       regionName,
       fromCode,
       toCode,
+      ...(toRole ? { toRole } : {}),
       note,
       ...(basis ? { basis } : {}),
       ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
@@ -916,6 +1158,9 @@ const normalizePolityChange = (entry) => {
   const rawOperation = normalizeOptionalString(entry.operation || entry.op || entry.action).toLowerCase();
   const operation = POLITY_OPERATION_SET.has(rawOperation) ? rawOperation : "update";
 
+  // A new role replaces the old one; nothing (or an empty string, which a model
+  // fills optional fields with) keeps it.
+  const role = normalizePolityRole(entry.role ?? entry.polityRole);
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -925,6 +1170,7 @@ const normalizePolityChange = (entry) => {
     note: normalizeOptionalString(entry.note || entry.reason),
     operation,
     reputation,
+    ...(role ? { role } : {}),
     stats,
     tags,
   };
@@ -2949,13 +3195,58 @@ const normalizeCreatedChat = (entry, index) => {
   };
 };
 
+const normalizePoliticalActorImpactOp = (entry) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const op = normalizeOptionalString(entry.op);
+  const polityKey = normalizeOptionalString(entry.polityKey || entry.polity || entry.country);
+  if (!op || !polityKey) return null;
+
+  let argsJson = "";
+  if (typeof entry.argsJson === "string") argsJson = entry.argsJson.trim();
+  else if (entry.argsJson && typeof entry.argsJson === "object" && !Array.isArray(entry.argsJson)) {
+    try { argsJson = JSON.stringify(entry.argsJson); } catch { argsJson = ""; }
+  }
+  // Native callers/tests may still use the direct operation shape. The provider
+  // schema deliberately does not: argsJson keeps the jump schema compact.
+  if (!argsJson) {
+    const directArgs = Object.fromEntries(Object.entries(entry).filter(([key]) => ![
+      "op", "polityKey", "polity", "country", "argsJson",
+    ].includes(key)));
+    if (Object.keys(directArgs).length) {
+      try { argsJson = JSON.stringify(directArgs); } catch { argsJson = ""; }
+    }
+  }
+  return { op, polityKey, argsJson };
+};
+
+const politicalActorOperationFromImpact = (entry, resolveOwner = (value) => value) => {
+  const normalized = normalizePoliticalActorImpactOp(entry);
+  if (!normalized) return { operation: null, error: "missing op or polityKey" };
+  let args = {};
+  if (normalized.argsJson) {
+    try {
+      const parsed = JSON.parse(normalized.argsJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { operation: null, error: "argsJson must decode to a JSON object" };
+      }
+      args = parsed;
+    } catch (error) {
+      return { operation: null, error: `argsJson is not valid JSON: ${error?.message || error}` };
+    }
+  }
+  const polityKey = normalizeOptionalString(resolveOwner(normalized.polityKey) || normalized.polityKey);
+  return { operation: { ...args, op: normalized.op, polityKey }, error: "" };
+};
+
 const normalizeEventImpacts = (value) => {
   if (!value || typeof value !== "object") {
     return {
       actionIds: [],
       createdChats: [],
+      institutionLifecycleOps: [],
       markerOps: [],
       polityChanges: [],
+      politicalActorOps: [],
       projectOps: [],
       regionClaims: [],
       regionControlOps: [],
@@ -2969,8 +3260,10 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
+    politicalActorOps: normalizeArray(value.politicalActorOps).map(normalizePoliticalActorImpactOp).filter(Boolean),
     projectOps: normalizeArray(value.projectOps).map(normalizeProjectOp).filter(Boolean),
     regionClaims: normalizeArray(value.regionClaims).map(normalizeRegionClaim).filter(Boolean),
     regionControlOps: normalizeArray(value.regionControlOps).map(normalizeRegionControlOp).filter(Boolean),
@@ -3018,6 +3311,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
       description: "",
       id: generateId(`event-${index}`),
       impacts: normalizeEventImpacts(null),
+      agency: null,
       importance: "minor",
       kind: "world",
       tags: [],
@@ -3049,6 +3343,7 @@ export const normalizeEventEntry = (entry, index = 0) => {
     description: normalizeOptionalString(entry.description || entry.summary || entry.text),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts),
+    agency: normalizeEventAgency(entry.agency),
     importance: normalizeOptionalString(entry.importance) || "minor",
     kind: normalizeRenamedKind(entry.kind) || "world",
     // Category tags for the timeline's filter chips (runtime/eventTags.js).
@@ -3129,6 +3424,8 @@ const normalizePolityOverride = (key, value) => {
     ...(normalizeOptionalString(value.mapDistinctLabel) ? { mapDistinctLabel: normalizeOptionalString(value.mapDistinctLabel) } : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
+    // What this power is, in the author's or the AI's own words (server/polityRole.js).
+    ...(normalizePolityRole(value.role) ? { role: normalizePolityRole(value.role) } : {}),
     ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
     ...(value.verbatim === true ? { verbatim: true } : {}),
   };
@@ -3679,6 +3976,10 @@ export const normalizeWorldState = (world) => {
     ...nextWorld,
     countryTags,
     countryStats,
+    politicalActors: normalizePoliticalActors(nextWorld.politicalActors),
+    politicalSimulation: normalizePoliticalSimulationClock(nextWorld.politicalSimulation),
+    institutions: normalizeInstitutions(nextWorld.institutions, diplomaticIdentityWorld),
+    powerStatus: normalizePowerStatus(nextWorld.powerStatus, diplomaticIdentityWorld),
     actionSuggestions: normalizeActionSuggestions(nextWorld.actionSuggestions),
     activeInteractive: normalizeInteractive(nextWorld.activeInteractive),
     interactiveOffer: normalizeInteractiveOffer(nextWorld.interactiveOffer),
@@ -3930,29 +4231,39 @@ export const buildActionDisplayText = (action) => {
 let worldViewRaw = null;
 let worldViewNormalized = null;
 
+let worldViewCatalog = null;
+
+// Both readers see the disputes the map file declares as well as the world's
+// own (runtime/mapClaims.js), from the region catalog the map has already
+// parsed; with no map loaded there is nothing to add.
 export const readWorldStateView = async ({ force = false } = {}) => {
   const raw = await readJson(JSON_URLS.world, {
     defaultValue: WORLD_DEFAULTS,
     force,
     clone: false,
   });
+  const catalog = getPrimedScenarioRegionCatalog();
 
-  if (!force && raw === worldViewRaw && worldViewNormalized) {
+  if (!force && raw === worldViewRaw && catalog === worldViewCatalog && worldViewNormalized) {
     return worldViewNormalized;
   }
 
   const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-  const normalized = normalizeWorldState(raw);
+  const normalized = withMapClaims(normalizeWorldState(raw), catalog);
   const elapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt;
   reportPerfOperation("normalize world read-only view", elapsed, { warnAt: 40 });
 
   worldViewRaw = raw;
+  worldViewCatalog = catalog;
   worldViewNormalized = normalized;
   return normalized;
 };
 
 export const readWorldState = async ({ force = false } = {}) =>
-  normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force }));
+  withMapClaims(
+    normalizeWorldState(await readJson(JSON_URLS.world, { defaultValue: WORLD_DEFAULTS, force })),
+    getPrimedScenarioRegionCatalog(),
+  );
 
 // Same-tab cache agreement after a country Stats commit.
 //
@@ -4077,8 +4388,166 @@ export const writeInterceptsState = async (intercepts, options = {}) =>
 export const readChatsState = async ({ force = false } = {}) =>
   normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
 
-export const writeChatsState = async (chats, options = {}) =>
-  writeJson(JSON_URLS.chat, normalizeChats(chats), { pretty: true, ...options });
+let chatWriteQueue = Promise.resolve();
+
+export const writeChatsState = async (chats, options = {}) => {
+  const normalized = normalizeChats(chats);
+  const snapshot = cloneValue(normalized);
+  const write = () => writeJson(JSON_URLS.chat, snapshot, { pretty: true, ...options });
+  const pending = chatWriteQueue.then(write, write);
+  chatWriteQueue = pending.then(() => undefined, () => undefined);
+  return pending;
+};
+
+// Publish the six canonical per-turn domains as one generation. Desktop uses a
+// durable journal plus per-file atomic replacement; web mode stores the complete
+// generation in one IndexedDB game-record transaction. Client caches are flipped
+// together only after persistence succeeds, so readers never observe a half-turn.
+const buildCanonicalTurnPayload = ({
+  actions = [],
+  chats = [],
+  events = [],
+  game = {},
+  colors = {},
+  world = {},
+} = {}, { expectedGameId = "", preserveApprovedEvents = false } = {}) => {
+  const normalizedWorld = normalizeWorldState(world);
+  enqueueContentStrings(normalizedWorld.polityOverrides);
+
+  const eventLog = normalizeEvents(events);
+  const normalizedEvents = preserveApprovedEvents
+    ? dedupeEventLog(eventLog, { keyOf: eventCanonicalKey })
+    : dedupeEventLog(eventLog);
+  enqueueEventStrings(normalizedEvents);
+
+  return {
+    actions: cloneValue(normalizeActions(actions)),
+    chat: cloneValue(normalizeChats(chats)),
+    events: cloneValue(normalizedEvents),
+    game: cloneValue(normalizeGameData(game)),
+    colors: colors && typeof colors === "object" && !Array.isArray(colors) ? cloneValue(colors) : {},
+    world: normalizedWorld,
+    ...(String(expectedGameId ?? "").trim() ? { expectedGameId: String(expectedGameId).trim() } : {}),
+  };
+};
+
+const commitCanonicalTurnPayload = async (payload, {
+  emitEvents = true,
+  startedAt = typeof performance !== "undefined" ? performance.now() : Date.now(),
+} = {}) => {
+  const stringifyStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const body = JSON.stringify(payload);
+  reportPerfOperation(
+    "stringify canonical turn commit",
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - stringifyStartedAt,
+    { extra: `${Math.round(body.length / 1024)} KiB`, warnAt: 50 },
+  );
+
+  const response = await fetch("/api/runtime/turn-commit", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+  if (!response.ok) throw new Error(`Failed to commit canonical turn: HTTP ${response.status}`);
+
+  let committed = payload;
+  let transactionId = "";
+  try {
+    const echoed = await response.json();
+    if (echoed?.assets && typeof echoed.assets === "object") committed = echoed.assets;
+    transactionId = String(echoed?.transactionId ?? "");
+  } catch {
+    // Alternate/older stores may answer without JSON. The normalized submitted
+    // generation remains the best available client representation.
+  }
+
+  publishJsonWriteBatch([
+    { url: JSON_URLS.actions, value: committed.actions },
+    { url: JSON_URLS.chat, value: committed.chat },
+    { url: JSON_URLS.events, value: committed.events },
+    { url: JSON_URLS.game, value: committed.game },
+    { url: JSON_URLS.colors, value: committed.colors },
+    { url: JSON_URLS.world, value: committed.world, cacheClone: false },
+  ], { emitEvents });
+
+  worldViewRaw = committed.world;
+  worldViewNormalized = committed.world;
+
+  reportPerfOperation(
+    "canonical turn commit",
+    (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+    { extra: transactionId, warnAt: 100 },
+  );
+  return { ...committed, transactionId };
+};
+
+const enqueueCanonicalGenerationWrite = (write) => {
+  const pending = chatWriteQueue.then(write, write);
+  chatWriteQueue = pending.then(() => undefined, () => undefined);
+  return pending;
+};
+
+export const writeCanonicalTurnState = (state = {}, {
+  expectedGameId = "",
+  emitEvents = true,
+  preserveApprovedEvents = false,
+} = {}) => {
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const payload = buildCanonicalTurnPayload(state, { expectedGameId, preserveApprovedEvents });
+  return enqueueCanonicalGenerationWrite(() => commitCanonicalTurnPayload(payload, { emitEvents, startedAt }));
+};
+
+// Deterministic native read-modify-write against the latest canonical
+// generation. Provider/model calls do not belong in this seam: do any slow
+// reasoning first, then publish the small native mutation here. The read occurs
+// only after prior canonical/chat writes drain, which is what prevents an
+// institutional vote or player message queued during an AI call from being
+// overwritten by an older snapshot.
+export const mutateCanonicalTurnState = (mutator, {
+  expectedGameId = "",
+  emitEvents = true,
+  guardRuntimeGeneration = true,
+} = {}) => {
+  if (typeof mutator !== "function") {
+    return Promise.reject(new TypeError("mutateCanonicalTurnState requires a mutator function."));
+  }
+
+  const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+  const expectedRuntimeGameUrl = guardRuntimeGeneration ? String(JSON_URLS.game || "") : "";
+  const assertRuntimeGeneration = () => {
+    if (expectedRuntimeGameUrl && String(JSON_URLS.game || "") !== expectedRuntimeGameUrl) {
+      throw new Error("Active campaign changed before canonical mutation could commit.");
+    }
+  };
+
+  return enqueueCanonicalGenerationWrite(async () => {
+    assertRuntimeGeneration();
+    const [actions, chats, events, game, world, colors] = await Promise.all([
+      readActionsState({ force: true }),
+      readChatsState({ force: true }),
+      readEventsState({ force: true }),
+      readGameData({ force: true }),
+      readWorldState({ force: true }),
+      readJson(JSON_URLS.colors, { defaultValue: {}, force: true }),
+    ]);
+    const current = { actions, chats, events, game, world, colors };
+    const patch = await mutator(current);
+    assertRuntimeGeneration();
+    if (!patch || typeof patch !== "object") {
+      return { skipped: true, ...current, chat: current.chats, transactionId: "" };
+    }
+
+    const next = {
+      ...current,
+      ...patch,
+      chats: Object.prototype.hasOwnProperty.call(patch, "chats")
+        ? patch.chats
+        : Object.prototype.hasOwnProperty.call(patch, "chat") ? patch.chat : chats,
+    };
+    const payload = buildCanonicalTurnPayload(next, { expectedGameId });
+    return commitCanonicalTurnPayload(payload, { emitEvents, startedAt });
+  });
+};
 
 export const readCountryStatsBundle = async ({ force = false } = {}) => {
   const [actions, events, game, world] = await Promise.all([
@@ -4279,6 +4748,20 @@ const writeRegionSovereign = (world, regionId, sovereign) => {
 
 const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
 
+// Writes a polity's role (server/polityRole.js) onto its record, found under any
+// case of its name; a polity with no record yet — a claimant the map knows only
+// from a claimant list, a real country the scenario never registered — gets one.
+const recordPolityRole = (world, name, role) => {
+  const text = normalizePolityRole(role);
+  const code = normalizeOptionalString(name);
+  if (!text || !code) return false;
+  if (!world.polityOverrides || typeof world.polityOverrides !== "object") world.polityOverrides = {};
+  const key = Object.keys(world.polityOverrides).find((entry) => samePolity(entry, code)) || code;
+  const current = world.polityOverrides[key] ?? { aliases: [], code: key, color: "", name: key, note: "", status: "active" };
+  world.polityOverrides[key] = { ...current, role: text };
+  return true;
+};
+
 const applyPolityAndTerritoryImpacts = ({
   colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
 }) => {
@@ -4334,6 +4817,9 @@ const applyPolityAndTerritoryImpacts = ({
     const claimant = resolveOwner(claim.claimantCode) || claim.claimantCode;
     // A claimant nobody knows becomes a landless polity rather than a phantom name.
     if (!claim.drop) foundPolityIfUnknown(world, colors, claimant);
+    // What the claimant is, when the claim says: onto its record, which a
+    // claimant known only from a claimant list gets now.
+    if (!claim.drop && claim.claimantRole) recordPolityRole(world, claimant, claim.claimantRole);
     const current = normalizeArray(world.regionClaimants[claim.regionId])
       .map((entry) => normalizeOptionalString(entry))
       .filter(Boolean);
@@ -4402,6 +4888,7 @@ const applyPolityAndTerritoryImpacts = ({
       const actor = resolveOwner(op.actorCode) || normalizeOptionalString(op.actorCode);
       if (!actor || samePolity(actor, currentController)) continue;
       foundPolityIfUnknown(world, colors, actor);
+      if (op.actorRole) recordPolityRole(world, actor, op.actorRole);
       const claimants = [...existing, actor];
       if (legalSovereign && currentController && !samePolity(legalSovereign, currentController)) claimants.push(legalSovereign);
       writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, currentController)));
@@ -4412,6 +4899,7 @@ const applyPolityAndTerritoryImpacts = ({
       const toCode = resolveOwner(op.toCode) || normalizeOptionalString(op.toCode);
       if (!toCode) continue;
       foundPolityIfUnknown(world, colors, toCode);
+      if (op.toRole) recordPolityRole(world, toCode, op.toRole);
       world.regionOwnershipOverrides[regionId] = toCode;
       writeRegionSovereign(world, regionId, legalSovereign);
       const claimants = existing.filter((name) => !samePolity(name, toCode));
@@ -4475,6 +4963,7 @@ const applyPolityAndTerritoryImpacts = ({
       ...(change.color ? { color: change.color } : {}),
       name: code,
       ...(change.note ? { note: change.note } : {}),
+      ...(change.role ? { role: change.role } : {}),
     };
 
     if (change.color) {
@@ -4661,9 +5150,36 @@ export const applyEventImpactsToWorld = ({
     });
     if (renamedHere.length) {
       renamedPolities.push(...renamedHere);
-      // The polity is keyed by its new name now: this event's unit and structure
-      // ops, and every later event, must resolve either name to the new key.
+      // The polity is keyed by its new name now: this event's unit, Political
+      // Actor and structure ops, and every later event, must resolve either name
+      // to the new key. This ordering is what makes rename + replace-leader in
+      // one event mutate one canonical actor rather than minting a stale-key twin.
       resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+    }
+
+    if (event.impacts.politicalActorOps?.length) {
+      for (const packed of event.impacts.politicalActorOps) {
+        const decoded = politicalActorOperationFromImpact(packed, resolveOwner);
+        if (!decoded.operation) {
+          console.warn(`[Political Actors] event "${event.title}" dropped ${packed?.op || "operation"}: ${decoded.error}.`);
+          continue;
+        }
+        const outcome = applyPoliticalActorOperation(nextWorld, decoded.operation);
+        if (!outcome?.applied) {
+          console.warn(`[Political Actors] event "${event.title}" could not apply ${decoded.operation.op} to ${decoded.operation.polityKey}: ${outcome?.error || "native validation refused it"}.`);
+          continue;
+        }
+
+        // Political Actors remain the write authority. When the old Stats sheet
+        // already exists, mirror only its legacy government/leader vocabulary so
+        // old UI/consumers do not display a contradicted officeholder. Never mint
+        // a Stats sheet from this compatibility projection.
+        const actorKey = getPoliticalProfileKey(nextWorld, decoded.operation.polityKey) || decoded.operation.polityKey;
+        if (nextWorld.countryStats && Object.prototype.hasOwnProperty.call(nextWorld.countryStats, actorKey)) {
+          const legacyProjection = buildPoliticalActorLegacyStatsProjection(nextWorld, actorKey);
+          if (Object.keys(legacyProjection).length) applyCountryStatPatchToWorld(nextWorld, actorKey, legacyProjection);
+        }
+      }
     }
 
     if (event.impacts.unitOps?.length) {

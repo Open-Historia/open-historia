@@ -206,10 +206,11 @@ export const AI_TASK_ROUTING = [
     { key: "eventConsolidator", label: "Event consolidator", hint: "Small/mid-tier: pure summarization", group: "Simulation" },
     { key: "projects", label: "Projects & operations", hint: "Mid-tier model", group: "Simulation" },
     { key: "pregameHistory", label: "Pre-game history", hint: "Mid-tier model", group: "Simulation" },
+    { key: "politicalWorldGeneration", label: "Political world generation", hint: "Mid/high-tier: bounded scenario political seeding", group: "Simulation" },
+    { key: "politicalWorldVerification", label: "Political world verification", hint: "Mid/high-tier: exact-date identity cross-check", group: "Simulation" },
     { key: "gameMaster", label: "Game Master", hint: "High-tier model (direct world edits)", group: "Player" },
     { key: "actions", label: "Action suggestions", hint: "Small/mid-tier: short suggestions", group: "Player" },
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
-    { key: "nextSpeaker", label: "Next speaker", hint: "Smallest model: single-field pick", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
@@ -931,6 +932,31 @@ export function setTaskPick(taskKey, entryId) {
     const entry = getResolvedFallbackList().find((candidate) => candidate.id === entryId);
     logDebugEvent("setting", `${task} ${entry ? `tries ${entry.label} first` : "uses the Fallback list from the top"}.`);
     notifyFallbackChange();
+}
+
+// Resolve the effective starting entry for a task without mutating the player's
+// stored Fallback list. Political World verification inherits the generation
+// task's pick when it has no dedicated choice so both halves of one authored
+// bootstrap use the same model by default. A dedicated verification pick still
+// wins. All other tasks keep Beta's ordinary Fallback-list behavior.
+export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
+    const key = String(taskKey ?? "").trim();
+    const entries = Array.isArray(sourceEntries) ? [...sourceEntries] : getResolvedFallbackList();
+    if (!key || entries.length === 0) return { entries, preferredEntryId: "", implicit: false };
+
+    const explicitPick = getTaskPick(key);
+    if (explicitPick && entries.some((entry) => entry.id === explicitPick)) {
+        return { entries, preferredEntryId: explicitPick, implicit: false };
+    }
+
+    if (key === "politicalWorldVerification") {
+        const generationPick = getTaskPick("politicalWorldGeneration");
+        if (generationPick && entries.some((entry) => entry.id === generationPick)) {
+            return { entries, preferredEntryId: generationPick, implicit: true };
+        }
+    }
+
+    return { entries, preferredEntryId: "", implicit: false };
 }
 
 // --- When an entry is Rate limited ---

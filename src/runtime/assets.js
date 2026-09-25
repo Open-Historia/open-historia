@@ -92,6 +92,10 @@ export const ESRI_BASEMAPS = [
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
   { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "atlas-relief-dark", label: "Atlas Relief - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  // Very dark, label-free physical canvas for political overlays. World.jsx
+  // composes this from World Terrain Base + ETOPO relief, so no baked country
+  // names or modern political borders sit underneath live OpenHistoria canon.
+  { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
@@ -999,6 +1003,49 @@ export const primeJson = (url, data, { cache, clone = true } = {}) => {
   return clone ? cloneJson(snapshot) : snapshot;
 };
 
+// Publish a set of already-persisted JSON assets into the client caches as ONE
+// visible generation. This is the client half of the whole-turn commit seam:
+// every cache is primed and every derived memo invalidated BEFORE any consumer
+// event fires, so a listener reacting to world/game/colors cannot observe the
+// other turn assets from the previous generation.
+export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
+  const list = Array.isArray(entries)
+    ? entries.filter((entry) => entry?.url)
+    : [];
+
+  for (const entry of list) {
+    primeJson(entry.url, entry.value, {
+      clone: entry.cacheClone ?? entry.url !== JSON_URLS.world,
+    });
+  }
+  for (const entry of list) {
+    invalidateDerivedCachesForWrite(entry.url, { emitEvents: false });
+  }
+
+  if (emitEvents && typeof window !== "undefined") {
+    const urls = new Set(list.map((entry) => entry.url));
+    if (urls.has(JSON_URLS.colors)) window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
+
+    for (const entry of list) {
+      const { url, value } = entry;
+      if (url === JSON_URLS.world) {
+        window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
+      }
+      if (url === JSON_URLS.game) {
+        window.dispatchEvent(new CustomEvent("oh:game-updated", { detail: { game: value } }));
+      }
+      if (isMutableRuntimeJsonUrl(url)) {
+        window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+          detail: { key: runtimeAssetLabel(url), url, value },
+        }));
+      }
+    }
+  }
+
+  return list.map((entry) => entry.value);
+};
+
 export const writeJson = async (
   url,
   data,
@@ -1562,6 +1609,11 @@ export const primeCustomRegionCatalogEntries = (
         ? raw.adjacencies.map((value) => String(value)).filter(Boolean)
         : [],
       ...(isBox(raw?.bounds) ? { bounds: raw.bounds } : {}),
+      // The map file's own claimants: what the world is read with when it has
+      // no row for the region (runtime/mapClaims.js).
+      ...(Array.isArray(raw?.claimants) && raw.claimants.length
+        ? { claimants: raw.claimants.map((value) => String(value ?? "").trim()).filter(Boolean) }
+        : {}),
     });
   }
   primedCustomRegionCatalog = entries;
@@ -1657,6 +1709,7 @@ export const primeCustomRegionCatalog = (
       type: props?.type ?? "",
       adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
       bounds: geometryBounds(feature?.geometry),
+      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
     });
   }
   return primeCustomRegionCatalogEntries(rawEntries, options);

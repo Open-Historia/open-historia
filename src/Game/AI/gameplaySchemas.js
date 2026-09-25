@@ -100,6 +100,11 @@ const regionClaimSchema = {
     regionId: regionIdSchema,
     regionName: regionNameSchema,
     claimantCode: textSchema("Claiming polity's FULL name (\"Spain\"), never a code."),
+    // What the claimant is, written onto its record as its role
+    // (server/polityRole.js) and shown wherever it appears. One line: the
+    // examples live in the actions reference and the GM rules, because this
+    // schema rides on every jump request (projectOpSchema.test.js).
+    claimantRole: textSchema("What the claimant IS in a few words (\"a terrorist organisation\"), when new or changed."),
     drop: {
       type: "boolean",
       description: "True to WITHDRAW the claim (renounced, traded away, given up in defeat). Unset asserts it.",
@@ -184,6 +189,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Defending controller's FULL name."),
         actorCode: nonEmptyTextSchema("Attacking polity's FULL name."),
+        actorRole: textSchema("What the attacker IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
       },
       required: ["op", "regionId", "fromCode", "actorCode"],
@@ -197,6 +203,7 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Previous controller's FULL name."),
         toCode: nonEmptyTextSchema("New controller's FULL name."),
+        toRole: textSchema("What the new controller IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
@@ -258,6 +265,7 @@ const polityChangeSchema = {
       "Defining traits after this change — ideology, alignment, posture (socialist, authoritarian, anti-nato). "
       + "Only when they change, and then the COMPLETE list, not a delta.",
     ),
+    role: textSchema("What this polity IS in a few words (\"a street gang\"), when new or changed."),
     note: textSchema("Brief reason."),
     stats: statsUpdateSchema,
   },
@@ -811,6 +819,65 @@ const projectOpSchema = {
   additionalProperties: false,
 };
 
+const institutionLifecycleImpactOpSchema = {
+  type: "object",
+  description:
+    "A canonical institution lifecycle act by an AI-controlled government. Use only when this event itself politically justifies founding, inviting, applying, responding, withdrawing, or opening formal discipline/dissolution business. The actor is sovereign: never use the human player's polity as actor for accept/apply/found/withdraw/respond. An invitation/application is NOT membership; native institution law resolves it.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["found", "invite", "apply", "respond", "withdraw", "expel", "suspend", "reinstate", "dissolve"],
+    },
+    actorPolity: textSchema("AI-controlled polity making this institutional act, using its exact canonical name."),
+    institutionId: textSchema("Existing institution id copied exactly from canonical institution context. Omit only for found."),
+    targetPolity: textSchema("invite/expel/suspend/reinstate: exact target polity name."),
+    caseId: textSchema("respond: exact pending lifecycle case id supplied by canonical context."),
+    requestedStatus: textSchema("invite/apply: requested status such as member or observer."),
+    decision: { type: "string", enum: ["accept", "reject", "seek-observer", "request-terms", "delay"] },
+    reason: textSchema("Concise political/strategic reason grounded in current relations, PWv2 context and institution fit."),
+    terms: textSchema("Counterconditions or accession terms when relevant."),
+    name: textSchema("found: institution name."),
+    shortName: textSchema("found: optional short name/acronym."),
+    kind: textSchema("found: institution kind, e.g. military_alliance, regional_bloc, economic_union, international_organization, other."),
+    purpose: stringArraySchema("found: concrete purposes/mandates."),
+    geographicScope: stringArraySchema("found: political/geographic scope; this informs whether membership makes sense."),
+    primaryThreatModel: stringArraySchema("found: named threats/adversaries the institution explicitly organizes around, if any."),
+    politicalCharacter: textSchema("found: concise political identity/character."),
+    votingRule: textSchema("found: governance decision rule, normally simple-majority unless the event establishes another rule."),
+    minimumFoundingMembers: { type: "integer", minimum: 1, maximum: 64 },
+    accessionMode: { type: "string", enum: ["approval", "direct"], description: "found: whether later accession needs an institutional vote or is direct once the applicant accepts." },
+    allowObserver: { type: "boolean", description: "found: whether observer status is permitted." },
+    withdrawalMode: { type: "string", enum: ["unilateral", "notice", "approval", "not-permitted"], description: "found: charter withdrawal rule." },
+    withdrawalNoticeDays: { type: "integer", minimum: 0, maximum: 3650, description: "found: notice period when withdrawalMode is notice." },
+    expulsionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal expulsion can be proposed." },
+    dissolutionMode: { type: "string", enum: ["approval", "not-permitted"], description: "found: whether formal dissolution can be proposed." },
+    invitees: stringArraySchema("found: governments invited to become founding participants; invitation does not make them members."),
+    charterNote: textSchema("found: concise founding charter note/obligation summary."),
+  },
+  required: ["op", "actorPolity"],
+  additionalProperties: false,
+};
+
+const politicalActorImpactOpSchema = {
+  type: "object",
+  description: "One canonical PWv2 mutation; operation arguments are JSON in argsJson.",
+  properties: {
+    op: {
+      type: "string",
+      enum: [
+        "create-party", "update-party", "set-party-support", "set-party-influence", "set-party-leader",
+        "create-power-bloc", "update-power-bloc", "set-power-bloc-influence",
+        "set-political-system", "set-government", "form-coalition", "leave-coalition",
+        "replace-leader", "set-strategy", "set-traits", "set-perceptions", "remove-perception",
+      ],
+    },
+    polityKey: { type: "string", minLength: 1 },
+    argsJson: { type: "string", minLength: 1 },
+  },
+  required: ["op", "polityKey", "argsJson"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -825,6 +892,11 @@ const impactsSchema = {
       type: "array",
       description: "Polity changes.",
       items: polityChangeSchema,
+    },
+    politicalActorOps: {
+      type: "array",
+      description: "Canonical government, leader, party and strategy mutations.",
+      items: politicalActorImpactOpSchema,
     },
     regionTransfers: {
       type: "array",
@@ -855,6 +927,12 @@ const impactsSchema = {
       type: "array",
       description: "The player's own espionage orders this event executes (deploy or recall an agent), only when their queued actions or chat ordered it; never for other powers.",
       items: spyOpSchema,
+    },
+    institutionLifecycleOps: {
+      type: "array",
+      description:
+        "Institution lifecycle acts enacted by AI-controlled governments in this event: found/invite/apply/respond/withdraw or formal discipline/dissolution proposals. Use current PWv2, relations, institution purpose/scope/obligations and threat model to decide whether the act makes political sense. Never make a sovereign membership decision for the human player. Invitations aimed at the player are allowed; the player must answer them.",
+      items: institutionLifecycleImpactOpSchema,
     },
     reports: {
       type: "array",
@@ -895,10 +973,41 @@ const impactsSchema = {
 // which is exactly how the attached ops get applied. The game master keeps the
 // full impacts object, since a direct "make this happen" command is one call
 // with no separate pass to hand the work to.
+// A few impact families have detailed field semantics duplicated verbatim in
+// ACTIONS_REFERENCE, which is present on every normal jump. Keep the jump tool
+// schema focused on shape while preserving each family's root description.
+// This compaction is jump-only: the authoritative/internal schemas (including
+// Game Master) retain their full descriptions. Validation is unchanged because
+// descriptions are annotations, not constraints.
+const stripNestedSchemaDescriptions = (schema) => {
+  if (Array.isArray(schema)) return schema.map(stripNestedSchemaDescriptions);
+  if (!schema || typeof schema !== "object") return schema;
+  return Object.fromEntries(
+    Object.entries(schema)
+      .filter(([key]) => key !== "description")
+      .map(([key, value]) => [key, stripNestedSchemaDescriptions(value)]),
+  );
+};
+
+const compactJumpImpactSchema = (schema) => ({
+  ...stripNestedSchemaDescriptions(schema),
+  ...(schema?.description ? { description: schema.description } : {}),
+});
+
+const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
+  "markerOps",
+  "institutionLifecycleOps",
+]);
+
 const jumpImpactsSchema = {
   ...impactsSchema,
   properties: Object.fromEntries(
-    Object.entries(impactsSchema.properties).filter(([key]) => key !== "projectOps"),
+    Object.entries(impactsSchema.properties)
+      .filter(([key]) => key !== "projectOps")
+      .map(([key, schema]) => [
+        key,
+        JUMP_COMPACT_IMPACT_DESCRIPTIONS.has(key) ? compactJumpImpactSchema(schema) : schema,
+      ]),
   ),
 };
 
@@ -1323,8 +1432,56 @@ export const PREGAME_HISTORY_SCHEMA = {
       items: canonicalUpdateSchema,
     },
   },
-  required: ["events", "summary"],
+  required: ["events", "summary", "canonicalUpdates"],
   additionalProperties: false,
+};
+
+export const PREGAME_HISTORY_TRANSPORT_SCHEMA = {
+  type: "object",
+  description: "Compact provider transport for pre-game history and the Round-Zero canonical bootstrap.",
+  properties: {
+    eventsJson: textSchema("JSON array text for chronological pre-game event objects. Must contain at least one event."),
+    summary: textSchema("One-paragraph summary of the era leading into the start date."),
+    canonicalUpdatesJson: textSchema("JSON array text for Day-One canonical-state facts. Use [] only when no qualifying state exists."),
+  },
+  required: ["eventsJson", "summary", "canonicalUpdatesJson"],
+  additionalProperties: false,
+};
+
+const parsePregameTransportArray = (value, field) => {
+  if (Array.isArray(value)) return value;
+  const text = String(value ?? "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) throw new Error("decoded value is not an array");
+    return parsed;
+  } catch (strictError) {
+    const salvaged = extractJsonArray(text);
+    if (!Array.isArray(salvaged)) {
+      throw new Error(`$.${field} must contain valid JSON array text: ${strictError?.message || strictError}.`);
+    }
+    return salvaged;
+  }
+};
+
+export const decodePregameHistoryTransportPayload = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { payload: value, error: "" };
+  const isTransport = Object.prototype.hasOwnProperty.call(value, "eventsJson")
+    || Object.prototype.hasOwnProperty.call(value, "canonicalUpdatesJson");
+  if (!isTransport) return { payload: value, error: "" };
+  try {
+    return {
+      payload: {
+        events: parsePregameTransportArray(value.eventsJson, "eventsJson"),
+        summary: String(value.summary ?? "").trim(),
+        canonicalUpdates: parsePregameTransportArray(value.canonicalUpdatesJson, "canonicalUpdatesJson"),
+      },
+      error: "",
+    };
+  } catch (error) {
+    return { payload: null, error: String(error?.message || error || "Invalid pre-game history transport payload.") };
+  }
 };
 
 // The idle-time diplomatic drip: while the player sits between jumps, a polity
@@ -1344,6 +1501,12 @@ export const IDLE_DIPLOMACY_SCHEMA = {
       anyOf: [
         { type: "null", description: "No polity would plausibly reach out right now." },
         createdChatSchema,
+      ],
+    },
+    chatInstitutionId: {
+      anyOf: [
+        { type: "null", description: "No institution Council route requested." },
+        textSchema("Exact shared institution id when this note belongs in that institution's Council; otherwise empty or null."),
       ],
     },
     unitOps: {
@@ -1412,16 +1575,6 @@ export const DEMAND_CHECK_SCHEMA = {
   additionalProperties: false,
 };
 
-export const NEXT_SPEAKER_SCHEMA = {
-  type: "object",
-  description: "The exact participant who should speak next in the diplomatic chat.",
-  properties: {
-    nextSpeaker: textSchema("Exact name of one chat participant other than the most recent speaker."),
-  },
-  required: ["nextSpeaker"],
-  additionalProperties: false,
-};
-
 // One turn of a diplomatic thread, acting for EVERY AI participant at once
 // (AI/chatActions.js). A four-way chat used to cost four requests for one
 // player message — one to pick the speaker, one per leader who answered — and
@@ -1447,11 +1600,12 @@ const chatActionSchema = {
       type: "string",
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
-        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a binding vote. add_poll_option = add a choice to one. poll_vote = cast a vote.",
-      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote"],
+        + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
+        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.",
+      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
-    content: textSchema("send_message: what it says, in its leader's voice. Match the length and tone of what it answers."),
+    content: textSchema("send_message: spoken message only, in its leader's voice. Match the length and tone of what it answers. actorName already identifies the speaker; never prefix content with the polity name plus a colon or dash."),
     targetEntryId: textSchema("add_reaction: the id of the message reacted to, copied from the transcript."),
     emoji: textSchema("add_reaction: one emoji."),
     title: textSchema("rename_chat: the new title."),
@@ -1474,6 +1628,14 @@ const chatActionSchema = {
     optionRef: textSchema("add_poll_option: your own label for the new choice. poll_vote: the option's ref, or the exact label of an option already open."),
     label: textSchema("add_poll_option: what the new choice says on the ballot."),
     allowCustom: { type: "boolean", description: "create_poll: whether a participant may add a choice of its own." },
+    proposalId: textSchema("institution_*: canonical proposal id copied from the formal institutional governance block."),
+    proposalType: textSchema("institution_lodge_proposal: proposal type, normally resolution unless the formal governance block permits another type."),
+    summary: textSchema("institution_lodge_proposal: concise formal proposal summary."),
+    amendmentId: textSchema("institution_resolve_amendment: canonical amendment id copied from the formal governance block."),
+    amendmentText: textSchema("institution_amendment: exact formal amendment text."),
+    amendmentStatus: textSchema("institution_resolve_amendment: accepted, rejected, or withdrawn."),
+    voteChoice: textSchema("institution_vote: yes, no, abstain, or veto. Veto is valid only where the charter grants it."),
+    reason: textSchema("institution_vote: optional concise public ballot rationale."),
   },
   required: ["type", "actorName"],
   additionalProperties: false,
@@ -1486,10 +1648,14 @@ export const CHAT_ACTIONS_SCHEMA = {
     actions: {
       type: "array",
       description: "The actions, in order. An empty list is a valid answer: silence is an answer.",
-      maxItems: 16,
+      // Formal institution maintenance may need one ballot per member (NATO-
+      // sized councils included). Ordinary chat remains prompt-bounded; native
+      // authority still validates every action independently.
+      maxItems: 48,
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
+    lifecycleResponsesJson: textSchema("Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is accept, reject, seek-observer, request-terms, or delay. Use [] when this is not a lifecycle negotiation."),
   },
   required: ["actions"],
   additionalProperties: false,
@@ -1720,6 +1886,25 @@ const gameMasterEventSchema = {
   },
 };
 
+const gmTerritorialScopeSchema = {
+  type: "object",
+  description: "Native exhaustive rendered-geography scope for a GM territorial instruction. Use this instead of sampling representative provinces.",
+  properties: {
+    kind: { type: "string", enum: ["legal-transfer", "control", "contest"] },
+    baseCountries: {
+      type: "array",
+      minItems: 1,
+      maxItems: 24,
+      items: nonEmptyTextSchema("Exact rendered base-geography country name, e.g. Estonia, Latvia, Lithuania."),
+    },
+    toCode: nonEmptyTextSchema("Recipient/controller/contender polity full name."),
+    eventIndex: { type: "integer", minimum: 0, maximum: 7 },
+    note: textSchema("Brief reason for the exhaustive scope."),
+  },
+  required: ["kind", "baseCountries", "toCode", "eventIndex", "note"],
+  additionalProperties: false,
+};
+
 // The GM transaction the app validates and previews. The AI plans structured
 // canonical operations; the payload is not itself permission to persist them —
 // only the administrator's Apply of the exact preview is.
@@ -1777,6 +1962,12 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 8,
       items: gameMasterEventSchema,
     },
+    territorialScopes: {
+      type: "array",
+      description: "Exhaustive rendered base-geography scopes. Native code expands each scope into exact per-region operations before preview.",
+      maxItems: 12,
+      items: gmTerritorialScopeSchema,
+    },
     countryStatPatches: {
       type: "array",
       description: "Authoritative whole-polity/current-baseline Stats corrections.",
@@ -1826,6 +2017,7 @@ export const GAME_MASTER_SCHEMA = {
     "mode",
     "summary",
     "events",
+    "territorialScopes",
     "countryStatPatches",
     "storylineUpdates",
     "warUpdates",
@@ -1852,6 +2044,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     },
     summary: textSchema("Concise explanation of what the transaction would change if applied."),
     eventsJson: textSchema("JSON array text for canonical event objects. Use [] when none."),
+    territorialScopesJson: textSchema("JSON array text for exhaustive rendered base-geography territorial scopes. Use [] when none."),
     countryStatPatchesJson: textSchema("JSON array text for authoritative country Stats patches. Use [] when none."),
     storylineUpdatesJson: textSchema("JSON array text for persistent canonical world.storylines updates. Use [] when none."),
     warUpdatesJson: textSchema("JSON array text for structured world.wars lifecycle operations. Use [] when none."),
@@ -1864,6 +2057,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "mode",
     "summary",
     "eventsJson",
+    "territorialScopesJson",
     "countryStatPatchesJson",
     "storylineUpdatesJson",
     "warUpdatesJson",
@@ -1877,6 +2071,7 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
 
 const GAME_MASTER_TRANSPORT_FIELDS = Object.freeze([
   ["eventsJson", "events"],
+  ["territorialScopesJson", "territorialScopes"],
   ["countryStatPatchesJson", "countryStatPatches"],
   ["storylineUpdatesJson", "storylineUpdates"],
   ["warUpdatesJson", "warUpdates"],
@@ -2422,7 +2617,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       type: "string",
       minLength: 1,
       description:
-        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms; never PPP/international dollars.",
+        "Bounded regional territorial estimate. With a native macro plan, return exactly one row per [M#] macro bucket as index~group~population~gdpPerCapita. Native code expands each macro row back across every exact live-map component. For an explicitly NON-TERRITORIAL basis, compatibility rows may use group~geography~population~gdpPerCapita when campaign canon supports a real distributed people/organization/economy; return the literal NONE when no defensible quantitative scope exists. group is core, integrated, or overseas/dependent; population is an integer; gdpPerCapita is a positive NOMINAL output-per-capita number in constant 2026-EUR accounting terms for inhabited buckets; a genuinely uninhabited bucket may use population=0 and gdpPerCapita=0. Never use PPP/international dollars.",
     },
     territorialComponentSplitText: {
       type: "string",
@@ -2614,6 +2809,32 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
   additionalProperties: false,
 };
 
+// Optional prose-only political assessment derived from spy collection.
+// Native code owns access/confidence; the model may not expose raw hidden PWv2 values.
+const spyPoliticalAssessmentSchema = {
+  type: "object",
+  description: "A narrative intelligence assessment of hidden political decision drivers inside the target. Never output raw simulation trait numbers, internal field names, or exact hidden scores.",
+  properties: {
+    summary: nonEmptyTextSchema("One concise overall assessment of the target leadership's current political decision posture."),
+    findings: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: {
+        type: "object",
+        properties: {
+          topic: nonEmptyTextSchema("Short player-readable topic, e.g. Leadership risk appetite, Elite pressure, Alliance perception."),
+          assessment: nonEmptyTextSchema("Narrative assessment only. No raw hidden numeric values or simulation field names."),
+        },
+        required: ["topic", "assessment"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["summary", "findings"],
+  additionalProperties: false,
+};
+
 // What a deployed spy reports: the target's diplomatic traffic with THIRD parties.
 // Redaction happens on the player's side, by their intelligence stat — the model
 // writes the whole exchange, the game decides how much of it the player can read.
@@ -2650,6 +2871,7 @@ const SPY_INTERCEPT_SCHEMA = {
         additionalProperties: false,
       },
     },
+    politicalAssessment: spyPoliticalAssessmentSchema,
   },
   required: ["exchanges"],
   additionalProperties: false,
@@ -2688,7 +2910,6 @@ export const GAMEPLAY_SCHEMAS = Object.freeze({
   jumpForward: JUMP_FORWARD_SCHEMA,
   autoJumpForward: AUTO_JUMP_FORWARD_SCHEMA,
   descriptionToAction: DESCRIPTION_TO_ACTION_SCHEMA,
-  nextSpeaker: NEXT_SPEAKER_SCHEMA,
   demandCheck: DEMAND_CHECK_SCHEMA,
   chatActions: CHAT_ACTIONS_SCHEMA,
   eventConsolidator: EVENT_CONSOLIDATOR_SCHEMA,
@@ -2744,12 +2965,6 @@ export const DEMAND_CHECK_TOOL = makeTool(
   "submit_demand_check",
   "Submit what this reply does about a demand between an overlord and its own puppet state.",
   DEMAND_CHECK_SCHEMA,
-);
-
-export const NEXT_SPEAKER_TOOL = makeTool(
-  "submit_next_speaker",
-  "Submit the exact diplomatic chat participant who should speak next.",
-  NEXT_SPEAKER_SCHEMA,
 );
 
 export const EVENT_CONSOLIDATOR_TOOL = makeTool(
@@ -2840,8 +3055,8 @@ export const IDLE_DIPLOMACY_TOOL = makeTool(
 
 export const PREGAME_HISTORY_TOOL = makeTool(
   "submit_pregame_history",
-  "Submit the pre-game backstory events that led up to the campaign's start date.",
-  PREGAME_HISTORY_SCHEMA,
+  "Submit the compact provider transport for the pre-game backstory and Round-Zero canonical bootstrap. Native code decodes and validates the full structured payload.",
+  PREGAME_HISTORY_TRANSPORT_SCHEMA,
 );
 
 export const SPY_INTERCEPT_TOOL = makeTool(
@@ -2863,7 +3078,6 @@ export const GAMEPLAY_TOOLS = Object.freeze({
   jumpForward: JUMP_FORWARD_TOOL,
   autoJumpForward: AUTO_JUMP_FORWARD_TOOL,
   descriptionToAction: DESCRIPTION_TO_ACTION_TOOL,
-  nextSpeaker: NEXT_SPEAKER_TOOL,
   demandCheck: DEMAND_CHECK_TOOL,
   chatActions: CHAT_ACTIONS_TOOL,
   eventConsolidator: EVENT_CONSOLIDATOR_TOOL,
@@ -3339,6 +3553,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "actionIds",
   "createdChats",
   "polityChanges",
+  "politicalActorOps",
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
@@ -3422,6 +3637,9 @@ const normalizeIdleDiplomacyShape = (value) => {
   const candidate = { ...value };
   if (typeof candidate.chat === "string") candidate.chat = null;
   if (isPlainRecord(candidate.chat)) candidate.chat = normalizeChatShape(candidate.chat);
+  if (candidate.chatInstitutionId === undefined && candidate.institutionId !== undefined) candidate.chatInstitutionId = candidate.institutionId;
+  if (candidate.chatInstitutionId === null) candidate.chatInstitutionId = "";
+  delete candidate.institutionId;
   if (Array.isArray(candidate.unitOps)) candidate.unitOps = candidate.unitOps.map(normalizeUnitOperationShape);
   return candidate;
 };
@@ -3447,6 +3665,69 @@ const normalizeProjectsShape = (value) => {
 // this when omitted", says its description) — so a missing, null or zero value
 // from the model is filled here, before the schema sees it, rather than
 // costing the sheet its attempt.
+
+// Raw-JSON chat turns (used by lifecycle negotiations) do not receive Gemini's
+// submit_chat_actions function declaration, so providers sometimes answer in a
+// natural dialogue shape and/or return lifecycleResponsesJson as a real array.
+// Normalize those transport aliases before CHAT_ACTIONS_SCHEMA validation. The
+// canonical task schema stays unchanged for function-calling providers.
+const normalizeChatActionsShape = (value) => {
+  // Institution Council turns use raw JSON transport for Gemini. In live play it
+  // has returned the action array directly and used conversational aliases such
+  // as `speak`, `polity` and `vote`. Canonicalize those transport spellings
+  // before CHAT_ACTIONS_SCHEMA sees them; native chat/institution validators still
+  // decide whether the resulting action is legal.
+  const source = Array.isArray(value) ? { actions: value } : value;
+  if (!isPlainRecord(source)) return value;
+  const candidate = { ...source };
+
+  const normalizeAction = (entry) => {
+    if (!isPlainRecord(entry)) return entry;
+    const action = { ...entry };
+    const rawType = action.type ?? action.action ?? action.op;
+    const foldedType = String(rawType ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const type = ({ speak: "send_message", say: "send_message", message: "send_message" })[foldedType] || foldedType;
+    const speaker = action.actorName ?? action.actor ?? action.speaker ?? action.polity;
+    const text = action.content ?? action.text ?? action.message;
+    if (action.actorName === undefined && speaker !== undefined) action.actorName = speaker;
+    if (type) action.type = type;
+    if (!action.type && speaker !== undefined && text !== undefined) action.type = "send_message";
+    const canonicalType = String(action.type ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (action.content === undefined && text !== undefined && canonicalType === "send_message") action.content = text;
+    if (canonicalType === "institution_vote" && action.voteChoice === undefined) {
+      action.voteChoice = action.vote ?? action.choice ?? action.optionRef;
+    }
+    delete action.action;
+    delete action.op;
+    delete action.actor;
+    delete action.speaker;
+    delete action.polity;
+    delete action.text;
+    delete action.message;
+    delete action.recipient;
+    delete action.vote;
+    delete action.choice;
+    // Institution identity comes from the canonical Council thread. A model may
+    // echo it in raw JSON, but it must not be able to redirect formal authority.
+    if (canonicalType.startsWith("institution_")) delete action.institutionId;
+    return action;
+  };
+
+  if (!Array.isArray(candidate.actions) && Array.isArray(candidate.dialogue)) {
+    candidate.actions = candidate.dialogue.map(normalizeAction);
+  } else if (Array.isArray(candidate.actions)) {
+    candidate.actions = candidate.actions.map(normalizeAction);
+  }
+  if (!Array.isArray(candidate.actions)) candidate.actions = [];
+  delete candidate.dialogue;
+
+  const lifecycleAlias = candidate.lifecycleResponsesJson ?? candidate.lifecycleResponses;
+  if (Array.isArray(lifecycleAlias)) candidate.lifecycleResponsesJson = JSON.stringify(lifecycleAlias);
+  else if (candidate.lifecycleResponsesJson === undefined && typeof lifecycleAlias === "string") candidate.lifecycleResponsesJson = lifecycleAlias;
+  delete candidate.lifecycleResponses;
+
+  return candidate;
+};
 const normalizeCountryStatSheetShape = (value) => {
   if (!isPlainRecord(value)) return value;
   const version = Number(value.statsSchemaVersion);
@@ -3454,7 +3735,28 @@ const normalizeCountryStatSheetShape = (value) => {
   return { ...value, statsSchemaVersion: 1 };
 };
 
+// Round Zero persists only agreements that are already standing on Day One. A
+// provider can omit that one deterministic discriminator and return bare
+// `agreement` even though the contract asks for `agreement:start`. Recover only
+// that unambiguous omission before schema validation. Explicit lifecycle kinds
+// remain untouched so `agreement:end`, `agreement:suspend`, etc. still fail the
+// strict Round-Zero validator instead of being silently accepted.
+const normalizePregameHistoryShape = (value) => {
+  if (!isPlainRecord(value) || !Array.isArray(value.canonicalUpdates)) return value;
+  let changed = false;
+  const canonicalUpdates = value.canonicalUpdates.map((entry) => {
+    if (!isPlainRecord(entry)) return entry;
+    const kind = String(entry.kind ?? "").trim();
+    if (kind.toLowerCase() !== "agreement") return entry;
+    changed = true;
+    return { ...entry, kind: "agreement:start" };
+  });
+  return changed ? { ...value, canonicalUpdates } : value;
+};
+
 export const normalizeGameplayPayload = (taskKey, value) => {
+  if (taskKey === "chatActions") return normalizeChatActionsShape(value);
+  if (taskKey === "pregameHistory") return normalizePregameHistoryShape(value);
   if (taskKey === "idleDiplomacy") return normalizeIdleDiplomacyShape(value);
   if (taskKey === "projects") return normalizeProjectsShape(value);
   if (taskKey === "countryStatSheet") return normalizeCountryStatSheetShape(value);
@@ -3557,7 +3859,6 @@ export const validateGameplayPayload = (taskKey, value) => {
 
   const requiredTextByTask = {
     descriptionToAction: ["title", "text", "kind"],
-    nextSpeaker: ["nextSpeaker"],
     eventConsolidator: ["summary"],
     interactiveCreation: ["title", "premise", "opening"],
     interactiveExecutor: ["summary"],

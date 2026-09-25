@@ -43,11 +43,14 @@ import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
+import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
+import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runtime/politicalWorldCapability.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import {
@@ -158,9 +161,98 @@ const actionButtonStyle = {
   fontWeight: 600,
   gap: "0.4rem",
   justifyContent: "center",
-  minHeight: "2.1rem",
-  padding: "0 0.95rem",
-  transition: "background 0.18s ease, border-color 0.18s ease, transform 0.18s ease",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.045), 0 6px 18px rgba(0,0,0,0.12)",
+  minHeight: "2.2rem",
+  padding: "0 1rem",
+  transition: "background 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease",
+};
+
+const APP_SHELL_MAX_WIDTH = "3000px";
+const CARD_TEXT_SHADOW = "0 1px 2px rgba(0,0,0,0.9), 0 5px 16px rgba(0,0,0,0.72), 0 14px 30px rgba(0,0,0,0.55)";
+const SCENARIO_CARD_TEXT_SHADOW = "0 1px 2px rgba(0,0,0,0.96), 0 6px 18px rgba(0,0,0,0.82), 0 16px 34px rgba(0,0,0,0.64)";
+
+const ButtonIcon = ({ kind, size = 15, strokeWidth = 1.9 }) => {
+  const common = {
+    fill: "none",
+    height: size,
+    stroke: "currentColor",
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    strokeWidth,
+    viewBox: "0 0 24 24",
+    width: size,
+  };
+
+  switch (kind) {
+    case "settings":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 2.7v2.1M12 19.2v2.1M4.7 12H2.6M21.4 12h-2.1M5.9 5.9l1.5 1.5M16.6 16.6l1.5 1.5M18.1 5.9l-1.5 1.5M7.4 16.6l-1.5 1.5" />
+        </svg>
+      );
+    case "refresh":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="M20 11a8 8 0 1 0 2.1 5.4" />
+          <path d="M20 4v7h-7" />
+        </svg>
+      );
+    case "import":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="M12 4v11" />
+          <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+          <path d="M4.5 19.5h15" />
+        </svg>
+      );
+    case "play":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="m9 7 8 5-8 5z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "archive":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="M4.5 7.5h15v11a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18.5z" />
+          <path d="M3.5 4.5h17v3h-17z" />
+          <path d="M9 12h6" />
+        </svg>
+      );
+    case "edit":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="M4.5 19.5 9 18l9-9a2.1 2.1 0 0 0-3-3l-9 9-1.5 4.5z" />
+          <path d="m13.5 7.5 3 3" />
+        </svg>
+      );
+    case "clone":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <rect x="9" y="9" width="10" height="10" rx="2" />
+          <path d="M6.5 15H6A2 2 0 0 1 4 13V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v.5" />
+        </svg>
+      );
+    case "update":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <path d="M12 4v11" />
+          <path d="m7.5 10.5 4.5 4.5 4.5-4.5" />
+          <path d="M5 19.5h14" />
+        </svg>
+      );
+    case "menu":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <circle cx="12" cy="5.5" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="18.5" r="1.4" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    default:
+      return null;
+  }
 };
 
 // On a touch screen .oh-tap / .oh-tap-row (styles.css) make a control a
@@ -239,6 +331,7 @@ const editorSectionLabels = {
   bundles: "Bundles",
   features: "Features",
   overview: "Overview",
+  politics: "Politics",
   prompts: "Prompts",
   stats: "Stats",
   world: "World",
@@ -650,12 +743,13 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.72) 100%), ` +
-            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}bb, transparent 34%), ` +
+            `linear-gradient(180deg, rgba(4,6,12,0.18) 0%, rgba(4,6,12,0.46) 30%, rgba(5,8,14,0.86) 72%, rgba(5,7,12,0.98) 100%), ` +
+            `linear-gradient(90deg, rgba(3,4,8,0.30) 0%, rgba(3,4,8,0.13) 42%, rgba(3,4,8,0.24) 100%), ` +
+            `radial-gradient(circle at 14% 18%, ${scenario.accentColor}b8, transparent 34%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
           inset: 0,
-          opacity: 0.92,
+          opacity: 0.96,
           position: "absolute",
         }}
       />
@@ -678,7 +772,7 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
                   background: selected ? `${scenario.accentColor}66` : "rgba(255,255,255,0.12)",
                   border: "1px solid rgba(255,255,255,0.15)",
                   borderRadius: "999px",
-                  color: "rgba(248,250,252,0.94)",
+                  color: "rgba(248,250,252,0.96)",
                   display: "inline-flex",
                   fontSize: "0.69rem",
                   fontWeight: 700,
@@ -720,13 +814,15 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
                 fontWeight: 800,
                 letterSpacing: "-0.03em",
                 lineHeight: 1,
+                textShadow: SCENARIO_CARD_TEXT_SHADOW,
               }}
             >
               {scenario.heroTitle || scenario.name}
             </div>
             <div
               style={{
-                color: "rgba(244,244,246,0.7)",
+                color: "rgba(248,248,250,0.96)",
+                textShadow: SCENARIO_CARD_TEXT_SHADOW,
                 display: "-webkit-box",
                 fontSize: "0.92rem",
                 lineHeight: 1.45,
@@ -746,7 +842,8 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
         <div>
           <div
             style={{
-              color: "rgba(255,255,255,0.68)",
+              color: "rgba(255,255,255,0.92)",
+              textShadow: SCENARIO_CARD_TEXT_SHADOW,
               display: "-webkit-box",
               fontSize: "0.8rem",
               marginBottom: "0.7rem",
@@ -777,13 +874,13 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
                 : undefined}
               type="button"
             >
-              {updateAvailable ? "⬆ Update" : "New Game"}
+              {updateAvailable ? <><ButtonIcon kind="update" /> Update</> : <><ButtonIcon kind="play" /> New Game</>}
             </button>
             <button className="oh-tap-row" onClick={() => onEdit(scenario.id)} style={touchFit({ ...actionButtonStyle, flex: 1 }, touch)} type="button">
-              Edit
+              <ButtonIcon kind="edit" /> Edit
             </button>
             <button className="oh-tap-row" onClick={() => onClone(scenario)} style={touchFit({ ...actionButtonStyle, flexBasis: "100%" }, touch)} type="button">
-              Clone Scenario
+              <ButtonIcon kind="clone" /> Clone Scenario
             </button>
           </div>
         </div>
@@ -869,12 +966,13 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
       <div
         style={{
           background:
-            `linear-gradient(180deg, rgba(0,0,0,0.08) 0%, rgba(0,0,0,0.72) 100%), ` +
-            `radial-gradient(circle at 16% 20%, ${game.accentColor}aa, transparent 32%), ` +
+            `linear-gradient(180deg, rgba(4,6,12,0.15) 0%, rgba(4,6,12,0.40) 30%, rgba(5,8,14,0.84) 74%, rgba(5,7,12,0.97) 100%), ` +
+            `linear-gradient(90deg, rgba(3,4,8,0.28) 0%, rgba(3,4,8,0.11) 42%, rgba(3,4,8,0.22) 100%), ` +
+            `radial-gradient(circle at 16% 20%, ${game.accentColor}a8, transparent 32%), ` +
             `url("${cardImageUrl}") center/cover, ` +
             `url("${DEFAULT_SCENARIO_COVER}") center/cover`,
           inset: 0,
-          opacity: 0.96,
+          opacity: 0.97,
           position: "absolute",
         }}
       />
@@ -899,7 +997,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                   background: active ? `${game.accentColor}66` : "rgba(255,255,255,0.12)",
                   border: "1px solid rgba(255,255,255,0.15)",
                   borderRadius: "999px",
-                  color: "rgba(248,250,252,0.94)",
+                  color: "rgba(248,250,252,0.96)",
                   display: "inline-flex",
                   flex: "0 0 auto",
                   fontSize: "0.69rem",
@@ -914,7 +1012,8 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
               </span>
               <span
                 style={{
-                  color: "rgba(255,255,255,0.72)",
+                  color: "rgba(255,255,255,0.82)",
+                  textShadow: CARD_TEXT_SHADOW,
                   fontSize: "0.76rem",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -952,7 +1051,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                 title={busy ? "Working…" : undefined}
                 type="button"
               >
-                ⋮
+                <ButtonIcon kind="menu" size={16} />
               </button>
               {cardMenuOpen && (
                 <>
@@ -1032,15 +1131,16 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
           </div>
 
           <div style={{ marginTop: "2rem" }}>
-            <div style={{ color: "#fff", fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+            <div style={{ color: "#fff", fontSize: "1.5rem", fontWeight: 800, letterSpacing: "-0.03em", textShadow: CARD_TEXT_SHADOW }}>
               {game.name}
             </div>
-            <div style={{ color: "rgba(244,244,246,0.72)", fontSize: "0.92rem", marginTop: "0.45rem" }}>
+            <div style={{ color: "rgba(248,248,250,0.91)", fontSize: "0.92rem", marginTop: "0.45rem", textShadow: CARD_TEXT_SHADOW }}>
               {game.country || "No player country"} / {game.currentDate || "No date"} / Round {game.round || 1}
             </div>
             <div
               style={{
-                color: "rgba(244,244,246,0.58)",
+                color: "rgba(248,248,250,0.91)",
+                textShadow: CARD_TEXT_SHADOW,
                 display: "-webkit-box",
                 fontSize: "0.84rem",
                 lineHeight: 1.45,
@@ -1057,7 +1157,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
         </div>
 
         <div>
-          <div style={{ color: "rgba(255,255,255,0.68)", fontSize: "0.8rem", marginBottom: "0.75rem" }}>
+          <div style={{ color: "rgba(255,255,255,0.78)", fontSize: "0.8rem", marginBottom: "0.75rem", textShadow: CARD_TEXT_SHADOW }}>
             {game.pendingActions} pending action{game.pendingActions === 1 ? "" : "s"} / {game.eventCount} event{game.eventCount === 1 ? "" : "s"}
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem" }}>
@@ -1073,7 +1173,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
               }, touch)}
               type="button"
             >
-              {active ? "Current" : "Play"}
+              {active ? "Current" : <><ButtonIcon kind="play" /> Play</>}
             </button>
             {/* Hide a finished or abandoned run without destroying it — the case
                 Delete cannot serve. Archiving the ACTIVE game is allowed: the
@@ -1085,7 +1185,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
               title={game.archived ? "Move back into your library" : "Hide from the library without deleting"}
               type="button"
             >
-              {game.archived ? "Unarchive" : "Archive"}
+              <ButtonIcon kind="archive" /> {game.archived ? "Unarchive" : "Archive"}
             </button>
           </div>
         </div>
@@ -1094,24 +1194,45 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
   );
 };
 
-// A netflix-style shelf on the main menu: a titled row of horizontally
-// scrolling cards. Rows that can be legitimately empty pass emptyText.
-const MenuRow = ({ children, emptyText, title }) => (
-  <div style={{ marginBottom: "1.7rem" }}>
-    <div style={{ color: "rgba(255,255,255,0.88)", fontSize: "1.02rem", fontWeight: 800, letterSpacing: "-0.01em", marginBottom: "0.7rem" }}>
-      {title}
-    </div>
-    {React.Children.count(children) > 0 ? (
-      <div style={{ display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }}>
-        {children}
+// A responsive shelf on the main menu. Desktop fills the available width with a
+// clean grid; phones keep the original swipeable row. Rows that can be
+// legitimately empty pass emptyText.
+const MenuRow = ({ children, description, emptyText, icon, title }) => {
+  const isMobile = useIsMobile();
+  const hasChildren = React.Children.count(children) > 0;
+
+  return (
+    <section style={{ marginBottom: isMobile ? "1.75rem" : "2rem" }}>
+      <div style={{ marginBottom: hasChildren ? "0.9rem" : "0.55rem" }}>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.85rem" }}>
+          <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem" }}>
+            {icon && <span aria-hidden="true" style={{ fontSize: "1rem", lineHeight: 1 }}>{icon}</span>}
+            <div style={{ color: "rgba(255,255,255,0.94)", fontSize: isMobile ? "1rem" : "1.12rem", fontWeight: 800, letterSpacing: "-0.02em" }}>
+              {title}
+            </div>
+          </div>
+          <div style={{ background: "linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02))", flex: 1, height: 1 }} />
+        </div>
+        {description && (
+          <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.88rem", marginLeft: icon ? "1.55rem" : 0, marginTop: "0.32rem" }}>
+            {description}
+          </div>
+        )}
       </div>
-    ) : (
-      <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.85rem", padding: "0.4rem 0 0.6rem" }}>
-        {emptyText || "Nothing here yet."}
-      </div>
-    )}
-  </div>
-);
+      {hasChildren ? (
+        <div style={isMobile
+          ? { display: "flex", gap: "0.9rem", overflowX: "auto", paddingBottom: "0.35rem", scrollbarWidth: "thin" }
+          : { display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 18.75rem), 20rem))", justifyContent: "start" }}>
+          {children}
+        </div>
+      ) : (
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.85rem", padding: "0.4rem 0 0.6rem" }}>
+          {emptyText || "Nothing here yet."}
+        </div>
+      )}
+    </section>
+  );
+};
 
 // First slot of "Your Scenarios": the big + that creates a blank scenario.
 const CreateScenarioTile = ({ busy, onCreate }) => (
@@ -1140,8 +1261,7 @@ const CreateScenarioTile = ({ busy, onCreate }) => (
   </button>
 );
 
-const SectionTabs = ({ currentSection, sections, setSection, touch }) => (
-  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
+const SectionTabs = ({ badges = {}, currentSection, sections, setSection, touch }) => (  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginBottom: "0.95rem" }}>
     {sections.map((sectionKey) => (
       <button
         key={sectionKey}
@@ -1159,6 +1279,11 @@ const SectionTabs = ({ currentSection, sections, setSection, touch }) => (
         type="button"
       >
         {editorSectionLabels[sectionKey] || sectionKey}
+        {badges[sectionKey] && (
+          <span style={{ background: "rgba(245,158,11,0.16)", border: "1px solid rgba(245,158,11,0.28)", borderRadius: "999px", color: "#fde68a", fontSize: "0.57rem", fontWeight: 800, marginLeft: "0.32rem", padding: "0.12rem 0.35rem" }}>
+            {badges[sectionKey]}
+          </span>
+        )}
       </button>
     ))}
   </div>
@@ -1181,6 +1306,7 @@ const EditorDrawer = ({
   onExportPrompts,
   onFileSelect,
   onImportPrompts,
+  onDetailsChange,
   onOpenFileDialog,
   onOpenMapEditor,
   onSave,
@@ -1199,12 +1325,21 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "stats", "features", "prompts", "assets", "bundles"]
+      ? ["overview", "world", "politics", "stats", "features", "prompts", "assets", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   // Two fields to a row leave a phone under 140 px for each, too narrow for a
   // date or a font name, so there the fields stack.
   const formColumns = isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))";
-
+  const editorPoliticalWorld = kind === "scenario"
+    ? politicalWorldCapability(details?.data?.world ?? {}, {
+      polityCount: Array.isArray(details?.data?.world?.ownerCodes) ? details.data.world.ownerCodes.length : 0,
+    })
+    : null;
+  const sectionBadges = editorPoliticalWorld?.status === POLITICAL_WORLD_CAPABILITY.ABSENT
+    ? { politics: "No world" }
+    : editorPoliticalWorld?.status === POLITICAL_WORLD_CAPABILITY.SPARSE
+      ? { politics: "Partial" }
+      : {};
   return (
     <div
       style={{
@@ -1247,8 +1382,7 @@ const EditorDrawer = ({
         </button>
       </div>
 
-      <SectionTabs currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
-
+      <SectionTabs badges={sectionBadges} currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
       {editorSection === "overview" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
@@ -1388,6 +1522,28 @@ const EditorDrawer = ({
             </div>
           </div>
         </div>
+      )}
+
+      {editorSection === "politics" && kind === "scenario" && (
+        <>
+          <Suspense
+            fallback={
+              <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem", color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>
+                Loading Political World tools...
+              </div>
+            }
+          >
+            <PoliticalWorldGenerationPanel
+              details={details}
+              formState={formState}
+              onDetailsChange={onDetailsChange}
+            />
+          </Suspense>
+          <InstitutionAuthoringPanel
+            details={details}
+            onDetailsChange={onDetailsChange}
+          />
+        </>
       )}
 
       {editorSection === "stats" && kind === "scenario" && (
@@ -1562,7 +1718,7 @@ const EditorDrawer = ({
   );
 };
 
-const LibraryTopBar = () => {
+const LibraryTopBar = ({ onOpenSettings }) => {
   const {
     activeGame,
     activeGameId,
@@ -2544,6 +2700,12 @@ const LibraryTopBar = () => {
         // full current registry (landless polities included) before editing, so
         // merging here would resurrect deleted or renamed entries forever.
         polityOverrides: seed.world?.polityOverrides ?? {},
+        // The Workshop is authoritative for the disputes too (exportPreset.js):
+        // it opened with the world's rows stamped over the map file's, so the map
+        // it saves is the whole of them.
+        ...(seed.world?.regionClaimants
+          ? { regionClaimants: seed.world.regionClaimants, settledRegionClaims: seed.world.settledRegionClaims ?? [] }
+          : {}),
         ownerSchema: seed.world?.ownerSchema ?? currentWorld.ownerSchema,
         // Playable factions for the start-country picker.
         ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
@@ -2798,10 +2960,10 @@ const LibraryTopBar = () => {
   // The open tab's own actions: in the bar on a desktop, heading the page on a
   // phone. The Community tab brings its own.
   const tabActions = activeTab === "community" ? [] : [
-    { icon: "⟳", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
+    { icon: "refresh", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
     activeTab === "scenarios"
-      ? { icon: "⬆", label: "Import JSON", phoneLabel: "Import scenario", run: () => importScenarioInputRef.current?.click() }
-      : { icon: "⬆", label: "Import game", run: () => importGameInputRef.current?.click() },
+      ? { icon: "import", label: "Import Scenario", phoneLabel: "Import Scenario", run: () => importScenarioInputRef.current?.click() }
+      : { icon: "import", label: "Import Game", phoneLabel: "Import Game", run: () => importGameInputRef.current?.click() },
   ];
 
   return (
@@ -2915,8 +3077,7 @@ const LibraryTopBar = () => {
         {(countryPicker) => (
         <div
           onClick={closeCountryPicker}
-          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}
-        >
+          style={{ position: "fixed", inset: 0, zIndex: 10060, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: `${SAFE_TOP} ${SAFE_RIGHT} ${SAFE_BOTTOM} ${SAFE_LEFT}` }}        >
           {/* On a phone the card takes the whole visible height rather than 80%
               of it: the search, the map, the list and the buttons need every
               row a phone has. */}
@@ -3039,8 +3200,7 @@ const LibraryTopBar = () => {
                         onPickCountry={(code) => pickCountry(code)}
                       />
                     </Suspense>
-                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>
-                      {playGameId ? "Done" : "Cancel"}
+                    <button type="button" className="oh-tap-row" onClick={() => { setCountryPicker(null); setPlayGameId(null); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }} style={touchFit({ ...actionButtonStyle, marginTop: "0.6rem" }, touch)}>                      {playGameId ? "Done" : "Cancel"}
                     </button>
                   </>
                 )}
@@ -3149,31 +3309,27 @@ const LibraryTopBar = () => {
             zIndex: 10046,
           }}
         >
-          <div
-            style={{
-              alignItems: "center",
-              borderBottom: "1px solid rgba(255,255,255,0.08)",
-              display: "grid",
-              flexShrink: 0,
-              gap: isMobile ? "0.4rem" : "0.9rem",
-              // Three columns keeps the tabs optically centred on a desktop. A
-              // phone has room for the three tabs and nothing more: the logo —
-              // decorative, and its wordmark already hidden there — gives up its
-              // space, and the tab's own actions move down to head the page,
-              // where they have room for their names (below).
-              gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) auto minmax(0, 1fr)",
-              // Clear of a status bar the page draws under, and of a notch at
-              // the side in landscape; every inset is 0 on a desktop.
-              height: `calc(${BAR_HEIGHT}px + ${SAFE_TOP})`,
-              padding: `${SAFE_TOP} calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_RIGHT}) 0 calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_LEFT})`,
-            }}
-          >
+          <div style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <div
+              style={{
+                alignItems: "center",
+                display: "grid",
+                flexShrink: 0,
+                gap: isMobile ? "0.4rem" : "0.9rem",
+                gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) auto minmax(0, 1fr)",
+                height: `calc(${BAR_HEIGHT}px + ${SAFE_TOP})`,
+                margin: "0 auto",
+                maxWidth: `calc(${APP_SHELL_MAX_WIDTH} + 2rem + ${SAFE_LEFT} + ${SAFE_RIGHT})`,
+                padding: `${SAFE_TOP} calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_RIGHT}) 0 calc(${isMobile ? "0.5rem" : "1rem"} + ${SAFE_LEFT})`,
+                width: "100%",
+              }}
+            >
             {!isMobile && (
-              <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
-                <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "2.65rem", justifyContent: "center", overflow: "hidden", width: "2.65rem" }}>
-                  <img alt="Open Historia" src="/logo.png" style={{ height: "1.7rem", width: "1.7rem" }} />
+              <div style={{ alignItems: "center", display: "flex", gap: "0.95rem", minWidth: 0 }}>
+                <div style={{ alignItems: "center", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "999px", display: "flex", flexShrink: 0, height: "3.15rem", justifyContent: "center", overflow: "hidden", width: "3.15rem" }}>
+                  <img alt="Open Historia" src="/logo.png" style={{ height: "2.05rem", width: "2.05rem" }} />
                 </div>
-                <div style={{ color: "#fff", fontSize: "1.05rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
+                <div style={{ color: "#fff", fontSize: "1.42rem", fontWeight: 800, letterSpacing: "-0.03em" }}>
                   Open Historia
                 </div>
               </div>
@@ -3198,8 +3354,8 @@ const LibraryTopBar = () => {
                   onClick={() => setActiveTab(tab)}
                   style={touchFit({
                     ...actionButtonStyle,
-                    background: activeTab === tab ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.05)",
-                    borderColor: activeTab === tab ? "rgba(255,255,255,0.19)" : "rgba(255,255,255,0.08)",
+                    background: activeTab === tab ? "rgba(109,66,217,0.34)" : "rgba(255,255,255,0.05)",
+                    borderColor: activeTab === tab ? "rgba(154,127,255,0.58)" : "rgba(255,255,255,0.08)",
                     minWidth: isMobile ? "0" : "6.6rem",
                     padding: isMobile ? "0.55rem 0.6rem" : undefined,
                   }, touch)}
@@ -3212,26 +3368,43 @@ const LibraryTopBar = () => {
 
             {!isMobile && (
               <div style={{ alignItems: "center", display: "flex", flexShrink: 0, gap: "0.55rem", justifyContent: "flex-end" }}>
-                {tabActions.map(({ label, run }) => (
-                  // padding: undefined leaves these the browser's own padding in
-                  // place of the pill's, as they have always had.
-                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit({ ...actionButtonStyle, flexShrink: 0, padding: undefined }, touch)} type="button">
-                    {label}
+                {typeof onOpenSettings === "function" && (
+                  <button
+                    className="oh-tap-row"
+                    onClick={onOpenSettings}
+                    style={touchFit({ ...actionButtonStyle, flexShrink: 0 }, touch)}
+                    title={isMobile ? "Settings" : undefined}
+                    type="button"
+                  >
+                    <ButtonIcon kind="settings" /> Settings
+                  </button>
+                )}
+                {tabActions.map(({ icon, label, run }) => (
+                  <button key={label} className="oh-tap-row" onClick={run} style={touchFit({ ...actionButtonStyle, flexShrink: 0 }, touch)} type="button">
+                    <ButtonIcon kind={icon} /> {label}
                   </button>
                 ))}
               </div>
             )}
+            </div>
           </div>
 
-          <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? `1.1rem calc(0.8rem + ${SAFE_RIGHT}) calc(2.5rem + ${SAFE_BOTTOM}) calc(0.8rem + ${SAFE_LEFT})` : `1.5rem calc(1.6rem + ${SAFE_RIGHT}) calc(3rem + ${SAFE_BOTTOM}) calc(1.6rem + ${SAFE_LEFT})` }}>
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            <div style={{ margin: "0 auto", maxWidth: APP_SHELL_MAX_WIDTH, padding: isMobile ? `1.1rem calc(0.8rem + ${SAFE_RIGHT}) calc(2.5rem + ${SAFE_BOTTOM}) calc(0.8rem + ${SAFE_LEFT})` : `1.5rem calc(1.6rem + ${SAFE_RIGHT}) calc(3rem + ${SAFE_BOTTOM}) calc(1.6rem + ${SAFE_LEFT})`, width: "100%" }}>
             {/* Phones: the tab's actions head the page, by name. In the bar they
-                were a bare ⟳ and ⬆ named only by a tooltip, which a finger
+                would be icon-only controls named by a tooltip, which a finger
                 never sees, and the bar has no room for words beside the tabs. */}
-            {isMobile && tabActions.length > 0 && (
+            {isMobile && (typeof onOpenSettings === "function" || tabActions.length > 0) && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.1rem" }}>
+                {typeof onOpenSettings === "function" && (
+                  <button className="oh-tap-row" onClick={onOpenSettings} style={touchFit(actionButtonStyle, touch)} type="button">
+                    <ButtonIcon kind="settings" />
+                    Settings
+                  </button>
+                )}
                 {tabActions.map(({ icon, label, phoneLabel, run }) => (
                   <button key={label} className="oh-tap-row" onClick={run} style={touchFit(actionButtonStyle, touch)} type="button">
-                    <span aria-hidden="true">{icon}</span>
+                    <ButtonIcon kind={icon} />
                     {phoneLabel || label}
                   </button>
                 ))}
@@ -3274,7 +3447,7 @@ const LibraryTopBar = () => {
                 </div>
               ) : (
                 <>
-                  <MenuRow title="🕐 Last Played">
+                  <MenuRow description="Continue where you left off." icon="🕐" title="Last Played">
                     {lastPlayedGames.map((game) => (
                       <GameCard
                         key={game.id}
@@ -3289,7 +3462,7 @@ const LibraryTopBar = () => {
                       />
                     ))}
                   </MenuRow>
-                  <MenuRow title="🔥 Most Played">
+                  <MenuRow description="Your most active games." icon="🔥" title="Most Played">
                     {mostPlayedGames.map((game) => (
                       <GameCard
                         key={game.id}
@@ -3305,7 +3478,7 @@ const LibraryTopBar = () => {
                     ))}
                   </MenuRow>
                   {archivedGames.length > 0 && (
-                    <MenuRow title={`🗄️ Archived (${archivedGames.length})`}>
+                    <MenuRow description="Hidden or older campaigns, kept ready when you need them." icon="🗄️" title={`Archived (${archivedGames.length})`}>
                       {archivedGames.map((game) => (
                         <GameCard
                           key={game.id}
@@ -3325,7 +3498,7 @@ const LibraryTopBar = () => {
               )
             ) : (
               <>
-                <MenuRow title="🔥 Most Played" emptyText="No scenarios yet.">
+                <MenuRow description="Your most active scenarios." emptyText="No scenarios yet." icon="🔥" title="Most Played">
                   {mostPlayedScenarios.map((scenario) => (
                     <ScenarioCard
                       key={scenario.id}
@@ -3340,7 +3513,7 @@ const LibraryTopBar = () => {
                     />
                   ))}
                 </MenuRow>
-                <MenuRow title="🕐 Last Updated" emptyText="No scenarios yet.">
+                <MenuRow description="Recently edited or imported scenarios." emptyText="No scenarios yet." icon="🕐" title="Last Updated">
                   {lastUpdatedScenarios.map((scenario) => (
                     <ScenarioCard
                       key={scenario.id}
@@ -3355,7 +3528,7 @@ const LibraryTopBar = () => {
                     />
                   ))}
                 </MenuRow>
-                <MenuRow title="✦ Your Scenarios">
+                <MenuRow description="Scenarios you created or customized yourself." icon="✦" title="Your Scenarios">
                   <CreateScenarioTile busy={isBusy} onCreate={handleCreateScenario} />
                   {yourScenarios.map((scenario) => (
                     <ScenarioCard
@@ -3373,6 +3546,7 @@ const LibraryTopBar = () => {
                 </MenuRow>
               </>
             )}
+            </div>
           </div>
         </div>
       </Presence>
@@ -3393,6 +3567,10 @@ const LibraryTopBar = () => {
         onExportBundle={handleExportBundle}
         onExportPrompts={handleExportPrompts}
         onImportPrompts={handleImportPrompts}
+        onDetailsChange={(nextDetails) => {
+          setEditorDetails(nextDetails);
+          setEditorState((current) => current ? { ...current } : current);
+        }}
         onOpenMapEditor={() => {
           const scenario = editorDetails?.scenario || null;
           setMapEditorScenario(scenario);
@@ -3427,6 +3605,14 @@ const LibraryTopBar = () => {
                 name: scenario.name || "",
                 author: world.author || "",
                 ownershipOverrides: world.regionOwnershipOverrides || {},
+                // The world's disputes, stamped over the map file's as the game
+                // reads them, so the Workshop edits what the game shows.
+                claimOverrides: {
+                  claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
+                    ? world.regionClaimants
+                    : {},
+                  settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
+                },
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,

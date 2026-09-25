@@ -227,7 +227,6 @@ export const downloadHubBundle = async (bundleUrl) => {
 // Never wider than the phone it is on: at 320 px a 19rem card pushed the
 // search results sideways off the screen.
 const CARD_WIDTH = "min(19rem, calc(100vw - 2rem))";
-
 const cardSurface = {
   background: "rgba(255,255,255,0.04)",
   border: "1px solid rgba(255,255,255,0.09)",
@@ -808,8 +807,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
             <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, background: DISCORD_BLURPLE, borderColor: "#6d78f5", color: "#fff", fontWeight: 700, gap: "0.45rem", textDecoration: "none" }, touch)}>
               <DiscordMark size="1.05rem" />
               Join the Discord
-            </a>
-          </div>
+            </a>          </div>
 
           {publishPickerOpen && (
             <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "14px", marginBottom: "0.9rem", padding: "0.8rem" }}>
@@ -865,8 +863,7 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                 )}
                 <ScenarioRow title="⬇ Most Installed" posts={rows.byInstalls} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
                 <ScenarioRow title="👍 Most Liked" posts={rows.byLikes} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
-                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />
-              </>
+                <ScenarioRow title="🕐 Most Recent" posts={rows.byRecent} busyId={busyId} onImport={handleImport} onSelect={selectPost} touch={touch} isMobile={isMobile} />              </>
             )
           )}
         </>

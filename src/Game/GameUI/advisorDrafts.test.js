@@ -140,3 +140,22 @@ test("empty and nullish input are safe", () => {
   assert.deepEqual(splitAtBlockquotes(null), []);
   assert.deepEqual(buildMessageDrafts([], ""), []);
 });
+
+test("typed private drafts preserve deterministic bilateral destination metadata", () => {
+  const drafts = buildMessageDrafts([{ targetType: "private", country: "Russian Empire" }], "> Private note.");
+  assert.deepEqual(drafts.map(({ targetType, country, institutionId, caseId, text }) => ({ targetType, country, institutionId, caseId, text })), [{
+    targetType: "private", country: "Russian Empire", institutionId: "", caseId: "", text: "Private note.",
+  }]);
+});
+
+test("typed institution Council and lifecycle drafts preserve exact thread identity", () => {
+  const reply = "> Council note.\n\n> Hearing note.";
+  const drafts = buildMessageDrafts([
+    { targetType: "institution-council", institutionId: "mitteleuropa" },
+    { targetType: "institution-lifecycle", institutionId: "mitteleuropa", caseId: "case-1", country: "Austria-Hungary" },
+  ], reply);
+  assert.deepEqual(drafts.map(({ targetType, country, institutionId, caseId }) => ({ targetType, country, institutionId, caseId })), [
+    { targetType: "institution-council", country: "", institutionId: "mitteleuropa", caseId: "" },
+    { targetType: "institution-lifecycle", country: "Austria-Hungary", institutionId: "mitteleuropa", caseId: "case-1" },
+  ]);
+});

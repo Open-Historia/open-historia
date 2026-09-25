@@ -139,3 +139,76 @@ test("the count matches what is shown, so a hidden programme cannot be inferred 
   assert.equal(answer.count, answer.projects.length);
   assert.equal(answer.count, 2);
 });
+
+test("political_actor keeps canonical private politics inside the narrator or the actor itself", () => {
+  const world = {
+    ...WORLD,
+    politicalActors: {
+      schemaVersion: 6,
+      byPolity: {
+        Angola: {
+          polityKey: "Angola",
+          name: "Angola",
+          traits: ["elite-fragmented"],
+          fears: ["military split"],
+          government: { form: "Republic", headOfGovernment: { name: "Prime Minister" } },
+          politicalSystem: { type: "presidential" },
+        },
+        Portugal: {
+          polityKey: "Portugal",
+          name: "Portugal",
+          traits: ["private-canonical-trait"],
+          fears: ["private-canonical-fear"],
+          government: { form: "Republic" },
+          politicalSystem: { type: "parliamentary" },
+        },
+      },
+    },
+  };
+  const narrator = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER }), "political_actor", { polity: "Portugal" });
+  assert.equal(narrator.level, "gm");
+  assert.deepEqual(narrator.canonical.traits, ["private-canonical-trait"]);
+
+  const own = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER, audience: viewerAudience(["Portugal"]) }), "political_actor", { polity: "Portugal" });
+  assert.equal(own.level, "gm");
+
+  const foreign = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER, audience: viewerAudience(["Angola"]) }), "political_actor", { polity: "Portugal" });
+  assert.equal(foreign.level, "public");
+  assert.equal("canonical" in foreign, false);
+  assert.equal(JSON.stringify(foreign).includes("private-canonical-trait"), false);
+  assert.equal(JSON.stringify(foreign).includes("private-canonical-fear"), false);
+});
+
+test("institution_info exposes formal business to the narrator and members, not unrelated governments", () => {
+  const world = {
+    ...WORLD,
+    institutions: {
+      schemaVersion: 1,
+      byId: {
+        "regional-council": {
+        id: "regional-council",
+        name: "Regional Council",
+        shortName: "RC",
+        kind: "alliance",
+        status: "active",
+        members: [
+          { polity: "Angola", status: "member" },
+          { polity: "Portugal", status: "member" },
+        ],
+        proposals: {
+          "p-secret": { id: "p-secret", title: "Contingency Plan", summary: "Member-only deliberation", status: "draft", createdBy: "Angola" },
+        },
+        },
+      },
+    },
+  };
+  const narrator = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER }), "institution_info", { institution: "RC" });
+  assert.equal(narrator.activeBusiness?.[0]?.title, "Contingency Plan");
+
+  const member = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER, audience: viewerAudience(["Angola"]) }), "institution_info", { institution: "Regional Council" });
+  assert.equal(member.activeBusiness?.[0]?.title, "Contingency Plan");
+
+  const outsider = executeLookup(buildLookupContext({ regions: REGIONS, world, player: PLAYER, audience: viewerAudience(["Nigeria"]) }), "institution_info", { institution: "RC" });
+  assert.equal("activeBusiness" in outsider, false);
+  assert.match(outsider.note, /not a member/i);
+});

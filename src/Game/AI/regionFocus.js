@@ -79,6 +79,7 @@ const impactOwners = (impacts) => {
   for (const entry of Array.isArray(impacts?.regionControlOps) ? impacts.regionControlOps : []) { push(entry?.fromCode); push(entry?.toCode); push(entry?.actorCode); }
   for (const entry of Array.isArray(impacts?.regionClaims) ? impacts.regionClaims : []) { push(entry?.claimantCode); }
   for (const entry of Array.isArray(impacts?.polityChanges) ? impacts.polityChanges : []) { push(entry?.code); push(entry?.name); }
+  for (const entry of Array.isArray(impacts?.politicalActorOps) ? impacts.politicalActorOps : []) { push(entry?.polityKey || entry?.polity || entry?.country); }
   for (const entry of Array.isArray(impacts?.unitOps) ? impacts.unitOps : []) { push(entry?.unit?.ownerCode); }
   return names;
 };
