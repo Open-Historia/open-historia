@@ -7,6 +7,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/AppTheme">
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
@@ -38,4 +39,11 @@
          remote tile servers instead of drawing its bundled relief. A normal
          permission, granted at install without a prompt. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- An export is saved into Downloads/Open Historia (src/runtime/native/fileSave.js).
+         Android 11 and newer let an app create files there with no permission at
+         all, so these stop at Android 10 (API 29), where the Filesystem plugin asks
+         for them the first time; requestLegacyExternalStorage above is what lets
+         Android 10 write by path. Refused, the export goes to the share sheet. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 </manifest>
