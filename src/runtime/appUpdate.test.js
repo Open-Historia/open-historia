@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import {
   APP_UPDATE_SETTLED_STATES,
   describeUpdateFailure,
+  desktopUpdateProgressIsStale,
+  desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
@@ -88,6 +90,33 @@ test("isUpdateSettled treats an unknown or absent state as still running", () =>
 });
 test("APP_UPDATE_SETTLED_STATES holds exactly the finished states", () => {
   assert.deepEqual([...APP_UPDATE_SETTLED_STATES].sort(), ["error", "none", "ready"]);
+});
+
+test("desktop updater progress belongs only to the release build it started for", () => {
+  assert.equal(desktopUpdateProgressMatchesBuild("35868314676", "35868314676"), true);
+  assert.equal(desktopUpdateProgressMatchesBuild("35868314676", "35900000000"), false);
+  for (const [progressBuild, availableBuild] of [
+    ["", "35900000000"],
+    ["35868314676", ""],
+    [null, "35900000000"],
+    [undefined, undefined],
+  ]) {
+    assert.equal(desktopUpdateProgressMatchesBuild(progressBuild, availableBuild), false);
+  }
+});
+
+test("a settled updater result becomes stale when a newer desktop build is published", () => {
+  for (const state of APP_UPDATE_SETTLED_STATES) {
+    assert.equal(desktopUpdateProgressIsStale("old-build", "new-build", state), true, state);
+  }
+  for (const state of ["idle", "checking", "available", "downloading"]) {
+    assert.equal(
+      desktopUpdateProgressIsStale("old-build", "new-build", state),
+      false,
+      `${state} must finish before the old attempt is discarded`,
+    );
+  }
+  assert.equal(desktopUpdateProgressIsStale("same-build", "same-build", "ready"), false);
 });
 
 test("describeUpdateFailure keeps the updater's reason and reads as one sentence", () => {

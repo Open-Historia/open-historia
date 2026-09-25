@@ -5,6 +5,8 @@ import {
   APP_UPDATE_CHECK_INTERVAL_MS,
   APP_UPDATE_REFOCUS_THROTTLE_MS,
   describeUpdateFailure,
+  desktopUpdateProgressIsStale,
+  desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
@@ -92,7 +94,13 @@ export default function AppUpdateBanner() {
   // Null until the player asks for one — the banner is otherwise the same as it
   // was, and a build that cannot update itself never sets this at all.
   const [progress, setProgress] = useState(null);
+  // Which release-manifest build this updater attempt was started for. The release
+  // manifest uses an opaque CI build id while electron-updater reports a semver, so
+  // the renderer owns this association explicitly.
+  const [progressBuild, setProgressBuild] = useState("");
   const lastRefocusRef = useRef(0);
+  const desktopBuild = String(desktop?.build || "");
+  const progressMatchesDesktop = desktopUpdateProgressMatchesBuild(progressBuild, desktopBuild);
 
   // A second-by-second poll, but only between pressing Update and the update being
   // ready (or failing) — never while the banner is merely sitting there. `progress`
@@ -149,6 +157,17 @@ export default function AppUpdateBanner() {
     const timer = setInterval(probe, APP_UPDATE_CHECK_INTERVAL_MS);
     return () => { dropped = true; clearInterval(timer); };
   }, [isApp, isWeb]);
+
+  // A newer release can be published after an older one has downloaded but before
+  // the player applies it. Never let that old settled state turn into "Restart now"
+  // for the new release. Keep an in-flight attempt alive; once it settles, discard
+  // its stale renderer state and offer the newly-advertised build normally.
+  useEffect(() => {
+    if (!desktopUpdateProgressIsStale(progressBuild, desktopBuild, progress?.state)) return;
+    setProgress(null);
+    setProgressBuild("");
+    setUpdating(false);
+  }, [desktopBuild, progress?.state, progressBuild]);
 
   useEffect(() => {
     if (!supported) return undefined;
@@ -207,6 +226,7 @@ export default function AppUpdateBanner() {
       // swaps the installation on restart, so there is nothing for the player to
       // find in a downloads folder and run.
       if (desktop.auto && progress?.state !== "error") {
+        setProgressBuild(desktopBuild);
         setProgress({ state: "checking", percent: 0 });
         try {
           const res = await fetch("/api/app-update/download", { method: "POST" });
@@ -281,12 +301,13 @@ export default function AppUpdateBanner() {
       const failure = progress?.state === "error" ? `${describeUpdateFailure(progress.error)} ` : "";
       return `${failure}Download the new version and run it — your games are kept.`;
     }
-    if (progress?.state === "ready") return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready" && progressMatchesDesktop) return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready") return "A newer update is available. Download it before restarting.";
     if (progress?.state === "downloading") return `Downloading the update… ${progress.percent || 0}%`;
     if (progress?.state === "checking") return "Fetching the update…";
     return "Installs itself in the background — your games are kept.";
   };
-  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready");
+  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready" && progressMatchesDesktop);
   // Anything the updater is still working through, by the same rule the poll uses —
   // so a state with no percentage to show yet still reads as busy rather than
   // falling through to the button's idle label and claiming a download is opening.

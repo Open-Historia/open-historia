@@ -35,6 +35,27 @@ export const APP_UPDATE_SETTLED_STATES = ["ready", "error", "none"];
 // no reading at all — counts as still moving.
 export const isUpdateSettled = (state) => APP_UPDATE_SETTLED_STATES.includes(state);
 
+// Desktop release ids are opaque CI build ids. Keep the renderer's updater state
+// tied to the exact release the player asked it to download: a "ready" result for
+// an older build is not evidence that a newly-published build is ready too.
+export const desktopUpdateProgressMatchesBuild = (progressBuild, availableBuild) => {
+  const target = String(progressBuild ?? "").trim();
+  const available = String(availableBuild ?? "").trim();
+  return Boolean(target && available && target === available);
+};
+
+// If a newer release appears while an older attempt is still downloading, let the
+// in-flight updater finish rather than starting two operations concurrently. Once
+// that older attempt settles, however, its result is stale UI state and must not
+// become "Restart now" for the newly-advertised build.
+export const desktopUpdateProgressIsStale = (progressBuild, availableBuild, state) =>
+  Boolean(
+    String(progressBuild ?? "").trim()
+      && String(availableBuild ?? "").trim()
+      && !desktopUpdateProgressMatchesBuild(progressBuild, availableBuild)
+      && isUpdateSettled(state),
+  );
+
 // A positive integer build number, or null for anything else (dev/web/desktop have
 // no stamped build, so they can never see an "update available").
 export const toBuild = (value) => {
