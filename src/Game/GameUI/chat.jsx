@@ -3,7 +3,7 @@ import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dedupeByName } from "../../runtime/countryList.js";
+import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/countryList.js";
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
@@ -30,6 +30,7 @@ import {
     getNationColors,
     getNationFlags,
     loadCountryNames as loadCachedCountryNames,
+    loadRegionCatalog,
     readJson,
 } from "../../runtime/assets.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
@@ -223,6 +224,25 @@ const findCommunityFlagPost = (posts, { code, name }) => {
 // The read-only world view: resolvePolityFlag needs the polity records
 // (aliases, mapRefs, legacy flags) to find an authored flag by identity.
 const getWorldForFlags = () => readWorldStateView().catch(() => ({}));
+
+// Who holds land, read from the map each time a picker opens, so a country
+// absorbed a moment ago is already gone from it (countryList.js). Null until
+// read, and on any failure: the pickers then list everyone rather than hide a
+// country on a guess.
+const useLandHolders = (active) => {
+    const [state, setState] = useState({ holders: null, world: null });
+    useEffect(() => {
+        if (!active) return undefined;
+        let cancelled = false;
+        Promise.all([loadRegionCatalog(), readWorldStateView()])
+            .then(([regions, world]) => {
+                if (!cancelled) setState({ holders: landHolderNames(regions, world), world });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active]);
+    return state;
+};
 
 const resolveFlagImageUrl = ({ code, name } = {}) => {
     if (!code && !name) return Promise.resolve(null);
@@ -2761,6 +2781,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
     const [openedAssessments, setOpenedAssessments] = useState({});
     const [open, setOpen]             = useState(null); // { target, exchange }
     const [choosing, setChoosing]     = useState(false);
+    const landHolders = useLandHolders(choosing);
     const [error, setError]           = useState("");
     const [section, setSection]       = useState("overview");
     const [countryQuery, setCountryQuery] = useState("");
@@ -2862,7 +2883,8 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         return <InterceptView target={open.target} exchange={open.exchange} clarity={clarity} seal={world?.spySeal} onBack={() => setOpen(null)} />;
     }
 
-    const candidates = countryRows.filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
+    const candidates = pickableCountries(countryRows, landHolders)
+        .filter((country) => !spies.some((spy) => sameCountry(spy.target, country.name)));
     const storyOf = (spy) => (storyDraft[spy.id] !== undefined ? storyDraft[spy.id] : spy.coverStory);
     const inputStyle = { width: "100%", boxSizing: "border-box", padding: "0.45rem 0.6rem", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.25)", color: "white", fontSize: "0.76rem", fontFamily: "sans-serif" };
     const full = spies.length >= MAX_ACTIVE_SPIES;
@@ -3347,9 +3369,10 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         };
     }, [isOpen, hasLoadedInitialData]);
 
+    const landHolders = useLandHolders(showSelector);
     const availableCountries = useMemo(
-        () => countries.filter(country => !countryMatchesIdentity(country, playerCountry)),
-                                       [countries, playerCountry]
+        () => pickableCountries(countries, landHolders).filter(country => !countryMatchesIdentity(country, playerCountry)),
+                                       [countries, landHolders, playerCountry]
     );
 
     const handleMessagesUpdate = (chatId, newMessages) => {
