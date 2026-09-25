@@ -55,7 +55,7 @@ test("formal institution council channels cannot be deleted like disposable dipl
 
 test("Diplomacy uses the restored workspace-sized shell", () => {
   const chat = read("./chat.jsx");
-  assert.match(chat, /width: "min\(58rem, calc\(72vw - var\(--oh-right-drawer-safe-offset, 0px\)\)\)"/);
+  assert.match(chat, /width: "min\(58rem, calc\(100vw - 1rem - var\(--oh-right-drawer-safe-offset, 0px\)\)\)"/);
   assert.match(chat, /height: "min\(50rem, calc\(100vh - 8rem\)\)"/);
   assert.doesNotMatch(chat, /width: "26\.25rem"/);
 });

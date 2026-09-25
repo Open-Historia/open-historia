@@ -42,7 +42,7 @@ test("composer uses the modern send icon and preserves auto-growing textarea beh
 });
 
 test("diplomacy yields space to the live desktop right drawer", () => {
-  assert.match(source, /width: "min\(58rem, calc\(72vw - var\(--oh-right-drawer-safe-offset, 0px\)\)\)"/);
+  assert.match(source, /width: "min\(58rem, calc\(100vw - 1rem - var\(--oh-right-drawer-safe-offset, 0px\)\)\)"/);
   assert.match(main, /const RIGHT_DRAWER_SAFE_OFFSET_VAR = "--oh-right-drawer-safe-offset"/);
   assert.match(main, /const rightDrawerSafeOffset = rightDrawerOpen && !isMobile/);
   assert.match(main, /style\.setProperty\(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset\)/);
