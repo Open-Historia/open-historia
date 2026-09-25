@@ -7,12 +7,13 @@ import {
     getRateLimitPolicy,
     getReasoningEnabled,
     getResolvedFallbackList,
-    getTaskPick,
+    resolveTaskFallbackEntries,
     providerSupportsModelDiscovery,
     saveRecentModel,
     updateEntry,
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger } from "./requestBudget.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
@@ -94,6 +95,8 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
+import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
+import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -439,8 +442,7 @@ const PAGE_IS_LOCAL = isLocallyServed();
 // a request from the app process, where CORS does not exist. It stands in for
 // the relay for the same endpoints — a model on the LAN — with one difference
 // the caller can see: the reply arrives whole, not streamed (native/http.js).
-const NATIVE_HTTP = Boolean(import.meta.env.VITE_OH_NATIVE) && nativeHttpAvailable();
-// Endpoints that have already proven they need the relay (no browser CORS) —
+const NATIVE_HTTP = Boolean(import.meta.env.VITE_OH_NATIVE) && nativeHttpAvailable();// Endpoints that have already proven they need the relay (no browser CORS) —
 // remembered so we skip the doomed direct attempt on every later call.
 const relayOnlyOrigins = new Set();
 
@@ -504,7 +506,6 @@ async function providerFetch(url, options = {}) {
     if (NATIVE_HTTP && (relayOnlyOrigins.has(origin) || isLocalEndpoint(url))) {
         return nativeHttpFetch(url, options);
     }
-
     try {
         return await directFetch(url, options);
     } catch (error) {
@@ -2377,6 +2378,11 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // skip reports what it cost): both are for the request budget below.
     const {
         languageMode = "ui", logLabel = "", __debug: debugMeta = null, __debugSink: debugSink = null, lookups = null,
+        // Developer/evaluation harness hooks. They are stripped here and never
+        // reach a provider. __forceEntryId pins one exact Fallback-list entry so
+        // paired A/B runs cannot silently compare different models. __capture
+        // receives the exact request/response metrics even when telemetry is off.
+        __capture: capture = null, __forceEntryId: forceEntryId = "",
         requestKind = PLAYER_REQUEST, onRequest: observeRequest = null,
         ...providerOpts
     } = opts;
@@ -2387,13 +2393,32 @@ export async function callAI(systemPrompt, history, opts = {}) {
         systemPrompt = `${systemPrompt}\n\n${directive}`;
     }
 
-    const entries = getResolvedFallbackList();
-    const preferredEntryId = providerOpts.taskKey ? getTaskPick(providerOpts.taskKey) : "";
+    const resolvedRouting = resolveTaskFallbackEntries(providerOpts.taskKey);
+    let entries = resolvedRouting.entries;
+    let preferredEntryId = resolvedRouting.preferredEntryId;
+    const pinnedId = String(forceEntryId ?? "").trim();
+    if (pinnedId) {
+        const pinned = entries.find((entry) => entry.id === pinnedId);
+        if (!pinned) throw new Error(`The selected AI entry (${pinnedId}) is no longer in the Fallback list.`);
+        entries = [pinned];
+        preferredEntryId = pinned.id;
+    }
     // Named for where the call STARTS; the answer names who actually answered.
     const firstChoice = entries.find((entry) => entry.id === preferredEntryId) ?? entries[0];
     const provider = firstChoice?.provider ?? "(none)";
     const label = logLabel || "AI call";
     const startedAt = Date.now();
+    if (capture && typeof capture === "object") {
+        capture.startedAt = startedAt;
+        capture.taskKey = providerOpts.taskKey ?? (logLabel || "direct");
+        capture.requestedEntryId = pinnedId || preferredEntryId || firstChoice?.id || "";
+        capture.systemPrompt = systemPrompt;
+        capture.history = Array.isArray(history)
+            ? history.map((entry) => ({ role: entry?.role, parts: Array.isArray(entry?.parts) ? entry.parts.map((part) => ({ text: String(part?.text ?? "") })) : [] }))
+            : [];
+        capture.userMessage = Array.isArray(history) ? String(history.at(-1)?.parts?.[0]?.text ?? "") : "";
+        capture.requests = [];
+    }
     // Telemetry (Settings → AI debug console): one record per call — prompt,
     // answer, model, usage, latency — in memory and, while recording is on, in
     // IndexedDB. A task-runner call is judged by its validator afterwards, so
@@ -2436,6 +2461,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
     // than per call — one callAI can be many requests. The ledger must never
     // cost a call its answer.
     const noteRequest = (status) => {
+        if (capture && typeof capture === "object") capture.requests?.push(status);
         try {
             requestLedger.note({
                 status,
@@ -2517,7 +2543,10 @@ export async function callAI(systemPrompt, history, opts = {}) {
                         usage = sumUsage(usage, reported);
                     },
                     // The model the provider actually resolved (overrides, discovery).
-                    onModel: (model) => { if (record) record.model = String(model ?? ""); },
+                    onModel: (model) => {
+                        if (record) record.model = String(model ?? "");
+                        if (capture && typeof capture === "object") capture.model = String(model ?? "");
+                    },
                 }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
                     label,
                     provider: entry.provider,
@@ -2543,12 +2572,28 @@ export async function callAI(systemPrompt, history, opts = {}) {
             ...(usage ?? {}),
         }, { verbose: true });
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
+        const capturedRawResponse = typeof result === "string"
+            ? result
+            : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : "");
         finishAiRecord(record, {
             ok: true,
-            rawResponse: typeof result === "string"
-                ? result
-                : String(result?.rawText ?? "") || (result?.toolInput ? JSON.stringify(result.toolInput) : ""),
+            rawResponse: capturedRawResponse,
         });
+        if (capture && typeof capture === "object") {
+            capture.ok = true;
+            capture.endedAt = Date.now();
+            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
+            capture.firstByteMs = timer.firstByteMs;
+            capture.provider = answeredBy?.provider || firstChoice?.provider || "";
+            capture.entryId = answeredBy?.id || firstChoice?.id || "";
+            capture.entryLabel = answeredBy?.label || firstChoice?.label || "";
+            capture.model = capture.model || answeredBy?.model || firstChoice?.model || "";
+            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
+            capture.lookupRounds = lookupRounds;
+            capture.lookupCalls = lookupCalls;
+            capture.rawResponse = capturedRawResponse;
+            capture.viaToolCall = Boolean(result?.toolInput);
+        }
         return result;
     } catch (error) {
         // NOT verbose-only. A call that failed is the thing a bug report is most
@@ -2564,6 +2609,14 @@ export async function callAI(systemPrompt, history, opts = {}) {
             { verbose: cancelled });
         attachCallMetrics(record, { usage, firstByteMs: timer.firstByteMs });
         finishAiRecord(record, { ok: false, error: cancelled ? "cancelled" : String(error?.message || error) });
+        if (capture && typeof capture === "object") {
+            capture.ok = false;
+            capture.endedAt = Date.now();
+            capture.latencyMs = Math.max(0, capture.endedAt - startedAt);
+            capture.firstByteMs = timer.firstByteMs;
+            capture.usage = usage && typeof usage === "object" ? { ...usage } : null;
+            capture.error = cancelled ? "cancelled" : String(error?.message || error);
+        }
         throw error;
     }
 }
@@ -2659,15 +2712,42 @@ ${plannedActionsWithIds}`;
 // or one real line break (very likely in a multi-paragraph letter) makes the
 // fence invalid JSON, which advisor.jsx's extractFencedJson discards without
 // a trace — the button just never appears, with nothing to explain why. The
-// JSON now carries only the country name, and advisor.jsx pulls the actual
-// text back out of the blockquote itself, positionally.
+// JSON now carries only the explicit destination identity, and advisor.jsx
+// pulls the actual text back out of the blockquote itself, positionally.
 const ADVISOR_MESSAGE_DRAFT_DIRECTIVE = `[Drafting Messages to Send]
-Whenever you draft an actual diplomatic message the player could send to another polity right now — not a summary or paraphrase of what they might say, but the literal message text — write it as a markdown blockquote (a line starting with "> "), exactly as you already do, and quote nothing else in the reply that way. Immediately after all such blockquotes, in ADDITION to your normal prose (never instead of it), append a single fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, IN THE SAME ORDER their blockquotes appear above: {"country":"<the exact recipient polity name>"}. Do not repeat the message text in this block — do not include a "text" field — the blockquote itself is the message. Omit the block entirely when you have not drafted an actual sendable message this turn — most replies need none.
+Whenever you draft an actual diplomatic message the player could send right now — not a summary or paraphrase, but the literal message text — write it as a markdown blockquote (a line starting with "> "), and quote nothing else in the reply that way. Immediately after all such blockquotes, append one fenced \`\`\`senddraft block containing a JSON array with one entry per drafted message, in the SAME ORDER the blockquotes appear. Do not repeat the message text in JSON.
+
+Every draft MUST carry an explicit destination:
+- Private bilateral: {"targetType":"private","country":"<exact recipient polity name>"}.
+- Institution Council: {"targetType":"institution-council","institutionId":"<exact institution id>","country":"<optional display recipient>"}.
+- Institution lifecycle/accession hearing: {"targetType":"institution-lifecycle","institutionId":"<exact institution id>","caseId":"<exact lifecycle case id>","country":"<counterparty display name>"}.
+
+Use only exact ids exposed in [Current Diplomatic & Institutional Options]. NEVER omit targetType for an institutional message and NEVER assume the current/latest diplomacy chat is the destination. If you are drafting ordinary bilateral correspondence, targetType must be "private" even when that polity also shares an institution with the player. Omit the block entirely when you have not drafted a sendable message this turn.
 
 Example:
 > Your Excellency, I write to propose a mutual non-aggression pact between our nations...
 \`\`\`senddraft
-[{"country":"France"}]
+[{"targetType":"private","country":"France"}]
+\`\`\``;
+
+// Formal institution business is separate from diplomatic prose. The Advisor
+// may prepare an exact action, but it never executes merely because the model
+// recommends it: advisor.jsx renders a confirmation button and the native
+// institution runtime revalidates the player's authority on click.
+const ADVISOR_INSTITUTION_DRAFT_DIRECTIVE = `[Drafting Formal Institution Actions]
+When you recommend a concrete formal institutional step that the player can legally take RIGHT NOW, normally append one fenced \`\`\`institutiondraft block containing a JSON array in the SAME reply instead of stopping at "formal execution is your prerogative". This is a DRAFT ONLY: the game shows the player a confirmation button and native governance revalidates everything before execution. Never say the act has happened merely because you drafted it.
+
+Allowed draft shapes:
+- Table a new agenda resolution: {"type":"table-proposal","institutionId":"<exact id>","proposalType":"resolution","title":"<short title>","summary":"<what the institution should decide>"}
+- Submit an EXISTING player-sponsored proposal for formal voting: {"type":"submit-proposal","institutionId":"<exact id>","proposalId":"<exact existing proposal id>"}
+- Cast the player's ballot on an EXISTING open proposal: {"type":"vote","institutionId":"<exact id>","proposalId":"<exact existing proposal id>","choice":"yes|no|abstain|veto","reason":"<optional rationale>"}
+- Send a membership invitation through the institution lifecycle: {"type":"invite","institutionId":"<exact id>","polity":"<exact target polity name>","requestedStatus":"member|observer|associate|participant","reason":"<optional rationale>"}
+
+Use ONLY exact institution/proposal ids and current affordances exposed in [Current Diplomatic & Institutional Options]. Do not invent an id or a ballot that is not open. Do not use this block for ordinary Council speech; that uses senddraft. Do not silently combine multiple legal stages: if a proposal must first be tabled and only later submitted for voting, draft the currently legal next step. For accession, follow the charter's lifecycle rather than inventing a pre-vote when the actual next step is an invitation. Omit the block when there is no formal player action to prepare.
+
+Example:
+\`\`\`institutiondraft
+[{"type":"table-proposal","institutionId":"mitteleuropa","proposalType":"resolution","title":"Danube Transport Coordination","summary":"Adopt a common Mitteleuropa framework for cross-border rail scheduling and customs clearance."}]
 \`\`\``;
 
 // The advisor has always been handed the whole world's unit list, but under a
@@ -2903,9 +2983,16 @@ async function buildAdvisorSystemPrompt() {
         renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
         variables,
     );
+    const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
+        world: worldData,
+        playerPolity: gameData?.country || "",
+        chats: chatData,
+    });
     const directives = [
+        advisorPoliticalDiplomacy.text,
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
+        ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         ADVISOR_DEPLOY_DIRECTIVE,
         buildAdvisorProjectsDirective(variables.projectsSummary),
         buildAdvisorForcesDirective(variables.forcePosture),
@@ -2946,22 +3033,55 @@ async function buildAdvisorSystemPrompt() {
 // `chatId` names the thread being answered. That thread rides as the turns, so
 // it is left out of the digest of the speaker's other chats as well — it used
 // to appear there too, a second copy that changed with every message.
-export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", { chatId = "" } = {}) {
+export async function buildDiplomaticSystemPrompt(countries, playerCountry, speakingAs = "", {
+    chatId = "",
+    // Evaluation-only seams. stateOverride must already be the player-visible
+    // frozen snapshot; politicalWorldOverride is read ONLY by the Political
+    // Decision Context projection, so sensitivity tests cannot accidentally
+    // change unrelated world-summary inputs. Normal gameplay passes neither.
+    stateOverride = null,
+    politicalContextMode = "normal",
+    politicalWorldOverride = null,
+    promptCapture = null,
+    decisionFocusText = "",
+} = {}) {
     await ensurePromptsLoaded();
     const participantList = countries.map((country) => `- ${country}`).join("\n");
-    const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
-        readJson(JSON_URLS.game, { defaultValue: {} }),
-        readJson(JSON_URLS.actions, { defaultValue: [] }),
-        readJson(JSON_URLS.chat, { defaultValue: [] }),
-        readJson(JSON_URLS.world, { defaultValue: {} }),
-        readJson(JSON_URLS.events, { defaultValue: [] }),
-        readJson(JSON_URLS.advisor, { defaultValue: [] }),
-    ]);
-    // A leader answering the player mid-reveal speaks from the world the player
-    // has been shown (runtime/unseenEvents.js), not the one the turn finished.
-    const { game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
-        game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
-    });
+    let savedGame;
+    let actionData;
+    let savedChats;
+    let savedWorld;
+    let savedEvents;
+    let advisorData;
+    let gameData;
+    let chatData;
+    let worldData;
+    let eventData;
+    if (stateOverride && typeof stateOverride === "object") {
+        savedGame = stateOverride.game || {};
+        actionData = Array.isArray(stateOverride.actions) ? stateOverride.actions : [];
+        savedChats = Array.isArray(stateOverride.chats) ? stateOverride.chats : [];
+        savedWorld = stateOverride.world || {};
+        savedEvents = Array.isArray(stateOverride.events) ? stateOverride.events : [];
+        advisorData = Array.isArray(stateOverride.advisor) ? stateOverride.advisor : [];
+        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = {
+            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
+        });
+    } else {
+        [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
+            readJson(JSON_URLS.game, { defaultValue: {} }),
+            readJson(JSON_URLS.actions, { defaultValue: [] }),
+            readJson(JSON_URLS.chat, { defaultValue: [] }),
+            readJson(JSON_URLS.world, { defaultValue: {} }),
+            readJson(JSON_URLS.events, { defaultValue: [] }),
+            readJson(JSON_URLS.advisor, { defaultValue: [] }),
+        ]);
+        // A leader answering the player mid-reveal speaks from the world the player
+        // has been shown (runtime/unseenEvents.js), not the one the turn finished.
+        ({ game: gameData, chats: chatData, world: worldData, events: eventData } = await viewAsSeen({
+            game: savedGame, chats: savedChats, world: savedWorld, events: savedEvents,
+        }));
+    }
 
     // A leader only knows the conversations they are actually in. The leader
     // prompt carries the recent chat history, and this used to hand it EVERY
@@ -2988,7 +3108,15 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
             speakingAs: speaker,
             worldData,
         })),
-        chatParticipants: participantList || "",
+        // Each participant with what it is, when its record says
+        // (server/polityRole.js): a leader speaking for "a terrorist
+        // organisation" or "the rebel side of the civil war" speaks as one.
+        chatParticipants: countries
+          .map((country) => {
+            const role = polityRoleOf(worldData?.polityOverrides, country);
+            return `- ${country}${role ? ` — what it is: ${role}` : ""}`;
+          })
+          .join("\n") || participantList || "",
         // The thread itself rides as the turns (see CONVERSATION_IN_TURNS). It
         // also stops this prompt naming the WRONG thread: the variable took the
         // speaker's most recently active chat, which need not be this one.
@@ -3018,6 +3146,30 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
         variables,
     );
+    const politicalDecision = buildDiplomaticPoliticalContext({
+        world: worldData,
+        speakingAs: speaker,
+        playerCountry: playerCountry || gameData?.country || "",
+        decisionFocusText,
+    });
+    const basePoliticalSection = politicalDecision?.text ? `\n\n${politicalDecision.text}` : "";
+    const evaluationPoliticalDecision = politicalWorldOverride
+        ? buildDiplomaticPoliticalContext({
+            world: politicalWorldOverride,
+            speakingAs: speaker,
+            playerCountry: playerCountry || gameData?.country || "",
+            decisionFocusText,
+        })
+        : null;
+    const politicalSection = politicalContextMode === "omit"
+        ? ""
+        : evaluationPoliticalDecision?.text
+            ? `\n\n${evaluationPoliticalDecision.text}`
+            : basePoliticalSection;
+    if (promptCapture && typeof promptCapture === "object") {
+        promptCapture.politicalContextText = politicalSection;
+        promptCapture.speaker = speaker;
+    }
 
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
@@ -3053,7 +3205,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         : "";
 
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${espionage}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${rendered}${politicalSection}${espionage}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];
@@ -3201,7 +3353,11 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     // the panel and kept on the player's message (conversationCatchUp.js
     // buildThreadCatchUp); the leader reads it ahead of what the player typed.
     const { chatId = "", catchUp = "", ...opts } = options || {};
-    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, { chatId });
+    const focusText = withCatchUp(playerMessage, catchUp);
+    const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, {
+        chatId,
+        decisionFocusText: focusText,
+    });
 
     diplomaticHistory.push({ role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] });
     diplomaticHistory = compactConversationHistory(diplomaticHistory);
@@ -3252,16 +3408,29 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     }
 }
 
-// A one-off diplomatic exchange for callers with no live ConversationView
-// mounted — the Advisor's "Send message to <country>" button (advisor.jsx,
-// via gameplay.js's sendAdvisorDraftedMessage). Builds its OWN local history
-// from the target chat's own saved messages instead of touching the
-// module-level `diplomaticHistory` above, which always reflects whichever
-// chat a ConversationView currently has open in the Diplomacy panel — reusing
-// it here would splice this unrelated exchange into whatever chat the player
-// happens to be mid-reading.
-export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], chatId = "", opts }) {
-    const freshPrompt = await buildDiplomaticSystemPrompt(participantNames, playerCountry, speakingAs, { chatId });
+// Build the exact one-off diplomatic request without sending it or touching the
+// module-level live-chat history. The Political World A/B lab uses this so both
+// arms see one frozen transcript and differ only in the bounded political block.
+export async function buildDiplomaticEvaluationRequest({
+    playerMessage,
+    speakingAs,
+    participantNames,
+    playerCountry,
+    priorMessages = [],
+    chatId = "",
+    stateOverride = null,
+    politicalContextMode = "normal",
+    politicalWorldOverride = null,
+} = {}) {
+    const promptCapture = {};
+    const systemPrompt = await buildDiplomaticSystemPrompt(participantNames || [], playerCountry, speakingAs, {
+        chatId,
+        stateOverride,
+        politicalContextMode,
+        politicalWorldOverride,
+        promptCapture,
+        decisionFocusText: playerMessage,
+    });
 
     const priorMemory = latestSavedDiplomaticMemory(priorMessages);
     let history = priorMessages
@@ -3275,13 +3444,36 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
     history = compactConversationHistory(history);
 
     const turnInstruction = buildDiplomaticTurnInstruction({ speakingAs, priorMemory: priorMemory?.summary || "" });
-
     const memoryContext = diplomaticMemoryContextEntry(priorMemory?.summary, priorMemory?.time, formatDateReadable);
     const historyWithInstruction = [
         ...(memoryContext ? [memoryContext] : []),
         ...history,
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
+
+    return {
+        systemPrompt,
+        history: historyWithInstruction,
+        politicalContextText: promptCapture.politicalContextText || "",
+        speaker: promptCapture.speaker || speakingAs || "",
+    };
+}
+
+// A one-off diplomatic exchange for callers with no live ConversationView
+// mounted — the Advisor's "Send message to <country>" button (advisor.jsx,
+// via gameplay.js's sendAdvisorDraftedMessage). Builds its OWN local history
+// from the target chat's own saved messages instead of touching the
+// module-level `diplomaticHistory` above, which always reflects whichever
+// chat a ConversationView currently has open in the Diplomacy panel — reusing
+// it here would splice this unrelated exchange into whatever chat the player
+// happens to be mid-reading.
+export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, participantNames, playerCountry, priorMessages = [], chatId = "", opts }) {
+    const priorMemory = latestSavedDiplomaticMemory(priorMessages);
+    const request = await buildDiplomaticEvaluationRequest({
+        playerMessage, speakingAs, participantNames, playerCountry, priorMessages, chatId,
+    });
+    const freshPrompt = request.systemPrompt;
+    const historyWithInstruction = request.history;
 
     // Marked as the advisor's send rather than the panel's, because this is the
     // path where "the letter the advisor drafted is not what arrived" happens —
@@ -3323,10 +3515,9 @@ export async function sendDiplomaticMessageOnceOff({ playerMessage, speakingAs, 
 // fall back mid-request — and a refused submission runs the task synchronously,
 // through the list as usual.
 const batchEntryFor = (taskKey) => {
-    const entries = getResolvedFallbackList();
-    const pick = taskKey ? getTaskPick(taskKey) : "";
+    const { entries, preferredEntryId } = resolveTaskFallbackEntries(taskKey);
     const ready = (entry) => getEntryStatus(entry.id).status === "ready";
-    return entries.find((entry) => entry.id === pick && ready(entry)) ?? entries.find(ready) ?? null;
+    return entries.find((entry) => entry.id === preferredEntryId && ready(entry)) ?? entries.find(ready) ?? null;
 };
 
 export const providerSupportsBatch = (taskKey) => batchEntryFor(taskKey)?.provider === "anthropic";

@@ -12,13 +12,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-    CHAT_REVEAL_PAUSE_MS,
+    CHAT_REVEAL_MAX_PAUSE_MS,
+    CHAT_REVEAL_MIN_PAUSE_MS,
     MAX_ACTIONS_PER_BATCH,
     applyChatActionBatch,
     describeChatActionFeedback,
     describeChatCutIn,
     normalizeChatAction,
     planChatReveal,
+    randomChatRevealPauseMs,
+    stripRedundantChatSpeakerPrefix,
 } from "./chatActions.js";
 import { projectChatThread } from "../../runtime/chatThreads.js";
 
@@ -29,6 +32,17 @@ const roster = (extra = {}) => ({
     messageIds: ["m1"],
     polls: [],
     ...extra,
+});
+
+test("structured messages strip only a redundant exact leading speaker label", () => {
+    assert.equal(stripRedundantChatSpeakerPrefix("French Republic: France supports the proposal.", "French Republic"), "France supports the proposal.");
+    assert.equal(stripRedundantChatSpeakerPrefix("French Republic - France supports the proposal.", "French Republic"), "France supports the proposal.");
+    assert.equal(stripRedundantChatSpeakerPrefix("France: France supports the proposal.", "French Republic"), "France: France supports the proposal.", "aliases are not guessed");
+    assert.equal(stripRedundantChatSpeakerPrefix("We agree with French Republic: this should pass.", "French Republic"), "We agree with French Republic: this should pass.", "later mentions are untouched");
+    assert.deepEqual(
+        normalizeChatAction({ type: "send_message", actorName: "French Republic", content: "French Republic: France supports the proposal." }),
+        { type: "send_message", actorName: "French Republic", content: "France supports the proposal." },
+    );
 });
 
 test("an action is read from what the model writes, and refused when it is not one", () => {
@@ -212,7 +226,16 @@ test("a batch is said a message at a time, each with what follows it", () => {
         ["message"],
     ], "what comes before the first message goes with it; the rest follows its message");
     assert.deepEqual(ids(steps).flat(), events.map((event) => event.id), "every event, once, in order");
-    assert.equal(CHAT_REVEAL_PAUSE_MS, 5000);
+    assert.equal(CHAT_REVEAL_MIN_PAUSE_MS, 1000);
+    assert.equal(CHAT_REVEAL_MAX_PAUSE_MS, 3000);
+});
+
+test("group reply pauses are randomized independently inside the 1-3 second window", () => {
+    assert.equal(randomChatRevealPauseMs(() => 0), 1000);
+    assert.equal(randomChatRevealPauseMs(() => 0.5), 2000);
+    assert.equal(randomChatRevealPauseMs(() => 0.999999), 3000);
+    assert.equal(randomChatRevealPauseMs(() => -1), 1000, "bad low samples clamp safely");
+    assert.equal(randomChatRevealPauseMs(() => Number.NaN), 1000, "non-numeric samples fail closed to the minimum");
 });
 
 test("a batch with fewer than two messages is one step, and nothing is none", () => {
@@ -248,4 +271,17 @@ test("an option given as {label} alone, and a vote by its own ref, both work", (
         { type: "poll_vote", actorName: "Prussia", pollRef: "p", optionRef: "sit" },
     ], roster(), {});
     assert.deepEqual(rejected, []);
+});
+
+test("institution channels reject generic membership mutations without rejecting sibling speech", () => {
+  const result = applyChatActionBatch([
+    { type: "add_member", actorName: "France", targetName: "Spain" },
+    { type: "send_message", actorName: "France", content: "The council should decide membership formally." },
+  ], {
+    aiParticipants: ["France"], humanParticipants: ["Germany"], knownPolities: ["France", "Germany", "Spain"],
+  }, { time: "2026-01-01", disallowMembershipChanges: true });
+  assert.equal(result.applied.length, 1);
+  assert.equal(result.events[0].kind, "message");
+  assert.equal(result.rejected.length, 1);
+  assert.match(result.rejected[0].reason, /institution ledger/i);
 });

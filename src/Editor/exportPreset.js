@@ -14,6 +14,7 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
+import { normalizePolityRole } from "../../server/polityRole.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -225,6 +226,17 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
   const hasCustomGeometry = detectCustomGeometry(regionsFC, kind);
   const gameRegions = normalizeRegionsForGame(regionsFC);
 
+  // Every dispute the map declares, as the world's own list too. The AI, the
+  // region card and the Region Inspector read world.regionClaimants, and in the
+  // game a world row wins over the map file — so a scenario that inherited the
+  // built-in world's rows hid the author's edits to those regions, and a dispute
+  // drawn only in the map was one the AI never heard of.
+  const regionClaimants = {};
+  for (const feature of gameRegions.features) {
+    const list = feature.properties?.claimants;
+    if (Array.isArray(list) && list.length) regionClaimants[feature.properties.id] = [...new Set(list)];
+  }
+
   // Scenario Workshop / owner schema 4: region ownership is a stable
   // polity KEY. The visible/current name belongs to the polity registry and may
   // change without re-keying a single region.
@@ -256,13 +268,19 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
         ...(Array.isArray(record.aliases) ? record.aliases : []),
         displayName,
       ].map((v) => String(v || "").trim()).filter(Boolean))];
+      const { role: rawRole, ...rest } = record;
+      // What this power is, in the author's words ("a terrorist organisation",
+      // "the rebel side of the civil war"): the model reads it wherever the
+      // polity appears (server/polityRole.js).
+      const role = normalizePolityRole(rawRole);
       polityOverrides[stableKey] = {
-        ...record,
+        ...rest,
         code: record.code || stableKey,
         name: displayName,
         aliases,
         color: overrides[stableKey] ? rgbToHex(overrides[stableKey]) : (record.color || rgbToHex(rgb)),
         note: String(record.note || ""),
+        ...(role ? { role } : {}),
         status: record.status || "active",
         ...(record.verbatim || COUNTRY_NAMES[stableKey] ? { verbatim: Boolean(record.verbatim || COUNTRY_NAMES[stableKey]) } : {}),
       };
@@ -286,6 +304,10 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,
     polityOverrides,
+    // The map's disputes (above). A scenario is a starting point, so nothing in
+    // it is a dispute that already ended.
+    regionClaimants,
+    settledRegionClaims: [],
     // The starting units the author placed (Units panel / Unit tool).
     units: buildUnitsForGame(doc.units),
     // A custom background replaces Earth, so it must also hide the stock modern

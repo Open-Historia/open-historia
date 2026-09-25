@@ -3,8 +3,9 @@
 //
 // The timing of a group turn said a line at a time (AI/chatActions.js
 // planChatReveal). The first step is said when the turn arrives; each later one
-// waits `pauseMs` while its speaker is shown typing, then is said. The panel
-// (chat.jsx) says a step by writing it into the thread, so a step not said yet
+// waits `pauseMs` while its speaker is shown typing, then is said. `pauseMs`
+// may be a number or a function, so the panel can choose a fresh delay per line.
+// The panel (chat.jsx) says a step by writing it into the thread, so a step not said yet
 // exists only here — and stopping, when the player cuts in or leaves the
 // thread, hands back what is left, for the panel to drop or to say at once.
 //
@@ -37,12 +38,14 @@ export const startChatReveal = ({
         if (!running) return;
         if (!left.length) { end(); return; }
         onTyping(left[0]);
+        const requestedPause = typeof pauseMs === "function" ? pauseMs(left[0]) : pauseMs;
+        const delay = Number.isFinite(Number(requestedPause)) ? Math.max(0, Number(requestedPause)) : 0;
         timer = schedule(() => {
             if (!running) return;
             const step = left.shift();
             if (onSay(step) === false) { left.length = 0; end(); return; }
             typeNext();
-        }, pauseMs);
+        }, delay);
     };
     typeNext();
 

@@ -57,7 +57,7 @@ export const setRatingEnabled = (enabled) => writeFlag(RATING_SETTING_KEY, enabl
 
 // Tasks whose completion is worth an immediate "rate this" prompt — the
 // narrative-shaping calls. Everything else stays rateable from the console; a
-// rating toast after every nextSpeaker classification would be pure noise.
+// tiny mechanical/classification calls would be pure noise.
 export const RATING_ELIGIBLE_TASKS = Object.freeze(new Set([
   "jumpForward",
   "autoJumpForward",
@@ -293,6 +293,7 @@ export const normalizeParsedSummary = (taskKey, parsed) => {
     regionTransferCount: sum("regionTransfers"),
     controlOpCount: sum("regionControlOps"),
     polityChangeCount: sum("polityChanges"),
+    politicalActorOpCount: sum("politicalActorOps"),
     unitOpCount: sum("unitOps"),
     chatCount: count("createdChats") + count("diplomaticOutreach"),
     warUpdateCount: count("warUpdates"),

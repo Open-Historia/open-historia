@@ -13,6 +13,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
 import { PROMPT_GUIDANCE, locateSegment } from "./promptGuidance.js";
 import { STATIC_PROMPT_KEYS } from "./promptLayout.js";
@@ -22,6 +23,7 @@ const EDITABLE = { orders: "[What an Order Can Do]", reactions: "[The World Answ
 const TECHNICAL = "[What Is True Now]";
 
 const template = (task) => defaultPrompts.tasks[task];
+const gameplaySource = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
 const once = (text, needle) => text.split(needle).length - 1 === 1;
 
 test("both jump templates carry all four passages, once each", () => {
@@ -153,6 +155,13 @@ test("the ban is on inventing a rivalry, not on hostility", () => {
 // the job the body is for written into it: the owner's call, after a spell with
 // no number at all left the model as terse as ever. What must not come back is
 // the old floor of twenty and the instruction to keep them short.
+test("the runtime military addendum uses the same no-invented-rivalry rule", () => {
+  assert.match(gameplaySource, /\[Other Powers' Militaries\]/);
+  assert.match(gameplaySource, /The one thing forbidden here is INVENTING A RIVALRY/);
+  assert.match(gameplaySource, /covers every pair of polities on the map/);
+  assert.match(gameplaySource, /never was, a ban on hostility toward the player/);
+});
+
 test("event descriptions run 25-50 words, sized by importance, and describe what happens", () => {
   for (const task of JUMP_TASKS) {
     const text = template(task);

@@ -152,8 +152,7 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
           </div>
         )}
         <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.7rem", letterSpacing: "0.1em", marginTop: "0.9rem", textShadow, textTransform: "uppercase" }}>
-          {PHASES[phase] ?? PHASES.world}
-        </div>
+          {PHASES[phase] ?? PHASES.world}        </div>
       </div>
       <img className="oh-loading-logo" src="/logo.png" alt="" style={{ flexShrink: 0, height: "4rem", width: "4rem" }} />
     </div>

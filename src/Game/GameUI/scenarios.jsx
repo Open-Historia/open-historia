@@ -117,7 +117,6 @@ const buildEditorState = (details) => {
     gameMaster: prompts.gameMaster ?? GAMEPLAY_PROMPT_DEFAULTS.gameMaster,
     idleDiplomacy: prompts.idleDiplomacy ?? GAMEPLAY_PROMPT_DEFAULTS.idleDiplomacy,
     jumpForward: prompts.jumpForward ?? GAMEPLAY_PROMPT_DEFAULTS.jumpForward,
-    nextSpeaker: prompts.nextSpeaker ?? GAMEPLAY_PROMPT_DEFAULTS.nextSpeaker,
   };
 
   return {

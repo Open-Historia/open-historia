@@ -14,6 +14,10 @@
 // caller builds (lookupContext), so it runs in node tests and in the harness.
 
 import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from "./regionMatch.js";
+import { getPoliticalProfile } from "../../runtime/politicalActors.js";
+import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
+import { normalizeInstitutions } from "../../runtime/institutions.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
@@ -25,6 +29,24 @@ import {
 
 const clean = (value) => String(value ?? "").trim();
 const array = (value) => (Array.isArray(value) ? value : []);
+
+// What each named power is, when its record says (server/polityRole.js), as
+// { name: role } — given beside a list of names that stays exact, so a name is
+// always one to copy into an operation as it stands.
+const rolesFor = (polities, names) => {
+  const roles = {};
+  for (const name of array(names)) {
+    const key = clean(name);
+    if (!key || roles[key]) continue;
+    const role = polityRoleOf(polities, key);
+    if (role) roles[key] = role;
+  }
+  return roles;
+};
+const withRoles = (field, polities, names) => {
+  const roles = rolesFor(polities, names);
+  return Object.keys(roles).length ? { [field]: roles } : {};
+};
 const clampInt = (value, min, max, fallback) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -62,6 +84,9 @@ export const LOOKUP_TOOL_NAMES = Object.freeze([
   "border_between",
   "map_around",
   "list_cities",
+  "political_actor",
+  "list_institutions",
+  "institution_info",
 ]);
 
 export const LOOKUP_TOOLS = Object.freeze([
@@ -236,6 +261,25 @@ export const LOOKUP_TOOLS = Object.freeze([
       limit: integer("How many (default 40, max 200)."),
     }),
   },
+  {
+    name: "political_actor",
+    description:
+      "Canonical political state for one polity. The simulation may read the full actor; polity-scoped audiences receive only their own canonical state or a foreign polity's public political projection. A lookup never grants authority to act for a polity.",
+    schema: object("Which polity.", { polity: text("Canonical polity name or known alias.") }, ["polity"]),
+  },
+  {
+    name: "list_institutions",
+    description:
+      "Canonical institutions in the campaign: identity, kind, status and membership count. Optionally filter to institutions containing one polity.",
+    schema: object("Optional membership filter.", { member: text("Optional polity name.") }),
+  },
+  {
+    name: "institution_info",
+    description:
+      "Canonical institution identity, membership and governance/business state. The simulation can inspect the full canonical workspace; polity-scoped audiences only receive full formal business for institutions they belong to. Membership never grants authority to decide for another member.",
+    schema: object("Which institution.", { institution: text("Institution id, name or short name.") }, ["institution"]),
+  },
+
 ]);
 
 // The instruction that goes with the tools.
@@ -510,7 +554,7 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
         ...(candidate.kind === "city" || row.name !== candidate.label ? { region: row.name } : {}),
         controller: row.owner || "unowned",
         ...(row.sovereign && row.sovereign !== row.owner ? { lawfulOwner: row.sovereign } : {}),
-        ...(claimants.length ? { claimants } : {}),
+        ...(claimants.length ? { claimants, ...withRoles("claimantRoles", context.polities, claimants) } : {}),
       } : { region: "not on this map" }),
     });
   }
@@ -666,13 +710,102 @@ const agreementBrief = (agreement) => ({
   ...(agreement?.startedDate ? { since: clean(agreement.startedDate) } : {}),
 });
 
+const politicalActorLookup = (context, polity) => {
+  const requested = clean(polity);
+  if (!requested) return { error: "polity is required" };
+  const actor = getPoliticalProfile(context.world, requested);
+  if (!actor) return { error: `No canonical Political Actor found for "${requested}". Do not invent one.` };
+
+  const actorName = clean(actor.polityKey || actor.name || requested);
+  const ownAudience = audienceIncludes(context.audience, actorName) || audienceIncludes(context.audience, requested);
+  const level = isSimulationAudience(context.audience) || ownAudience
+    ? POLITICAL_KNOWLEDGE_LEVELS.GM
+    : POLITICAL_KNOWLEDGE_LEVELS.PUBLIC;
+  const view = buildPoliticalKnowledgeView(context.world, actorName, { level });
+  if (!view) return { error: `No readable Political Actor state found for "${requested}".` };
+  return {
+    polity: actorName,
+    authority: "read-only evidence; never permission to act for this polity",
+    ...view,
+  };
+};
+
+const normalizedInstitutionRows = (world) => Object.values(normalizeInstitutions(world?.institutions, world).byId || {});
+
+const institutionMemberNames = (institution) => array(institution?.members)
+  .map((member) => clean(member?.polity || member?.name || member))
+  .filter(Boolean);
+
+const institutionIsVisibleInFull = (context, institution) => (
+  isSimulationAudience(context.audience)
+  || institutionMemberNames(institution).some((member) => audienceIncludes(context.audience, member))
+);
+
+const institutionIdentityBrief = (institution) => ({
+  id: clean(institution?.id),
+  name: clean(institution?.name),
+  shortName: clean(institution?.shortName),
+  kind: clean(institution?.kind),
+  status: clean(institution?.status),
+  memberCount: institutionMemberNames(institution).length,
+  purpose: array(institution?.charter?.lifecycle?.purpose).slice(0, 8).map(clean).filter(Boolean),
+  geographicScope: array(institution?.charter?.lifecycle?.identity?.geographicScope).slice(0, 8).map(clean).filter(Boolean),
+  politicalCharacter: clean(institution?.charter?.lifecycle?.identity?.politicalCharacter).slice(0, 400),
+});
+
+const institutionFullBrief = (institution) => {
+  const proposalSource = institution?.proposals ?? institution?.agenda ?? institution?.matters;
+  const proposals = Array.isArray(proposalSource)
+    ? proposalSource
+    : Object.values(proposalSource && typeof proposalSource === "object" ? proposalSource : {});
+  return {
+    ...institutionIdentityBrief(institution),
+    foundedDate: clean(institution?.foundedDate),
+    members: array(institution?.members).slice(0, 80).map((member) => ({
+      polity: clean(member?.polity || member?.name || member),
+      status: clean(member?.status || "member"),
+      role: clean(member?.role || "member"),
+    })).filter((member) => member.polity),
+    ...(institution?.charter && typeof institution.charter === "object" ? { charter: institution.charter } : {}),
+    activeBusiness: proposals.filter((proposal) => {
+      const status = clean(proposal?.status).toLowerCase();
+      return !["resolved", "adopted", "rejected", "withdrawn", "closed", "failed", "passed"].includes(status);
+    }).slice(0, 20).map((proposal) => ({
+      id: clean(proposal?.id),
+      title: clean(proposal?.title || proposal?.name),
+      summary: clean(proposal?.summary).slice(0, 500),
+      status: clean(proposal?.status),
+      sponsor: clean(proposal?.sponsor || proposal?.proposer),
+      ...(proposal?.votingRule || proposal?.rule ? { votingRule: proposal?.votingRule || proposal?.rule } : {}),
+    })),
+    pendingLifecycle: Object.values(institution?.lifecycleCases || {}).filter((entry) => ["pending", "negotiating", "pending-approval"].includes(clean(entry?.status).toLowerCase())).slice(0, 24).map((entry) => ({
+      id: clean(entry?.id),
+      kind: clean(entry?.kind),
+      polity: clean(entry?.polity),
+      initiatedBy: clean(entry?.initiatedBy),
+      requestedStatus: clean(entry?.requestedStatus),
+      status: clean(entry?.status),
+      proposalId: clean(entry?.proposalId),
+      effectiveDate: clean(entry?.effectiveDate),
+      reason: clean(entry?.reason).slice(0, 400),
+    })),
+    membershipHistory: array(institution?.membershipHistory).slice(-24).map((entry) => ({
+      action: clean(entry?.action), polity: clean(entry?.polity), actor: clean(entry?.actor), date: clean(entry?.date),
+      status: clean(entry?.status), role: clean(entry?.role), reason: clean(entry?.reason).slice(0, 300),
+    })),
+  };
+};
+
 export const executeLookup = (context, name, args = {}) => {
   const a = args && typeof args === "object" ? args : {};
   switch (name) {
     case "list_powers": {
       const query = foldRegionKey(a.query);
       const powers = [...context.ownerRows.entries()]
-        .map(([label, rows]) => ({ name: label, regions: rows.length, ...(label === context.player ? { player: true } : {}) }))
+        .map(([label, rows]) => {
+          const role = polityRoleOf(context.polities, label);
+          return { name: label, regions: rows.length, ...(role ? { role } : {}), ...(label === context.player ? { player: true } : {}) };
+        })
         .filter((power) => !query || foldRegionKey(power.name).includes(query))
         .sort((x, y) => y.regions - x.regions || x.name.localeCompare(y.name));
       return { count: powers.length, powers: powers.slice(0, 250) };
@@ -727,10 +860,12 @@ export const executeLookup = (context, name, args = {}) => {
     case "region_info": {
       const row = context.byId.get(clean(a.regionId));
       if (!row) return { error: `No region with id "${clean(a.regionId)}". Use find_region or list_regions to get ids.` };
+      const claimants = array(context.claimants[row.id]).map(clean).filter(Boolean);
       return {
         ...regionBrief(row),
         sovereign: row.sovereign || row.owner || "unowned",
-        claimants: array(context.claimants[row.id]).map(clean).filter(Boolean),
+        claimants,
+        ...withRoles("claimantRoles", context.polities, claimants),
         cities: context.citiesInRegion(row).slice(0, 12).map((city) => ({ name: city.name, population: city.population, ...(city.capital ? { capital: city.capital } : {}) })),
         neighbours: context.neighboursOf(row).slice(0, 24).map(regionBrief),
       };
@@ -776,6 +911,7 @@ export const executeLookup = (context, name, args = {}) => {
       return {
         name: owner,
         regions: held.length,
+        ...(clean(record?.role) ? { role: clean(record.role) } : {}),
         ...(record?.note ? { description: clean(record.note).slice(0, 600) } : {}),
         ...(array(record?.tags).length ? { tags: array(record.tags).map(clean) } : {}),
         ...(Number.isFinite(Number(world.internationalReputation?.[owner])) ? { reputation: Number(world.internationalReputation[owner]) } : {}),
@@ -784,6 +920,7 @@ export const executeLookup = (context, name, args = {}) => {
         relations,
         claimsAsserted: claimsBy.slice(0, 20),
         claimsAgainstIt: claimsAgainst.slice(0, 20),
+        ...withRoles("claimantRoles", context.polities, claimsAgainst.slice(0, 20).flatMap((entry) => entry.claimants)),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
       };
@@ -797,8 +934,10 @@ export const executeLookup = (context, name, args = {}) => {
     }
     case "war_ledger": {
       const world = context.world ?? {};
+      const wars = array(world.wars).map(warBrief);
       return {
-        wars: array(world.wars).map(warBrief),
+        wars,
+        ...withRoles("participantRoles", context.polities, wars.flatMap((war) => war.participants)),
         agreements: array(world.agreements).slice(0, 40).map(agreementBrief),
       };
     }
@@ -846,7 +985,12 @@ export const executeLookup = (context, name, args = {}) => {
         if (!claimants.length && foldRegionKey(sovereign) === foldRegionKey(row.owner)) continue;
         rows.push({ ...regionBrief(row), sovereign: sovereign || "unowned", ...(claimants.length ? { claimants } : {}) });
       }
-      return { count: rows.length, regions: rows.slice(0, 120) };
+      const shown = rows.slice(0, 120);
+      return {
+        count: rows.length,
+        regions: shown,
+        ...withRoles("claimantRoles", context.polities, shown.flatMap((entry) => entry.claimants ?? [])),
+      };
     }
     case "list_projects": {
       const world = context.world ?? {};
@@ -1047,6 +1191,37 @@ export const executeLookup = (context, name, args = {}) => {
       }
       for (const list of Object.values(byOwner)) list.sort((x, y) => x.steps - y.steps || x.name.localeCompare(y.name));
       return { centre: regionBrief(centre), steps, regions: distance.size, byOwner };
+    }
+    case "political_actor":
+      return politicalActorLookup(context, a.polity);
+    case "list_institutions": {
+      const member = clean(a.member);
+      const rows = normalizedInstitutionRows(context.world).filter((institution) => (
+        !member || institutionMemberNames(institution).some((name) => foldRegionKey(name) === foldRegionKey(member))
+      ));
+      return {
+        count: rows.length,
+        institutions: rows.slice(0, 80).map(institutionIdentityBrief),
+      };
+    }
+    case "institution_info": {
+      const token = foldRegionKey(a.institution);
+      if (!token) return { error: "institution is required" };
+      const institution = normalizedInstitutionRows(context.world).find((entry) => (
+        [entry?.id, entry?.name, entry?.shortName].some((value) => foldRegionKey(value) === token)
+      ));
+      if (!institution) return { error: `No canonical institution matches "${clean(a.institution)}".` };
+      if (!institutionIsVisibleInFull(context, institution)) {
+        return {
+          ...institutionIdentityBrief(institution),
+          members: institutionMemberNames(institution),
+          note: "Formal business is not exposed to this audience because it is not a member of this institution.",
+        };
+      }
+      return {
+        ...institutionFullBrief(institution),
+        authority: "read-only canonical governance evidence; membership is not consent and this lookup cannot cast votes or decide outcomes",
+      };
     }
     default:
       return { error: `Unknown lookup "${clean(name)}". Available: ${LOOKUP_TOOL_NAMES.join(", ")}.` };

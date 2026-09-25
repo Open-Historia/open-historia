@@ -1138,6 +1138,7 @@ const WorldMap = ({ isGlobe = false }) => {
         ...V_NEXT_MARKER_SHAPE_LAYER_IDS,
         "markers-shapes",
         "cities-shapes",
+        "cities-capitals",
       ].filter((id) => map.getLayer(id));
       const featureHits = featureLayers.length
         ? map.queryRenderedFeatures(event.point, { layers: featureLayers })

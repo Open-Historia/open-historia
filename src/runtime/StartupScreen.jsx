@@ -4,7 +4,6 @@ import React, { useEffect, useState } from "react";
 // Google on every start, and the right faces with no network.
 import "../assets/fonts/fonts.css";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
-
 // Loading-screen artwork. The first is the original; the rest cycle in once the
 // files exist in /public. Missing files are skipped (see the preload check), so
 // the screen never flashes a broken image.

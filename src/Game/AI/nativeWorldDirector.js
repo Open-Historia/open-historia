@@ -13,6 +13,7 @@ import {
   createWorldActorResolver,
 } from "./nativeWorldIntegrity.js";
 import { addGameDays, compareGameDates, gameDateDayNumber, gameDateYear } from "../../runtime/gameDates.js";
+import { polityRoleOf } from "../../../server/polityRole.js";
 import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/projects.js";
 
 // Native World Director (ported from kernely's Continuum branch).
@@ -299,6 +300,7 @@ const eventCanonicalConsequenceChannels = (candidate, eventIndex) => {
     "regionClaims",
     "regionControlOps",
     "polityChanges",
+    "politicalActorOps",
     "createdChats",
     "unitOps",
     "markerOps",
@@ -431,6 +433,7 @@ const eventConsequenceScore = (event) => {
   if (normalizeArray(impacts.regionClaims).length) score += 4;
   if (normalizeArray(impacts.regionControlOps).length) score += 4;
   if (normalizeArray(impacts.polityChanges).length) score += 4;
+  if (normalizeArray(impacts.politicalActorOps).length) score += 4;
 
   const unitOps = normalizeArray(impacts.unitOps);
   if (unitOps.some((op) => ["remove"].includes(normalizeString(op?.op).toLowerCase()))) score += 3;
@@ -596,6 +599,7 @@ const countImpactSignals = (event) => {
     "regionClaims",
     "regionControlOps",
     "polityChanges",
+    "politicalActorOps",
     "unitOps",
     "markerOps",
     "createdChats",
@@ -744,6 +748,12 @@ const pushTerritorialCandidates = (candidates, world, suppressedActors = new Set
         controller ? `controller ${controller}` : "",
         sovereign ? `legal sovereign ${sovereign}` : "",
         contenderList.length ? `claimants/contenders ${contenderList.join(", ")}` : "",
+        // What those claimants are, when their records say (server/polityRole.js).
+        contenderList
+          .map((name) => ({ name, role: polityRoleOf(world?.polityOverrides, name) }))
+          .filter((entry) => entry.role)
+          .map((entry) => `${entry.name} is ${entry.role}`)
+          .join(", "),
       ].filter(Boolean).join("; "),
       ageDays: 0,
       trajectoryValue: 4,
@@ -1496,6 +1506,7 @@ const storylineEventStructuredActors = (event) => {
   return [
     ...normalizeArray(event?.combatants),
     ...normalizeArray(impacts?.polityChanges).flatMap((entry) => [entry?.code, entry?.name]),
+    ...normalizeArray(impacts?.politicalActorOps).map((entry) => entry?.polityKey || entry?.polity || entry?.country),
     ...normalizeArray(impacts?.regionTransfers).flatMap((entry) => [entry?.fromCode, entry?.toCode]),
     ...normalizeArray(impacts?.regionClaims).flatMap((entry) => [
       entry?.claimantCode,
