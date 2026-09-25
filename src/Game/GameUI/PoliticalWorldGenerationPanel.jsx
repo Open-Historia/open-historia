@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadScenarioDetails, saveScenario } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { acceptFor } from "../../runtime/fileAccept.js";
 import { activeReferencePackIds, normalizeCanonContext, readScenarioCanon } from "../../runtime/scenarioCanon.js";
 import {
   POLITICAL_WORLD_CAPABILITY,
@@ -1449,7 +1450,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           <button disabled={busy || applying || dateMismatch} onClick={repairGoverningAlignment} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Repair Governing Alignment</button>
           <button disabled={busy || applying || geopoliticalApplying || dateMismatch} onClick={generateGeopoliticalBaseline} style={{ ...buttonStyle, opacity: busy || applying || geopoliticalApplying || dateMismatch ? 0.55 : 1 }} type="button">Generate Geopolitical Baseline</button>
           <button disabled={busy || applying || dateMismatch} onClick={() => generate(true)} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Test 15 Polities</button>
-          <input accept="application/json,.json" onChange={restoreRunLog} ref={restoreRunLogInputRef} style={{ display: "none" }} type="file" />
+          <input accept={acceptFor("application/json,.json")} onChange={restoreRunLog} ref={restoreRunLogInputRef} style={{ display: "none" }} type="file" />
           <button disabled={busy || applying || dateMismatch} onClick={() => restoreRunLogInputRef.current?.click()} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Restore Run Log</button>
           {result && !busy && runKind !== "governing-alignment-repair" && runKind !== "political-world-unified" && <button disabled={applying || dateMismatch} onClick={recheckHistory} style={buttonStyle} type="button">Re-check Timeline Canon</button>}
           {result && !busy && runKind !== "political-world-unified" && <button onClick={downloadRunLog} style={buttonStyle} type="button">Download Run Log</button>}
