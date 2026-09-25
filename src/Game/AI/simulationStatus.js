@@ -18,6 +18,7 @@ let pendingProjectsJump = null;
 
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
+const chatGenerationListeners = new Set();
 
 export const beginSimulation = () => {
   activeSimulations += 1;
@@ -38,7 +39,26 @@ export const setPendingProjectsJump = (value) => {
 };
 
 export const setChatGenerationInFlight = (inFlight) => {
-  chatGenerationInFlight = inFlight === true;
+  const next = inFlight === true;
+  if (next === chatGenerationInFlight) return;
+  chatGenerationInFlight = next;
+  for (const listener of chatGenerationListeners) {
+    try {
+      listener(next);
+    } catch {
+      // A listener's failure is its own; the flag is already set.
+    }
+  }
+};
+
+// The chat's typing badge and banner are told when the flag changes, rather
+// than reading it on an 800 ms timer for the whole session (menu included).
+// Returns the unsubscribe.
+export const subscribeChatGeneration = (listener) => {
+  chatGenerationListeners.add(listener);
+  return () => {
+    chatGenerationListeners.delete(listener);
+  };
 };
 
 export const hasPendingJumpSegment = () => pendingJumpSegment !== null;

@@ -13,10 +13,10 @@ import {
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
-  ensurePmtilesProtocol,
   getNationColors,
   loadRegionTileIdSet,
   primeCustomRegionCatalogEntries,
@@ -25,7 +25,13 @@ import {
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
+import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 import { useWorkerFetchableUrl } from "./useWorkerFetchableUrl.js";
+import {
+  REGIONS_PARSE_HOLD_MS,
+  forgetParsedSourceCopy,
+  holdUntilSourceLoaded,
+} from "./regionsSourceMemory.js";
 import { publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
@@ -1506,6 +1512,22 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map, derivedSourceEpoch]);
 
+  // MapLibre keeps a copy of the whole parsed regions file on the page once it
+  // has loaded it; it is dropped as soon as it lands (regionsSourceMemory.js).
+  const regionsFetchUrlRef = useRef("");
+  regionsFetchUrlRef.current = regionsGeojsonFetchUrl || "";
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on) return undefined;
+    const forget = (event) => {
+      if (event?.sourceId !== "custom-regions-source") return;
+      forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current);
+    };
+    mapInstance.on("sourcedata", forget);
+    forget({ sourceId: "custom-regions-source" });
+    return () => mapInstance.off?.("sourcedata", forget);
+  }, [map]);
+
   // Political Cartography Pipeline v2. Canonical per-region ownership remains
   // the visual truth. The worker owns topology, political borders and polity
   // label geometry; only a result for the newest desired political revision may
@@ -1591,6 +1613,32 @@ const WorldMap = ({ isGlobe = false }) => {
     }
     polityBoundaryWorkerRef.current = worker;
 
+    // On a phone the worker's first message waits until MapLibre has parsed the
+    // same file (regionsSourceMemory.js): the two parses of a classic map at
+    // once are what took phones down on the second loading screen. The
+    // scheduler keeps one request in flight, so at most one message is held.
+    const holdMap = map?.getMap ? map.getMap() : map;
+    let parseHeld = Boolean(regionsGeojsonFetchUrl && holdMap?.on && isConstrainedDevice());
+    let heldMessage = null;
+    const postToWorker = (message) => {
+      if (parseHeld) heldMessage = message;
+      else worker.postMessage(message);
+    };
+    const parseHold = parseHeld
+      ? holdUntilSourceLoaded({
+          map: holdMap,
+          sourceId: "custom-regions-source",
+          onRelease: (reason) => {
+            parseHeld = false;
+            recordMapTrace("nations:regions-parse-released", { reason });
+            forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl);
+            const message = heldMessage;
+            heldMessage = null;
+            if (message && worker === polityBoundaryWorkerRef.current) worker.postMessage(message);
+          },
+        })
+      : null;
+
     const restartWorker = ({ initialFailure = false } = {}) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
       // The stalled revision's presentation holds die with its worker: the
@@ -1625,7 +1673,7 @@ const WorldMap = ({ isGlobe = false }) => {
           revision,
           type: payload?.type ?? "",
         });
-        worker.postMessage({ ...payload, requestId: revision, geometryEpoch });
+        postToWorker({ ...payload, requestId: revision, geometryEpoch });
       },
       onTimeout: ({ stalled, latestDesired }) => {
         if (worker !== polityBoundaryWorkerRef.current) return;
@@ -1918,15 +1966,17 @@ const WorldMap = ({ isGlobe = false }) => {
     enqueuedBoundaryOwnershipRef.current = ownershipOverrides;
     enqueuedBoundaryClaimantsRef.current = claimants;
     enqueuedBoundaryLabelNamesRef.current = labelNames;
+    // A held parse keeps the worker's whole budget: the wait is not its time.
     scheduler.enqueue({
       type: "initialize",
       regionsUrl: regionsGeojsonFetchUrl,
       ownershipOverrides,
       regionClaimants: claimants,
       labelNames,
-    }, { timeoutMs: 120000 });
+    }, { timeoutMs: 120000 + (parseHeld ? REGIONS_PARSE_HOLD_MS : 0) });
 
     return () => {
+      parseHold?.cancel();
       scheduler.stop();
       worker.terminate();
       if (polityBoundarySchedulerRef.current === scheduler) polityBoundarySchedulerRef.current = null;

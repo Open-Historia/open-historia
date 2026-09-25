@@ -4577,7 +4577,9 @@ export const viewAsSeen = async ({ world, events, chats, game } = {}, { unseen =
     .filter(Boolean);
   let seenWorld = null;
   try {
-    const snapshots = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: false });
+    // The shared archive, not a copy of all twelve turns: only the one world
+    // staged from is copied, since applying events to it may change it.
+    const snapshots = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: false, clone: false });
     const toDate = turn.toDate || turn.date;
     const snap = normalizeArray(snapshots).find((entry) => entry?.state?.world
       && entry.fromDate === turn.fromDate && entry.toDate === toDate);
@@ -4586,7 +4588,7 @@ export const viewAsSeen = async ({ world, events, chats, game } = {}, { unseen =
         colors: {},
         events: normalizeEvents(seenTurnEvents),
         motion: { originDate: snap.fromDate || turn.fromDate || "", round: Number(turn.round) || Number(snap.round) || 0, tick: 0 },
-        world: normalizeWorldState(snap.state.world),
+        world: normalizeWorldState(cloneValue(snap.state.world)),
       }).world;
       const stolenBy = new Map(normalizeArray(world?.reports).map((report) => [report?.id, report?.interceptedBy]));
       seenWorld = {

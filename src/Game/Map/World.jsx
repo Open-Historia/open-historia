@@ -14,13 +14,15 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   esriTileTemplate,
-  ensureBasemapProtocol,
   isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
+import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 
+// MapLibre's worker pool is made with the first map, so this goes first.
+configureMapRuntime();
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
 ensureBasemapProtocol();
