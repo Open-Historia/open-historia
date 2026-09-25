@@ -499,3 +499,21 @@ button:active:not(:disabled) {
   animation: oh-fade-out 450ms ease both !important;
   pointer-events: none !important;
 }
+
+/* Touch screens (a finger is the main pointer): every control a thumb has to
+   hit is at least 44 px across. The classes sit on the controls a phone needs
+   to reach, above all the close buttons, which were 14-26 px; with a mouse the
+   query never matches and desktop keeps its compact sizes. .oh-tap is for icon
+   buttons (square), .oh-tap-row for text buttons, tabs and rows that set their
+   own width. */
+@media (pointer: coarse) {
+  .oh-tap {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    justify-content: center;
+    align-items: center;
+  }
+  .oh-tap-row {
+    min-height: 2.75rem;
+  }
+}

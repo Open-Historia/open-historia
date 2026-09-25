@@ -128,6 +128,25 @@ test("reporting that nothing moved is valid", () => {
 });
 
 // The reason all of this was worth doing.
+test("jump-only schema compaction keeps internal impact guidance intact", () => {
+  const jumpImpacts = GAMEPLAY_TOOLS.jumpForward.schema.properties.events.items.properties.impacts.properties;
+  const gmImpacts = GAME_MASTER_SCHEMA.properties.events.items.properties.impacts.properties;
+
+  for (const key of ["markerOps", "institutionLifecycleOps"]) {
+    assert.equal(
+      JSON.stringify(jumpImpacts[key].items).includes('"description"'),
+      false,
+      `${key} nested descriptions should stay out of the every-turn jump schema`,
+    );
+    assert.equal(
+      JSON.stringify(gmImpacts[key].items).includes('"description"'),
+      true,
+      `${key} internal/Game Master schema must retain its field guidance`,
+    );
+    assert.equal(typeof jumpImpacts[key].description, "string", `${key} should keep its jump-level meaning`);
+  }
+});
+
 test("the board no longer costs the jump anything", () => {
   const jumpSchema = GAMEPLAY_TOOLS.jumpForward.schema;
   const jumpChars = JSON.stringify(jumpSchema).length;

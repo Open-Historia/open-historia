@@ -1,12 +1,14 @@
 /*! Open Historia — portions (custom regions.geojson runtime endpoint) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import mapLibreGl from "maplibre-gl";
+// No maplibre-gl here: nearly every file imports this one, so a MapLibre import
+// put the 1 MB map library in the page's first download. What MapLibre is told
+// (its worker count, the pmtiles and ohbase protocols) is Map/mapLibreSetup.js.
 import { PMTiles, Protocol, SharedPromiseCache } from "pmtiles";
 import { resolveRegionName } from "./regionNameFixes.js";
 import { logDebugEvent } from "./debugLog.js";
 import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
-
-const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
+import { WholeFileSource } from "./wholeFileSource.js";
+import { isNativeBuild } from "./native/bridge.js";
 
 // v2: v1 could serve a stale archive forever (no freshness check), which
 // left months-old map data — countries missing their names — in every
@@ -37,7 +39,6 @@ const jsonHeadersFor = (payload) => ({
   ...JSON_HEADERS,
   "Content-Length": String(new TextEncoder().encode(payload).length),
 });
-const FALLBACK_THREADS = 4;
 const remoteValueCache = new Map();
 const remoteRequestCache = new Map();
 let runtimeAssetToken = "";
@@ -90,6 +91,10 @@ export const ESRI_BASEMAPS = [
   // plus shaded land relief; World.jsx applies a darker dedicated grade.
   { id: "atlas-relief", label: "Atlas Relief", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
   { id: "atlas-relief-dark", label: "Atlas Relief - Dark", service: "Ocean/World_Ocean_Base", maxZoom: 13 },
+  // Very dark, label-free physical canvas for political overlays. World.jsx
+  // composes this from World Terrain Base + ETOPO relief, so no baked country
+  // names or modern political borders sit underneath live OpenHistoria canon.
+  { id: "midnight-terrain", label: "Midnight Terrain", service: "World_Terrain_Base", maxZoom: 13 },
   { id: "imagery", label: "Satellite", service: "World_Imagery", maxZoom: 19 },
   { id: "streets", label: "Streets", service: "World_Street_Map", maxZoom: 19 },
   { id: "topo", label: "Topographic", service: "World_Topo_Map", maxZoom: 19 },
@@ -221,8 +226,19 @@ const isMutableRuntimeJsonUrl = (url) =>
   url === JSON_URLS.snapshotsIndex ||
   url === JSON_URLS.world;
 
-const pmtilesProtocol = new Protocol();
-let pmtilesProtocolReady = false;
+// Registered with MapLibre by Map/mapLibreSetup.js; archives are added to it
+// here (registerPmtilesArchive) whether or not the map has loaded yet.
+export const pmtilesProtocol = new Protocol();
+// MapLibre asks this protocol for archives by URL, and one it has not been
+// handed yet it opens itself — as a FetchSource, over Range, which the Android
+// app cannot serve (see wholeFileSource.js). There, every archive MapLibre asks
+// for is opened through getPmtilesArchive instead, so it is read whole.
+// Guarded: `tiles` is internal to the pmtiles package.
+if (isNativeBuild() && pmtilesProtocol.tiles instanceof Map) {
+  const opened = pmtilesProtocol.tiles;
+  const lookup = opened.get.bind(opened);
+  opened.get = (url) => lookup(url) ?? getPmtilesArchive(url);
+}
 let nationColorsPromise = null;
 let nationColorsPromiseKey = "";
 let nationFlagsPromise = null;
@@ -362,7 +378,6 @@ const invalidateDerivedCachesForWrite = (url, { emitEvents = true } = {}) => {
     releaseWorkerFetchableUrl(url);
   }
 };
-let mapRuntimeConfigured = false;
 let vectorTileModulesPromise = null;
 
 export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
@@ -702,40 +717,33 @@ class MemorySource {
   }
 }
 
+// The Android app never range-reads an archive: Capacitor's local server
+// ignores the end of a Range (see wholeFileSource.js). Its reads wait for the
+// one whole-file load the warm makes and slice that.
+const loadWholeArchive = async (url) => {
+  await warmPmtilesArchive(url);
+  const buffer = binaryValueCache.get(url);
+  // Swept by a runtime-token change (a game switch) mid-read: fail the read
+  // rather than hand pmtiles an empty archive.
+  if (!buffer) throw new Error(`${url} was released while it was being read.`);
+  return buffer;
+};
+
 const createPmtilesArchive = (url) => {
   const source = binaryValueCache.has(url)
     ? new MemorySource(url, binaryValueCache.get(url))
-    : url;
+    : import.meta.env.VITE_OH_NATIVE
+      ? new WholeFileSource(url, loadWholeArchive)
+      : url;
 
   return new PMTiles(source, pmtilesCache);
 };
 
 export const registerPmtilesArchive = (url) => {
-  ensurePmtilesProtocol();
   const archive = createPmtilesArchive(url);
   pmtilesArchives.set(url, archive);
   pmtilesProtocol.add(archive);
   return archive;
-};
-
-export const configureMapRuntime = () => {
-  if (mapRuntimeConfigured || typeof navigator === "undefined") return;
-
-  const hardwareThreads = navigator.hardwareConcurrency || FALLBACK_THREADS;
-  const workerCount = Math.min(6, Math.max(2, Math.ceil(hardwareThreads / 2)));
-  const parallelImageRequests = Math.min(24, Math.max(16, hardwareThreads * 2));
-  setWorkerCount(workerCount);
-  setMaxParallelImageRequests(parallelImageRequests);
-  mapRuntimeConfigured = true;
-};
-
-export const ensurePmtilesProtocol = () => {
-  if (!pmtilesProtocolReady) {
-    addProtocol("pmtiles", pmtilesProtocol.tile.bind(pmtilesProtocol));
-    pmtilesProtocolReady = true;
-  }
-
-  return pmtilesProtocol;
 };
 
 // ---------------------------------------------------------------------------
@@ -748,7 +756,6 @@ export const ensurePmtilesProtocol = () => {
 
 // Levels 0-9 have global coverage; placeholders only appear above that.
 const PLACEHOLDER_MIN_ZOOM = 9;
-let basemapProtocolReady = false;
 const placeholderRefByService = new Map();
 
 const fetchBasemapTileBytes = async (service, z, y, x, signal) => {
@@ -833,7 +840,8 @@ const synthesizeFromAncestor = async (service, z, y, x, placeholderRef, signal) 
   return null;
 };
 
-const basemapTileLoader = async (params, abortController) => {
+// MapLibre's "ohbase" protocol (registered by Map/mapLibreSetup.js).
+export const basemapTileLoader = async (params, abortController) => {
   const match = /^ohbase:\/\/([^/]+)\/(\d+)\/(\d+)\/(\d+)$/.exec(params.url);
   if (!match) throw new Error(`Bad basemap tile URL: ${params.url}`);
   const service = basemapById(match[1]).service;
@@ -855,13 +863,6 @@ const basemapTileLoader = async (params, abortController) => {
     // Fall through: the placeholder beats a missing tile.
   }
   return { data };
-};
-
-export const ensureBasemapProtocol = () => {
-  if (!basemapProtocolReady) {
-    addProtocol("ohbase", basemapTileLoader);
-    basemapProtocolReady = true;
-  }
 };
 
 export const readJson = async (url, { cache, defaultValue, force = false, signal, clone = true } = {}) => {
@@ -973,6 +974,49 @@ export const primeJson = (url, data, { cache, clone = true } = {}) => {
   return clone ? cloneJson(snapshot) : snapshot;
 };
 
+// Publish a set of already-persisted JSON assets into the client caches as ONE
+// visible generation. This is the client half of the whole-turn commit seam:
+// every cache is primed and every derived memo invalidated BEFORE any consumer
+// event fires, so a listener reacting to world/game/colors cannot observe the
+// other turn assets from the previous generation.
+export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
+  const list = Array.isArray(entries)
+    ? entries.filter((entry) => entry?.url)
+    : [];
+
+  for (const entry of list) {
+    primeJson(entry.url, entry.value, {
+      clone: entry.cacheClone ?? entry.url !== JSON_URLS.world,
+    });
+  }
+  for (const entry of list) {
+    invalidateDerivedCachesForWrite(entry.url, { emitEvents: false });
+  }
+
+  if (emitEvents && typeof window !== "undefined") {
+    const urls = new Set(list.map((entry) => entry.url));
+    if (urls.has(JSON_URLS.colors)) window.dispatchEvent(new CustomEvent("oh:colors-updated"));
+    if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
+
+    for (const entry of list) {
+      const { url, value } = entry;
+      if (url === JSON_URLS.world) {
+        window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
+      }
+      if (url === JSON_URLS.game) {
+        window.dispatchEvent(new CustomEvent("oh:game-updated", { detail: { game: value } }));
+      }
+      if (isMutableRuntimeJsonUrl(url)) {
+        window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
+          detail: { key: runtimeAssetLabel(url), url, value },
+        }));
+      }
+    }
+  }
+
+  return list.map((entry) => entry.value);
+};
+
 export const writeJson = async (
   url,
   data,
@@ -985,6 +1029,10 @@ export const writeJson = async (
     // opt out of an otherwise-useful defensive cache clone. Default behavior is
     // unchanged for every existing caller.
     cacheClone = url !== JSON_URLS.world,
+    // false: the store keeps the record exactly as sent, so its echo is not
+    // worth reading back. Asks for none (Prefer: return=minimal) and caches what
+    // was sent; a store that answers with the record anyway is not parsed.
+    echo = true,
   } = {},
 ) => {
   const stringifyStartedAt = perfNow();
@@ -993,7 +1041,7 @@ export const writeJson = async (
   const startedAt = Date.now();
   const response = await fetch(url, {
     body: payload,
-    headers: JSON_HEADERS,
+    headers: echo ? JSON_HEADERS : { ...JSON_HEADERS, Prefer: "return=minimal" },
     method: "PUT",
   });
 
@@ -1030,16 +1078,18 @@ export const writeJson = async (
   // non-JSON one), which is the older shape of these routes.
   let saved = data;
   let savedPayload = payload;
-  try {
-    const echoedStartedAt = perfNow();
-    const echoed = await response.text();
-    if (echoed) {
-      saved = JSON.parse(echoed);
-      savedPayload = echoed;
+  if (echo) {
+    try {
+      const echoedStartedAt = perfNow();
+      const echoed = await response.text();
+      if (echoed) {
+        saved = JSON.parse(echoed);
+        savedPayload = echoed;
+      }
+      warnSlowJson("echo parse", url, echoedStartedAt, echoed ? `${Math.round(echoed.length / 1024)} KiB` : "");
+    } catch {
+      /* no body, or not JSON — keep what we sent */
     }
-    warnSlowJson("echo parse", url, echoedStartedAt, echoed ? `${Math.round(echoed.length / 1024)} KiB` : "");
-  } catch {
-    /* no body, or not JSON — keep what we sent */
   }
 
   primeJson(url, saved, { clone: cacheClone });
@@ -1224,10 +1274,7 @@ export const warmRemoteResources = async (
   return results;
 };
 
-export const getPmtilesArchive = (url) => {
-  ensurePmtilesProtocol();
-  return pmtilesArchives.get(url) || registerPmtilesArchive(url);
-};
+export const getPmtilesArchive = (url) => pmtilesArchives.get(url) || registerPmtilesArchive(url);
 
 export const primePmtilesArchive = (url, buffer) => {
   binaryValueCache.set(url, buffer);

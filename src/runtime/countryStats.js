@@ -779,6 +779,72 @@ export const decodeTerritorialComponentSplit = (text, splitBuckets = []) => {
 // never one row per map province. Native code expands those macro estimates back
 // into the complete live-map component ledger so territorial transfers remain
 // precise without making AI latency scale with map granularity.
+
+const COUNTRY_STATS_CALIBRATION_MODES = new Set([
+  "historical_start",
+  "counterfactual_start",
+  "campaign_reconstruction",
+]);
+
+// Population calibration metadata is audit provenance, not the numeric source of
+// truth. Fresh/hard-audit Stats calls already require economicCalibration for the
+// same baseline. Some providers occasionally omit the optional populationCalibration
+// object even after returning complete regional macro estimates. In that narrow case,
+// recover the shared scenario-causality frontier from economicCalibration instead of
+// throwing away an otherwise-valid territorial ledger and paying for another AI retry.
+//
+// An explicitly supplied populationCalibration is never overwritten. If the economic
+// provenance is absent or malformed, this returns the original value so the caller can
+// still fail closed with the existing validation error.
+export const resolveCountryStatsPopulationCalibration = (populationCalibration, economicCalibration) => {
+  if (populationCalibration !== undefined && populationCalibration !== null) {
+    return { calibration: populationCalibration, synthesized: false };
+  }
+  if (!economicCalibration || typeof economicCalibration !== "object" || Array.isArray(economicCalibration)) {
+    return { calibration: populationCalibration, synthesized: false };
+  }
+
+  const mode = clean(economicCalibration.mode);
+  const historyAuthorityCutoff = clean(economicCalibration.historyAuthorityCutoff);
+  if (!COUNTRY_STATS_CALIBRATION_MODES.has(mode) || !historyAuthorityCutoff) {
+    return { calibration: populationCalibration, synthesized: false };
+  }
+
+  return {
+    calibration: {
+      mode,
+      historyAuthorityCutoff,
+      basis:
+        "Native regional macro estimates over the authoritative live Stats footprint; " +
+        "scenario-causality frontier aligned to economicCalibration for the same baseline.",
+    },
+    synthesized: true,
+  };
+};
+
+export const normalizeCountryStatsMacroEstimate = (value) => {
+  const index = Math.trunc(Number(value?.index));
+  const group = clean(value?.group).toLowerCase();
+  const population = parseStatNumber(value?.population);
+  const gdpPerCapita = parseStatNumber(value?.gdpPerCapita);
+  if (!Number.isInteger(index) || index < 1) return null;
+  if (!COMPONENT_GROUP_SET.has(group)) return null;
+  if (!Number.isFinite(population) || population < 0) return null;
+  if (!Number.isFinite(gdpPerCapita) || gdpPerCapita < 0) return null;
+  if (population > 0 && gdpPerCapita <= 0) return null;
+  return {
+    index,
+    group,
+    population: Math.round(population),
+    // Uninhabited territory has no meaningful GDP/capita. The persistent
+    // component schema requires a positive numeric placeholder, but population
+    // zero means this sentinel contributes exactly zero GDP.
+    gdpPerCapita: population === 0
+      ? 1
+      : Math.round(gdpPerCapita * 100) / 100,
+  };
+};
+
 export const expandTerritorialMacroEstimates = (
   macroPlanInput,
   macroEstimatesInput,
@@ -799,20 +865,9 @@ export const expandTerritorialMacroEstimates = (
 
   const estimateByIndex = new Map();
   for (const estimate of estimates) {
-    const index = Math.trunc(Number(estimate?.index));
-    const group = clean(estimate?.group).toLowerCase();
-    const population = parseStatNumber(estimate?.population);
-    const gdpPerCapita = parseStatNumber(estimate?.gdpPerCapita);
-    if (!Number.isInteger(index) || index < 1 || estimateByIndex.has(index)) continue;
-    if (!COMPONENT_GROUP_SET.has(group)) continue;
-    if (!Number.isFinite(population) || population < 0) continue;
-    if (!Number.isFinite(gdpPerCapita) || gdpPerCapita <= 0) continue;
-    estimateByIndex.set(index, {
-      index,
-      group,
-      population: Math.round(population),
-      gdpPerCapita: Math.round(gdpPerCapita * 100) / 100,
-    });
+    const normalized = normalizeCountryStatsMacroEstimate(estimate);
+    if (!normalized || estimateByIndex.has(normalized.index)) continue;
+    estimateByIndex.set(normalized.index, normalized);
   }
 
   const previousByGeography = new Map(

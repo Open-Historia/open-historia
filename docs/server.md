@@ -41,8 +41,8 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | --- | --- | --- | --- |
 | GET | `/api/ui-settings` | Global shared UI settings (currently `language`) — every device sees the same choice | `server/server.js:171` |
 | PUT | `/api/ui-settings` | Set the shared UI language | `server/server.js:236` |
-| GET | `/api/lang/:code` | Merged language pack: shipped `dist|public/lang/<code>.json` **under** saved `data/lang/<code>.json` (saved wins) | `server/server.js:197` |
-| PUT | `/api/lang/:code` | Append runtime-generated translations into `data/lang/<code>.json` (bounded per entry: source ≤3000, translation ≤6000 chars) | `server/server.js:205` |
+| GET | `/api/lang/:code` | Merged language pack: saved `data/lang/<code>.json` **under** shipped `dist|public/lang/<code>.json` (shipped wins: a saved entry for a string the pack covers is an older AI translation; see [Languages & Translation](i18n.md)) | `server/server.js` |
+| PUT | `/api/lang/:code` | Append runtime-generated translations into `data/lang/<code>.json`, skipping strings the shipped pack has (bounded per entry: source ≤3000, translation ≤6000 chars) | `server/server.js` |
 
 `code` must match `/^[a-z]{2,3}$/` or the route 400s (`isLangCode`, `server/server.js:195`).
 
@@ -296,7 +296,7 @@ export const DATA_DIR = process.env.OH_DATA_DIR
   : path.join(__dirname, "data");   // server/data
 ```
 
-Every store imports this one constant, so a single env var relocates **all** writable state. Desktop and Termux leave it unset and use `server/data` (byte-identical to how they've always worked). The **embedded Android server** runs `server.js` in-process via `nodejs-mobile`, where the `server/data` shipped inside the APK is **read-only**; the app sets `OH_DATA_DIR` to a writable sandbox path, seeds first-run defaults there, and downloads PMTiles into `OH_DATA_DIR/assets` (which `resolveRuntimeBinaryAsset` prefers over the read-only shipped copies). Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged under* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root.
+Every store imports this one constant, so a single env var relocates **all** writable state. Desktop and Termux leave it unset and use `server/data` (byte-identical to how they've always worked). The **embedded Android server** runs `server.js` in-process via `nodejs-mobile`, where the `server/data` shipped inside the APK is **read-only**; the app sets `OH_DATA_DIR` to a writable sandbox path, seeds first-run defaults there, and downloads PMTiles into `OH_DATA_DIR/assets` (which `resolveRuntimeBinaryAsset` prefers over the read-only shipped copies). Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged over* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root, and an updated pack replaces the older AI translations of the strings it covers.
 
 ### Environment variables
 | Var | Default | Effect |

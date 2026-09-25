@@ -46,6 +46,7 @@ export const MAP_LAYER_ORDER = [
 
   // Physical/world objects must never be buried by political cartography.
   "cities-shapes",
+  "cities-capitals",
   "cities-labels",
   "markers-shapes-strategic",
   "markers-labels-strategic",

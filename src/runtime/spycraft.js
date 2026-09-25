@@ -397,7 +397,30 @@ const normalizeExchange = (exchange, index, target) => {
   };
 };
 
-// { [target]: { gatheredAt, round, planted, exchanges } }. `planted` marks a
+const normalizeStoredPoliticalAssessment = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const cipher = String(value.cipher ?? "").trim();
+  if (cipher) return { cipher };
+  const summary = String(value.summary ?? "").replace(/\s+/g, " ").trim();
+  const source = String(value.source ?? "").replace(/\s+/g, " ").trim();
+  const confidence = String(value.confidence ?? value.confidenceLabel ?? "").replace(/\s+/g, " ").trim();
+  const gatheredAt = String(value.gatheredAt ?? "").trim();
+  const findings = (Array.isArray(value.findings) ? value.findings : [])
+    .map((finding) => {
+      if (!finding || typeof finding !== "object" || Array.isArray(finding)) return null;
+      const text = String(finding.text ?? finding.assessment ?? finding.summary ?? "").replace(/\s+/g, " ").trim();
+      if (!text) return null;
+      const topic = String(finding.topic ?? "").replace(/\s+/g, " ").trim();
+      const findingConfidence = String(finding.confidence ?? finding.confidenceLabel ?? "").replace(/\s+/g, " ").trim();
+      return { ...(topic ? { topic } : {}), text, ...(findingConfidence ? { confidence: findingConfidence } : {}) };
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+  if (!summary && !source && !confidence && !gatheredAt && findings.length === 0) return null;
+  return { ...(summary ? { summary } : {}), ...(source ? { source } : {}), ...(confidence ? { confidence } : {}), ...(gatheredAt ? { gatheredAt } : {}), ...(findings.length ? { findings } : {}) };
+};
+
+// { [target]: { reportId, spyId, gatheredAt, round, planted, politicalAssessment?, exchanges } }. `planted` marks a
 // report produced while the agent was turned: the file remembers, the player
 // does not get told. Anything malformed is dropped rather than rendered.
 export const normalizeIntercepts = (raw) => {
@@ -408,11 +431,15 @@ export const normalizeIntercepts = (raw) => {
       .map((exchange, i) => normalizeExchange(exchange, i, name))
       .filter(Boolean);
     if (!name || exchanges.length === 0) continue;
+    const politicalAssessment = normalizeStoredPoliticalAssessment(entry?.politicalAssessment);
     out[name] = {
+      reportId: String(entry?.reportId ?? "").trim(),
+      spyId: String(entry?.spyId ?? "").trim(),
       gatheredAt: String(entry?.gatheredAt ?? "").trim(),
       round: Number.isFinite(Number(entry?.round)) ? Number(entry.round) : 0,
       planted: entry?.planted === true,
       exchanges,
+      ...(politicalAssessment ? { politicalAssessment } : {}),
     };
   }
   return out;

@@ -28,6 +28,10 @@ const fromB64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 // kept in world.spySeal.
 export const newSeal = () => toHex(globalThis.crypto.getRandomValues(new Uint8Array(32)));
 
+// Unique report ids keep AES-GCM labels unique even when an agent reports twice
+// in the same game round.
+export const newSpyReportId = () => `spy-report-${toHex(globalThis.crypto.getRandomValues(new Uint8Array(12)))}`;
+
 export const isSeal = (value) => /^[0-9a-f]{64}$/i.test(String(value ?? ""));
 
 const keyCache = new Map();
@@ -83,3 +87,26 @@ export const openExchange = async (seal, exchange) => ({
     }
   })),
 });
+
+
+// Political assessments use the same per-game seal as traffic, but a separate
+// report-scoped label. They are opened only in memory before the knowledge layer
+// decides what the player may see.
+const politicalAssessmentLabel = (reportId) => `${String(reportId ?? "").trim() || "legacy-report"}:political-assessment`;
+
+export const sealPoliticalAssessment = async (seal, reportId, assessment) => {
+  if (!assessment || typeof assessment !== "object" || Array.isArray(assessment)) return null;
+  if (assessment.cipher && !assessment.summary && !assessment.findings) return { cipher: String(assessment.cipher) };
+  return { cipher: await sealText(seal, politicalAssessmentLabel(reportId), JSON.stringify(assessment)) };
+};
+
+export const openPoliticalAssessment = async (seal, reportId, assessment) => {
+  if (!assessment || typeof assessment !== "object" || Array.isArray(assessment)) return null;
+  if (!assessment.cipher) return assessment;
+  try {
+    const parsed = JSON.parse(await openText(seal, politicalAssessmentLabel(reportId), assessment.cipher));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return { summary: "[unreadable]", findings: [] };
+  }
+};

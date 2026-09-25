@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   POLITY_TEXT_FADE_OUT_START_ZOOM,
   POLITY_TEXT_MAX_ZOOM,
+  POLITY_TEXT_VISUAL_SCALE,
   PTR_WORLD_PIXELS_AT_REFERENCE_ZOOM,
   planMetricTextSupport,
   polityTextOpacityAtZoom,
+  scalePolityTextSupportPoints,
 } from "./polityTextLayout.js";
 
 test("PTR-1 metric support uses one uniform scale derived from real raster metrics", () => {
@@ -105,12 +107,27 @@ test("PTR-1.8 fades smoothly before the close-zoom cutoff instead of disappearin
   assert.equal(polityTextOpacityAtZoom({ ...base, zoom: 7.2 }), 0);
 });
 
-test("polity text is drawn until z7.5 by default, fading over the last three-quarters of a zoom", () => {
-  assert.equal(POLITY_TEXT_MAX_ZOOM, 7.5);
-  assert.equal(POLITY_TEXT_FADE_OUT_START_ZOOM, 6.75);
-  assert.equal(polityTextOpacityAtZoom({ zoom: 6.7 }), 1);
-  const late = polityTextOpacityAtZoom({ zoom: 7.4 });
-  assert.ok(late > 0 && late < 1, `expected partial opacity at z7.4, got ${late}`);
-  assert.equal(polityTextOpacityAtZoom({ zoom: 7.5 }), 0);
-  assert.equal(polityTextOpacityAtZoom({ zoom: 7.6 }), 0);
+test("polity text yields to provinces and cities before close zoom", () => {
+  assert.equal(POLITY_TEXT_MAX_ZOOM, 6.20);
+  assert.equal(POLITY_TEXT_FADE_OUT_START_ZOOM, 5.00);
+  assert.equal(polityTextOpacityAtZoom({ zoom: 4.9 }), 1);
+  const mid = polityTextOpacityAtZoom({ zoom: 5.5 });
+  assert.ok(mid > 0 && mid < 1, `expected partial opacity at z5.5, got ${mid}`);
+  assert.ok(polityTextOpacityAtZoom({ zoom: 5.9 }) < mid);
+  assert.equal(polityTextOpacityAtZoom({ zoom: 6.20 }), 0);
+  assert.equal(polityTextOpacityAtZoom({ zoom: 7.0 }), 0);
+});
+
+
+test("PTR visual scale contracts a finished support path to 0.88x without moving its center", () => {
+  assert.equal(POLITY_TEXT_VISUAL_SCALE, 0.88);
+  const center = [10, 20];
+  const points = [[0, 20], [10, 30], [20, 20]];
+  const scaled = scalePolityTextSupportPoints({ points, center });
+  const expected = [[1.2, 20], [10, 28.8], [18.8, 20]];
+  for (let index = 0; index < expected.length; index += 1) {
+    assert.ok(Math.abs(scaled[index][0] - expected[index][0]) < 1e-12);
+    assert.ok(Math.abs(scaled[index][1] - expected[index][1]) < 1e-12);
+  }
+  assert.deepEqual(center, [10, 20]);
 });

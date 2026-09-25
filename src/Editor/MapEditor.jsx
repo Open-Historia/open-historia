@@ -49,6 +49,7 @@ import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLib
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
+import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
@@ -426,6 +427,35 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   dRef.current = d;
   const saveNowRef = useRef(saveNow);
   saveNowRef.current = saveNow;
+
+  // The ✕, and on a phone Back (runtime/backToClose.js), which used to reach
+  // past the Workshop to whatever was open under it. Answers false when the
+  // player chooses to stay, and Back then leaves the Workshop open.
+  const requestClose = async () => {
+    if (scenarioMode && scenarioDirty) {
+      const ok = window.confirm(
+        "This scenario has Workshop changes that have not been saved into the scenario yet. Close without applying them?",
+      );
+      if (!ok) return false;
+    }
+    // Closing with edits still in the debounce window would drop them
+    // silently — the button looks like "go back", not "discard". Try
+    // to save first, and only ask if that fails or is still pending,
+    // so the common case closes with no prompt and no loss.
+    if (d.saveStatus === "dirty") {
+      await saveNow();
+      if (dRef.current.saveStatus === "saved") { onClose(); return true; }
+    }
+    if (d.saveStatus === "saved") { onClose(); return true; }
+    const ok = window.confirm(
+      "This map has changes that could not be saved. Close it and lose them?",
+    );
+    if (ok) onClose();
+    return ok;
+  };
+  useBackToClose(Boolean(onClose), requestClose);
+  // A side panel open in it (types, regions, layers…) closes first.
+  useBackToClose(Boolean(openPanel), () => setOpenPanel(null));
 
   const newDoc = (kind) => {
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
@@ -818,28 +848,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           )}
           {onClose && (
             <button
-              onClick={async () => {
-                if (scenarioMode && scenarioDirty) {
-                  const ok = window.confirm(
-                    "This scenario has Workshop changes that have not been saved into the scenario yet. Close without applying them?",
-                  );
-                  if (!ok) return;
-                }
-                // Closing with edits still in the debounce window would drop them
-                // silently — the button looks like "go back", not "discard". Try
-                // to save first, and only ask if that fails or is still pending,
-                // so the common case closes with no prompt and no loss.
-                if (d.saveStatus === "dirty") {
-                  await saveNow();
-                  if (dRef.current.saveStatus === "saved") { onClose(); return; }
-                }
-                if (d.saveStatus === "saved") { onClose(); return; }
-                const ok = window.confirm(
-                  "This map has changes that could not be saved. Close it and lose them?",
-                );
-                if (ok) onClose();
-              }}
+              onClick={() => { void requestClose(); }}
               title="Close map editor"
+              aria-label="Close map editor"
               style={{
                 ...panelSurface,
                 padding: isMobile ? "9px 11px" : "8px 13px",

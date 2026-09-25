@@ -25,7 +25,7 @@ const GAME_ZIP_SCENARIO = "scenario.json";
 
 // Every file the game saves goes through runtime/saveFile.js: the anchor with the
 // deferred revoke in a browser (Firefox cancels a download whose object URL is
-// revoked in the same task as the click), the Filesystem + share sheet in the
+// revoked in the same task as the click), Downloads/Open Historia in the
 // Android app. Kept as a named export because the game-bundle parity test holds
 // every zip save to this one door.
 export const saveGameZipToDisk = (blob, fileName) => saveBlobToDisk(blob, fileName);

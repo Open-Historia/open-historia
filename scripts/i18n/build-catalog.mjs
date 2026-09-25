@@ -1,106 +1,151 @@
-/*! Open Historia — language-pack catalog builder © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Collects the English strings that seed the shipped language packs
-// (public/lang/<code>.json): every country name, the preset scenarios'
-// card text, difficulty levels, and the interface's fixed strings.
-// Usage: node scripts/i18n/build-catalog.mjs  → public/lang/catalog-en.json
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+/*! Open Historia — language-pack catalogs © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Writes the English catalogs the shipped language packs translate:
+//
+//   public/lang/catalog-en.json          every fixed interface string, read out
+//                                        of the source (extractStrings.mjs),
+//                                        plus every stock country name and the
+//                                        preset scenarios' card text;
+//   public/lang/prompts/catalog-en.json  every guidance passage of the default
+//                                        prompts (promptGuidance.js), which the
+//                                        packs carry translated too.
+//
+// Patterns (text built at render time) sit in the interface catalog with their
+// slots in double braces: "{{count}} events".
+//
+// One catalog serves every branch. The branches' interfaces differ, so pass
+// each other branch's tree with --also and the catalog is their union; the
+// same packs can then ship everywhere:
+//
+//   node scripts/i18n/build-catalog.mjs
+//   node scripts/i18n/build-catalog.mjs --also ../beta-checkout --also ../main-checkout
+//
+// A tree given with --also needs only its src/ (and scripts/presets/ for the
+// scenario cards): `git archive origin/beta src scripts/presets | tar -x -C dir`.
+
+import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { loadCountryCatalog } from "../presets/lib/regionCatalog.mjs";
+import { extractTree } from "./extractStrings.mjs";
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../..");
-const OUT_DIR = path.join(ROOT, "public", "lang");
+const LANG_DIR = path.join(ROOT, "public", "lang");
 
-// The interface's fixed strings (exact text as rendered).
-const UI_STRINGS = [
-  // Top bar / library
-  "Games", "Scenarios", "Community", "New Game", "Edit", "Clone Scenario",
-  "Refresh", "Import JSON", "Open Historia", "Loading Community…",
-  // New-game dialog
-  "Choose your country", "Choose your difficulty", "How hard should the world fight back?",
-  "Scenario default", "Keep scenario default", "Cancel", "Done", "Back",
-  "Search countries…",
-  // Settings
-  "Game Settings", "AI Provider", "Language", "Search languages...", "Fullscreen",
-  "3D Globe", "3D Terrain", "Model reasoning", "Cheats", "Discord", "GitHub",
-  "Stored only in this browser.",
-  // Timeline / events
-  "Timeline", "Events", "Auto-jump", "1 week", "1 month", "3 months", "6 months",
-  "1 year", "No world events were recorded for this time skip.",
-  "No event chain is available yet.", "Next event", "Show on map", "Loading...", "Undated",
-  // Chat / actions / forces / advisor
-  "Advisor", "No messages yet. Ask your advisor something!", "Ask your advisor...",
-  "Clear chat", "Close advisor", "Diplomatic Chats", "Actions", "Forces",
-  // Country panel
-  "Related Events", "Search events...", "Filters", "All", "Major", "Minor",
-  "No events found for this country.", "Details", "Alternative Names", "None",
-  "Advisor Report", "Open Diplomacy", "Unclaimed Territory", "No flag available",
-  // Map editor — country colour + flag picker
-  "Choose flag", "Colour", "Country code that drives the fill color",
-  "Go back to this country's standard colour",
-  "Already on this map", "My flags", "Built-in flags", "In the game",
-  "Use this flag", "Use the standard flag again", "Remove from My flags",
-  "Share a flag", "Share this flag with the community", "Open hub ↗",
-  "Loading community flags…", "Could not load community flags.",
-  "Could not download that flag.", "Could not read that image.",
-  "No community flags yet — “⬆ Share a flag” posts one to the hub for everyone.",
-  "Opens the hub's flag form — drag your image in and submit", "Posted by the project",
-  "Applying…", "Search…",
-  // Cheats menu (titles + subtitles)
-  "Master AI", "Full control over the game with AI assistance",
-  "Your Country", "Change which country you're playing as",
-  "Difficulty", "Adjust the game difficulty level",
-  "Annex Country", "Click a country to annex it into another",
-  "Annex Regions", "Click individual regions to transfer them to a country",
-  "Modify existing country properties",
-  "Add Country", "Create a new country on the map",
-  "Regions", "Edit region names, tags, and properties",
-  "Edit Map Feature", "Edit existing map features like cities and landmarks",
-  "Add Map Feature", "Create new map features with custom properties",
-  "Clear Map Features", "Clean up old and irrelevant features",
-  "Edit historical events and their descriptions",
-  "Edit Country", "Name", "Color (hex)", "Command", "Execute", "Switch country",
-  "Save changes", "Create country", "Save region", "Save event", "Save feature",
-  "Place on map", "Search features…", "Search events…", "Title", "Date", "Description",
-  "Start clicking the map", "Pick a region on the map",
-  // National statistics pane (indices + economy)
-  "Stats", "Sovereignty", "Food autonomy", "Energy autonomy", "Economic independence",
-  "Internal security", "International reputation", "Stability", "GDP breakdown",
-  "Budget balance", "Public debt", "Unemployment", "Inflation", "Agriculture",
-  "Industry", "Services", "Surplus", "Deficit",
-  // Military units / forces
-  "Infantry", "Armor", "Air", "Naval", "Artillery", "Garrison", "Strength",
-  // Assorted controls
-  "Custom", "Reduce motion", "Unclaimed",
-];
+const args = process.argv.slice(2);
+const also = [];
+for (let i = 0; i < args.length; i += 1) {
+  if (args[i] === "--also" && args[i + 1]) also.push(path.resolve(args[(i += 1)]));
+}
+const roots = [ROOT, ...also];
 
-const collectSpecStrings = () => {
-  const strings = [];
-  const dir = path.join(ROOT, "scripts", "presets");
-  for (const file of readdirSync(dir)) {
+// Card text of the preset scenarios: the fields a scenario card renders.
+const specStrings = (root) => {
+  const dir = path.join(root, "scripts", "presets");
+  if (!fs.existsSync(dir)) return [];
+  const out = [];
+  for (const file of fs.readdirSync(dir)) {
     if (!file.endsWith(".spec.mjs")) continue;
-    const source = readFileSync(path.join(dir, file), "utf8");
-    // Card text fields only — the fields scenario cards render.
+    const source = fs.readFileSync(path.join(dir, file), "utf8");
     for (const match of source.matchAll(/\b(?:name|description|subtitle|eyebrow|heroTitle|heroSubtitle)\s*:\s*"((?:[^"\\]|\\.)+)"/g)) {
-      strings.push(JSON.parse(`"${match[1]}"`));
+      out.push(JSON.parse(`"${match[1]}"`));
     }
   }
-  return strings;
+  return out;
 };
 
-const collectDifficulty = async () => {
-  const { DIFFICULTY_LEVELS } = await import(url.pathToFileURL(path.join(ROOT, "src/runtime/difficulty.js")));
-  return DIFFICULTY_LEVELS.flatMap((level) => [level.label, level.blurb]);
+// The built-in scenarios' own polities (server/seed/<id>/world.json): their
+// names and aliases are the game's own text, on the map from the first boot,
+// and many are not stock names ("Nauru", "Transnistria", "Republic of Poland").
+const seedPolityNames = (root) => {
+  const dir = path.join(root, "server", "seed");
+  if (!fs.existsSync(dir)) return [];
+  const out = [];
+  for (const seed of fs.readdirSync(dir)) {
+    const file = path.join(dir, seed, "world.json");
+    if (!fs.existsSync(file)) continue;
+    let world;
+    try {
+      world = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      continue;
+    }
+    for (const [key, polity] of Object.entries(world?.polityOverrides ?? {})) {
+      for (const name of [key, polity?.name, polity?.mapLabel, ...(Array.isArray(polity?.aliases) ? polity.aliases : [])]) {
+        if (typeof name === "string" && name.trim()) out.push(name.trim());
+      }
+    }
+  }
+  return out;
 };
 
-const countries = (await loadCountryCatalog()).map((entry) => entry.COUNTRY).filter(Boolean);
-const catalog = [...new Set([
-  ...UI_STRINGS,
-  ...(await collectDifficulty()),
-  ...collectSpecStrings(),
-  ...countries,
-])].filter((value) => typeof value === "string" && value.trim().length > 1).sort();
+// Every stock country's name, from the shipped countries archive.
+const countryNames = async () => {
+  try {
+    const { loadCountryCatalog } = await import(url.pathToFileURL(path.join(ROOT, "scripts/presets/lib/regionCatalog.mjs")));
+    return (await loadCountryCatalog()).map((entry) => entry.COUNTRY).filter(Boolean);
+  } catch (error) {
+    console.warn(`  country names skipped (${error.message}); the previous catalog's are kept`);
+    return null;
+  }
+};
 
-mkdirSync(OUT_DIR, { recursive: true });
-writeFileSync(path.join(OUT_DIR, "catalog-en.json"), JSON.stringify(catalog, null, 1));
-console.log(`catalog-en.json: ${catalog.length} strings`);
+const guidancePassages = async (root) => {
+  const guidanceFile = path.join(root, "src/Game/AI/promptGuidance.js");
+  const promptsFile = path.join(root, "src/Game/AI/defaultPrompts.json");
+  if (!fs.existsSync(guidanceFile) || !fs.existsSync(promptsFile)) return [];
+  const { buildGuidanceDefaults } = await import(url.pathToFileURL(guidanceFile));
+  const defaults = buildGuidanceDefaults(JSON.parse(fs.readFileSync(promptsFile, "utf8")));
+  const out = [];
+  const walk = (value) => {
+    if (typeof value === "string") {
+      if (value.trim()) out.push(value);
+    } else if (value && typeof value === "object") Object.values(value).forEach(walk);
+  };
+  walk(defaults);
+  return out;
+};
+
+const main = async () => {
+  const strings = new Set();
+  let patternCount = 0;
+  for (const root of roots) {
+    const { exact, patterns, errors } = extractTree(root);
+    errors.forEach((error) => console.warn(`  parse error: ${error}`));
+    exact.forEach((_, text) => strings.add(text));
+    patterns.forEach((_, text) => strings.add(text));
+    patternCount += patterns.size;
+    specStrings(root).forEach((text) => strings.add(text));
+    seedPolityNames(root).forEach((text) => strings.add(text));
+    console.log(`  ${path.relative(ROOT, root) || "."}: ${exact.size} strings, ${patterns.size} patterns`);
+  }
+
+  const countries = await countryNames();
+  if (countries) countries.forEach((name) => strings.add(name));
+  else {
+    // Keep the previous catalog's names rather than dropping them.
+    try {
+      for (const entry of JSON.parse(fs.readFileSync(path.join(LANG_DIR, "catalog-en.json"), "utf8"))) {
+        if (typeof entry === "string" && /^[A-Z]/.test(entry) && !entry.includes("{{") && entry.length < 60) strings.add(entry);
+      }
+    } catch { /* first run */ }
+  }
+
+  const catalog = [...strings].map((s) => s.trim()).filter((s) => s.length > 1 && /[A-Za-z]{2}/.test(s)).sort();
+  fs.mkdirSync(LANG_DIR, { recursive: true });
+  fs.writeFileSync(path.join(LANG_DIR, "catalog-en.json"), `${JSON.stringify([...new Set(catalog)], null, 1)}\n`);
+  const patterns = catalog.filter((s) => s.includes("{{")).length;
+  console.log(`catalog-en.json: ${catalog.length} strings (${patterns} of them patterns)`);
+
+  const passages = new Set();
+  for (const root of roots) (await guidancePassages(root)).forEach((text) => passages.add(text));
+  const promptDir = path.join(LANG_DIR, "prompts");
+  fs.mkdirSync(promptDir, { recursive: true });
+  const promptCatalog = [...passages].sort();
+  fs.writeFileSync(path.join(promptDir, "catalog-en.json"), `${JSON.stringify(promptCatalog, null, 1)}\n`);
+  console.log(`prompts/catalog-en.json: ${promptCatalog.length} guidance passages, ${promptCatalog.join("").length} characters`);
+  void patternCount;
+};
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

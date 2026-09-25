@@ -95,14 +95,29 @@ export const buildMessageDrafts = (draftsRaw, sourceText) => {
     const blockquotes = allQuotes.slice(offset);
     return draftsRaw
         .map((draft, index) => {
-            const country = draft && String(draft.country ?? "").trim();
-            if (!country) return null;
+            const targetType = String(draft?.targetType || "private").trim().toLowerCase();
+            const country = String(draft?.country ?? "").trim();
+            const institutionId = String(draft?.institutionId ?? "").trim();
+            const caseId = String(draft?.caseId ?? "").trim();
+            const threadId = String(draft?.threadId ?? "").trim();
+            if (targetType === "private" && !country) return null;
+            if (targetType === "institution-council" && !institutionId && !threadId) return null;
+            if (targetType === "institution-lifecycle" && ((!institutionId && !threadId) || (!caseId && !threadId))) return null;
+            if (!["private", "institution-council", "institution-lifecycle"].includes(targetType)) return null;
             // A "text" field is still honored if present — older saved messages
             // have one, and an explicit value beats the positional guess.
             // Plain text: this string goes into the diplomacy composer, which
             // renders the player's own messages verbatim.
             const text = toPlainText(String(draft?.text ?? "").trim() || blockquotes[index] || "");
-            return text ? { country, text, quoteIndex: offset + index } : null;
+            return text ? {
+                targetType,
+                country,
+                institutionId,
+                caseId,
+                threadId,
+                text,
+                quoteIndex: offset + index,
+            } : null;
         })
         .filter(Boolean);
 };

@@ -8,6 +8,8 @@
 
 import { lazy, Suspense, useState } from "react";
 import { createPortal } from "react-dom";
+import { isTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 
 // The editor's flag picker drops in unchanged — it is prop-driven and pulls in no
 // editor stores. It returns a flag STRING (a flagcdn URL or a PNG data URL) or
@@ -47,6 +49,8 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
   const [landless, setLandless] = useState(true);
   const [regionIds, setRegionIds] = useState(() => new Set());
   const [flagOpen, setFlagOpen] = useState(false);
+  // On a phone, Back closes the flag picker and leaves the form as it was.
+  useBackToClose(flagOpen, () => setFlagOpen(false));
 
   const toggleRegion = (id) => {
     setRegionIds((prev) => {
@@ -77,8 +81,10 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
     <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
       <div>
         <div style={label}>Name</div>
+        {/* Not focused on a touch screen, where the keyboard would come up
+            over the rest of the form before the player had seen it. */}
         <input
-          autoFocus
+          autoFocus={!isTouchPrimary()}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g. Free Cascadia, the Provisional Government…"
@@ -91,6 +97,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
           <div style={label}>Colour</div>
           <input
             type="color"
+            className="oh-tap"
             value={color}
             onChange={(e) => setColor(e.target.value)}
             style={{ width: 48, height: 34, background: "none", border: "1px solid rgba(255,255,255,0.16)", borderRadius: 8, cursor: "pointer" }}
@@ -98,17 +105,18 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
         </div>
         <div style={{ flex: 1 }}>
           <div style={label}>Flag</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          {/* Wraps on a narrow phone rather than pushing Remove off the card. */}
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
             {flag ? (
               <img src={flag} alt="" style={{ width: 34, height: 22, objectFit: "contain", borderRadius: 3, border: "1px solid rgba(255,255,255,0.25)" }} />
             ) : (
               <span aria-hidden="true" style={{ fontSize: "1.4rem" }}>🏳️</span>
             )}
-            <button type="button" onClick={() => setFlagOpen(true)} style={pill(false)}>
+            <button type="button" className="oh-tap-row" onClick={() => setFlagOpen(true)} style={pill(false)}>
               {flag ? "Change flag" : "Choose flag"}
             </button>
             {flag && (
-              <button type="button" onClick={() => setFlag(null)} style={pill(false)}>Remove</button>
+              <button type="button" className="oh-tap-row" onClick={() => setFlag(null)} style={pill(false)}>Remove</button>
             )}
           </div>
         </div>
@@ -128,8 +136,8 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
       <div>
         <div style={label}>Starting territory</div>
         <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.4rem" }}>
-          <button type="button" onClick={() => setLandless(true)} style={pill(landless)}>Start landless</button>
-          <button type="button" onClick={() => setLandless(false)} style={pill(!landless)}>Claim regions</button>
+          <button type="button" className="oh-tap-row" onClick={() => setLandless(true)} style={pill(landless)}>Start landless</button>
+          <button type="button" className="oh-tap-row" onClick={() => setLandless(false)} style={pill(!landless)}>Claim regions</button>
         </div>
         {landless ? (
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.76rem" }}>
@@ -159,6 +167,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
       <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.2rem" }}>
         <button
           type="button"
+          className="oh-tap-row"
           onClick={submit}
           disabled={!canCreate}
           style={{
@@ -171,7 +180,7 @@ const FactionCreator = ({ regionsGeojson, onCreate, onCancel, busy }) => {
         >
           {busy ? "Creating…" : "Create & play"}
         </button>
-        <button type="button" onClick={onCancel} style={{ ...pill(false), padding: "0.55rem 1rem" }}>Cancel</button>
+        <button type="button" className="oh-tap-row" onClick={onCancel} style={{ ...pill(false), padding: "0.55rem 1rem" }}>Cancel</button>
       </div>
 
       {/* Portalled to <body>, exactly as the editor mounts it outside its own

@@ -1,10 +1,13 @@
 /*! Open Historia — portions (standalone map-editor mode) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Map from "./Game/Map/World.jsx";
 import UI from "./Game/GameUI/main.jsx";
 
 // Lazy so OpenLayers is only fetched when the editor is actually opened.
 const MapEditor = lazy(() => import("./Editor/MapEditor.jsx"));
+// Lazy too: the map and MapLibre with it (over 1 MB) are fetched and parsed
+// while the startup screen is already up, not before it can draw, and the
+// editor never loads them. Nothing outside Game/Map imports maplibre-gl.
+const WorldMap = lazy(() => import("./Game/Map/World.jsx"));
 import StartupScreen from "./runtime/StartupScreen.jsx";
 import ErrorBoundary from "./runtime/ErrorBoundary.jsx";
 import AppUpdateBanner from "./runtime/AppUpdateBanner.jsx";
@@ -191,13 +194,15 @@ function GameApp() {
   return (
     <>
     <div style={WorldShell}>
-    <Map
+    <Suspense fallback={null}>
+    <WorldMap
     key={`map-${activeGameId || "default"}`}
     mapRef={mapRef}
     projection={isGlobeEnabled ? "globe" : "mercator"}
     terrainEnabled={isTerrainEnabled}
     onInitialIdle={handleFirstWorldIdle}
     />
+    </Suspense>
     <div style={Vignette} />
     </div>
     {isReady && (

@@ -18,6 +18,7 @@ test("political fills and borders remain below cities markers and units", () => 
   ]) {
     assert.ok(index(political) >= 0, `${political} is missing from canonical order`);
     assert.ok(index(political) < index("cities-shapes"));
+    assert.ok(index(political) < index("cities-capitals"));
     assert.ok(index(political) < index("cities-labels"));
     assert.ok(index(political) < index("markers-shapes-strategic"));
     assert.ok(index(political) < index("units-fill"));
@@ -35,6 +36,7 @@ test("late political fills are deterministically moved underneath existing objec
     "basemap",
     "polity-boundaries",
     "cities-shapes",
+    "cities-capitals",
     "cities-labels",
     "units-fill",
     "custom-regions-fill",
@@ -56,6 +58,7 @@ test("late political fills are deterministically moved underneath existing objec
     "custom-regions-fill",
     "polity-boundaries",
     "cities-shapes",
+    "cities-capitals",
     "cities-labels",
     "units-fill",
   ]);
@@ -115,5 +118,6 @@ test("layer-order enforcement physically promotes tagged NatGeo references out f
 test("PTR-0 polity text renderer stays above legacy polity labels and below cities", () => {
   assert.ok(index("polity-text-renderer") > index("country-labels"));
   assert.ok(index("polity-text-renderer") < index("cities-shapes"));
+  assert.ok(index("polity-text-renderer") < index("cities-capitals"));
   assert.ok(index("polity-text-renderer") < index("cities-labels"));
 });

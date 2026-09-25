@@ -20,9 +20,10 @@ android {
         }
     }
     // The world map ships inside the APK (www/assets/*.pmtiles, laid there by
-    // mobile/scripts/stage-www.mjs) and is read by HTTP Range from the WebView.
-    // A deflated asset would make every range read inflate from byte 0, so the
-    // archives are stored as they are.
+    // mobile/scripts/stage-www.mjs) and is read whole by the WebView, once per
+    // archive: Capacitor's local server cannot answer a Range correctly
+    // (src/runtime/wholeFileSource.js). The archives are stored as they are, so
+    // that read is a straight copy rather than an inflate.
     androidResources {
         noCompress 'pmtiles'
     }

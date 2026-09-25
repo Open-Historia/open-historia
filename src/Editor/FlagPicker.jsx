@@ -353,7 +353,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
               {isMobile ? "↺" : "Remove"}
             </button>
           )}
-          <button type="button" style={{ ...closeBtn, marginLeft: isMobile ? "auto" : undefined }} onClick={onClose}>✕</button>
+          <button type="button" className="oh-tap" aria-label="Close flag picker" style={{ ...closeBtn, marginLeft: isMobile ? "auto" : undefined }} onClick={onClose}>✕</button>
         </div>
 
         <div style={bodyBox}>

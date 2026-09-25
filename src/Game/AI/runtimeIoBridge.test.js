@@ -7,6 +7,7 @@
 // on the website and in the Android app, where its own fetch would 404.
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { IO_CONFIG, IO_REQUEST, IO_RESULT, createWorkerIoClient, serveWorkerIo } from "./runtimeIoBridge.js";
 
 const wire = (fetchImpl) => {
@@ -70,4 +71,12 @@ test("answers are matched by id, and other messages are left alone", async () =>
 test("the page ignores everything that is not an io request", async () => {
   assert.equal(await serveWorkerIo({ type: IO_CONFIG }, async () => new Response("")), null);
   assert.equal(await serveWorkerIo(null, async () => new Response("")), null);
+});
+
+test("Country Stats hosted-worker path keeps the page-side runtime I/O bridge wired", () => {
+  const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /import \{ IO_CONFIG, IO_REQUEST, serveWorkerIo \} from "\.\/runtimeIoBridge\.js"/);
+  assert.match(gameplay, /VITE_OH_WEB\) worker\.postMessage\(\{ type: IO_CONFIG, bridgeRuntimeIo: true \}\)/);
+  assert.match(gameplay, /event\?\.data\?\.type === IO_REQUEST/);
+  assert.match(gameplay, /serveWorkerIo\(event\.data, fetch\)/);
 });

@@ -64,7 +64,7 @@ test("the board runs BEFORE anything is written", () => {
   // The held-turn UX rests entirely on this: a board failure must mean nothing
   // happened, so the turn can be held and retried without applying twice.
   const board = at("if (projects) {", "the projects/board call");
-  const write = at("await Promise.all([", "the state write");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(
     board < write,
     "the board must run before the state write, or a held turn cannot be retried safely",
@@ -93,14 +93,14 @@ test("the board pass is given the Hidden events, and their ops land before the w
   const board = at("if (projects) {", "the projects/board call");
   const handedOn = at("hiddenEvents: boardHiddenEvents", "passing the Hidden events to the board pass");
   const applied = at("boardOnlyEventIds:", "applying Hidden-event ops without stamping activity");
-  const write = at("await Promise.all([", "the state write");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(board < handedOn && handedOn < write, "the board pass must receive the Hidden events before the write");
   assert.ok(applied < write, "a Hidden event's Board ops must be applied before the write, or they are lost");
 });
 
 test("a provisional major event the board pass did not back is kept off the timeline before the write", () => {
   const settle = at("if (unbackedIds.has(list[index]?.id)) list.splice(index, 1);", "removing unbacked provisional events");
-  const write = at("await Promise.all([", "the state write");
+  const write = at("await writeCanonicalTurnState({", "the atomic canonical state write");
   assert.ok(settle < write, "an unbacked provisional event must leave nextEvents before it is written");
 });
 

@@ -13,6 +13,7 @@ import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
+import { acceptFor } from "../runtime/fileAccept.js";
 
 const overlay = {
   position: "fixed",
@@ -259,7 +260,7 @@ const BasemapPicker = ({
             {busy ? "Uploading…" : "⬆ Upload basemap"}
             <input
               type="file"
-              accept={BACKGROUND_ACCEPT}
+              accept={acceptFor(BACKGROUND_ACCEPT)}
               style={{ display: "none" }}
               onChange={(e) => {
                 const f = e.target.files?.[0];

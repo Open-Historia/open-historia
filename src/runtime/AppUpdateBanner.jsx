@@ -307,11 +307,11 @@ export default function AppUpdateBanner() {
         </span>
       </div>
       {ready ? (
-        <button type="button" style={btn} onClick={onRestart}>
+        <button type="button" className="oh-tap-row" style={btn} onClick={onRestart}>
           Restart now
         </button>
       ) : isWeb || desktop || latest.apk ? (
-        <button type="button" style={btn} onClick={onUpdate} disabled={updating || busy}>
+        <button type="button" className="oh-tap-row" style={btn} onClick={onUpdate} disabled={updating || busy}>
           {busy
             ? `${progress.percent || 0}%`
             : updating
@@ -319,7 +319,7 @@ export default function AppUpdateBanner() {
               : "Update now"}
         </button>
       ) : null}
-      <button type="button" style={dismissBtn} onClick={onDismiss} aria-label="Dismiss update notice">
+      <button type="button" className="oh-tap" style={dismissBtn} onClick={onDismiss} aria-label="Dismiss update notice">
         ×
       </button>
     </div>

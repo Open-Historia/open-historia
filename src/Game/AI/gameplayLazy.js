@@ -55,7 +55,6 @@ export const endActiveInteractive = async (...args) => (await gameplay()).endAct
 export const setAsideActiveInteractive = async (...args) => (await gameplay()).setAsideActiveInteractive(...args);
 
 // --- Chat and diplomacy -----------------------------------------------------
-export const chooseNextDiplomaticSpeaker = async (...args) => (await gameplay()).chooseNextDiplomaticSpeaker(...args);
 // One request acts for every AI participant in a thread (AI/chatActions.js).
 export const runChatActionBatch = async (...args) => (await gameplay()).runChatActionBatch(...args);
 export const checkDemandReply = async (...args) => (await gameplay()).checkDemandReply(...args);
@@ -73,5 +72,6 @@ export const consolidateHistoryNow = async (...args) => (await gameplay()).conso
 
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);
+export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
 export const generateCountryStatSheet = async (...args) => (await gameplay()).generateCountryStatSheet(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);

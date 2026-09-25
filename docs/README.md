@@ -31,6 +31,7 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Server & API](server.md) — The Node/Express game server: routes, data-dir layout, asset serving, owner migration, and portability.
 - [Map Data & Assets](assets-and-data.md) — Map-data & asset handling from GitHub-Release download through server override resolution to the browser caching/warming model.
 - [Runtime Services](runtime-services.md) — Library/scenario/game stores, the country-name resolver, i18n/translator, and tags/labels/community-flags/map-settings services.
+- [Languages & Translation](i18n.md) — Shipped language packs for the interface and the prompts' guidance, AI translation of content only, the pattern and run lookup, writing UI code that translates, regenerating the packs.
 
 ### Web & Mobile
 - [Web Build (openhistoria.com)](web-build.md) — The browser-only `VITE_OH_WEB` build: fetch-interceptor fake backend, IndexedDB stores, PMTiles Worker-proxy/content-node trust chain, magic-link/Google accounts + E2E sync.

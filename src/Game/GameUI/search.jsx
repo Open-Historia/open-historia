@@ -1,6 +1,8 @@
 /*! Open Historia — portions (mobile search layout) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { useWorldState } from "../Map/useWorldState.js";
 import { focusFeature } from "../Selection/Features.jsx";
 import {
@@ -19,8 +21,10 @@ import { BESIDE_DOCK_LEFT, DOCK_BOTTOM_REM, DOCK_BUTTON_BOTTOM, DOCK_HEIGHT_REM,
 // A small magnifier beside the launcher dock, not a fifth launcher: smaller
 // than the dock's buttons and sitting on the same baseline as their bottoms.
 // Open on a phone it becomes a full-width bar, and a finger needs the extra
-// height there.
+// height there. On any touch screen the magnifier itself is finger-sized too,
+// still smaller than the launchers.
 const COMPACT_SIZE = "2.4rem";
+const TOUCH_SIZE = "2.75rem";
 const PHONE_BAR_SIZE = "3rem";
 
 // Photon, not Nominatim: the OSM foundation's Nominatim policy forbids client-side autocomplete outright, and it shows, since it answers "berl" with an office block in Brussels. Photon is the same data, indexed for search as you type.
@@ -157,6 +161,7 @@ const localEntry = (place) => ({
 
 const Search = memo(({ mapRef }) => {
   const isMobile = useIsMobile();
+  const isTouch = useTouchPrimary();
   const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState(null);
@@ -253,6 +258,9 @@ const Search = memo(({ mapRef }) => {
     setSelectedIndex(-1);
   };
 
+  // On a phone, Back closes the open search rather than leaving the game.
+  useBackToClose(expanded, close);
+
   const flyToEntry = async (entry) => {
     if (!entry) return;
 
@@ -333,7 +341,9 @@ const Search = memo(({ mapRef }) => {
 
   const hasSuggestions = expanded && suggestions.length > 0;
   const phoneBar = expanded && isMobile;
-  const size = phoneBar ? PHONE_BAR_SIZE : COMPACT_SIZE;
+  const size = phoneBar ? PHONE_BAR_SIZE : isTouch ? TOUCH_SIZE : COMPACT_SIZE;
+  // Up from the home indicator and in from a notch, with the dock (0 elsewhere).
+  const bottom = `calc(${phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM} + ${SAFE_BOTTOM})`;
 
   return (
     <div
@@ -342,12 +352,12 @@ const Search = memo(({ mapRef }) => {
         // Desktop: sits right of the launcher dock, level with the bottoms of
         // its buttons, and expands rightward. Phones: the expanded box wouldn't
         // fit there, so it opens as a full-width bar just above the dock.
-        bottom: phoneBar ? `${DOCK_BOTTOM_REM + DOCK_HEIGHT_REM + 0.5}rem` : DOCK_BUTTON_BOTTOM,
+        bottom,
         // hudDock.js derives this from the dock's launcher count, so a new
         // launcher can't end up underneath it.
-        left: phoneBar ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT,
+        left: `calc(${phoneBar ? `${DOCK_LEFT_REM}rem` : BESIDE_DOCK_LEFT} + ${SAFE_LEFT})`,
         height: size,
-        width: expanded ? (isMobile ? "calc(100vw - 1rem)" : "17rem") : size,
+        width: expanded ? (isMobile ? `calc(100vw - 1rem - ${SAFE_LEFT} - ${SAFE_RIGHT})` : "17rem") : size,
         overflow: "visible",
         transition: "width 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
         cursor: expanded ? "default" : "pointer",
@@ -362,7 +372,13 @@ const Search = memo(({ mapRef }) => {
         color: "white",
         fontFamily: "sans-serif",
       }}
-      onClick={!expanded ? () => setExpanded(true) : undefined}
+      onClick={!expanded ? () => {
+        setExpanded(true);
+        // iOS raises the keyboard only for a focus made while the tap is being
+        // handled, so on a touch screen the tap focuses the input itself
+        // rather than leaving it to the effect above.
+        if (isTouch) inputRef.current?.focus();
+      } : undefined}
     >
       <div
         style={{
@@ -374,7 +390,9 @@ const Search = memo(({ mapRef }) => {
         }}
       >
         <button
+          className="oh-tap"
           onClick={expanded ? close : undefined}
+          aria-label={expanded ? "Close search" : "Search place"}
           style={{
             background: "none",
             border: "none",
@@ -420,6 +438,7 @@ const Search = memo(({ mapRef }) => {
 
         <input
           ref={inputRef}
+          className="oh-tap-row"
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -444,7 +463,9 @@ const Search = memo(({ mapRef }) => {
 
         {expanded && (
           <button
+            className="oh-tap"
             onClick={commit}
+            aria-label="Go"
             style={{
               background: "none",
               border: "none",
@@ -481,11 +502,18 @@ const Search = memo(({ mapRef }) => {
             borderBottom: "none",
             boxShadow: "0 -6px 16px rgba(0,0,0,0.3)",
             overflow: "hidden",
+            // On a phone the keyboard takes half the screen, and seven rows
+            // ran off the top of what was left. Capped to the room above the
+            // bar, the list scrolls instead.
+            ...(isMobile || isTouch
+              ? { maxHeight: `calc(${APP_HEIGHT} - ${bottom} - ${size} - 0.5rem)`, overflowY: "auto" }
+              : null),
           }}
         >
           {suggestions.map((suggestion, index) => (
             <div
               key={suggestion.key}
+              className="oh-tap-row"
               onMouseDown={(event) => {
                 event.preventDefault();
                 void flyToEntry(suggestion);

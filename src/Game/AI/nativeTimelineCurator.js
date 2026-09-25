@@ -70,6 +70,7 @@ const summarizeEvent = (event, index) => ({
 
   regionTransfers: asArray(event?.impacts?.regionTransfers).length,
   polityChanges: asArray(event?.impacts?.polityChanges).length,
+  politicalActorOps: asArray(event?.impacts?.politicalActorOps).length,
   unitOps: asArray(event?.impacts?.unitOps).length,
   markerOps: asArray(event?.impacts?.markerOps).length,
   createdChats: asArray(event?.impacts?.createdChats).length,
@@ -89,6 +90,7 @@ const structuredImpactReasons = (event) => {
     "regionTransfers",
     "regionClaims",
     "regionControlOps",
+    "politicalActorOps",
     "unitOps",
     "markerOps",
     "createdChats",
@@ -508,6 +510,10 @@ const buildCandidatePacket = (event, index) => ({
       asArray(event?.impacts?.polityChanges),
     ),
 
+    politicalActorOps: cloneValue(
+      asArray(event?.impacts?.politicalActorOps),
+    ),
+
     unitOps: cloneValue(
       asArray(event?.impacts?.unitOps),
     ),
@@ -768,7 +774,7 @@ const retrievalAssistedRedundancyPass =
     normalizedOutcomeEvidence.length >= 6 &&
     isVagueProcessOutcomeEvidence(
     model.observableOutcomeEvidence,
-  );    
+  );
 const nativeObservableOutcomeGrounded =
   !nativeProcessEvidenceRequired ||
   (
@@ -1640,6 +1646,7 @@ const runNativeCuratorSelfTests = () => {
     impacts: {
       createdChats: [],
       polityChanges: [],
+      politicalActorOps: [],
       regionTransfers: [],
       regionClaims: [],
       unitOps: [],

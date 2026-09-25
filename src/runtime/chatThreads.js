@@ -93,10 +93,12 @@ export const normalizeMember = (value) => {
     const name = asText(value.name ?? value.label ?? value.country);
     const code = asText(value.code ?? value.id);
     if (!name && !code) return null;
-    return { code, name: name || code };
+    const polityKey = asText(value.polityKey);
+    return { code, name: name || code, ...(polityKey ? { polityKey } : {}) };
 };
 
-const sameMember = (left, right) => fold(left?.name) === fold(right?.name)
+const sameMember = (left, right) => (Boolean(asText(left?.polityKey)) && fold(left?.polityKey) === fold(right?.polityKey))
+    || fold(left?.name) === fold(right?.name)
     || (Boolean(asText(left?.code)) && fold(left?.code) === fold(right?.code));
 
 // ---------------------------------------------------------------------------
@@ -267,7 +269,7 @@ export const eventsFromLegacyChat = (chat) => {
                 id: `${id}-reaction-${reactionIndex + 1}`,
                 kind: "reaction",
                 time: asText(message?.time),
-                by: asText(by),
+                by: asText(typeof value === "object" ? value?.country : "") || asText(by),
                 target: id,
                 emoji,
                 code: asText(typeof value === "object" ? value?.code : ""),
@@ -334,7 +336,25 @@ export const projectChatThread = (events) => {
         }
         if (event.kind === "reaction") {
             const message = messageById.get(event.target);
-            if (message && event.by) message.reactions[event.by] = { emoji: event.emoji, code: event.code };
+            if (message && event.by) {
+                // A participant may react more than once to the same line. The
+                // old country-keyed projection silently replaced the earlier
+                // reaction, which made the UI capable of showing only one.
+                // Keep the first legacy key stable, suffix later entries, and
+                // carry the real country name in the value so round-tripping
+                // the projected shape still recreates the correct actor.
+                let key = event.by;
+                let suffix = 2;
+                while (Object.prototype.hasOwnProperty.call(message.reactions, key)) {
+                    key = `${event.by}#${suffix}`;
+                    suffix += 1;
+                }
+                message.reactions[key] = {
+                    emoji: event.emoji,
+                    code: event.code,
+                    ...(key === event.by ? {} : { country: event.by }),
+                };
+            }
             continue;
         }
         if (event.kind === "poll_created") {

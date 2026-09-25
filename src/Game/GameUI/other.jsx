@@ -3,6 +3,7 @@ import React, { memo, useEffect, useState } from "react";
 import { JSON_URLS, getNationFlags } from "../../runtime/assets.js";
 import { isPolityLandless, readWorldState } from "../../runtime/gameState.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { SAFE_BOTTOM } from "../../runtime/mobileUi.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
@@ -52,7 +53,7 @@ const FallbackBadge = ({ label }) => (
 // dockStyle places the standalone badge beside the advisor drawer (main.jsx).
 const DEFAULT_DOCK_STYLE = { right: "0.5rem" };
 
-const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = false }) {
+const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = false, active = false, onToggle = null }) {
     const { activeGame } = useLibraryState();
     const activeGameId = String(activeGame?.id || "");
     const activeGameCountry = String(activeGame?.country || "").trim();
@@ -158,10 +159,14 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
     const flagUrl = landless ? null : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
     const flagEmoji = landless ? null : flagEmojiFromGid(country);
 
+    const Root = embedded ? "div" : "button";
     return (
-        <div
+        <Root
+        type={embedded ? undefined : "button"}
         className={embedded ? "oh-dock-polity" : undefined}
-        title={displayName}
+        title={embedded ? displayName : `${displayName} · Open country panel`}
+        aria-label={embedded ? undefined : `Open ${displayName} country panel`}
+        onClick={embedded ? undefined : onToggle}
         style={embedded ? {
             alignItems: "center",
             display: "flex",
@@ -175,15 +180,21 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         } : {
             ...baseStyle,
             ...dockStyle,
-            bottom: "4.75rem",
+            bottom: `calc(4.75rem + ${SAFE_BOTTOM})`,
             // Rides beside the advisor drawer, so a wide drawer carries it over
             // the Actions/Projects/chat panels (9998); an open panel stays on top.
             zIndex: 9997,
-            height: "2.75rem",
-            width: "2.75rem",
-            padding: "0.35rem",
+            height: "4rem",
+            width: "4rem",
+            padding: "0.48rem",
             boxSizing: "border-box",
             overflow: "hidden",
+            cursor: "pointer",
+            appearance: "none",
+            background: active
+                ? "linear-gradient(180deg, rgba(91,155,255,0.22), rgba(59,130,246,0.12))"
+                : "linear-gradient(180deg, rgba(53,53,58,0.58), rgba(17,17,19,0.48))",
+            transition: `${dockStyle.transition || ""}${dockStyle.transition ? ", " : ""}background 0.15s ease`,
         }}
         >
         <div style={embedded ? {
@@ -218,7 +229,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
                 </div>
             </div>
         )}
-        </div>
+        </Root>
     );
 });
 

@@ -13,10 +13,10 @@
 //   * Logging turned off. There is no log to send, so the buttons go back to
 //     copying the failure on its own (copyIncidentReport) under their old
 //     labels, and switch over live if logging is turned back on.
-//   * The Android app. Its WebView cannot save a file — its download listener
-//     hands every URL to the system browser, and a blob: URL means nothing
-//     there — so the same report goes to the clipboard instead, and the button
-//     says so. Anything else that stops the download falls back the same way.
+//   * A save that fails. The file goes out through runtime/saveFile.js — a
+//     download in a browser, Downloads/Open Historia in the Android app — and if that
+//     throws, the same report goes to the clipboard instead, and the button says
+//     so.
 import { useState, useSyncExternalStore } from "react";
 import { copyToClipboard } from "./clipboard.js";
 import {
@@ -32,8 +32,8 @@ import { saveBlobToDisk } from "./saveFile.js";
 // carries the Desktop log too, where there is one (see buildLoggingFile).
 export const saveDebugLogFile = async ({ incident } = {}) => {
     const report = await buildLoggingFile({ incident });
-    // runtime/saveFile.js: a download in a browser, the Filesystem + share sheet
-    // in the Android app. Either failing falls through to the clipboard below.
+    // runtime/saveFile.js: a download in a browser, Downloads/Open Historia (or the
+    // share sheet) in the Android app. Either failing falls through to the clipboard below.
     try {
         const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
         return await saveBlobToDisk(blob, debugLogFilename(incident?.kind));

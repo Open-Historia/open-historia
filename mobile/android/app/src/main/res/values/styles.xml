@@ -13,6 +13,14 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- Android 15 draws every app edge to edge, under the status and
+             navigation bars; capacitor.config.json's adjustMarginsForEdgeToEdge
+             keeps the game clear of them, and this is what shows in the bars:
+             the game's own background, with light icons on it. -->
+        <item name="android:windowBackground">@color/oh_background</item>
+        <item name="android:statusBarColor">@color/oh_background</item>
+        <item name="android:navigationBarColor">@color/oh_background</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
 

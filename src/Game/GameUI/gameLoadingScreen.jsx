@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useWorldState } from "../Map/useWorldState.js";
+import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT } from "../../runtime/mobileUi.js";
 import {
   GAME_OPENING_EVENT,
   MAP_IDLE_EVENT,
@@ -134,7 +135,9 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
         gap: "1.5rem",
         justifyContent: "space-between",
         left: 0,
-        padding: "1.75rem 2rem",
+        // Clear of a phone's home indicator, and of the notch when it is
+        // turned sideways (all 0 on a desktop).
+        padding: `1.75rem calc(2rem + ${SAFE_RIGHT}) calc(1.75rem + ${SAFE_BOTTOM}) calc(2rem + ${SAFE_LEFT})`,
         position: "absolute",
         right: 0,
       }}
@@ -144,13 +147,12 @@ export const GameLoadingScreen = ({ gameName = "", scenarioName = "", countryNam
           {gameName || scenarioName || "Open Historia"}
         </div>
         {(scenarioName || countryName) && (
-          <div data-no-translate style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.85rem", marginTop: "0.3rem", textShadow }}>
+          <div style={{ color: "rgba(255,255,255,0.72)", fontSize: "0.85rem", marginTop: "0.3rem", textShadow }}>
             {[scenarioName, countryName].filter(Boolean).join(" · ")}
           </div>
         )}
         <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.7rem", letterSpacing: "0.1em", marginTop: "0.9rem", textShadow, textTransform: "uppercase" }}>
-          {PHASES[phase] ?? PHASES.world}
-        </div>
+          {PHASES[phase] ?? PHASES.world}        </div>
       </div>
       <img className="oh-loading-logo" src="/logo.png" alt="" style={{ flexShrink: 0, height: "4rem", width: "4rem" }} />
     </div>

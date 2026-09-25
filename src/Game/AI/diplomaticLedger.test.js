@@ -72,6 +72,33 @@ test("relation and agreement lines bind to their event and merge into the world"
   assert.match(text, /franco-russian-alliance \| ACTIVE \| alliance \| Franco-Russian Alliance/);
 });
 
+test("bounded diplomatic context pulls a seed actor's active Puppet counterpart into attention", () => {
+  const puppetWorld = {
+    ...world,
+    puppets: [{
+      id: "german-russian-client",
+      overlord: "Germany",
+      puppet: "Russia",
+      kind: "client",
+      loyalty: 58,
+      secrecy: "covert",
+      status: "active",
+      startedDate: "1893-01-01",
+      knownTo: [],
+    }],
+  };
+
+  const active = buildBoundedDiplomaticContext(puppetWorld, { playerPolity: "Germany", maxActors: 2 });
+  assert.deepEqual(active.actors, ["Germany", "Russia"]);
+  assert.equal(active.puppets.length, 1);
+  assert.match(active.text, /Germany directs Russia/);
+
+  const disabled = buildBoundedDiplomaticContext(puppetWorld, { playerPolity: "Germany", maxActors: 2, puppetStates: false });
+  assert.deepEqual(disabled.actors, ["Germany"]);
+  assert.equal(disabled.puppets.length, 0);
+  assert.doesNotMatch(disabled.text, /SUBORDINATIONS/);
+});
+
 test("a lifecycle change on an agreement that does not exist is refused for the GM and dropped in simulation", () => {
   const row = "phantom-pact~end~alliance~France,Russia~1~Phantom Pact~gone";
   const strict = { events: alliance(), relationUpdates: "", agreementUpdates: row };

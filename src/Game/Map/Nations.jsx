@@ -13,10 +13,10 @@ import {
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
+import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
 import {
   JSON_URLS,
   PMTILES_PROTOCOL_URLS,
-  ensurePmtilesProtocol,
   getNationColors,
   loadRegionTileIdSet,
   primeCustomRegionCatalogEntries,
@@ -25,7 +25,13 @@ import {
   resolveCountryDisplayName,
 } from "../../runtime/assets.js";
 import { resolveRegionName } from "../../runtime/regionNameFixes.js";
+import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 import { useWorkerFetchableUrl } from "./useWorkerFetchableUrl.js";
+import {
+  REGIONS_PARSE_HOLD_MS,
+  forgetParsedSourceCopy,
+  holdUntilSourceLoaded,
+} from "./regionsSourceMemory.js";
 import { publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
@@ -338,6 +344,16 @@ const ownerFoldKey = (value) =>
     .normalize("NFD")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
+
+// The same fold for a label as the player reads it, which may be in any script
+// (runtime/translator.js): folded to a-z, every Chinese, Arabic or Cyrillic name
+// was "" and "collided" with every other, so each fell back to its English owner.
+const labelFoldKey = (value) =>
+  String(value ?? "")
+    .normalize("NFD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
 
 // ---- Disputed-region stripes ------------------------------------------------
 // A region whose `claimants` list names the countries contesting it renders
@@ -1128,6 +1144,7 @@ const WorldMap = ({ isGlobe = false }) => {
         ...V_NEXT_MARKER_SHAPE_LAYER_IDS,
         "markers-shapes",
         "cities-shapes",
+        "cities-capitals",
       ].filter((id) => map.getLayer(id));
       const featureHits = featureLayers.length
         ? map.queryRenderedFeatures(event.point, { layers: featureLayers })
@@ -1353,11 +1370,11 @@ const WorldMap = ({ isGlobe = false }) => {
     // identity only for the colliding labels.
     const counts = new Map();
     for (const label of labels.values()) {
-      const key = ownerFoldKey(label);
+      const key = labelFoldKey(label);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     for (const [owner, label] of labels) {
-      if ((counts.get(ownerFoldKey(label)) ?? 0) > 1) labels.set(owner, owner);
+      if ((counts.get(labelFoldKey(label)) ?? 0) > 1) labels.set(owner, owner);
     }
     return Object.fromEntries(labels);
     // labelEpoch intentionally rebakes translated strings after i18n updates.
@@ -1495,6 +1512,22 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [map, derivedSourceEpoch]);
 
+  // MapLibre keeps a copy of the whole parsed regions file on the page once it
+  // has loaded it; it is dropped as soon as it lands (regionsSourceMemory.js).
+  const regionsFetchUrlRef = useRef("");
+  regionsFetchUrlRef.current = regionsGeojsonFetchUrl || "";
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on) return undefined;
+    const forget = (event) => {
+      if (event?.sourceId !== "custom-regions-source") return;
+      forgetParsedSourceCopy(mapInstance, "custom-regions-source", regionsFetchUrlRef.current);
+    };
+    mapInstance.on("sourcedata", forget);
+    forget({ sourceId: "custom-regions-source" });
+    return () => mapInstance.off?.("sourcedata", forget);
+  }, [map]);
+
   // Political Cartography Pipeline v2. Canonical per-region ownership remains
   // the visual truth. The worker owns topology, political borders and polity
   // label geometry; only a result for the newest desired political revision may
@@ -1580,6 +1613,32 @@ const WorldMap = ({ isGlobe = false }) => {
     }
     polityBoundaryWorkerRef.current = worker;
 
+    // On a phone the worker's first message waits until MapLibre has parsed the
+    // same file (regionsSourceMemory.js): the two parses of a classic map at
+    // once are what took phones down on the second loading screen. The
+    // scheduler keeps one request in flight, so at most one message is held.
+    const holdMap = map?.getMap ? map.getMap() : map;
+    let parseHeld = Boolean(regionsGeojsonFetchUrl && holdMap?.on && isConstrainedDevice());
+    let heldMessage = null;
+    const postToWorker = (message) => {
+      if (parseHeld) heldMessage = message;
+      else worker.postMessage(message);
+    };
+    const parseHold = parseHeld
+      ? holdUntilSourceLoaded({
+          map: holdMap,
+          sourceId: "custom-regions-source",
+          onRelease: (reason) => {
+            parseHeld = false;
+            recordMapTrace("nations:regions-parse-released", { reason });
+            forgetParsedSourceCopy(holdMap, "custom-regions-source", regionsGeojsonFetchUrl);
+            const message = heldMessage;
+            heldMessage = null;
+            if (message && worker === polityBoundaryWorkerRef.current) worker.postMessage(message);
+          },
+        })
+      : null;
+
     const restartWorker = ({ initialFailure = false } = {}) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
       // The stalled revision's presentation holds die with its worker: the
@@ -1614,7 +1673,7 @@ const WorldMap = ({ isGlobe = false }) => {
           revision,
           type: payload?.type ?? "",
         });
-        worker.postMessage({ ...payload, requestId: revision, geometryEpoch });
+        postToWorker({ ...payload, requestId: revision, geometryEpoch });
       },
       onTimeout: ({ stalled, latestDesired }) => {
         if (worker !== polityBoundaryWorkerRef.current) return;
@@ -1907,15 +1966,17 @@ const WorldMap = ({ isGlobe = false }) => {
     enqueuedBoundaryOwnershipRef.current = ownershipOverrides;
     enqueuedBoundaryClaimantsRef.current = claimants;
     enqueuedBoundaryLabelNamesRef.current = labelNames;
+    // A held parse keeps the worker's whole budget: the wait is not its time.
     scheduler.enqueue({
       type: "initialize",
       regionsUrl: regionsGeojsonFetchUrl,
       ownershipOverrides,
       regionClaimants: claimants,
       labelNames,
-    }, { timeoutMs: 120000 });
+    }, { timeoutMs: 120000 + (parseHeld ? REGIONS_PARSE_HOLD_MS : 0) });
 
     return () => {
+      parseHold?.cancel();
       scheduler.stop();
       worker.terminate();
       if (polityBoundarySchedulerRef.current === scheduler) polityBoundarySchedulerRef.current = null;
@@ -2294,6 +2355,50 @@ const WorldMap = ({ isGlobe = false }) => {
     return clauses.length ? ["all", ...clauses] : ["all"];
   }, [editedStockIds, legacyAuthoritativeCountryCodes]);
 
+  // Feature-state lives on the MapLibre source object. A lost WebGL context
+  // (Android drops it under memory pressure) or a style MapLibre cannot diff
+  // (Settings > 3D Terrain) rebuilds every source as a new object with no
+  // state, while the applied-fill ledgers still said each colour was drawn:
+  // the whole map stayed grey. A source a ledger wrote to that is replaced or
+  // gone voids that ledger, and its epoch makes the sync write every fill again.
+  const fillStateSourcesRef = useRef({ custom: null, repair: null, tiles: null });
+  const [customFillSourceEpoch, setCustomFillSourceEpoch] = useState(0);
+  const [tileFillSourceEpoch, setTileFillSourceEpoch] = useState(0);
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on) return undefined;
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      // Between a context loss and its restore the map has no style at all.
+      if (!mapInstance.style) return;
+      const seen = fillStateSourcesRef.current;
+      const next = {
+        custom: mapInstance.getSource("custom-regions-source") ?? null,
+        repair: mapInstance.getSource("custom-regions-repair-source") ?? null,
+        tiles: mapInstance.getSource("regions-source") ?? null,
+      };
+      fillStateSourcesRef.current = next;
+      if ((seen.custom && seen.custom !== next.custom) || (seen.repair && seen.repair !== next.repair)) {
+        appliedCustomFillStateRef.current = new Map();
+        setCustomFillSourceEpoch((epoch) => epoch + 1);
+      }
+      if (seen.tiles && seen.tiles !== next.tiles) {
+        appliedTileFillStateRef.current = new Map();
+        setTileFillSourceEpoch((epoch) => epoch + 1);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(check);
+    };
+    schedule();
+    mapInstance.on("styledata", schedule);
+    return () => {
+      mapInstance.off("styledata", schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [map]);
+
   // Only live ownership overrides touch the URL-backed authored source. Seed
   // colours remain properties of the scenario file; conquests are a tiny state
   // diff rather than a full GeoJSON replacement.
@@ -2391,7 +2496,9 @@ const WorldMap = ({ isGlobe = false }) => {
           return;
         }
 
-        appliedCustomFillStateRef.current = appliedAfterSync;
+        // A ledger replaced mid-pass was reset on purpose (a region repair, a
+        // rebuilt source), and the reset re-runs this sync to write every fill.
+        if (appliedCustomFillStateRef.current === applied) appliedCustomFillStateRef.current = appliedAfterSync;
         const syncElapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - syncStartedAt;
       };
 
@@ -2408,6 +2515,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (workFrame) cancelAnimationFrame(workFrame);
     };
   }, [
+    customFillSourceEpoch,
     customFlag,
     map,
     ownerColorCss,
@@ -2940,7 +3048,7 @@ const WorldMap = ({ isGlobe = false }) => {
           return;
         }
 
-        appliedTileFillStateRef.current = appliedAfterSync;
+        if (appliedTileFillStateRef.current === applied) appliedTileFillStateRef.current = appliedAfterSync;
         const applyElapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - applyStartedAt;
         reportPerfOperation("map feature-state ownership sync", applyElapsed, { warnAt: PERF_MAP_WARN_MS });
         recordMapWork("Nations:feature-state-sync", applyElapsed, { operations: operations.length });
@@ -2960,7 +3068,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (retryFrame) cancelAnimationFrame(retryFrame);
       if (workFrame) cancelAnimationFrame(workFrame);
     };
-  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions]);
+  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions, tileFillSourceEpoch]);
 
   const stockRegionsFillPaint = useMemo(
     () => customActive

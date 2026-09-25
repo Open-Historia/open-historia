@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { getNationFlags } from "../../runtime/assets.js";
 import { resolvePolityFlag, setPolityFlag } from "../../runtime/polityFlags.js";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 
 const MAX_FLAG_WIDTH = 256;
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
@@ -148,6 +150,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
     const inputRef = useRef(null);
     const packCacheRef = useRef(new Map());
     const packRequestRef = useRef(0);
+    const isMobile = useIsMobile();
 
     useEffect(() => {
         if (!isOpen) return;
@@ -347,35 +350,40 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
     );
 
     return createPortal(
-        <div style={{ position: "fixed", inset: 0, zIndex: 12050, background: "rgba(2,6,23,0.78)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-            <div style={{ width: "min(56rem, 96vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", background: "rgba(16,18,24,0.99)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: 16, boxShadow: "0 24px 70px rgba(0,0,0,0.6)", overflow: "hidden", color: "white", fontFamily: "sans-serif" }}>
+        // Padded clear of the notch and the home indicator (every inset is 0 on
+        // a desktop); on a phone the card may use the whole visible height.
+        <div style={{ position: "fixed", inset: 0, zIndex: 12050, background: "rgba(2,6,23,0.78)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: `calc(1rem + ${SAFE_TOP}) calc(1rem + ${SAFE_RIGHT}) calc(1rem + ${SAFE_BOTTOM}) calc(1rem + ${SAFE_LEFT})` }}>
+            <div style={{ width: "min(56rem, 96vw)", maxHeight: isMobile ? `calc(${APP_HEIGHT} - 2rem - ${SAFE_TOP} - ${SAFE_BOTTOM})` : "88vh", display: "flex", flexDirection: "column", background: "rgba(16,18,24,0.99)", border: "1px solid rgba(255,255,255,0.13)", borderRadius: 16, boxShadow: "0 24px 70px rgba(0,0,0,0.6)", overflow: "hidden", color: "white", fontFamily: "sans-serif" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", padding: "1rem 1.1rem", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                     {current.imageUrl ? <img src={current.imageUrl} alt="" style={{ width: 46, height: 29, objectFit: "cover", borderRadius: 4, boxShadow: "0 0 0 1px rgba(255,255,255,0.18)" }} /> : <div style={{ width: 46, height: 29, borderRadius: 4, border: "1px solid rgba(255,255,255,0.18)" }} />}
                     <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 800, fontSize: "1rem" }}>Change flag</div>
                         <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.75rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity?.name || polity?.polityKey || polity?.code}</div>
                     </div>
-                    <button type="button" onClick={onClose} style={{ ...buttonStyle, padding: "0.35rem 0.55rem", fontSize: "1rem", background: "transparent" }}>✕</button>
+                    <button type="button" className="oh-tap" aria-label="Close flag picker" onClick={onClose} style={{ ...buttonStyle, padding: "0.35rem 0.55rem", fontSize: "1rem", background: "transparent" }}>✕</button>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.75rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                {/* On a phone the tabs, the search and the two actions take as many
+                    lines as they need, and the search stretches across its own. */}
+                <div style={{ display: "flex", alignItems: "center", flexWrap: isMobile ? "wrap" : undefined, gap: "0.5rem", padding: "0.75rem 1rem", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     {[{ id: "game", label: "In this game" }, { id: "community", label: "Community" }].map((entry) => (
-                        <button key={entry.id} type="button" onClick={() => { setTab(entry.id); setQuery(""); if (entry.id !== "community") closeCommunityPack(); }} style={{ ...buttonStyle, background: tab === entry.id ? "rgba(255,255,255,0.14)" : buttonStyle.background, borderColor: tab === entry.id ? "rgba(255,255,255,0.28)" : buttonStyle.border.split(" ").at(-1) }}>
+                        <button key={entry.id} type="button" className="oh-tap-row" onClick={() => { setTab(entry.id); setQuery(""); if (entry.id !== "community") closeCommunityPack(); }} style={{ ...buttonStyle, background: tab === entry.id ? "rgba(255,255,255,0.14)" : buttonStyle.background, borderColor: tab === entry.id ? "rgba(255,255,255,0.28)" : buttonStyle.border.split(" ").at(-1) }}>
                             {entry.label}
                         </button>
                     ))}
                     <input
                         type="search"
+                        className="oh-tap-row"
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
                         placeholder={communityPack ? "Search this pack…" : "Search flags…"}
                         aria-label={communityPack ? "Search flags in this pack" : "Search flags"}
-                        style={searchInputStyle}
+                        style={isMobile ? { ...searchInputStyle, flex: "1 1 100%", width: "auto" } : searchInputStyle}
                     />
                     <div style={{ flex: 1 }} />
-                    <button type="button" disabled={busy} onClick={() => inputRef.current?.click()} style={{ ...buttonStyle, opacity: busy ? 0.5 : 1 }}>Upload image</button>
+                    <button type="button" className="oh-tap-row" disabled={busy} onClick={() => inputRef.current?.click()} style={{ ...buttonStyle, opacity: busy ? 0.5 : 1 }}>Upload image</button>
                     <input ref={inputRef} type="file" accept={ACCEPT} onChange={upload} style={{ display: "none" }} />
-                    <button type="button" disabled={busy} onClick={() => apply(null)} title="Remove the custom flag and use the polity's safe stock/map fallback when one exists" style={{ ...buttonStyle, opacity: busy ? 0.5 : 1 }}>Use standard</button>
+                    <button type="button" className="oh-tap-row" disabled={busy} onClick={() => apply(null)} title="Remove the custom flag and use the polity's safe stock/map fallback when one exists" style={{ ...buttonStyle, opacity: busy ? 0.5 : 1 }}>Use standard</button>
                 </div>
 
                 {error && <div style={{ margin: "0.75rem 1rem 0", padding: "0.6rem 0.75rem", borderRadius: 8, background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.35)", color: "#fca5a5", fontSize: "0.76rem" }}>{error}</div>}
@@ -399,7 +407,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
                     ) : communityPack ? (
                         <>
                             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.9rem" }}>
-                                <button type="button" onClick={closeCommunityPack} style={{ ...buttonStyle, padding: "0.45rem 0.65rem" }}>← Community</button>
+                                <button type="button" className="oh-tap-row" onClick={closeCommunityPack} style={{ ...buttonStyle, padding: "0.45rem 0.65rem" }}>← Community</button>
                                 <div style={{ minWidth: 0 }}>
                                     <div style={{ fontWeight: 800, fontSize: "0.92rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{communityPack.title || "Scenario flag pack"}</div>
                                     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.7rem", marginTop: "0.15rem" }}>
@@ -418,7 +426,7 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
                             ) : communityPackState === "error" ? (
                                 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", padding: "0.7rem 0.8rem", borderRadius: 8, background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#fca5a5", fontSize: "0.78rem" }}>
                                     <span style={{ flex: 1 }}>{communityPackError || "This flag pack could not be loaded."}</span>
-                                    <button type="button" onClick={() => openCommunityPack(communityPack)} style={{ ...buttonStyle, padding: "0.38rem 0.6rem" }}>Retry</button>
+                                    <button type="button" className="oh-tap-row" onClick={() => openCommunityPack(communityPack)} style={{ ...buttonStyle, padding: "0.38rem 0.6rem" }}>Retry</button>
                                 </div>
                             ) : communityPackFlags.length === 0 ? (
                                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.8rem" }}>This scenario pack does not contain any custom flag images that can be selected individually.</div>

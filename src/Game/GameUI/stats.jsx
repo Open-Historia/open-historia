@@ -1,16 +1,25 @@
 /*! Open Historia — national stats pane © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
-import { JSON_URLS, getNationFlags, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags, getNationTags, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows } from "./statsHistoricalTracking.js";
+import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
+import { resolveCountryTags } from "../../runtime/countryTags.js";
+import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
-import { setRegionClickObserver } from "../Selection/Regions.jsx";
-import { ensureIntelligenceRated, generateCountryStatSheet } from "../AI/gameplayLazy.js";
+import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
+import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
+import PoliticalOverview from "./PoliticalOverview.jsx";
+import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
@@ -36,6 +45,7 @@ import {
     loadStatSheetDefinition,
     statSheetKeys,
 } from "../../runtime/statsSheet.js";
+import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
@@ -46,7 +56,22 @@ const STORAGE_KEY = "oh-stat-sheets-v2";
 const TRACKING_STORAGE_KEY = "oh-stat-tracking-v1";
 const MAX_STORED_SHEETS = 20;
 const MAX_LOCAL_CACHE_COMPONENTS = 64;
+// The sheets shown this session, the most recently shown last. Every entry is a
+// whole sheet (one read from the world keeps that world's copy of it alive
+// after the next turn replaces it), and a long session opens many countries in
+// many games: so no more than MAX_MEMORY_SHEETS, and none kept past the game
+// they belong to or past Android asking for memory back.
+const MAX_MEMORY_SHEETS = 24;
 const memoryCache = new Map();
+const rememberSheet = (key, entry) => {
+    memoryCache.delete(key);
+    memoryCache.set(key, entry);
+    while (memoryCache.size > MAX_MEMORY_SHEETS) memoryCache.delete(memoryCache.keys().next().value);
+};
+if (typeof window !== "undefined") {
+    window.addEventListener("oh:active-game-changed", () => memoryCache.clear());
+}
+onMemoryPressure(() => memoryCache.clear());
 
 const readTrackingSettingsFallback = (gameKey, playerCountry = "") => {
     if (!gameKey) return normalizeCountryStatsTracking({}, { playerCountry });
@@ -411,7 +436,7 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
     </div>
 );
 
-const DiplomacySection = ({ world, targetCountry }) => {
+const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
     const diplomacy = useMemo(() => {
         if (!world || !targetCountry) return null;
         const target = canonicalPolityKey(targetCountry, world);
@@ -466,13 +491,34 @@ const DiplomacySection = ({ world, targetCountry }) => {
             .filter(Boolean)
             .sort((left, right) => compareGameDates(right.lastUpdatedDate || right.startedDate || "", left.lastUpdatedDate || left.startedDate || ""));
 
+        // Puppet truth stays in the canonical relationship ledger, but player-facing diplomacy must
+        // never read that ledger directly. The shared resolver enforces covert
+        // knowledge and loyalty visibility consistently with the map, Advisor
+        // and diplomatic chat. Unknown covert arrangements therefore leave no
+        // trace in this drawer.
+        const viewer = canonicalPolityKey(viewerPolity, world) || cleanText(viewerPolity);
+        const subordination = viewer ? puppetSummaryFor(world, viewer, target) : null;
+        const subordinates = viewer
+            ? livePuppetsFor(world, viewer)
+                .filter((row) => lowerText(canonicalPolityKey(row?.overlord, world)) === targetKey)
+                .map((row) => ({
+                    ...row,
+                    puppetKey: canonicalPolityKey(row?.puppet, world) || cleanText(row?.puppet),
+                    puppetName: polityDisplayName(world, row?.puppet),
+                    kindLabel: puppetKindLabel(row?.kind),
+                }))
+                .sort((left, right) => left.puppetName.localeCompare(right.puppetName))
+            : [];
+
         return {
             relations,
             agreements,
             currentWars,
+            subordination,
+            subordinates,
             activeAgreements: agreements.filter((agreement) => lowerText(agreement.status) === "active").length,
         };
-    }, [world, targetCountry]);
+    }, [world, targetCountry, viewerPolity]);
 
     if (!diplomacy) return null;
 
@@ -484,6 +530,51 @@ const DiplomacySection = ({ world, targetCountry }) => {
         <DiplomacyMetric label="Active agreements" value={diplomacy.activeAgreements} tone="#34d399" />
         <DiplomacyMetric label="Conflicts" value={diplomacy.currentWars.length} tone={diplomacy.currentWars.length ? "#f87171" : "#94a3b8"} />
         </div>
+
+        {diplomacy.subordination && (
+            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: "0.65rem" }}>
+            <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.56rem", fontWeight: 850, letterSpacing: "0.05em", textTransform: "uppercase" }}>Subordination</div>
+            <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 850, marginTop: "0.28rem" }}>{diplomacy.subordination.headline}</div>
+            <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.22rem" }}>{diplomacy.subordination.meaning}</div>
+            {diplomacy.subordination.facts.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.28rem", marginTop: "0.45rem" }}>
+                {diplomacy.subordination.facts.map((fact) => (
+                    <span key={fact} style={{ backgroundColor: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "999px", color: "rgba(255,255,255,0.68)", fontSize: "0.58rem", padding: "0.15rem 0.38rem" }}>{fact}</span>
+                ))}
+                </div>
+            )}
+            {diplomacy.subordination.provenance && (
+                <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.58rem", fontStyle: "italic", lineHeight: 1.4, marginTop: "0.4rem" }}>{diplomacy.subordination.provenance}</div>
+            )}
+            </div>
+        )}
+
+        {diplomacy.subordinates.length > 0 && (
+            <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
+            <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.72rem", fontWeight: 800, padding: "0.55rem 0.65rem" }}>Subordinate states</div>
+            {diplomacy.subordinates.map((row) => {
+                const facts = [
+                    row.loyaltyBand,
+                    row.startedDate ? `Since ${row.startedDate}` : "",
+                    row.secrecy === "covert" ? "Covert" : "Openly known",
+                    row.fromIntelligence ? "From intelligence" : "",
+                ].filter(Boolean);
+                return (
+                    <div key={row.id || `${row.overlord}-${row.puppetKey}`} style={{ borderTop: "1px solid rgba(255,255,255,0.07)", padding: "0.55rem 0.65rem" }}>
+                    <div style={{ alignItems: "flex-start", display: "flex", gap: "0.55rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                    <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.72rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.puppetName}</div>
+                    {facts.length > 0 && (
+                        <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.6rem", lineHeight: 1.4, marginTop: "0.14rem" }}>{facts.join(" · ")}</div>
+                    )}
+                    </div>
+                    <span style={statusBadgeStyle(row.secrecy === "covert" ? "#c084fc" : "#60a5fa")}>{prettyToken(row.kindLabel)}</span>
+                    </div>
+                    </div>
+                );
+            })}
+            </div>
+        )}
 
         <div style={{ ...cardStyle, marginTop: "0.55rem", padding: 0, overflow: "hidden" }}>
         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", padding: "0.55rem 0.65rem" }}>
@@ -534,7 +625,7 @@ const DiplomacySection = ({ world, targetCountry }) => {
                 {prettyToken(agreement.type || "other")} · {counterpartText}
                 </div>
                 {agreement.lastUpdatedDate && (
-                    <div data-no-translate style={{ color: "rgba(255,255,255,0.28)", fontSize: "0.58rem", marginTop: "0.12rem" }}>
+                    <div style={{ color: "rgba(255,255,255,0.28)", fontSize: "0.58rem", marginTop: "0.12rem" }}>
                     Updated {agreement.lastUpdatedDate}
                     </div>
                 )}
@@ -581,7 +672,8 @@ const DiplomacySection = ({ world, targetCountry }) => {
     );
 };
 
-const statsSubtabStyle = (selected) => ({
+// `touch`: a thumb-sized tab. The inline minHeight would beat the tap class.
+const statsSubtabStyle = (selected, touch = false) => ({
     alignItems: "center",
     backgroundColor: selected ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.03)",
     border: `1px solid ${selected ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.09)"}`,
@@ -593,10 +685,27 @@ const statsSubtabStyle = (selected) => ({
     fontSize: "0.72rem",
     fontWeight: 800,
     justifyContent: "center",
-    minHeight: "2.45rem",
+    minHeight: touch ? "2.75rem" : "2.45rem",
     padding: "0.45rem 0.55rem",
     transition: "background-color 0.15s, border-color 0.15s, color 0.15s",
 });
+
+// A statistics sheet on a phone: exactly the screen, clear of the notch and the
+// home indicator. The cards' minimum heights (580 and 520 px) go, as on any
+// touch screen: they are taller than a small phone.
+const phoneSheetStyle = {
+    border: "none",
+    borderRadius: 0,
+    boxSizing: "border-box",
+    height: APP_HEIGHT,
+    maxWidth: "none",
+    minHeight: 0,
+    paddingBottom: SAFE_BOTTOM,
+    paddingLeft: SAFE_LEFT,
+    paddingRight: SAFE_RIGHT,
+    paddingTop: SAFE_TOP,
+    width: "100%",
+};
 
 // ---------------------------------------------------------------------------
 // 8B.3 — Advanced Statistics
@@ -709,21 +818,25 @@ const advancedRangeStyle = (active) => ({
     padding: "0.42rem 0.62rem",
 });
 
-const AdvancedLineChart = ({ samples, metricKeys, metricsByKey }) => {
+// `compact` (a phone): a narrower drawing. Scaled from 900 units down to a
+// phone's 340 px, its axis labels came out 4 px tall. `fill` (a touch screen
+// held sideways): the chart takes the height it is given rather than 340 px,
+// which pushed the sheet past the bottom of the screen.
+const AdvancedLineChart = ({ samples, metricKeys, metricsByKey, compact = false, fill = false }) => {
     const [hoverIndex, setHoverIndex] = useState(null);
     const metrics = metricKeys.map((key) => metricsByKey[key]).filter(Boolean);
     const validSamples = samples.filter((sample) => metrics.some((metric) => Number.isFinite(Number(historyMetricValue(sample, metric.key)))));
 
     if (!validSamples.length || !metrics.length) {
         return (
-            <div style={{ alignItems: "center", color: "rgba(255,255,255,0.38)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center", minHeight: "330px", textAlign: "center" }}>
+            <div style={{ alignItems: "center", color: "rgba(255,255,255,0.38)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center", minHeight: compact || fill ? "8rem" : "330px", textAlign: "center" }}>
                 No historical samples are available for this selection yet.
             </div>
         );
     }
 
-    const width = 900;
-    const height = 470;
+    const width = compact ? 420 : 900;
+    const height = compact ? 320 : 470;
     const pad = { left: 78, right: 34, top: 34, bottom: 58 };
     const plotWidth = width - pad.left - pad.right;
     const plotHeight = height - pad.top - pad.bottom;
@@ -777,7 +890,7 @@ const AdvancedLineChart = ({ samples, metricKeys, metricsByKey }) => {
 
     return (
         <div style={{ minHeight: 0, position: "relative", width: "100%" }}>
-            <svg aria-label="Historical statistics chart" role="img" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", height: "auto", maxHeight: "58vh", minHeight: "340px", width: "100%" }}>
+            <svg aria-label="Historical statistics chart" role="img" viewBox={`0 0 ${width} ${height}`} style={{ display: "block", height: "auto", maxHeight: "58vh", minHeight: "340px", width: "100%", ...(compact ? { maxHeight: "none", minHeight: 0 } : fill ? { height: "100%", maxHeight: "none", minHeight: 0 } : null) }}>
                 <defs>
                     <linearGradient id="ohStatsGridFade" x1="0" x2="1">
                         <stop offset="0%" stopColor="rgba(255,255,255,0.02)" />
@@ -868,6 +981,12 @@ const AdvancedStatsModal = ({
 }) => {
     const [metricKeys, setMetricKeys] = useState(["gdp"]);
     const [range, setRange] = useState("all");
+    // A phone gets the whole screen and one column, the chart over the choice
+    // of statistics. Any touch screen drops the fixed minimum heights, so a
+    // phone held sideways keeps the header, and its ✕, on the screen.
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
+    const fit = isMobile || touch;
     const metricGroups = useMemo(
         () => advancedMetricGroupsFor(indexRows, statSheetDefinition),
         [indexRows, statSheetDefinition],
@@ -933,8 +1052,8 @@ const AdvancedStatsModal = ({
             : "No history yet";
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(880px, calc(100vh - 2.4rem))", maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)" }}>
+        <div role="dialog" aria-modal="true" aria-label={`Advanced statistics for ${countryName}`} style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(880px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "1380px", minHeight: "580px", overflow: "hidden", width: "min(96vw, 1380px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.75rem", padding: "0.85rem 1rem" }}>
                     <div style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "9px", display: "flex", flexShrink: 0, height: "2.25rem", justifyContent: "center", overflow: "hidden", width: "2.25rem" }}>
                         {flagUrl ? <img alt="" src={flagUrl} style={{ height: "100%", objectFit: "cover", width: "100%" }} /> : <span style={{ color: "#93c5fd", fontSize: "0.72rem", fontWeight: 900 }}>{flagFallback}</span>}
@@ -944,12 +1063,14 @@ const AdvancedStatsModal = ({
                             <span style={{ color: "#f8fafc", fontSize: "1rem", fontWeight: 900 }}>Advanced Statistics</span>
                             <span style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.76rem", fontWeight: 700 }}>{countryName}</span>
                         </div>
-                        <div data-no-translate style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{sampleSpan} · {visibleSamples.length} snapshot{visibleSamples.length === 1 ? "" : "s"}</div>
+                        <div style={{ color: "rgba(255,255,255,0.32)", fontSize: "0.64rem", marginTop: "0.15rem" }}>{sampleSpan} · {visibleSamples.length} snapshot{visibleSamples.length === 1 ? "" : "s"}</div>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close advanced statistics" style={{ alignItems: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "8px", color: "rgba(255,255,255,0.62)", cursor: "pointer", display: "flex", fontSize: "1rem", height: "2.25rem", justifyContent: "center", width: "2.25rem" }}>×</button>
                 </div>
 
-                <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(0, 1fr) minmax(285px, 330px)", minHeight: 0 }}>
+                {/* On a phone one column that scrolls as a whole: the chart, its
+                    figures, then the time range and the statistics to plot. */}
+                <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(0, 1fr) minmax(285px, 330px)", minHeight: 0, ...(isMobile ? { display: "block", overflowY: "auto" } : null) }}>
                     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, padding: "1rem 1rem 0.9rem" }}>
                         <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.35rem" }}>
                             <div>
@@ -961,18 +1082,18 @@ const AdvancedStatsModal = ({
                             </div>
                         </div>
 
-                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: "390px", overflow: "hidden", padding: "0.35rem" }}>
+                        <div style={{ background: "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", display: "flex", flex: 1, minHeight: isMobile ? "10rem" : fit ? 0 : "390px", overflow: "hidden", padding: "0.35rem" }}>
                             {status === "loading" ? (
                                 <div style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flex: 1, fontSize: "0.82rem", justifyContent: "center" }}>Loading campaign history…</div>
                             ) : status === "error" ? (
                                 <div style={{ alignItems: "center", color: "#fca5a5", display: "flex", flex: 1, fontSize: "0.8rem", justifyContent: "center", padding: "2rem", textAlign: "center" }}>{error || "Historical Stats could not be loaded."}</div>
                             ) : (
-                                <AdvancedLineChart samples={visibleSamples} metricKeys={metricKeys} metricsByKey={metricsByKey} />
+                                <AdvancedLineChart samples={visibleSamples} metricKeys={metricKeys} metricsByKey={metricsByKey} compact={isMobile} fill={fit && !isMobile} />
                             )}
                         </div>
 
                         {first && last && (
-                            <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
+                            <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: `repeat(${Math.min(isMobile ? 2 : 4, selectedMetrics.length)}, minmax(0, 1fr))`, marginTop: "0.7rem" }}>
                                 {selectedMetrics.map((metric) => {
                                     const start = Number(historyMetricValue(first, metric.key));
                                     const end = Number(historyMetricValue(last, metric.key));
@@ -992,7 +1113,7 @@ const AdvancedStatsModal = ({
                                         <div key={metric.key} style={{ backgroundColor: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "9px", minWidth: 0, padding: "0.55rem 0.65rem" }}>
                                             <div style={{ color: "rgba(255,255,255,0.36)", fontSize: "0.55rem", fontWeight: 800, letterSpacing: "0.05em", overflow: "hidden", textOverflow: "ellipsis", textTransform: "uppercase", whiteSpace: "nowrap" }}>{metric.label}</div>
                                             <div data-no-translate style={{ color: metric.color, fontSize: "0.92rem", fontWeight: 900, marginTop: "0.16rem" }}>{metric.format(end)}</div>
-                                            <div data-no-translate style={{ color: delta == null ? "rgba(255,255,255,0.3)" : delta > 0 ? "#86efac" : delta < 0 ? "#fca5a5" : "rgba(255,255,255,0.42)", fontSize: "0.58rem", marginTop: "0.08rem" }}>{deltaText} over range</div>
+                                            <div style={{ color: delta == null ? "rgba(255,255,255,0.3)" : delta > 0 ? "#86efac" : delta < 0 ? "#fca5a5" : "rgba(255,255,255,0.42)", fontSize: "0.58rem", marginTop: "0.08rem" }}>{deltaText} over range</div>
                                         </div>
                                     );
                                 })}
@@ -1000,10 +1121,10 @@ const AdvancedStatsModal = ({
                         )}
                     </div>
 
-                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem" }}>
+                    <aside style={{ backgroundColor: "rgba(9,9,10,0.24)", borderLeft: "1px solid rgba(255,255,255,0.07)", minHeight: 0, overflowY: "auto", padding: "0.9rem 0.85rem 1rem", ...(isMobile ? { borderLeft: "none", borderTop: "1px solid rgba(255,255,255,0.07)", overflowY: "visible" } : null) }}>
                         <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.58rem", fontWeight: 900, letterSpacing: "0.08em", textTransform: "uppercase" }}>Time range</div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.5rem" }}>
-                            {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
+                            {[['all', 'All'], ['1y', '1 year'], ['5y', '5 years'], ['10y', '10 years']].map(([key, label]) => <button key={key} type="button" className="oh-tap-row" onClick={() => setRange(key)} style={advancedRangeStyle(range === key)}>{label}</button>)}
                         </div>
 
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginTop: "1rem" }}>
@@ -1020,7 +1141,7 @@ const AdvancedStatsModal = ({
                                         const checked = metricKeys.includes(metric.key);
                                         const compatible = !selectedMetrics.length || selectedUnit === metric.unit || checked;
                                         return (
-                                            <button key={metric.key} type="button" onClick={() => toggleMetric(metric)} style={{ alignItems: "center", backgroundColor: checked ? `${metric.color}16` : "transparent", border: `1px solid ${checked ? `${metric.color}50` : "transparent"}`, borderRadius: "7px", color: checked ? "rgba(255,255,255,0.9)" : compatible ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", cursor: "pointer", display: "flex", fontSize: "0.66rem", fontWeight: checked ? 800 : 650, gap: "0.45rem", padding: "0.38rem 0.45rem", textAlign: "left", width: "100%" }}>
+                                            <button key={metric.key} type="button" className="oh-tap-row" onClick={() => toggleMetric(metric)} style={{ alignItems: "center", backgroundColor: checked ? `${metric.color}16` : "transparent", border: `1px solid ${checked ? `${metric.color}50` : "transparent"}`, borderRadius: "7px", color: checked ? "rgba(255,255,255,0.9)" : compatible ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)", cursor: "pointer", display: "flex", fontSize: "0.66rem", fontWeight: checked ? 800 : 650, gap: "0.45rem", padding: "0.38rem 0.45rem", textAlign: "left", width: "100%" }}>
                                                 <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: checked ? metric.color : "rgba(255,255,255,0.08)", border: `1px solid ${checked ? metric.color : "rgba(255,255,255,0.13)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{checked ? "✓" : ""}</span>
                                                 <span style={{ flex: 1, minWidth: 0 }}>{metric.label}</span>
                                             </button>
@@ -1054,6 +1175,12 @@ const HistoricalTrackingModal = ({
     currentCountry,
 }) => {
     const [search, setSearch] = useState("");
+    // As Advanced Statistics: a phone gets the whole screen and one column that
+    // scrolls, the country list holding at most half the screen of its own; any
+    // touch screen drops the fixed minimum height and lets both halves scroll.
+    const isMobile = useIsMobile();
+    const touch = useTouchPrimary();
+    const fit = isMobile || touch;
 
     useEffect(() => {
         if (!open) return undefined;
@@ -1069,33 +1196,25 @@ const HistoricalTrackingModal = ({
         };
     }, [open, onClose]);
 
-    const candidates = useMemo(() => {
-        const collected = new Map();
-        const add = (value) => {
-            const key = canonicalPolityKey(value, world);
-            if (!key || collected.has(lowerText(key))) return;
-            if (world && isPolityLandless(world, key)) return;
-            collected.set(lowerText(key), key);
-        };
-        add(playerCountry);
-        add(currentCountry);
-        Object.keys(world?.countryStats || {}).forEach(add);
-        Object.keys(world?.polityOverrides || {}).forEach(add);
-        return [...collected.values()].sort((a, b) => polityDisplayName(world, a).localeCompare(polityDisplayName(world, b)));
-    }, [world, playerCountry, currentCountry]);
+    // One bounded index for the whole modal. The previous implementation rebuilt
+    // polity identity and normalized/scanned the region ledger once per candidate,
+    // then resolved every label again on EVERY keystroke. On detailed scenarios
+    // that turned a country search into tens of seconds of synchronous work.
+    const trackingCandidates = useMemo(() => buildHistoricalTrackingCandidateRows({
+        world,
+        playerCountry,
+        currentCountry,
+    }), [world, playerCountry, currentCountry]);
+    const candidateRows = trackingCandidates.rows;
 
     const trackedPolities = settings?.trackedPolities || [];
-    const filteredCandidates = useMemo(() => {
-        const query = lowerText(search);
-        if (!query) return candidates;
-        return candidates.filter((key) => {
-            const label = polityDisplayName(world, key);
-            return lowerText(key).includes(query) || lowerText(label).includes(query);
-        });
-    }, [candidates, search, world]);
+    const filteredCandidates = useMemo(
+        () => filterHistoricalTrackingCandidateRows(candidateRows, search),
+        [candidateRows, search],
+    );
 
     const toggleCountry = useCallback((key) => {
-        const canonical = canonicalPolityKey(key, world) || key;
+        const canonical = trackingCandidates.index.canonicalKey(key) || key;
         const current = normalizeCountryStatsTracking(settings, { playerCountry });
         const alreadyTracked = current.trackedPolities.some((item) => lowerText(item) === lowerText(canonical));
         let nextTracked = current.trackedPolities;
@@ -1105,7 +1224,7 @@ const HistoricalTrackingModal = ({
             nextTracked = [...current.trackedPolities, canonical];
         }
         onChange({ ...current, trackedPolities: nextTracked });
-    }, [settings, onChange, playerCountry, world]);
+    }, [settings, onChange, playerCountry, trackingCandidates]);
 
     const setIntervalMonths = useCallback((intervalMonths) => {
         onChange({ ...(settings || {}), intervalMonths });
@@ -1114,8 +1233,8 @@ const HistoricalTrackingModal = ({
     if (!open || typeof document === "undefined") return null;
 
     return createPortal(
-        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
-            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: "min(760px, calc(100vh - 2.4rem))", maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)" }}>
+        <div role="dialog" aria-modal="true" aria-label="Historical statistics tracking settings" style={{ alignItems: "center", background: "rgba(6,6,7,0.8)", backdropFilter: "blur(10px)", display: "flex", inset: 0, justifyContent: "center", padding: isMobile ? 0 : "clamp(0.8rem, 2vw, 1.6rem)", position: "fixed", zIndex: 2147483000 }}>
+            <div style={{ background: "linear-gradient(180deg, rgba(26,26,29,0.995), rgba(13,13,15,0.995))", border: "1px solid var(--oh-hud-border)", borderRadius: "18px", boxShadow: "var(--oh-hud-shadow)", display: "flex", flexDirection: "column", height: `min(760px, calc(${APP_HEIGHT} - 2.4rem))`, maxWidth: "980px", minHeight: "520px", overflow: "hidden", width: "min(94vw, 980px)", ...(isMobile ? phoneSheetStyle : fit ? { minHeight: 0 } : null) }}>
                 <div style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", justifyContent: "space-between", padding: "1rem 1.05rem 0.95rem" }}>
                     <div style={{ alignItems: "center", display: "flex", gap: "0.8rem", minWidth: 0 }}>
                         <div style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "12px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "1.2rem", height: "2.5rem", justifyContent: "center", width: "2.5rem" }}>⚙</div>
@@ -1126,11 +1245,11 @@ const HistoricalTrackingModal = ({
                             </div>
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} style={{ alignItems: "center", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "inline-flex", flexShrink: 0, fontSize: "1rem", height: "2.4rem", justifyContent: "center", width: "2.4rem" }}>×</button>
+                    <button type="button" className="oh-tap" onClick={onClose} aria-label="Close historical tracking" style={{ alignItems: "center", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", display: "inline-flex", flexShrink: 0, fontSize: "1rem", height: "2.4rem", justifyContent: "center", width: "2.4rem" }}>×</button>
                 </div>
 
-                <div style={{ display: "grid", flex: 1, gap: "1rem", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 330px)", minHeight: 0, padding: "1rem 1.05rem 1.05rem" }}>
-                    <div style={{ minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+                <div style={{ display: "grid", flex: 1, gap: "1rem", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 330px)", minHeight: 0, padding: "1rem 1.05rem 1.05rem", ...(isMobile ? { display: "block", overflowY: "auto", padding: "0.85rem" } : null) }}>
+                    <div style={{ minHeight: 0, overflow: isMobile ? "visible" : touch ? "auto" : "hidden", display: "flex", flexDirection: "column", gap: "0.9rem" }}>
                         <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800, marginBottom: "0.5rem" }}>Auto-refresh cadence</div>
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
@@ -1140,6 +1259,7 @@ const HistoricalTrackingModal = ({
                                         <button
                                             key={months}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => setIntervalMonths(months)}
                                             style={{
                                                 backgroundColor: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
@@ -1163,7 +1283,7 @@ const HistoricalTrackingModal = ({
                             </div>
                         </div>
 
-                        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem", display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+                        <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem", display: "flex", flexDirection: "column", minHeight: fit ? "auto" : 0, flex: 1 }}>
                             <div style={{ alignItems: "center", display: "flex", gap: "0.7rem", justifyContent: "space-between" }}>
                                 <div>
                                     <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 800 }}>Tracked countries</div>
@@ -1186,15 +1306,17 @@ const HistoricalTrackingModal = ({
 
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.7rem" }}>
                                 {trackedPolities.map((key) => {
-                                    const label = polityDisplayName(world, key);
+                                    const label = trackingCandidates.index.displayName(key);
                                     const isPlayer = lowerText(key) === lowerText(playerCountry);
                                     return (
                                         <button
                                             key={key}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => toggleCountry(key)}
                                             style={{ alignItems: "center", backgroundColor: "rgba(59,130,246,0.12)", border: "1px solid rgba(96,165,250,0.2)", borderRadius: "999px", color: "#dbeafe", cursor: "pointer", display: "inline-flex", fontSize: "0.68rem", gap: "0.45rem", padding: "0.35rem 0.6rem" }}
                                             title="Remove from tracked countries"
+                                            aria-label={`Stop tracking ${label}`}
                                         >
                                             <span>{label}</span>
                                             {isPlayer && <span style={{ color: "#fbbf24", fontSize: "0.62rem", fontWeight: 800 }}>you</span>}
@@ -1207,8 +1329,9 @@ const HistoricalTrackingModal = ({
                                 )}
                             </div>
 
-                            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.85rem", minHeight: 0, overflowY: "auto", paddingTop: "0.85rem" }}>
-                                {filteredCandidates.map((key) => {
+                            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: "0.35rem", marginTop: "0.85rem", minHeight: 0, overflowY: "auto", paddingTop: "0.85rem", ...(fit ? { flex: "0 0 auto", maxHeight: `calc(${APP_HEIGHT} * 0.5)` } : null) }}>
+                                {filteredCandidates.map((row) => {
+                                    const key = row.key;
                                     const tracked = trackedPolities.some((item) => lowerText(item) === lowerText(key));
                                     const isPlayer = lowerText(key) === lowerText(playerCountry);
                                     const isViewed = lowerText(key) === lowerText(currentCountry);
@@ -1217,6 +1340,7 @@ const HistoricalTrackingModal = ({
                                         <button
                                             key={key}
                                             type="button"
+                                            className="oh-tap-row"
                                             onClick={() => toggleCountry(key)}
                                             disabled={maxed}
                                             style={{
@@ -1237,7 +1361,7 @@ const HistoricalTrackingModal = ({
                                             <span style={{ minWidth: 0 }}>
                                                 <span style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0 }}>
                                                     <span aria-hidden="true" style={{ alignItems: "center", backgroundColor: tracked ? "#22c55e" : "rgba(255,255,255,0.06)", border: `1px solid ${tracked ? "#22c55e" : "rgba(255,255,255,0.12)"}`, borderRadius: "4px", color: "#121214", display: "inline-flex", flexShrink: 0, fontSize: "0.55rem", fontWeight: 1000, height: "14px", justifyContent: "center", width: "14px" }}>{tracked ? "✓" : ""}</span>
-                                                    <span style={{ fontSize: "0.74rem", fontWeight: tracked ? 800 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polityDisplayName(world, key)}</span>
+                                                    <span style={{ fontSize: "0.74rem", fontWeight: tracked ? 800 : 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                                                 </span>
                                                 <span style={{ alignItems: "center", color: "rgba(255,255,255,0.42)", display: "flex", flexWrap: "wrap", fontSize: "0.62rem", gap: "0.35rem", marginTop: "0.18rem" }}>
                                                     {isPlayer && <span style={{ color: "#fbbf24" }}>your country</span>}
@@ -1258,7 +1382,7 @@ const HistoricalTrackingModal = ({
                         </div>
                     </div>
 
-                    <aside style={{ display: "flex", flexDirection: "column", gap: "0.9rem", minHeight: 0 }}>
+                    <aside style={{ display: "flex", flexDirection: "column", gap: "0.9rem", minHeight: 0, ...(isMobile ? { marginTop: "0.9rem" } : fit ? { overflowY: "auto" } : null) }}>
                         <div style={{ backgroundColor: "rgba(59,130,246,0.07)", border: "1px solid rgba(96,165,250,0.14)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "#bfdbfe", fontSize: "0.78rem", fontWeight: 850 }}>At a glance</div>
                             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.3rem" }}>
@@ -1276,7 +1400,7 @@ const HistoricalTrackingModal = ({
                             </ul>
                         </div>
                         <div style={{ marginTop: "auto", display: "flex", gap: "0.6rem" }}>
-                            <button type="button" onClick={onClose} style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", flex: 1, fontSize: "0.76rem", fontWeight: 800, padding: "0.7rem 0.85rem" }}>Done</button>
+                            <button type="button" className="oh-tap-row" onClick={onClose} style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "10px", color: "rgba(255,255,255,0.75)", cursor: "pointer", flex: 1, fontSize: "0.76rem", fontWeight: 800, padding: "0.7rem 0.85rem" }}>Done</button>
                         </div>
                     </aside>
                 </div>
@@ -1294,9 +1418,13 @@ const StatsPaneBody = ({ active }) => {
     const [worldSnapshot, setWorldSnapshot] = useState(null);
     const worldSnapshotRef = useRef(null);
     const statsLoadRef = useRef({ sequence: 0, controller: null });
-    const [statsView, setStatsView] = useState("diplomacy");
+    const [statsView, setStatsView] = useState("politics");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
+    // On a phone, Back closes the statistics sheet on top, not the advisor under it.
+    useBackToClose(advancedOpen, () => setAdvancedOpen(false));
+    useBackToClose(trackingOpen, () => setTrackingOpen(false));
+    const touch = useTouchPrimary();
     const [trackingSettings, setTrackingSettings] = useState({ intervalMonths: 0, trackedPolities: [] });
     const [historyState, setHistoryState] = useState({ status: "idle", samples: [], error: "", recoveredCount: 0, persistentCount: 0 });
     const [state, setState] = useState({ status: "idle", sheet: null, error: "" });
@@ -1308,6 +1436,8 @@ const StatsPaneBody = ({ active }) => {
     // Author-set flags from the scenario (flags.json). Memoized in assets.js, so
     // this is one fetch per scenario; {} for every scenario that sets none.
     const [customFlags, setCustomFlags] = useState({});
+    const [baseTags, setBaseTags] = useState({});
+    const [politicalKnowledge, setPoliticalKnowledge] = useState({ target: "", view: null });
     const [statSheetDefinition, setStatSheetDefinition] = useState({ custom: false, sections: [] });
     const [statSheetDefinitionReady, setStatSheetDefinitionReady] = useState(false);
     const [statSheetDefinitionError, setStatSheetDefinitionError] = useState("");
@@ -1340,6 +1470,30 @@ const StatsPaneBody = ({ active }) => {
         worldSnapshotRef.current = worldSnapshot;
     }, [worldSnapshot]);
     const displayName = useCountryDisplayName(targetCountry);
+
+    // Political Actors are canonical political truth. Stats remains a separate,
+    // scenario-customizable projection; the Politics tab reads only the bounded
+    // player-knowledge view and never copies political truth into Stats fields.
+    useEffect(() => {
+        if (!active || !worldSnapshot || !targetCountry) {
+            setPoliticalKnowledge({ target: "", view: null });
+            return undefined;
+        }
+        let cancelled = false;
+        const publicView = buildPublicPoliticalView(worldSnapshot, targetCountry);
+        setPoliticalKnowledge({ target: targetCountry, view: publicView ? { level: "public", public: publicView } : null });
+        readOpenedIntercepts()
+            .then((intercepts) => {
+                if (cancelled) return;
+                const view = buildPlayerPoliticalKnowledgeView(worldSnapshot, targetCountry, {
+                    viewerPolity: player.code,
+                    intercepts,
+                });
+                setPoliticalKnowledge({ target: targetCountry, view });
+            })
+            .catch(() => {});
+        return () => { cancelled = true; };
+    }, [active, targetCountry, player.code, player.round, worldSnapshot]);
 
     const persistTrackingSettings = useCallback((next) => {
         const normalized = normalizeCountryStatsTracking(next, { playerCountry: player.code });
@@ -1405,9 +1559,14 @@ const StatsPaneBody = ({ active }) => {
     // Which game and which date are we in? Also seeds the target: your country.
     useEffect(() => {
         let cancelled = false;
-        getNationFlags()
-            .then((flags) => { if (!cancelled) setCustomFlags(flags || {}); })
-            .catch(() => {});
+        Promise.all([
+            getNationFlags().catch(() => ({})),
+            getNationTags().catch(() => ({})),
+        ]).then(([flags, tags]) => {
+            if (cancelled) return;
+            setCustomFlags(flags || {});
+            setBaseTags(tags || {});
+        });
         return () => { cancelled = true; };
     }, [activeGameId]);
 
@@ -1466,18 +1625,27 @@ const StatsPaneBody = ({ active }) => {
     }, [active, activeGameId]);
 
     // While the pane is showing, clicking any country on the map inspects it.
+    // Listen through the committed browser event rather than the old module-global
+    // callback seam: the map and Country pane can live in separate lazy/HMR module
+    // instances, while the window event remains one stable runtime boundary.
     useEffect(() => {
-        if (!active) return undefined;
-        setRegionClickObserver((props) => {
-            // One namespace: the owning country's NAME. The gid0/GID_0 tail is the
-            // region's GADM provenance — a code — so falling through to it used to
-            // hand this pane "RUS" for an unowned region while every owned one gave
-            // a name. The sheet is keyed by country, and the two never matched.
-            const gid0 = String(props?.gid0 || props?.GID_0 || "").trim();
-            const country = String(props?.owner || "").trim() || COUNTRY_NAMES[gid0] || gid0;
+        if (!active || typeof window === "undefined") return undefined;
+        const onRegionSelected = (event) => {
+            const props = event?.detail;
+            if (!props || typeof props !== "object") return;
+
+            // Prefer live ownership, but normalize stock ISO/GADM codes back into
+            // the same canonical polity namespace the Stats sheet uses. COUNTRY is
+            // retained as a safe fallback for stock regions without an owner field.
+            const gid0 = cleanText(props.gid0 || props.GID_0);
+            const owner = cleanText(props.owner);
+            const ownerName = COUNTRY_NAMES[owner] || owner;
+            const rawCountry = ownerName || cleanText(props.COUNTRY) || COUNTRY_NAMES[gid0] || gid0;
+            const country = canonicalPolityKey(rawCountry, worldSnapshotRef.current) || rawCountry;
             if (country) setTargetCountry(country);
-        });
-        return () => setRegionClickObserver(null);
+        };
+        window.addEventListener(REGION_SELECTED_EVENT, onRegionSelected);
+        return () => window.removeEventListener(REGION_SELECTED_EVENT, onRegionSelected);
     }, [active]);
 
     const loadSheet = useCallback(async ({ force = false, forceReassess = false } = {}) => {
@@ -1500,7 +1668,7 @@ const StatsPaneBody = ({ active }) => {
                 const persistedNeedsPopulationAudit = !statSheetDefinition.custom && persistedIsValid && needsStartPopulationCalibrationAudit(persisted, player);
                 const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsPopulationAudit;
                 if (persistedIsValid && !persistedNeedsNativeAudit) {
-                    memoryCache.set(cacheKey, { date: player.date, sheet: persisted });
+                    rememberSheet(cacheKey, { date: player.date, sheet: persisted });
                     setState({ status: "ready", sheet: persisted, error: "" });
                     return;
                 }
@@ -1519,7 +1687,7 @@ const StatsPaneBody = ({ active }) => {
                 (statSheetDefinition.custom || !needsStartPopulationCalibrationAudit(cached.sheet, player))
             ) {
                 const sheet = mergeStatSheet(cached.sheet, aiOverride);
-                memoryCache.set(cacheKey, { date: player.date, sheet });
+                rememberSheet(cacheKey, { date: player.date, sheet });
                 setState({ status: "ready", sheet, error: "" });
                 return;
             }
@@ -1573,7 +1741,7 @@ const StatsPaneBody = ({ active }) => {
             // overwrite freshly normalized component-derived GDP with stale browser-era values.
             const sheet = finalizeCountryStatSheet(generated);
             const entry = { date: player.date, sheet };
-            memoryCache.set(cacheKey, entry);
+            rememberSheet(cacheKey, entry);
             storeSheet(cacheKey, entry);
             if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
             startTransition(() => {
@@ -1616,7 +1784,7 @@ const StatsPaneBody = ({ active }) => {
             if (directSheet && typeof directSheet === "object") {
                 const cacheKey = `${player.gameKey}:${targetCountry}`;
                 const entry = { date: player.date, sheet: directSheet };
-                memoryCache.set(cacheKey, entry);
+                rememberSheet(cacheKey, entry);
                 storeSheet(cacheKey, entry);
 
                 // Keep the read-only ref coherent for subsequent country revisits,
@@ -1651,7 +1819,7 @@ const StatsPaneBody = ({ active }) => {
                 if (persisted && typeof persisted === "object") {
                     const cacheKey = `${player.gameKey}:${targetCountry}`;
                     const entry = { date: player.date, sheet: persisted };
-                    memoryCache.set(cacheKey, entry);
+                    rememberSheet(cacheKey, entry);
                     storeSheet(cacheKey, entry);
                     setState({ status: "ready", sheet: persisted, error: "" });
                 }
@@ -1822,7 +1990,18 @@ const StatsPaneBody = ({ active }) => {
     // stat metadata while Economy itself waits for the validated/migrated sheet.
     // This preserves capital/government/leader text without triggering heavy Stats
     // generation on the default Diplomacy tab.
-    const headerSheet = sheet || worldSnapshot?.countryStats?.[targetCountry] || null;
+    const resolvedTargetKey = targetCountry && worldSnapshot
+        ? (canonicalPolityKey(targetCountry, worldSnapshot) || targetCountry)
+        : targetCountry;
+    const headerSheet = sheet
+        || worldSnapshot?.countryStats?.[resolvedTargetKey]
+        || worldSnapshot?.countryStats?.[targetCountry]
+        || null;
+    const currentPoliticalKnowledge = politicalKnowledge.target === targetCountry ? politicalKnowledge.view : null;
+    const publicPoliticalProfile = currentPoliticalKnowledge?.public
+        || (worldSnapshot && targetCountry ? buildPublicPoliticalView(worldSnapshot, targetCountry) : null);
+    const politicalKey = publicPoliticalProfile?.polityKey || resolvedTargetKey || targetCountry;
+    const politicalTags = resolveCountryTags(baseTags, worldSnapshot, politicalKey);
     const intelligence = targetCountry && worldSnapshot ? intelligenceOf(worldSnapshot, targetCountry) : null;
     const isPlayer = targetCountry && targetCountry.toUpperCase() === String(player.code).toUpperCase();
     // An author-set flag (scenario flags.json) wins over the code-derived one, so a
@@ -1911,21 +2090,29 @@ const StatsPaneBody = ({ active }) => {
                 <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.76rem", marginTop: "0.15rem" }}>
                 {[headerSheet.capital, headerSheet.continent].filter(Boolean).join(" · ")}
                 </div>
-                {headerSheet.government && (
+                {!publicPoliticalProfile && headerSheet.government && (
                     <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.72rem", marginTop: "0.1rem" }}>
                     {headerSheet.government}
                     </div>
                 )}
-                {headerSheet.leader && (
+                {!publicPoliticalProfile && headerSheet.leader && (
                     <div style={{ color: "#fbbf24", fontSize: "0.72rem", marginTop: "0.1rem" }}>
                     Leader: {headerSheet.leader}
                     </div>
                 )}
                 </>
             )}
+            {politicalTags.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", marginTop: "0.28rem" }}>
+                    {politicalTags.map((tag) => (
+                        <span key={tag} style={{ background: "rgba(124,58,237,0.22)", border: "1px solid rgba(124,58,237,0.5)", borderRadius: "999px", color: "rgba(255,255,255,0.76)", fontSize: "0.61rem", padding: "0.1rem 0.38rem" }}>{tag}</span>
+                    ))}
+                </div>
+            )}
             </div>
             {statsView === "economy" && state.status !== "loading" && (
                 <button
+                className="oh-tap"
                 onClick={(event) => loadSheet({ force: true, forceReassess: event.shiftKey })}
                 title="Refresh stat sheet · Shift+click = force fresh baseline"
                 aria-label="Refresh stat sheet; hold Shift while clicking to force a fresh baseline"
@@ -1937,17 +2124,33 @@ const StatsPaneBody = ({ active }) => {
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.9rem" }}>
             <button
             type="button"
+            aria-pressed={statsView === "politics"}
+            onClick={() => setStatsView("politics")}
+            style={statsSubtabStyle(statsView === "politics")}
+            >🏛 Politics</button>
+            <button
+            type="button"
             aria-pressed={statsView === "diplomacy"}
             onClick={() => setStatsView("diplomacy")}
-            style={statsSubtabStyle(statsView === "diplomacy")}
+            style={statsSubtabStyle(statsView === "diplomacy", touch)}
             >🤝 Diplomacy</button>
             <button
             type="button"
             aria-pressed={statsView === "economy"}
             onClick={() => setStatsView("economy")}
-            style={statsSubtabStyle(statsView === "economy")}
+            style={statsSubtabStyle(statsView === "economy", touch)}
             >{statSheetDefinition.custom ? "📊 National" : "📈 Economy"}</button>
             </div>
+
+            {statsView === "politics" && (
+                <PoliticalOverview
+                    profile={publicPoliticalProfile}
+                    fallbackGovernment={headerSheet?.government || ""}
+                    fallbackLeader={headerSheet?.leader || ""}
+                    intelligence={currentPoliticalKnowledge?.intelligence || null}
+                    institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
+                />
+            )}
 
             {statsView === "economy" && statSheetDefinitionError && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>
@@ -1965,6 +2168,7 @@ const StatsPaneBody = ({ active }) => {
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>
                 {state.error}
                 <button
+                className="oh-tap-row"
                 onClick={() => loadSheet({ force: true })}
                 style={{ background: "none", border: "none", color: "#93c5fd", cursor: "pointer", display: "block", fontSize: "0.8rem", fontWeight: 700, marginTop: "0.4rem", padding: 0 }}
                 >Try again</button>
@@ -1972,7 +2176,7 @@ const StatsPaneBody = ({ active }) => {
             )}
 
             {statsView === "diplomacy" && worldSnapshot && (
-                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} />
+                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} viewerPolity={player.code} />
             )}
 
             {statsView === "diplomacy" && !worldSnapshot && (

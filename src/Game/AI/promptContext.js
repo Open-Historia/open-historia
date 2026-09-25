@@ -232,6 +232,14 @@ export const buildEventHistoryText = (
         );
       }
 
+      if (event.impacts.politicalActorOps?.length > 0) {
+        impactNotes.push(
+          `Political changes: ${event.impacts.politicalActorOps
+            .map((entry) => `${entry.polityKey || entry.polity || entry.country || "polity"}: ${entry.op || "update"}`)
+            .join(", ")}`,
+        );
+      }
+
       return [
         `- ${date}: ${event.title}`,
         description ? `  ${description}` : "",

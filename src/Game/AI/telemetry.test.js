@@ -89,7 +89,7 @@ test("ratings clamp to 1-10 and land on the record", async () => {
 test("the parsed summary counts beta's payload shape", () => {
   const summary = normalizeParsedSummary("jumpForward", {
     events: [
-      { impacts: { regionTransfers: [{}, {}], regionControlOps: [{}], polityChanges: [], unitOps: [{}] } },
+      { impacts: { regionTransfers: [{}, {}], regionControlOps: [{}], polityChanges: [], politicalActorOps: [{}], unitOps: [{}] } },
       { impacts: { regionTransfers: [{}] } },
       {},
     ],
@@ -105,6 +105,7 @@ test("the parsed summary counts beta's payload shape", () => {
     regionTransferCount: 3,
     controlOpCount: 1,
     polityChangeCount: 0,
+    politicalActorOpCount: 1,
     unitOpCount: 1,
     chatCount: 3,
     warUpdateCount: 1,
@@ -112,7 +113,6 @@ test("the parsed summary counts beta's payload shape", () => {
     storylineUpdateCount: 1,
     stopDate: "2014-05-01",
   });
-  assert.equal(normalizeParsedSummary("nextSpeaker", { speaker: "FR" }), null);
   assert.equal(normalizeParsedSummary("x", null), null);
   assert.equal(normalizeParsedSummary("eventConsolidator", { summary: "s" }).eventCount, 0);
 });

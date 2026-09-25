@@ -22,8 +22,8 @@ const INITIAL_VIEWPORT = {
 
 // ESRI and the AWS terrain bucket both speak HTTP/2, so these are multiplexed
 // streams rather than sockets — 6 left the pipe mostly idle for the whole warm.
-// 12 matches the parallelism configureMapRuntime() already hands MapLibre for
-// exactly these hosts.
+// 12 sits within the parallelism Game/Map/mapLibreSetup.js hands MapLibre for
+// exactly these hosts on a desktop.
 const TEXTURE_WARM_CONCURRENCY = 12;
 
 const buildGlobalTextureUrls = (template, maxZoom) => {
@@ -162,7 +162,9 @@ const STARTUP_TASKS = [
     // getPmtilesArchive serves over range reads while the full archive warms in
     // the background; waiting for the whole thing would put 60 MB in front of a
     // 40 KB read. The archive is registered under its URL either way, so whichever
-    // source is live when this runs answers with the same bytes.
+    // source is live when this runs answers with the same bytes. (Not on Android:
+    // its APK assets cannot be range-read, so there the read waits for the whole
+    // file — see wholeFileSource.js.)
     deps: [],
     run: () => loadCountryNames(),
   },

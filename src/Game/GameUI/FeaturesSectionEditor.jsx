@@ -1,5 +1,6 @@
 /*! Open Historia — the Features tab of the scenario and game editors © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
+import { useTouchPrimary } from "../../runtime/mobileUi.js";
 import {
   FEATURE_DEFINITIONS,
   normalizeFeatureSettings,
@@ -16,6 +17,9 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
   const overrides = isGame ? (features ?? {}) : effective;
+  // On a touch screen every choice is a finger's height (.oh-tap-row), which an
+  // inline min-height would pin smaller: there the class sets it.
+  const touch = useTouchPrimary();
 
   // A game's patch with `undefined` values removes those overrides.
   const setFeature = (key, patch) => {
@@ -38,7 +42,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
     ...styles.actionButtonStyle,
     background: active ? "rgba(0,0,0,0.42)" : "rgba(255,255,255,0.04)",
     borderColor: active ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.1)",
-    minHeight: "2rem",
+    minHeight: touch ? undefined : "2rem",
     padding: "0 0.7rem",
   });
 
@@ -67,12 +71,12 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                 {definition.toggleable !== false && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                   {isGame && (
-                    <button type="button" style={choice(enabledState === "default")} onClick={() => setFeature(definition.key, { enabled: undefined })}>
+                    <button type="button" className="oh-tap-row" style={choice(enabledState === "default")} onClick={() => setFeature(definition.key, { enabled: undefined })}>
                       Scenario default ({scenarioSays})
                     </button>
                   )}
-                  <button type="button" style={choice(enabledState === "on")} onClick={() => setFeature(definition.key, { enabled: true })}>On</button>
-                  <button type="button" style={choice(enabledState === "off")} onClick={() => setFeature(definition.key, { enabled: false })}>Off</button>
+                  <button type="button" className="oh-tap-row" style={choice(enabledState === "on")} onClick={() => setFeature(definition.key, { enabled: true })}>On</button>
+                  <button type="button" className="oh-tap-row" style={choice(enabledState === "off")} onClick={() => setFeature(definition.key, { enabled: false })}>Off</button>
                 </div>
                 )}
               </div>
@@ -94,7 +98,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                           <label style={styles.fieldLabelStyle}>{setting.label}</label>
                           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                             {isGame && (
-                              <button type="button" style={choice(!overridden)} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
+                              <button type="button" className="oh-tap-row" style={choice(!overridden)} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
                                 Scenario default ({scenarioLabel})
                               </button>
                             )}
@@ -102,6 +106,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                               <button
                                 key={option.value}
                                 type="button"
+                                className="oh-tap-row"
                                 style={choice(selected === option.value || (!isGame && effective[definition.key][setting.key] === option.value))}
                                 onClick={() => setFeature(definition.key, { [setting.key]: option.value })}
                               >
@@ -145,7 +150,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                                 {overridden ? "This game's own rules replace the scenario's." : "Following the scenario"}
                               </span>
                               {overridden && (
-                                <button type="button" style={{ ...choice(false), minHeight: "1.7rem", padding: "0 0.55rem" }} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
+                                <button type="button" className="oh-tap-row" style={{ ...choice(false), minHeight: touch ? undefined : "1.7rem", padding: "0 0.55rem" }} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
                                   Use scenario default
                                 </button>
                               )}
@@ -181,7 +186,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                             </span>
                           )}
                           {overridden && (
-                            <button type="button" style={{ ...choice(false), minHeight: "1.7rem", padding: "0 0.55rem" }} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
+                            <button type="button" className="oh-tap-row" style={{ ...choice(false), minHeight: touch ? undefined : "1.7rem", padding: "0 0.55rem" }} onClick={() => setFeature(definition.key, { [setting.key]: undefined })}>
                               Use scenario default
                             </button>
                           )}

@@ -1,5 +1,6 @@
 /*! Open Historia — portions (troop system integration + globe sun/stars) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
 import MapScene from "./MapScene.jsx";
@@ -13,13 +14,15 @@ import {
   basemapProtocolTemplate,
   buildBasemapRenderKey,
   esriTileTemplate,
-  ensureBasemapProtocol,
   isBuiltinBasemapId,
   resolveBasemapId,
 } from "../../runtime/assets.js";
+import { configureMapRuntime, ensureBasemapProtocol } from "./mapLibreSetup.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 
+// MapLibre's worker pool is made with the first map, so this goes first.
+configureMapRuntime();
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
 // Not Yet Available" placeholders get replaced with upscaled ancestor tiles.
 ensureBasemapProtocol();
@@ -192,7 +195,61 @@ const PAX_TERRAIN_ATLAS_DARK_PAINT = {
   ],
 };
 
+// Midnight Terrain is deliberately quiet rather than colourful. Physical
+// geography survives as low-luminance relief, while the live political layer
+// owns essentially all strong colour. Brightness caps keep mountain/desert
+// highlights from turning into a second visual foreground. Both inputs remain
+// label-free so no modern names or borders sit underneath scenario canon.
+const PAX_WORLD_RELIEF_MIDNIGHT_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.96,
+  "raster-contrast": 0.30,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.16,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0.82,
+    3.0, 0.82,
+    3.50, 0.66,
+    4.00, 0.38,
+    4.45, 0.15,
+    4.85, 0,
+  ],
+};
+
+const PAX_TERRAIN_MIDNIGHT_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.92,
+  // Keep the palette nearly monochrome, but recover enough local relief at
+  // regional/close zoom for mountains and broad terrain structure to survive
+  // beneath political colour. This stays substantially darker than Atlas Dark.
+  "raster-contrast": 0.38,
+  "raster-brightness-min": 0.0,
+  "raster-brightness-max": 0.20,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 0,
+    2.75, 0.02,
+    3.20, 0.11,
+    3.65, 0.34,
+    4.10, 0.54,
+    4.60, 0.66,
+    5.40, 0.70,
+    6.50, 0.74,
+    8.0, 0.76,
+    12, 0.78,
+  ],
+};
+
 const getPaxReliefPaints = (basemapId) => {
+  if (basemapId === "midnight-terrain") {
+    return {
+      world: PAX_WORLD_RELIEF_MIDNIGHT_PAINT,
+      terrain: PAX_TERRAIN_MIDNIGHT_PAINT,
+    };
+  }
   if (basemapId === "ocean-dark") {
     return {
       world: PAX_WORLD_RELIEF_OCEAN_DARK_PAINT,
@@ -278,9 +335,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       sky: { "atmosphere-blend": 0 },
     };
   }
-  // The scenario's basemap is the basemap, at every zoom. Atlas Relief and the
-  // physically-dark Ocean variant are composed looks of their own (ETOPO global
-  // relief fading into label-free World Terrain Base); other raster ids render
+  // The scenario's basemap is the basemap, at every zoom. Atlas Relief, the
+  // physically-dark Ocean variant and Midnight Terrain are composed looks of
+  // their own (ETOPO global relief fading into label-free World Terrain Base);
+  // other raster ids render
   // the ESRI service they name. National Geographic - Dark is handled by the
   // async vector-style adapter in World() below.
   // The renderer used to swap Ocean and a scenario-default Dark Gray for that
@@ -289,7 +347,8 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // had faded out around z5.
   const usePaxRelief = basemapId === "atlas-relief"
     || basemapId === "atlas-relief-dark"
-    || basemapId === "ocean-dark";
+    || basemapId === "ocean-dark"
+    || basemapId === "midnight-terrain";
   const paxReliefPaints = getPaxReliefPaints(basemapId);
   const basemapPaint = usePaxRelief
     ? paxReliefPaints.terrain
@@ -299,10 +358,14 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // World Terrain Base is the useful middle ground for the relief presets:
   // label-free shaded land relief + bathymetry + coastal water context.
   const renderedBasemapId = usePaxRelief ? "terrain" : basemapId;
-  const darkPhysicalVariant = basemapId === "ocean-dark" || basemapId === "atlas-relief-dark";
-  const physicalBackground = darkPhysicalVariant
-    ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
-    : "#0b1017";
+  const darkPhysicalVariant = basemapId === "ocean-dark"
+    || basemapId === "atlas-relief-dark"
+    || basemapId === "midnight-terrain";
+  const physicalBackground = basemapId === "midnight-terrain"
+    ? "#000205"
+    : darkPhysicalVariant
+      ? (basemapId === "ocean-dark" ? "#030a14" : "#050609")
+      : "#0b1017";
 
   // THE BLACK TILES. The renderer before vNext put a second raster layer UNDER
   // the basemap: "satellite-lowres", z0-2 only, levels that always have real
@@ -996,7 +1059,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     <div
       id="oh-globe-space"
       style={{
-        height: "100vh",
+        height: APP_HEIGHT,
         width: "100vw",
         backgroundColor: isGlobe ? "#000" : "#0b1017",
         position: "relative",

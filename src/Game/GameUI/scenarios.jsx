@@ -13,6 +13,7 @@ import {
   useScenarioState,
 } from "../../runtime/scenarios.js";
 import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
+import { acceptFor } from "../../runtime/fileAccept.js";
 
 // The accent a scenario or game falls back to when it carries none: the same
 // default the stores hand out (server/libraryStore.js, web/storeConstants.js).
@@ -117,7 +118,6 @@ const buildEditorState = (details) => {
     gameMaster: prompts.gameMaster ?? GAMEPLAY_PROMPT_DEFAULTS.gameMaster,
     idleDiplomacy: prompts.idleDiplomacy ?? GAMEPLAY_PROMPT_DEFAULTS.idleDiplomacy,
     jumpForward: prompts.jumpForward ?? GAMEPLAY_PROMPT_DEFAULTS.jumpForward,
-    nextSpeaker: prompts.nextSpeaker ?? GAMEPLAY_PROMPT_DEFAULTS.nextSpeaker,
   };
 
   return {
@@ -627,7 +627,7 @@ const ScenarioEditor = ({
       ref={(node) => {
         fileInputsRef.current[assetKey] = node;
       }}
-      accept={uploadAccept[assetKey]}
+      accept={acceptFor(uploadAccept[assetKey])}
       onChange={(event) => onFileSelect(assetKey, event)}
       style={{ display: "none" }}
       type="file"

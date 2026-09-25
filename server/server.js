@@ -41,6 +41,7 @@ import {
   uploadScenarioAsset,
   writeGameSnapshots,
   writeRuntimeJsonAsset,
+  writeRuntimeTurnState,
 } from "./libraryStore.js";
 import {
   createMapEditorDocument,
@@ -246,7 +247,6 @@ const sendAssetMissing = (res, error) => {
   }
   sendError(res, 404, error);
 };
-
 // Block cross-origin state-changing requests (CSRF / drive-by protection).
 // The CORS allowlist above lets the Android connect screen (on the WebView's own
 // origin) *probe* this server — a GET. Without this guard, any web page the
@@ -306,6 +306,30 @@ const streamBinaryFile = (req, res, sourcePath, contentType = "application/octet
   fs.createReadStream(sourcePath, { end: clampedEnd, start: clampedStart }).pipe(res);
 };
 
+const INSTITUTION_LOGO_DATA_URL = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/]+={0,2})$/i;
+const MAX_INSTITUTION_LOGO_BYTES = 512 * 1024;
+
+const sendInstitutionLogo = (res, dataUrl) => {
+  const match = INSTITUTION_LOGO_DATA_URL.exec(String(dataUrl || ""));
+  if (!match) throw new Error("Institution logo is missing or invalid.");
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > MAX_INSTITUTION_LOGO_BYTES) {
+    throw new Error("Institution logo is empty or exceeds the server size limit.");
+  }
+  const subtype = match[1].toLowerCase();
+  const contentType = subtype === "jpg" ? "image/jpeg" : `image/${subtype}`;
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Length", buffer.length);
+  res.send(buffer);
+};
+
+const readScenarioInstitutionLogoMap = (scenarioId) => {
+  const asset = resolveScenarioUploadAsset(scenarioId, "institutionLogos");
+  const parsed = JSON.parse(fs.readFileSync(asset.sourcePath, "utf8"));
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+};
+
 // Global client preferences (currently the UI language) shared by every
 // device that plays through this server — the phone app and desktop browser
 // see the same choice, instead of each browser keeping its own.
@@ -324,11 +348,14 @@ app.get("/api/ui-settings", (_req, res) => {
 });
 
 // Language packs. Two layers merge:
-//  - shipped packs (public/lang/<code>.json, arrive with updates) seed the
-//    top languages so common strings never need an AI call;
+//  - shipped packs (public/lang/<code>.json, arrive with updates) hold every
+//    fixed string of the interface (scripts/i18n/), so it never needs an AI
+//    call in those languages;
 //  - saved packs (server/data/lang/<code>.json) accumulate every translation
-//    generated at runtime. They live under server/data, which the update
-//    script never touches, so they survive updates. Saved entries win.
+//    generated at runtime: what a scenario or a player made. They live under
+//    server/data, which the update script never touches, so they survive
+//    updates. Shipped entries win: a saved entry for a string a pack now
+//    covers is an older AI translation, made before the pack had it.
 const shippedLangDir = fs.existsSync(path.join(distDir, "lang"))
   ? path.join(distDir, "lang")
   : path.join(__dirname, "../public/lang");
@@ -355,7 +382,7 @@ app.get("/api/lang/:code", (req, res) => {
   if (!isLangCode(code)) {
     return sendError(res, 400, "Invalid language code.");
   }
-  res.json({ ...readLangPack(shippedLangDir, code), ...readLangPack(savedLangDir, code) });
+  res.json({ ...readLangPack(savedLangDir, code), ...readLangPack(shippedLangDir, code) });
 });
 
 app.put("/api/lang/:code", largeJsonParser, (req, res) => {
@@ -369,10 +396,12 @@ app.put("/api/lang/:code", largeJsonParser, (req, res) => {
       return sendError(res, 400, "Body must be { entries: { source: translation } }.");
     }
     const saved = readLangPack(savedLangDir, code);
+    // What the shipped pack covers is not saved again (it would never be read).
+    const shipped = readLangPack(shippedLangDir, code);
     let added = 0;
     for (const [source, translated] of Object.entries(entries)) {
       if (typeof source === "string" && typeof translated === "string" &&
-          source.length <= 3000 && translated.length <= 6000) {
+          source.length <= 3000 && translated.length <= 6000 && !Object.hasOwn(shipped, source)) {
         if (saved[source] !== translated) {
           saved[source] = translated;
           added += 1;
@@ -651,6 +680,15 @@ app.put("/api/scenarios/:scenarioId/assets/:assetKey", uploadParser, (req, res) 
   }
 });
 
+app.get("/api/scenarios/:scenarioId/institution-logo/:institutionId", (req, res) => {
+  try {
+    const logos = readScenarioInstitutionLogoMap(req.params.scenarioId);
+    sendInstitutionLogo(res, logos?.[req.params.institutionId]);
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
 app.get("/api/games", (_req, res) => {
   try {
     res.json(getGameCatalog());
@@ -790,6 +828,15 @@ app.delete("/api/scenarios/:scenarioId", (req, res) => {
   }
 });
 
+app.get("/api/runtime/institution-logo/:institutionId", (req, res) => {
+  try {
+    const logos = readRuntimeJsonAsset("institutionLogos")?.data || {};
+    sendInstitutionLogo(res, logos?.[req.params.institutionId]);
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
 app.get("/api/runtime/json/:assetKey", (req, res) => {
   try {
     // Scenario geometry is served untransformed, so parsing it only to
@@ -809,6 +856,20 @@ app.get("/api/runtime/json/:assetKey", (req, res) => {
   }
 });
 
+app.put("/api/runtime/turn-commit", jsonParser, (req, res) => {
+  try {
+    if (!Number(req.headers["content-length"])) {
+      return sendError(res, 400, new Error("Refusing to commit turn: the request had no body."));
+    }
+    const committed = writeRuntimeTurnState(req.body);
+    res.setHeader("Cache-Control", "no-store");
+    res.type("application/json");
+    res.send(JSON.stringify(committed));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
 app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
   try {
     // express.json() hands us {} when the body was absent or unparseable, which is
@@ -818,8 +879,17 @@ app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
     if (!Number(req.headers["content-length"])) {
       return sendError(res, 400, new Error(`Refusing to write ${req.params.assetKey}: the request had no body.`));
     }
-    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body);
+    // Prefer: return=minimal (RFC 7240): the writer does not want the stored
+    // record back. The rollback archive asks for this — reading it back and
+    // sending all of it every turn cost this process and the page a copy each.
+    const minimal = /\breturn=minimal\b/i.test(String(req.get("prefer") ?? ""));
+    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body, { readBack: !minimal });
     res.setHeader("Cache-Control", "no-store");
+    if (minimal) {
+      res.setHeader("Preference-Applied", "return=minimal");
+      res.status(204).end();
+      return;
+    }
     res.type("application/json");
     res.send(JSON.stringify(asset.data));
   } catch (error) {

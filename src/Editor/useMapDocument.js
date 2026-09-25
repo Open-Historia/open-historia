@@ -212,8 +212,8 @@ export const useMapDocument = (initial) => {
   }, []);
 
   // Renaming a polity re-keys it: the record moves to the new name and every
-  // colour, flag, tag and city marker keyed by the old one follows, with the old
-  // name kept as a former name (server/polityRename.js). The map's regions are
+  // colour, flag, tag and city marker keyed by the old one follows, and the old
+  // name is not kept anywhere (server/polityRename.js). The map's regions are
   // re-keyed by OlMap.renameOwner; MapEditor calls both.
   const renamePolity = useCallback((key, nextName) => {
     const from = String(key || "").trim();

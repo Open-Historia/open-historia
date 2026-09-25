@@ -133,9 +133,29 @@ test("WebGL context loss remains instrumented for freeze diagnostics", () => {
   assert.match(world, /webglcontextlost/);
   assert.match(world, /webglcontextrestored/);
   assert.match(world, /recordMapTrace\("gpu:webgl-lost"/);
+  assert.match(world, /recordMapTrace\("gpu:webgl-released"/);
+  assert.match(world, /mapInstance\?\._removed \|\| !canvas\.isConnected/);
+  assert.match(world, /setTimeout\(\(\) => \{/);
   assert.match(world, /recordMapTrace\("gpu:webgl-restored"/);
   assert.match(world, /canvas\.addEventListener\("webglcontextlost", onLost\)/);
   assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
+});
+
+test("country fills are written again when MapLibre rebuilds the sources holding their feature-state", () => {
+  // A restored WebGL context, or a style MapLibre cannot diff (3D Terrain),
+  // brings every source back as a new object with no feature-state. The
+  // applied-fill ledgers go with the old objects, or the whole map stays grey.
+  assert.match(nations, /mapInstance\.on\("styledata", schedule\)/);
+  assert.match(nations, /if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /seen\.custom && seen\.custom !== next\.custom\) \|\| \(seen\.repair && seen\.repair !== next\.repair/);
+  assert.match(nations, /appliedCustomFillStateRef\.current = new Map\(\);\s*setCustomFillSourceEpoch/);
+  assert.match(nations, /if \(seen\.tiles && seen\.tiles !== next\.tiles\) \{\s*appliedTileFillStateRef\.current = new Map\(\);\s*setTileFillSourceEpoch/);
+  assert.match(nations, /\}, \[\s*customFillSourceEpoch,\s*customFlag,/);
+  assert.match(nations, /shouldMountStockRegions, tileFillSourceEpoch\]\);/);
+  // A pass still slicing when its ledger was reset must not put the old one back.
+  assert.match(nations, /if \(appliedCustomFillStateRef\.current === applied\) appliedCustomFillStateRef\.current = appliedAfterSync;/);
+  assert.match(nations, /if \(appliedTileFillStateRef\.current === applied\) appliedTileFillStateRef\.current = appliedAfterSync;/);
+  assert.doesNotMatch(nations, /^\s*applied(Custom|Tile)FillStateRef\.current = appliedAfterSync;/m);
 });
 
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
@@ -143,6 +163,17 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /loadNatGeoDarkStyle/);
   assert.match(world, /effectiveBasemap === "natgeo-dark"/);
   assert.match(world, /"atlas-relief-dark"/);
+  assert.match(world, /basemapId === "midnight-terrain"/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.96/);
+  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.16/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.92/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.20/);
+  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-contrast": 0\.38/);
+  assert.match(world, /5\.40, 0\.70[\s\S]*?6\.50, 0\.74[\s\S]*?12, 0\.78/);
+  assert.match(world, /"#000205"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*previewFilter: "brightness\(0\.15\) saturate\(0\.14\) contrast\(1\.10\)"/);
   assert.match(natGeoDarkStyle, /3d1a30626bbc46c582f148b9252676ce/);
   assert.match(natGeoDarkStyle, /classifyNatGeoDarkLabelLayer/);
   assert.match(natGeoDarkStyle, /kind === "street"/);
@@ -171,6 +202,8 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /noteBasemapTransitionProgress\(94\)/);
   assert.match(runtimeAssets, /id: "natgeo-dark"/);
   assert.match(editorBasemaps, /id: "natgeo-dark"/);
+  assert.match(runtimeAssets, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
+  assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
 });
 
 test("label geometry is worker-owned and Nations never fits live polity polygons on the main thread", () => {
