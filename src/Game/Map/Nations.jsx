@@ -2355,6 +2355,50 @@ const WorldMap = ({ isGlobe = false }) => {
     return clauses.length ? ["all", ...clauses] : ["all"];
   }, [editedStockIds, legacyAuthoritativeCountryCodes]);
 
+  // Feature-state lives on the MapLibre source object. A lost WebGL context
+  // (Android drops it under memory pressure) or a style MapLibre cannot diff
+  // (Settings > 3D Terrain) rebuilds every source as a new object with no
+  // state, while the applied-fill ledgers still said each colour was drawn:
+  // the whole map stayed grey. A source a ledger wrote to that is replaced or
+  // gone voids that ledger, and its epoch makes the sync write every fill again.
+  const fillStateSourcesRef = useRef({ custom: null, repair: null, tiles: null });
+  const [customFillSourceEpoch, setCustomFillSourceEpoch] = useState(0);
+  const [tileFillSourceEpoch, setTileFillSourceEpoch] = useState(0);
+  useEffect(() => {
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.on) return undefined;
+    let frame = 0;
+    const check = () => {
+      frame = 0;
+      // Between a context loss and its restore the map has no style at all.
+      if (!mapInstance.style) return;
+      const seen = fillStateSourcesRef.current;
+      const next = {
+        custom: mapInstance.getSource("custom-regions-source") ?? null,
+        repair: mapInstance.getSource("custom-regions-repair-source") ?? null,
+        tiles: mapInstance.getSource("regions-source") ?? null,
+      };
+      fillStateSourcesRef.current = next;
+      if ((seen.custom && seen.custom !== next.custom) || (seen.repair && seen.repair !== next.repair)) {
+        appliedCustomFillStateRef.current = new Map();
+        setCustomFillSourceEpoch((epoch) => epoch + 1);
+      }
+      if (seen.tiles && seen.tiles !== next.tiles) {
+        appliedTileFillStateRef.current = new Map();
+        setTileFillSourceEpoch((epoch) => epoch + 1);
+      }
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(check);
+    };
+    schedule();
+    mapInstance.on("styledata", schedule);
+    return () => {
+      mapInstance.off("styledata", schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [map]);
+
   // Only live ownership overrides touch the URL-backed authored source. Seed
   // colours remain properties of the scenario file; conquests are a tiny state
   // diff rather than a full GeoJSON replacement.
@@ -2452,7 +2496,9 @@ const WorldMap = ({ isGlobe = false }) => {
           return;
         }
 
-        appliedCustomFillStateRef.current = appliedAfterSync;
+        // A ledger replaced mid-pass was reset on purpose (a region repair, a
+        // rebuilt source), and the reset re-runs this sync to write every fill.
+        if (appliedCustomFillStateRef.current === applied) appliedCustomFillStateRef.current = appliedAfterSync;
         const syncElapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - syncStartedAt;
       };
 
@@ -2469,6 +2515,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (workFrame) cancelAnimationFrame(workFrame);
     };
   }, [
+    customFillSourceEpoch,
     customFlag,
     map,
     ownerColorCss,
@@ -3001,7 +3048,7 @@ const WorldMap = ({ isGlobe = false }) => {
           return;
         }
 
-        appliedTileFillStateRef.current = appliedAfterSync;
+        if (appliedTileFillStateRef.current === applied) appliedTileFillStateRef.current = appliedAfterSync;
         const applyElapsed = (typeof performance !== "undefined" ? performance.now() : Date.now()) - applyStartedAt;
         reportPerfOperation("map feature-state ownership sync", applyElapsed, { warnAt: PERF_MAP_WARN_MS });
         recordMapWork("Nations:feature-state-sync", applyElapsed, { operations: operations.length });
@@ -3021,7 +3068,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (retryFrame) cancelAnimationFrame(retryFrame);
       if (workFrame) cancelAnimationFrame(workFrame);
     };
-  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions]);
+  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions, tileFillSourceEpoch]);
 
   const stockRegionsFillPaint = useMemo(
     () => customActive
