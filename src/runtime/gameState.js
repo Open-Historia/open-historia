@@ -4391,6 +4391,10 @@ export const readChatsState = async ({ force = false } = {}) =>
 
 let chatWriteQueue = Promise.resolve();
 
+// Unqueued: only for callers already running inside the canonical queue.
+const writeChatsNow = (chats, options = {}) =>
+  writeJson(JSON_URLS.chat, cloneValue(normalizeChats(chats)), { pretty: true, ...options });
+
 export const writeChatsState = async (chats, options = {}) => {
   const normalized = normalizeChats(chats);
   const snapshot = cloneValue(normalized);
@@ -4508,6 +4512,7 @@ export const mutateCanonicalTurnState = (mutator, {
   expectedGameId = "",
   emitEvents = true,
   guardRuntimeGeneration = true,
+  preserveApprovedEvents = false,
 } = {}) => {
   if (typeof mutator !== "function") {
     return Promise.reject(new TypeError("mutateCanonicalTurnState requires a mutator function."));
@@ -4545,8 +4550,111 @@ export const mutateCanonicalTurnState = (mutator, {
         ? patch.chats
         : Object.prototype.hasOwnProperty.call(patch, "chat") ? patch.chat : chats,
     };
-    const payload = buildCanonicalTurnPayload(next, { expectedGameId });
+    const payload = buildCanonicalTurnPayload(next, { expectedGameId, preserveApprovedEvents });
     return commitCanonicalTurnPayload(payload, { emitEvents, startedAt });
+  });
+};
+
+// One document's read-modify-write, on the same queue as the canonical
+// generation and the chat writes. The document is read fresh INSIDE the queue,
+// so the mutator always starts from what the previous write left. Reading it
+// before a model call and writing the whole of it back afterwards is how a unit
+// the player deployed, or a note another writer posted, while the call was out
+// used to be erased: the old copy won. Call the model first, then hand its
+// result to a mutator that applies it to the current document.
+//
+// The mutator gets the current value and returns the next one (it may change
+// the one it was given and return it), or null/undefined to write nothing. It
+// must stay native and quick: nothing it awaits may queue another canonical
+// write, or the queue waits on itself. Resolves to the saved value, or null
+// when nothing was written. Rejects, writing nothing, if the active campaign
+// changed after the call was made.
+const RUNTIME_DOCUMENTS = {
+  world: {
+    read: () => readWorldState({ force: true }),
+    write: (value, options) => writeWorldState(value, options),
+  },
+  chats: {
+    read: () => readChatsState({ force: true }),
+    write: (value, options) => writeChatsNow(value, options),
+  },
+  events: {
+    read: () => readEventsState({ force: true }),
+    write: (value, options) => writeEventsState(value, options),
+  },
+  actions: {
+    read: () => readActionsState({ force: true }),
+    write: (value, options) => writeActionsState(value, options),
+  },
+  game: {
+    read: () => readGameData({ force: true }),
+    write: (value, options) => writeGameData(value, options),
+  },
+  intercepts: {
+    read: () => readInterceptsState({ force: true }),
+    write: (value, options) => writeInterceptsState(value, options),
+  },
+  // The advisor's conversation: written by its panel, by document notices and
+  // by a rollback, so all three meet here too.
+  advisor: {
+    read: async () => {
+      const messages = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
+      return Array.isArray(messages) ? messages : [];
+    },
+    write: (value, options) => writeJson(JSON_URLS.advisor, Array.isArray(value) ? value : [], options),
+  },
+};
+
+export const mutateRuntimeDocument = (key, mutator, {
+  guardRuntimeGeneration = true,
+  ...writeOptions
+} = {}) => {
+  const document = RUNTIME_DOCUMENTS[key];
+  if (!document) return Promise.reject(new TypeError(`mutateRuntimeDocument: unknown document "${key}".`));
+  if (typeof mutator !== "function") {
+    return Promise.reject(new TypeError("mutateRuntimeDocument requires a mutator function."));
+  }
+  const expectedRuntimeGameUrl = guardRuntimeGeneration ? String(JSON_URLS.game || "") : "";
+  const assertRuntimeGeneration = () => {
+    if (expectedRuntimeGameUrl && String(JSON_URLS.game || "") !== expectedRuntimeGameUrl) {
+      throw new Error(`Active campaign changed before the ${key} write could commit.`);
+    }
+  };
+  return enqueueCanonicalGenerationWrite(async () => {
+    assertRuntimeGeneration();
+    const current = await document.read();
+    const next = await mutator(current);
+    assertRuntimeGeneration();
+    if (next === null || next === undefined) return null;
+    return document.write(next, writeOptions);
+  });
+};
+
+export const mutateWorldState = (mutator, options) => mutateRuntimeDocument("world", mutator, options);
+export const mutateChatsState = (mutator, options) => mutateRuntimeDocument("chats", mutator, options);
+export const mutateEventsState = (mutator, options) => mutateRuntimeDocument("events", mutator, options);
+export const mutateActionsState = (mutator, options) => mutateRuntimeDocument("actions", mutator, options);
+export const mutateGameData = (mutator, options) => mutateRuntimeDocument("game", mutator, options);
+export const mutateInterceptsState = (mutator, options) => mutateRuntimeDocument("intercepts", mutator, options);
+export const mutateAdvisorState = (mutator, options) => mutateRuntimeDocument("advisor", mutator, options);
+
+// A write another thread performs, run while this page's write queue is held.
+// The country-stats worker reads world.json, merges one sheet in and PUTs the
+// whole document back itself (it keeps that stringify off the page); held here
+// for that round trip, no queued page write can land between its read and its
+// PUT and be erased by it. The whole queue waits on the task, so it must settle
+// on its own: give it a timeout. Rejects, running nothing, if the active
+// campaign changed after the call was made.
+export const runInCanonicalWriteQueue = (task, { guardRuntimeGeneration = true } = {}) => {
+  if (typeof task !== "function") {
+    return Promise.reject(new TypeError("runInCanonicalWriteQueue requires a task function."));
+  }
+  const expectedRuntimeGameUrl = guardRuntimeGeneration ? String(JSON_URLS.game || "") : "";
+  return enqueueCanonicalGenerationWrite(async () => {
+    if (expectedRuntimeGameUrl && String(JSON_URLS.game || "") !== expectedRuntimeGameUrl) {
+      throw new Error("Active campaign changed before the write could run.");
+    }
+    return task();
   });
 };
 
