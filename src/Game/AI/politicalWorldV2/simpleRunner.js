@@ -127,8 +127,16 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
     invalidateDownstreamActorCoverage(next, accepted);
     clearAttempts(next, task.type, accepted);
     const feedback = retryBucket(next, "politicalActor");
-    for (const polity of accepted) delete feedback[polity];
-    for (const polity of unresolved) feedback[polity] = actorFailureErrors(result, polity);
+    const politicalSystemLocks = retryBucket(next, "politicalSystemLocks");
+    for (const polity of accepted) {
+      delete feedback[polity];
+      delete politicalSystemLocks[polity];
+    }
+    for (const polity of unresolved) {
+      feedback[polity] = actorFailureErrors(result, polity);
+      const retryLock = result?.generation?.retryPoliticalSystemLocksByPolity?.[polity];
+      if (retryLock && typeof retryLock === "object" && !Array.isArray(retryLock)) politicalSystemLocks[polity] = clone(retryLock);
+    }
     bumpAttempts(next, task.type, unresolved);
   } else if (task.type === "governing-alignment") {
     const declaredAccepted = new Set(array(result?.acceptedPolities).map(clean).filter(Boolean));

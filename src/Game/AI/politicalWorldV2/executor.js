@@ -301,6 +301,7 @@ export const createPoliticalWorldV2Executor = ({
         behaviorallyCompleteStandard: true,
         requireRepresentationCoverage: true,
         retryErrorsByPolity: checkpoint?.retryContext?.politicalActor || {},
+        retryPoliticalSystemLocksByPolity: checkpoint?.retryContext?.politicalSystemLocks || {},
         callModel: trackedCallModel,
         signal,
       });

@@ -4020,6 +4020,66 @@ test("external one-call Political World v2 retries preserve prior native validat
   assert.equal(result.failedPolities, 0);
 });
 
+test("external one-call Political World v2 retries preserve field-level political-system locks", async () => {
+  const first = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: {} },
+    maxBatchSize: 1,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: false,
+    generatedAt: fixedNow,
+    callModel: async () => ({ toolInput: { proposals: [{
+      polityKey: "Republic X",
+      actorPatchJson: JSON.stringify({
+        politicalSystem: { type: "dominant_party_republic", representation: "party_state" },
+        government: { form: "Dominant-party presidential republic", headOfState: "Leader X", headOfGovernment: "Leader X" },
+        parties: [{ id: "government-party", name: "Government Party" }],
+      }),
+    }] } }),
+  });
+
+  assert.equal(first.generatedPolities, 0);
+  assert.equal(first.failedPolities, 1);
+  assert.deepEqual(first.retryPoliticalSystemLocksByPolity, {
+    "Republic X": { type: "dominant_party_republic" },
+  });
+
+  let retryPrompt = "";
+  const second = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: {} },
+    maxBatchSize: 1,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: false,
+    retryErrorsByPolity: { "Republic X": first.failures[0].errors },
+    retryPoliticalSystemLocksByPolity: first.retryPoliticalSystemLocksByPolity,
+    generatedAt: fixedNow,
+    callModel: async (_systemPrompt, history) => {
+      retryPrompt = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { proposals: [{
+        polityKey: "Republic X",
+        actorPatchJson: JSON.stringify({
+          politicalSystem: { type: "one_party_state", representation: "electoral" },
+          government: { form: "Dominant-party presidential republic", headOfState: "Leader X", headOfGovernment: "Leader X" },
+          parties: [
+            { id: "government-party", name: "Government Party" },
+            { id: "opposition-party", name: "Opposition Party" },
+          ],
+        }),
+      }] } };
+    },
+  });
+
+  assert.match(retryPrompt, /POLITICAL SYSTEM LOCK \(FIELD LEVEL\): type=dominant_party_republic/i);
+  assert.match(retryPrompt, /representation is NOT locked and must be corrected/i);
+  assert.equal(second.generatedPolities, 1, JSON.stringify(second.failures));
+  assert.equal(second.failedPolities, 0, JSON.stringify(second.failures));
+  assert.equal(second.proposals[0].proposal.actorPatch.politicalSystem.type, "dominant_party_republic");
+  assert.equal(second.proposals[0].proposal.actorPatch.politicalSystem.representation, "electoral");
+});
+
 test("alternate authority keeps a later target world separate from an exclusive reference-canon cutoff", () => {
   const historyAuthority = {
     referenceAllowed: true,

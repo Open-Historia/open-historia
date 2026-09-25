@@ -46,3 +46,23 @@ test("applying Political World preserves unrelated canonical world ledgers such 
   assert.match(source, /const freshWorld = freshDetails\?\.data\?\.world \?\? \{\}/);
   assert.match(source, /world:\s*\{\s*\.\.\.freshWorld,\s*politicalActors: application\.politicalActors/);
 });
+
+test("Political World generation recovery is plain-language and polity-oriented", () => {
+  const source = read("./PoliticalWorldGenerationPanel.jsx");
+
+  assert.match(source, /v2UnresolvedPolityKeys = \[\.\.\.new Set\(v2Unresolved\.map/);
+  assert.match(source, /generatePoliticalWorld\(\{ retryDeferred: v2NeedsRetry \}\)/);
+  assert.match(source, /"Continue Generation"/);
+  assert.match(source, /polities ready/);
+  assert.match(source, /AI request/);
+  assert.match(source, /Completed work is saved/);
+  assert.match(source, /Continue Generation retries only unfinished polities/);
+  assert.match(source, /Political World added to scenario -/);
+  assert.match(source, />Pause<\/button>/);
+  assert.match(source, /Progress is saved as you go\. You can pause and continue later\./);
+  assert.match(source, /width: `\$\{progressReadyPercent\}%`/);
+  assert.doesNotMatch(source, /Cancel pauses the run/);
+  assert.doesNotMatch(source, />Retry Deferred Targets</);
+  assert.doesNotMatch(source, /stubborn target\(s\)/);
+  assert.doesNotMatch(source, /AI call\(s\) total/);
+});

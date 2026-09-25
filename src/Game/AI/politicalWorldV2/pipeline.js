@@ -319,6 +319,31 @@ export const applyPoliticalWorldV2Checkpoint = ({
 
 export const discardPoliticalWorldV2Checkpoint = (scenarioId) => clearPoliticalWorldV2Checkpoint(scenarioId);
 
+const buildDiagnosticUnresolvedDetails = (checkpoint) => {
+  const details = {};
+  const attempts = checkpoint?.attempts && typeof checkpoint.attempts === "object" ? checkpoint.attempts : {};
+  const retryContext = checkpoint?.retryContext && typeof checkpoint.retryContext === "object" ? checkpoint.retryContext : {};
+  for (const entry of array(checkpoint?.quality?.unresolved)) {
+    const polityKey = clean(entry?.polityKey);
+    const kind = clean(entry?.kind);
+    if (!polityKey) continue;
+    const current = details[polityKey] || { kinds: [], attempts: {}, validationErrors: [] };
+    const politicalSystemLock = retryContext?.politicalSystemLocks?.[polityKey];
+    if (politicalSystemLock && typeof politicalSystemLock === "object" && !Array.isArray(politicalSystemLock)) {
+      current.politicalSystemLock = clone(politicalSystemLock);
+    }
+    if (kind && !current.kinds.includes(kind)) current.kinds.push(kind);
+    if (kind) current.attempts[kind] = Math.max(0, Math.trunc(Number(attempts[`${kind}:${polityKey}`]) || 0));
+    const validationErrors = [
+      ...array(retryContext?.politicalActor?.[polityKey]),
+      ...array(retryContext?.governingAlignment?.[polityKey]),
+    ].map(clean).filter(Boolean);
+    current.validationErrors = [...new Set([...current.validationErrors, ...validationErrors])];
+    details[polityKey] = current;
+  }
+  return details;
+};
+
 export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = {}) => ({
   schemaVersion: 2,
   kind: "political-world-v2-diagnostic",
@@ -339,12 +364,14 @@ export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = 
     updatedAt: clean(checkpoint?.updatedAt),
   },
   quality: clone(checkpoint?.quality || {}),
+  unresolvedDetails: buildDiagnosticUnresolvedDetails(checkpoint),
   bootstrap: clone(checkpoint?.bootstrap || {}),
   canonContext: clone(checkpoint?.stagedWorld?.canonContext || null),
   plan: clone(checkpoint?.plan || {}),
   worklist: {
     currentTask: clone(checkpoint?.currentTask || null),
     attempts: clone(checkpoint?.attempts || {}),
+    retryContext: clone(checkpoint?.retryContext || {}),
     membership: clone(checkpoint?.membership || {}),
     verification: clone(checkpoint?.verification || {}),
   },

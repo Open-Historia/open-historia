@@ -67,7 +67,8 @@ test("bounded domain failures defer targets without silently reopening them on o
   assert.doesNotMatch(pipeline, /checkpoint\.attempts = \{\};/);
   assert.match(pipeline, /retryDeferred === true/);
   assert.match(pipeline, /resetDeferredPoliticalWorldV2Attempts/);
-  assert.match(panel, /Retry Deferred Targets/);
+  assert.match(panel, /Continue Generation/);
+  assert.doesNotMatch(panel, /Retry Deferred Targets/);
 });
 
 test("provider/executor throws pause the deterministic session instead of penalizing polity attempts", () => {
@@ -86,6 +87,18 @@ test("v2 owns retries at the checkpoint boundary so one work item can spend only
   assert.match(executor, /const taskProviderCallCeiling = \(\) => 1/);
   assert.match(executor, /maxAttempts: 1/);
   assert.match(executor, /retryErrorsByPolity: checkpoint\?\.retryContext\?\.politicalActor/);
+  assert.match(executor, /retryPoliticalSystemLocksByPolity: checkpoint\?\.retryContext\?\.politicalSystemLocks/);
+  assert.match(runner, /retryBucket\(next, "politicalSystemLocks"\)/);
+  assert.match(runner, /retryPoliticalSystemLocksByPolity/);
+});
+
+test("downloaded v2 diagnostics preserve per-polity retry validation evidence", () => {
+  assert.match(pipeline, /unresolvedDetails: buildDiagnosticUnresolvedDetails\(checkpoint\)/);
+  assert.match(pipeline, /retryContext: clone\(checkpoint\?\.retryContext \|\| \{\}\)/);
+  assert.match(pipeline, /retryContext\?\.politicalActor\?\.\[polityKey\]/);
+  assert.match(pipeline, /retryContext\?\.politicalSystemLocks\?\.\[polityKey\]/);
+  assert.match(pipeline, /politicalSystemLock/);
+  assert.match(pipeline, /validationErrors/);
 });
 
 
