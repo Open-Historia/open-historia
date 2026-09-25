@@ -158,6 +158,42 @@ test("country fills are written again when MapLibre rebuilds the sources holding
   assert.doesNotMatch(nations, /^\s*applied(Custom|Tile)FillStateRef\.current = appliedAfterSync;/m);
 });
 
+test("an ownership transition caught by a lost WebGL context or a style rebuild still ends, and the queue moves on", () => {
+  // MapLibre drops the custom flood layer with its callbacks (onRemove on a lost
+  // context; silently on a rebuilt style), so the sweep that waits for them is
+  // ended by the fill-source watcher once the sources come back.
+  assert.match(nations, /sweep\.finish = finish;/);
+  assert.match(nations, /if \(seen\.custom !== next\.custom && ownershipSweepRef\.current\.active\) ownershipSweepRef\.current\.finish\?\.\(\);\s*appliedCustomFillStateRef\.current = new Map\(\);/);
+  // With no style nothing can be read or drawn: finish() waits for the restore
+  // instead of committing half a sweep, and the sweep's own frames stand down.
+  assert.match(nations, /const finish = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| committed\) return;[\s\S]{0,400}?if \(!mapInstance\.style\) return;\s*committed = true;/);
+  assert.match(nations, /data\?\.requestId !== requestId\) return;[\s\S]{0,200}?if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /const waitForLayer = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| !mapInstance\.style\) return;/);
+  assert.match(nations, /const hydrate = \(\) => \{\s*frame = 0;[\s\S]{0,120}?if \(!mapInstance\.style\) return;/);
+});
+
+test("the map survives a render or a map effect while the WebGL context is lost", () => {
+  // Between a context loss and its restore MapLibre has no style, and getLayer,
+  // getSource and setFeatureState throw. A turn landing in that window renders
+  // the map again: a throw while rendering took the whole map down.
+  assert.match(nations, /const hasMapLayer = \(id\) => Boolean\(map\?\.getMap\?\.\(\)\?\.style && map\.getLayer\(id\)\);/);
+  const jsxStart = nations.search(/\n {2}return \(\r?\n\s*<>/);
+  assert.ok(jsxStart > 0, "the map component's JSX");
+  const jsx = nations.slice(jsxStart, nations.indexOf("export default WorldMap"));
+  assert.doesNotMatch(jsx, /\bmap\??\.(getLayer|getSource)\b/);
+  assert.ok((jsx.match(/hasMapLayer\(/g) ?? []).length >= 11, "layer lookups while rendering go through hasMapLayer");
+  // Effects that run in that window wait for the style like a missing source.
+  assert.match(nations, /if \(\s*!mapInstance\.style\s*\|\| !mapInstance\.getSource\?\.\("custom-regions-source"\)/);
+  assert.match(nations, /if \(!mapInstance\.style \|\| !mapInstance\.getSource\?\.\("regions-source"\)\) \{/);
+  assert.equal((nations.match(/const applySlice = \(\) => \{\s*if \(cancelled \|\| !mapInstance\.style\) return;/g) ?? []).length, 2);
+  assert.equal((nations.match(/mapInstance\?\.style \? mapInstance\.getSource\?\.\("polity-boundaries-source"\) : null/g) ?? []).length, 2);
+  assert.doesNotMatch(nations, /mapInstance\?\.getSource\?\.\("polity-boundaries-source"\)/);
+  // Labels published in that window wake the polity text renderer: it waits
+  // for the style like an unloaded one, and its catch cannot throw again.
+  assert.match(polityTextLayer, /if \(!runtime\.layer \|\| \(mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\)\) return true;/);
+  assert.match(polityTextLayer, /failed: !runtime\.layer,\s*mounted: Boolean\(runtime\.layer && mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\),/);
+});
+
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
   assert.match(world, /basemapId === "ocean-dark"/);
   assert.match(world, /loadNatGeoDarkStyle/);

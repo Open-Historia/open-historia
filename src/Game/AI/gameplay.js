@@ -320,6 +320,7 @@ import {
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
+import { idlePulseEvent, idlePulseUnitOps, keepDetectedEvents } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleChatBatchCore,
@@ -6535,8 +6536,12 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
     return null;
   }
 
+  // Whether an event invites a reaction, and what came of it, is the Event
+  // Editor's to write. The schema has no such field, but not every provider
+  // holds a model to its schema.
+  const { npcReaction, ...generated } = normalized;
   return {
-    ...normalized,
+    ...generated,
     id: normalized.id || `generated-event-${index}`,
   };
 };
@@ -16842,13 +16847,13 @@ const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps) => {
 
   const { world: impacted } = applyEventImpactsToWorld({
     colors: {},
-    events: [{ date: gameDate, title: "", description: "", impacts: { unitOps } }],
+    events: [idlePulseEvent(gameDate, unitOps)],
     world: freshWorld,
     motion: { originDate: gameDate, round, tick },
   });
   // fromDate === toDate, so no unit travels: the pulse only re-posts standing
   // orders and drifts patrols, which is right when no game time has passed.
-  const drifted = advanceStandingOrders(impacted, {
+  const drifted = advanceStandingOrders(keepDetectedEvents(freshWorld, impacted), {
     fromDate: gameDate,
     toDate: gameDate,
     round,
@@ -16982,7 +16987,9 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     if (!payload) return null;
 
     // --- movement ---------------------------------------------------------
-    const unitOps = normalizeArray(payload.unitOps);
+    // Only what the world may do: never the player's forces (idlePulse.js).
+    // With nothing left there is nothing to apply and no sighting to report.
+    const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), bundle.game?.country);
     if (unitOps.length > 0 && !isSimulationBusy()) {
       // Placed by name, and kept off each other, like a turn's own ops.
       try {

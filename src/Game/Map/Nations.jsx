@@ -498,6 +498,10 @@ const PERF_MAP_WARN_MS = 40;
 
 const WorldMap = ({ isGlobe = false }) => {
   const { current: map } = useMap();
+  // Between a WebGL context loss and its restore MapLibre has no style, and
+  // getLayer throws. A render in that window (a turn landing) must not crash;
+  // react-map-gl's own Source and Layer check the same thing.
+  const hasMapLayer = (id) => Boolean(map?.getMap?.()?.style && map.getLayer(id));
   const [colorMap, setColorMap] = useState({});
   const {
     worldState,
@@ -578,6 +582,7 @@ const WorldMap = ({ isGlobe = false }) => {
     timeout: 0,
     regionIds: [],
     floodLayer: null,
+    finish: null,
   });
   const [ownershipTransitionQueueEpoch, setOwnershipTransitionQueueEpoch] = useState(0);
   const [ownershipTransitionSlices, setOwnershipTransitionSlices] = useState(EMPTY_FEATURE_COLLECTION);
@@ -1396,7 +1401,9 @@ const WorldMap = ({ isGlobe = false }) => {
     for (const feature of upserts) cache.set(String(feature.id), feature);
 
     const mapInstance = map?.getMap ? map.getMap() : map;
-    const source = mapInstance?.getSource?.("polity-boundaries-source");
+    // With no style (a lost WebGL context) only the cache changes; the boundary
+    // rehydrate hands it to the rebuilt source after the restore.
+    const source = mapInstance?.style ? mapInstance.getSource?.("polity-boundaries-source") : null;
     if (source) {
       const fullSnapshot = () => ({ type: "FeatureCollection", features: [...cache.values()] });
       const fallbackToSnapshot = (error) => {
@@ -1470,7 +1477,7 @@ const WorldMap = ({ isGlobe = false }) => {
     setAcknowledgedBoundaryOwnership(null);
     if (resetMetadata) setCustomRegionMeta(EMPTY_CUSTOM_REGION_META);
     const mapInstance = map?.getMap ? map.getMap() : map;
-    const source = mapInstance?.getSource?.("polity-boundaries-source");
+    const source = mapInstance?.style ? mapInstance.getSource?.("polity-boundaries-source") : null;
     try {
       if (typeof source?.updateData === "function") source.updateData({ removeAll: true });
       else source?.setData?.(EMPTY_FEATURE_COLLECTION);
@@ -1485,6 +1492,8 @@ const WorldMap = ({ isGlobe = false }) => {
     let frame = 0;
     const hydrate = () => {
       frame = 0;
+      // A frame queued just before a WebGL context loss runs with no style.
+      if (!mapInstance.style) return;
       const source = mapInstance.getSource?.("polity-boundaries-source");
       if (!source || sourceObjectsRef.current.boundary === source) return;
       sourceObjectsRef.current.boundary = source;
@@ -2380,6 +2389,10 @@ const WorldMap = ({ isGlobe = false }) => {
       };
       fillStateSourcesRef.current = next;
       if ((seen.custom && seen.custom !== next.custom) || (seen.repair && seen.repair !== next.repair)) {
+        // The rebuild dropped the ownership flood layer too, and with it the
+        // callback that ends the sweep: end it here (holds released, cartography
+        // published, queue moving), then let the replay draw every fill.
+        if (seen.custom !== next.custom && ownershipSweepRef.current.active) ownershipSweepRef.current.finish?.();
         appliedCustomFillStateRef.current = new Map();
         setCustomFillSourceEpoch((epoch) => epoch + 1);
       }
@@ -2412,8 +2425,10 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const begin = () => {
       if (cancelled) return;
+      // No style (a lost WebGL context) waits like a source not there yet.
       if (
-        !mapInstance.getSource?.("custom-regions-source")
+        !mapInstance.style
+        || !mapInstance.getSource?.("custom-regions-source")
         || (repairedRegionIds.length && !mapInstance.getSource?.("custom-regions-repair-source"))
       ) {
         retryFrame = requestAnimationFrame(begin);
@@ -2459,7 +2474,7 @@ const WorldMap = ({ isGlobe = false }) => {
       let setCount = 0;
       let removeCount = 0;
       const applySlice = () => {
-        if (cancelled) return;
+        if (cancelled || !mapInstance.style) return;
         const sliceStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
         let processed = 0;
         while (cursor < operations.length) {
@@ -2641,6 +2656,10 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const finish = () => {
       if (token !== ownershipSweepRef.current.token || committed) return;
+      // With the WebGL context lost the map has no style: nothing can be read
+      // or drawn. The fill-source watcher finishes the sweep once the restored
+      // style has brought the sources back.
+      if (!mapInstance.style) return;
       committed = true;
       if (sweep.frame) cancelAnimationFrame(sweep.frame);
       if (sweep.waitFrame) cancelAnimationFrame(sweep.waitFrame);
@@ -2681,6 +2700,7 @@ const WorldMap = ({ isGlobe = false }) => {
       setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
       mapInstance.triggerRepaint?.();
     };
+    sweep.finish = finish;
 
     let worker;
     try {
@@ -2720,6 +2740,9 @@ const WorldMap = ({ isGlobe = false }) => {
 
     worker.onmessage = ({ data }) => {
       if (token !== ownershipSweepRef.current.token || data?.requestId !== requestId) return;
+      // No style (a lost WebGL context): nothing to animate on. The restore
+      // finishes the sweep without it.
+      if (!mapInstance.style) return;
       if (data?.type === "ownership-transition-error") {
         if (!fallbackSweepRequested) {
           requestLegacySweep(data.error);
@@ -2831,7 +2854,7 @@ const WorldMap = ({ isGlobe = false }) => {
       };
 
       const waitForLayer = () => {
-        if (token !== ownershipSweepRef.current.token) return;
+        if (token !== ownershipSweepRef.current.token || !mapInstance.style) return;
         const sourceReady = mapInstance.getSource?.("ownership-transition-sweep-source");
         const layerReady = mapInstance.getLayer?.("ownership-transition-sweep-fill");
         if (!sourceReady || !layerReady) {
@@ -2980,7 +3003,7 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const begin = () => {
       if (cancelled) return;
-      if (!mapInstance.getSource?.("regions-source")) {
+      if (!mapInstance.style || !mapInstance.getSource?.("regions-source")) {
         retryFrame = requestAnimationFrame(begin);
         return;
       }
@@ -3018,7 +3041,7 @@ const WorldMap = ({ isGlobe = false }) => {
       const appliedAfterSync = new Map(applied);
       let cursor = 0;
       const applySlice = () => {
-        if (cancelled) return;
+        if (cancelled || !mapInstance.style) return;
         const sliceStart = typeof performance !== "undefined" ? performance.now() : Date.now();
         let processed = 0;
 
@@ -3268,7 +3291,7 @@ const WorldMap = ({ isGlobe = false }) => {
           type="fill"
           minzoom={STOCK_REGION_HANDOFF_ZOOM}
           source-layer="regions"
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={stockRegionsVisibilityFilter}
           paint={stockRegionsFillPaint}
         />
@@ -3280,7 +3303,7 @@ const WorldMap = ({ isGlobe = false }) => {
             type="fill"
             minzoom={STOCK_REGION_HANDOFF_ZOOM}
             source-layer="regions"
-            beforeId={map?.getLayer?.("regions-outline") ? "regions-outline" : undefined}
+            beforeId={hasMapLayer("regions-outline") ? "regions-outline" : undefined}
             filter={[
               "all",
               ["in", ["get", "GID_1"], ["literal", disputedTileStops.filter((_, i) => i % 2 === 0)]],
@@ -3297,7 +3320,7 @@ const WorldMap = ({ isGlobe = false }) => {
           type="line"
           minzoom={PROVINCE_OUTLINE_MIN_ZOOM}
           source-layer="regions"
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={stockRegionsVisibilityFilter}
           paint={regionsOutlinePaint}
         />
@@ -3326,7 +3349,7 @@ const WorldMap = ({ isGlobe = false }) => {
           maxzoom={!regionTileHandoffSafe ? undefined : STOCK_REGION_HANDOFF_ZOOM}
           beforeId={shouldMountStockRegions
             ? "regions-fill"
-            : map?.getLayer?.("polity-boundaries-shadow")
+            : hasMapLayer("polity-boundaries-shadow")
               ? "polity-boundaries-shadow"
               : undefined}
           filter={canonicalCustomFarStockGeometryFilter}
@@ -3340,7 +3363,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="custom-regions-fill"
           type="fill"
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={canonicalCustomAuthoritativeGeometryFilter}
           paint={{
             "fill-color": CUSTOM_FILL_COLOR,
@@ -3355,7 +3378,7 @@ const WorldMap = ({ isGlobe = false }) => {
           id="custom-regions-local-outline"
           type="line"
           minzoom={PROVINCE_OUTLINE_MIN_ZOOM}
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={unrepairedRegionFilter}
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={buildProvinceOutlinePaint(customActive && worldKnown)}
@@ -3377,7 +3400,7 @@ const WorldMap = ({ isGlobe = false }) => {
           maxzoom={!regionTileHandoffSafe ? undefined : STOCK_REGION_HANDOFF_ZOOM}
           beforeId={shouldMountStockRegions
             ? "regions-fill"
-            : map?.getLayer?.("polity-boundaries-shadow")
+            : hasMapLayer("polity-boundaries-shadow")
               ? "polity-boundaries-shadow"
               : undefined}
           filter={customFarStockGeometryFilter}
@@ -3391,7 +3414,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="custom-regions-repair-fill"
           type="fill"
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           filter={customAuthoritativeGeometryFilter}
           paint={{
             "fill-color": CUSTOM_FILL_COLOR,
@@ -3404,7 +3427,7 @@ const WorldMap = ({ isGlobe = false }) => {
           id="custom-regions-repair-local-outline"
           type="line"
           minzoom={PROVINCE_OUTLINE_MIN_ZOOM}
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           layout={{ "line-cap": "round", "line-join": "round" }}
           paint={buildProvinceOutlinePaint(customActive && worldKnown)}
         />
@@ -3422,7 +3445,7 @@ const WorldMap = ({ isGlobe = false }) => {
         <Layer
           id="ownership-transition-sweep-fill"
           type="fill"
-          beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+          beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
           paint={{
             "fill-color": ["get", "fromColor"],
             "fill-opacity": 0,
@@ -3437,7 +3460,7 @@ const WorldMap = ({ isGlobe = false }) => {
           <Layer
             id="custom-regions-disputed-vnext"
             type="fill"
-            beforeId={map?.getLayer?.("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
+            beforeId={hasMapLayer("polity-boundaries-shadow") ? "polity-boundaries-shadow" : undefined}
             filter={["has", "_stripes"]}
             paint={{
               "fill-pattern": ["get", "_stripes"],
