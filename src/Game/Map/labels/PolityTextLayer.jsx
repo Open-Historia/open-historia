@@ -254,7 +254,9 @@ export default function PolityTextLayer({
     };
 
     const addExistingLayerIfNeeded = () => {
-      if (!runtime.layer || mapInstance.getLayer?.(POLITY_TEXT_RENDERER_LAYER_ID)) return true;
+      // With the WebGL context lost the map has no style and getLayer throws;
+      // getStyle() then says so, and the caller waits and retries.
+      if (!runtime.layer || (mapInstance.style && mapInstance.getLayer?.(POLITY_TEXT_RENDERER_LAYER_ID))) return true;
       const style = mapInstance.getStyle?.();
       if (!style) return false;
       try {
@@ -527,7 +529,7 @@ export default function PolityTextLayer({
         const message = String(error?.message ?? error ?? "unknown PTR error");
         reportStatus({
           failed: !runtime.layer,
-          mounted: Boolean(runtime.layer && mapInstance.getLayer?.(POLITY_TEXT_RENDERER_LAYER_ID)),
+          mounted: Boolean(runtime.layer && mapInstance.style && mapInstance.getLayer?.(POLITY_TEXT_RENDERER_LAYER_ID)),
           preparing: false,
           lastMountError: message,
         });

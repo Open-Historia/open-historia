@@ -28,7 +28,7 @@ test("political fills and province outlines are inserted below thick polity bord
     const snippet = nations.slice(start, start + 700);
     assert.match(
       snippet,
-      /beforeId=\{map\?\.getLayer\?\.\("polity-boundaries-shadow"\) \? "polity-boundaries-shadow" : undefined\}/,
+      /beforeId=\{hasMapLayer\("polity-boundaries-shadow"\) \? "polity-boundaries-shadow" : undefined\}/,
       `${layerId} must stay below polity-boundaries-shadow when the border layer is already mounted`,
     );
   }

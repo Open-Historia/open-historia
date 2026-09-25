@@ -172,6 +172,28 @@ test("an ownership transition caught by a lost WebGL context or a style rebuild 
   assert.match(nations, /const hydrate = \(\) => \{\s*frame = 0;[\s\S]{0,120}?if \(!mapInstance\.style\) return;/);
 });
 
+test("the map survives a render or a map effect while the WebGL context is lost", () => {
+  // Between a context loss and its restore MapLibre has no style, and getLayer,
+  // getSource and setFeatureState throw. A turn landing in that window renders
+  // the map again: a throw while rendering took the whole map down.
+  assert.match(nations, /const hasMapLayer = \(id\) => Boolean\(map\?\.getMap\?\.\(\)\?\.style && map\.getLayer\(id\)\);/);
+  const jsxStart = nations.search(/\n {2}return \(\r?\n\s*<>/);
+  assert.ok(jsxStart > 0, "the map component's JSX");
+  const jsx = nations.slice(jsxStart, nations.indexOf("export default WorldMap"));
+  assert.doesNotMatch(jsx, /\bmap\??\.(getLayer|getSource)\b/);
+  assert.ok((jsx.match(/hasMapLayer\(/g) ?? []).length >= 11, "layer lookups while rendering go through hasMapLayer");
+  // Effects that run in that window wait for the style like a missing source.
+  assert.match(nations, /if \(\s*!mapInstance\.style\s*\|\| !mapInstance\.getSource\?\.\("custom-regions-source"\)/);
+  assert.match(nations, /if \(!mapInstance\.style \|\| !mapInstance\.getSource\?\.\("regions-source"\)\) \{/);
+  assert.equal((nations.match(/const applySlice = \(\) => \{\s*if \(cancelled \|\| !mapInstance\.style\) return;/g) ?? []).length, 2);
+  assert.equal((nations.match(/mapInstance\?\.style \? mapInstance\.getSource\?\.\("polity-boundaries-source"\) : null/g) ?? []).length, 2);
+  assert.doesNotMatch(nations, /mapInstance\?\.getSource\?\.\("polity-boundaries-source"\)/);
+  // Labels published in that window wake the polity text renderer: it waits
+  // for the style like an unloaded one, and its catch cannot throw again.
+  assert.match(polityTextLayer, /if \(!runtime\.layer \|\| \(mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\)\) return true;/);
+  assert.match(polityTextLayer, /failed: !runtime\.layer,\s*mounted: Boolean\(runtime\.layer && mapInstance\.style && mapInstance\.getLayer\?\.\(POLITY_TEXT_RENDERER_LAYER_ID\)\),/);
+});
+
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
   assert.match(world, /basemapId === "ocean-dark"/);
   assert.match(world, /loadNatGeoDarkStyle/);
