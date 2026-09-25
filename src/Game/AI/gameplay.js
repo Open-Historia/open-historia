@@ -6549,7 +6549,10 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // and restoring one keeps today's file, less the copies of undone documents.
 const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors, intercepts = null, turn = null }) => {
   try {
-    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+    // Read shared and written without the defensive copies: the older restore
+    // points only move along in a new array, never change (see
+    // loadRollbackSnapshots). Each copy was the whole archive, every turn.
+    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true, clone: false }).catch(() => []);
     const list = Array.isArray(prior) ? prior : [];
     const snapshot = {
       id: `snap-${round}-${Date.now()}`,
@@ -6568,7 +6571,11 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
       },
       ...(turn ? { turn: cloneValue(turn) } : {}),
     };
-    await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS));
+    await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS), {
+      cacheClone: false,
+      cloneResult: false,
+      echo: false,
+    });
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
   }
@@ -6576,8 +6583,16 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
 
 // Restore points, newest first (index 0 = undo the most recent turn). Shared by
 // the cheats menu and the timeline's Undo control.
+//
+// SHARED, not copied: the list is the cached archive itself. It holds up to
+// twelve whole turns of game, world, events, actions and chat, 8-21 MB on a
+// long game, and a deep copy of all of it on every read was a multi-MB
+// allocation for callers that look at one restore point. Read it; never write
+// into it. A caller that hands part of a snapshot to code that may change it
+// copies that part: rollBackToSnapshot, interveneAfterEvent, the reveal's
+// staged world (time.jsx), viewAsSeen (gameState.js).
 export const loadRollbackSnapshots = async () => {
-  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }).catch(() => []);
+  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true, clone: false }).catch(() => []);
   return Array.isArray(list) ? list : [];
 };
 
@@ -6598,7 +6613,8 @@ export const rollBackToSnapshot = async (index = 0) => {
     const snapshots = await loadRollbackSnapshots();
     const snap = snapshots[index];
     if (!snap) return null;
-    const s = snap.state ?? {};
+    // A copy of the one restore point: what it restores becomes live state.
+    const s = cloneValue(snap.state ?? {}) ?? {};
     // The player's standing goal is theirs, not the turn's (runtime/playerGoal.js):
     // one set or changed after the snapshot — during the reveal, say, before an
     // Intervene — stays.
@@ -6642,7 +6658,7 @@ export const rollBackToSnapshot = async (index = 0) => {
     // Whatever was left of the undone turn's reveal went with it; the turn now
     // newest was seen before the one after it was made.
     unseenEvents.clear();
-    await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1));
+    await writeJson(JSON_URLS.snapshots, snapshots.slice(index + 1), { cacheClone: false, cloneResult: false, echo: false });
     const bundle = await readGameStateBundle({ force: true });
     // A rollback is the one event that legitimately moves the clock BACKWARDS.
     // The timeline's poll refuses any read older than what it already shows, so
@@ -6675,7 +6691,8 @@ export const interveneAfterEvent = async (keptCount) => {
   try {
     const snapshots = await loadRollbackSnapshots();
     const snap = snapshots[0];
-    const journal = snap?.turn;
+    // A copy: the kept events are applied again below.
+    const journal = cloneValue(snap?.turn);
     if (!normalizeArray(journal?.events).length) return null;
     const originDate = normalizeString(snap.state?.game?.gameDate);
     const minimumDate = (originDate && addIsoDays(originDate, 1)) || originDate;

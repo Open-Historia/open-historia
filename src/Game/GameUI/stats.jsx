@@ -45,6 +45,7 @@ import {
     loadStatSheetDefinition,
     statSheetKeys,
 } from "../../runtime/statsSheet.js";
+import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 
 // Sheets are regenerated when the game date moves; within a date they persist
 // across reloads so flipping between countries stays instant.
@@ -55,7 +56,22 @@ const STORAGE_KEY = "oh-stat-sheets-v2";
 const TRACKING_STORAGE_KEY = "oh-stat-tracking-v1";
 const MAX_STORED_SHEETS = 20;
 const MAX_LOCAL_CACHE_COMPONENTS = 64;
+// The sheets shown this session, the most recently shown last. Every entry is a
+// whole sheet (one read from the world keeps that world's copy of it alive
+// after the next turn replaces it), and a long session opens many countries in
+// many games: so no more than MAX_MEMORY_SHEETS, and none kept past the game
+// they belong to or past Android asking for memory back.
+const MAX_MEMORY_SHEETS = 24;
 const memoryCache = new Map();
+const rememberSheet = (key, entry) => {
+    memoryCache.delete(key);
+    memoryCache.set(key, entry);
+    while (memoryCache.size > MAX_MEMORY_SHEETS) memoryCache.delete(memoryCache.keys().next().value);
+};
+if (typeof window !== "undefined") {
+    window.addEventListener("oh:active-game-changed", () => memoryCache.clear());
+}
+onMemoryPressure(() => memoryCache.clear());
 
 const readTrackingSettingsFallback = (gameKey, playerCountry = "") => {
     if (!gameKey) return normalizeCountryStatsTracking({}, { playerCountry });
@@ -1652,7 +1668,7 @@ const StatsPaneBody = ({ active }) => {
                 const persistedNeedsPopulationAudit = !statSheetDefinition.custom && persistedIsValid && needsStartPopulationCalibrationAudit(persisted, player);
                 const persistedNeedsNativeAudit = persistedNeedsCapAudit || persistedNeedsPopulationAudit;
                 if (persistedIsValid && !persistedNeedsNativeAudit) {
-                    memoryCache.set(cacheKey, { date: player.date, sheet: persisted });
+                    rememberSheet(cacheKey, { date: player.date, sheet: persisted });
                     setState({ status: "ready", sheet: persisted, error: "" });
                     return;
                 }
@@ -1671,7 +1687,7 @@ const StatsPaneBody = ({ active }) => {
                 (statSheetDefinition.custom || !needsStartPopulationCalibrationAudit(cached.sheet, player))
             ) {
                 const sheet = mergeStatSheet(cached.sheet, aiOverride);
-                memoryCache.set(cacheKey, { date: player.date, sheet });
+                rememberSheet(cacheKey, { date: player.date, sheet });
                 setState({ status: "ready", sheet, error: "" });
                 return;
             }
@@ -1725,7 +1741,7 @@ const StatsPaneBody = ({ active }) => {
             // overwrite freshly normalized component-derived GDP with stale browser-era values.
             const sheet = finalizeCountryStatSheet(generated);
             const entry = { date: player.date, sheet };
-            memoryCache.set(cacheKey, entry);
+            rememberSheet(cacheKey, entry);
             storeSheet(cacheKey, entry);
             if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
             startTransition(() => {
@@ -1768,7 +1784,7 @@ const StatsPaneBody = ({ active }) => {
             if (directSheet && typeof directSheet === "object") {
                 const cacheKey = `${player.gameKey}:${targetCountry}`;
                 const entry = { date: player.date, sheet: directSheet };
-                memoryCache.set(cacheKey, entry);
+                rememberSheet(cacheKey, entry);
                 storeSheet(cacheKey, entry);
 
                 // Keep the read-only ref coherent for subsequent country revisits,
@@ -1803,7 +1819,7 @@ const StatsPaneBody = ({ active }) => {
                 if (persisted && typeof persisted === "object") {
                     const cacheKey = `${player.gameKey}:${targetCountry}`;
                     const entry = { date: player.date, sheet: persisted };
-                    memoryCache.set(cacheKey, entry);
+                    rememberSheet(cacheKey, entry);
                     storeSheet(cacheKey, entry);
                     setState({ status: "ready", sheet: persisted, error: "" });
                 }

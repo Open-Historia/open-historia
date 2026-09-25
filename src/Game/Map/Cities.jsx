@@ -4,10 +4,10 @@ import { Source, Layer } from "react-map-gl/maplibre";
 import {
     PMTILES_PROTOCOL_URLS,
     JSON_URLS,
-    ensurePmtilesProtocol,
     jsonReadSucceeded,
     readJson,
 } from "../../runtime/assets.js";
+import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
 import { useWorldState } from "./useWorldState.js";
 import { publishCustomCityIndex } from "../../runtime/placeSearch.js";
 import {

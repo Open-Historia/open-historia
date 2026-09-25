@@ -879,8 +879,17 @@ app.put("/api/runtime/json/:assetKey", jsonParser, (req, res) => {
     if (!Number(req.headers["content-length"])) {
       return sendError(res, 400, new Error(`Refusing to write ${req.params.assetKey}: the request had no body.`));
     }
-    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body);
+    // Prefer: return=minimal (RFC 7240): the writer does not want the stored
+    // record back. The rollback archive asks for this — reading it back and
+    // sending all of it every turn cost this process and the page a copy each.
+    const minimal = /\breturn=minimal\b/i.test(String(req.get("prefer") ?? ""));
+    const asset = writeRuntimeJsonAsset(req.params.assetKey, req.body, { readBack: !minimal });
     res.setHeader("Cache-Control", "no-store");
+    if (minimal) {
+      res.setHeader("Preference-Applied", "return=minimal");
+      res.status(204).end();
+      return;
+    }
     res.type("application/json");
     res.send(JSON.stringify(asset.data));
   } catch (error) {

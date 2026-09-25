@@ -3070,7 +3070,9 @@ const DateWidget = ({
                 const match = (snapshots || []).find(
                     (snap) => snap?.fromDate === record.fromDate && snap?.toDate === record.toDate && snap?.state?.world,
                 );
-                if (match) setStagedBase({ recordId: record.id, world: match.state.world });
+                // A copy of the one world staged: the list is the shared archive
+                // (gameplay.js loadRollbackSnapshots), never to be written into.
+                if (match) setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
             })
             .catch(() => {
                 /* no snapshot — reveal without staging */

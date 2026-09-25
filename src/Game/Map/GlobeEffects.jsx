@@ -16,6 +16,7 @@ import {
   releaseCelestialStars,
 } from "./globeCelestialCanvas.js";
 import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
 const INTERACTION_GRACE_MS = 3000;
@@ -29,9 +30,15 @@ const INTERACTION_GRACE_MS = 3000;
 // 60 times a second, forever, even with the phone just sitting on a table.
 const CELESTIAL_FRAME_MS_ACTIVE = 1000 / 25;
 const CELESTIAL_FRAME_MS_IDLE = 1000 / 15;
-// Redraw lighting on every frame during camera movement to avoid visible lag. 
+// Redraw lighting on every frame during camera movement to avoid visible lag.
 // Uses the cheap immediate: true draw path during interaction, throttling only when idle.
 const LIGHTING_FRAME_MS_ACTIVE = 0;
+// Except on a phone (runtime/deviceProfile.js): there each of those redraws is
+// a 48,000-pixel shade on the main thread (globeCanvasLighting.js), and a
+// minute of dragging the globe was the steadiest heat source on the device.
+// 30 fps is every other frame; the throttle's trailing timer still draws the
+// final position when the drag stops.
+const LIGHTING_FRAME_MS_ACTIVE_CONSTRAINED = 1000 / 30;
 const LIGHTING_FRAME_MS_IDLE = 1000 / 15;
 // Idle auto-rotation itself doesn't need a fresh jumpTo() every animation
 // frame either — updating the camera 15x/sec still reads as smooth rotation
@@ -79,6 +86,9 @@ const GlobeEffects = ({ active }) => {
     let starsVisible = false;
     let lightingVisible = false;
     let autoRotationActive = false;
+    const activeLightingFrameMs = isConstrainedDevice()
+      ? LIGHTING_FRAME_MS_ACTIVE_CONSTRAINED
+      : LIGHTING_FRAME_MS_ACTIVE;
     const sunElement = document.getElementById("oh-globe-sun");
     const starsCanvas = document.getElementById("oh-globe-stars");
     const lightingCanvas = document.getElementById("oh-globe-lighting");
@@ -127,7 +137,7 @@ const GlobeEffects = ({ active }) => {
         && (autoRotationActive
           || (!mapInstance.isMoving() && now - lastInteraction > INTERACTION_GRACE_MS));
       const celestialFrameMs = isIdle ? CELESTIAL_FRAME_MS_IDLE : CELESTIAL_FRAME_MS_ACTIVE;
-      const lightingFrameMs = isIdle ? LIGHTING_FRAME_MS_IDLE : LIGHTING_FRAME_MS_ACTIVE;
+      const lightingFrameMs = isIdle ? LIGHTING_FRAME_MS_IDLE : activeLightingFrameMs;
       if (projectionTransition > 0
         && (forceLighting || now - lastCelestialDraw >= celestialFrameMs)) {
         lastCelestialDraw = now;

@@ -3189,7 +3189,10 @@ const readRuntimeJsonAsset = (assetKey) => {
   };
 };
 
-const writeRuntimeJsonAsset = (assetKey, value) => {
+// `readBack: false` skips reading the stored record back for the reply (the
+// route's Prefer: return=minimal): the rollback archive is written whole every
+// turn, 8-21 MB on a long game, and nothing on the page needs it echoed.
+const writeRuntimeJsonAsset = (assetKey, value, { readBack = true } = {}) => {
   ensureGameStore();
   const pendingGameId = getActiveGameId();
   if (pendingGameId) recoverPendingTurnCommit(pendingGameId);
@@ -3337,7 +3340,7 @@ const writeRuntimeJsonAsset = (assetKey, value) => {
     }
   }
   writeGameMeta(activeGameId, {});
-  return readRuntimeJsonAsset(assetKey);
+  return readBack ? readRuntimeJsonAsset(assetKey) : null;
 };
 
 const resolveRuntimeBinaryAsset = (assetKey) => {

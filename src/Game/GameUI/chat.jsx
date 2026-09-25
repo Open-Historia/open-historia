@@ -12,7 +12,7 @@ import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } 
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
-import { isChatGenerationLikely } from "../AI/simulationStatus.js";
+import { isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -2397,7 +2397,10 @@ const usePuppetMarkers = () => {
     const [markers, setMarkers] = React.useState({});
     React.useEffect(() => {
         let cancelled = false;
+        let shown = "";
         const load = async () => {
+            // A hidden tab has no list to decorate; it catches up when shown.
+            if (typeof document !== "undefined" && document.hidden) return;
             try {
                 // The cached view, not a forced re-read: this decorates a list
                 // row, and forcing world.json off the server every 15 s for the
@@ -2418,12 +2421,25 @@ const usePuppetMarkers = () => {
                         foreign: () => {},
                     });
                 }
+                // Every 15 s the same labels, as a new object: re-rendering the
+                // whole list for that is the work this skips.
+                const key = JSON.stringify(next);
+                if (key === shown) return;
+                shown = key;
                 setMarkers(next);
             } catch { /* a marker is decoration; never break the list for it */ }
         };
         load();
         const timer = setInterval(load, 15000);
-        return () => { cancelled = true; clearInterval(timer); };
+        const onVisible = () => {
+            if (!document.hidden) load();
+        };
+        document.addEventListener("visibilitychange", onVisible);
+        return () => {
+            cancelled = true;
+            clearInterval(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+        };
     }, []);
     return markers;
 };
@@ -3839,14 +3855,14 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
         () => setNotificationCenterOpen(false),
     );
 
-    // "Someone might be typing": isChatGenerationLikely() is a plain synchronous
-    // getter (an idle poll rolling for a diplomatic note), not an event —
-    // polled at a fast, animation-friendly cadence so the badge and
-    // the panel's banner (below) feel live rather than laggy. Runs regardless of
-    // isOpen (unlike the unread poll) since the panel's own banner needs it too.
+    // "Someone might be typing": the idle poll rolling for a diplomatic note
+    // says when it starts and stops (simulationStatus.js), so the badge and the
+    // panel's banner (below) change the moment it does. Subscribed whether or
+    // not the panel is open, since the panel's own banner needs it too. This
+    // was an 800 ms timer for the whole session, main menu included.
     useEffect(() => {
-        const iv = setInterval(() => setIsGenerating(isChatGenerationLikely()), 800);
-        return () => clearInterval(iv);
+        setIsGenerating(isChatGenerationLikely());
+        return subscribeChatGeneration(setIsGenerating);
     }, []);
 
     // Event Editor diplomatic reaction scheduler. The queue lives in world.json,
