@@ -11,6 +11,7 @@
 // the declared defaults can never drift apart again without a red test.
 
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,7 +19,9 @@ import test, { after, before } from "node:test";
 
 const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "oh-shape-test-"));
 process.env.OH_DATA_DIR = DATA_DIR;
-process.env.PORT = "39518";
+// Let the OS choose a free port. The full test suite runs files concurrently,
+// so a hard-coded port can collide in CI even when the server itself is fine.
+process.env.PORT = "0";
 
 let httpServer;
 let base;
@@ -34,7 +37,10 @@ const get = async (key) => (await fetch(`${base}/api/runtime/json/${key}`)).json
 
 before(async () => {
   ({ httpServer } = await import("./server.js"));
-  base = `http://127.0.0.1:${process.env.PORT}`;
+  if (!httpServer.listening) await once(httpServer, "listening");
+  const address = httpServer.address();
+  assert(address && typeof address === "object", "test server must expose its bound TCP address");
+  base = `http://127.0.0.1:${address.port}`;
 });
 
 after(() => {
