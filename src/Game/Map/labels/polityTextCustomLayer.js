@@ -9,7 +9,8 @@ import {
   signedBendMetrics,
   singleArcFromAxis,
 } from "./polityTextSpline.js";
-import { rasterizePolityText } from "./polityTextRasterizer.js";
+import { measurePolityText } from "./polityTextRasterizer.js";
+import { labelRasterCanvas, releaseLabelRasterCanvas } from "./polityTextRasterLifetime.js";
 import {
   planMetricTextSupport,
   planTerritorialTextSupport,
@@ -314,7 +315,10 @@ export const measurePolityTextRenderRecord = ({
   );
   if (baselineLngLat.length < 2 && !hasTerritorialEnvelope) return null;
 
-  const raster = rasterizePolityText({
+  // Kept with the entry: the label is measured here and drawn only when it is
+  // first uploaded, then let go, and drawn again if its texture is ever lost
+  // (polityTextRasterLifetime.js).
+  const rasterOptions = {
     text: record.text,
     fontFamilies,
     fontSizePx: RASTER_FONT_SIZE_PX,
@@ -322,7 +326,8 @@ export const measurePolityTextRenderRecord = ({
     fillStyle,
     haloStyle,
     haloWidthPx,
-  });
+  };
+  const raster = measurePolityText(rasterOptions);
 
   const requestedFontPxAtZoom4 = Math.max(6, Number(record.fontPxAtZoom4) || 24);
   const rawMercator = baselineLngLat.length >= 2
@@ -397,6 +402,7 @@ export const measurePolityTextRenderRecord = ({
     return {
       record,
       raster,
+      rasterOptions,
       samples,
       hasTerritorialEnvelope: true,
       baselineLength,
@@ -433,6 +439,7 @@ export const measurePolityTextRenderRecord = ({
   return {
     record,
     raster,
+    rasterOptions,
     samples,
     hasTerritorialEnvelope: false,
     baselineLength,
@@ -454,6 +461,7 @@ export const finalizePolityTextRenderRecord = ({
   const {
     record,
     raster,
+    rasterOptions,
     metricPlan,
     baselineLength,
     renderBaselineLength,
@@ -503,6 +511,7 @@ export const finalizePolityTextRenderRecord = ({
   return {
     record,
     raster,
+    rasterOptions,
     supportPoints,
     ribbonVertices,
     mercatorBounds: boundsFromRibbonVertices(ribbonVertices),
@@ -533,6 +542,9 @@ export const preparePolityTextRenderRecord = (options) => {
 const ensureEntryGpuResources = (gl, entry, { debugBaseline = false } = {}) => {
   if (!entry || entry.texture || entry.ribbonBuffer) return Boolean(entry?.texture && entry?.ribbonBuffer);
   if (gl.isContextLost?.()) return false;
+  // Drawn again here if it was let go after an earlier upload.
+  const canvas = labelRasterCanvas(entry);
+  if (!canvas) return false;
 
   const ribbonBuffer = gl.createBuffer();
   const lineBuffer = debugBaseline ? gl.createBuffer() : null;
@@ -556,7 +568,7 @@ const ensureEntryGpuResources = (gl, entry, { debugBaseline = false } = {}) => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, entry.raster.canvas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -568,6 +580,9 @@ const ensureEntryGpuResources = (gl, entry, { debugBaseline = false } = {}) => {
     entry.ribbonBuffer = ribbonBuffer;
     entry.lineBuffer = lineBuffer;
     entry.texture = texture;
+    // The pixels are on the GPU now; the page's copy goes (see
+    // polityTextRasterLifetime.js).
+    releaseLabelRasterCanvas(entry);
     return true;
   } catch (error) {
     gl.deleteBuffer(ribbonBuffer);
@@ -952,6 +967,10 @@ export const createPolityTextCustomLayer = ({
     },
 
     onRemove(_map, gl) {
+      // Also how a lost WebGL context reaches this layer: MapLibre removes it
+      // with the style, and PolityTextLayer adds it back once the style is
+      // restored. Each visible label then uploads again, drawn again first
+      // (polityTextRasterLifetime.js).
       for (const entry of new Set([...this._entries, ...(this._pendingEntries ?? [])])) {
         releaseEntryGpuResources(gl, entry);
       }

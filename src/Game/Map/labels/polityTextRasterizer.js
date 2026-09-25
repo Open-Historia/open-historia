@@ -38,15 +38,14 @@ export const waitForFontStack = async ({ families, sampleText = "RUSSIAN FEDERAT
   }
 };
 
-export const rasterizePolityText = ({
+// Where the text sits and how big its canvas is, from the font's metrics alone.
+const layoutPolityText = ({
   text,
   fontFamilies,
   fontSizePx = 128,
   fontWeight = 400,
   fontStyle = "normal",
   letterSpacingEm = 0.06,
-  fillStyle = "rgba(255, 52, 214, 1)",
-  haloStyle = "rgba(0, 0, 0, 0.95)",
   haloWidthPx = 5,
   paddingPx = 12,
 } = {}) => {
@@ -78,15 +77,49 @@ export const rasterizePolityText = ({
   const width = Math.max(1, metrics.width + fallbackSpacing);
   const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.78;
   const descent = metrics.actualBoundingBoxDescent || fontSize * 0.22;
+  const canvasWidth = Math.ceil(width + padding * 2);
+  const canvasHeight = Math.ceil(ascent + descent + padding * 2);
+
+  return {
+    value,
+    haloWidth,
+    metrics: {
+      width: canvasWidth,
+      height: canvasHeight,
+      contentWidth: width,
+      contentHeight: ascent + descent,
+      fontSizePx: fontSize,
+      paddingPx: padding,
+      ascent,
+      descent,
+      aspectRatio: canvasWidth / Math.max(1, canvasHeight),
+      familyCss,
+      font,
+    },
+  };
+};
+
+// A label's size without its pixels, which is all its layout needs. The pixels
+// are drawn when the label is first uploaded (polityTextRasterLifetime.js), so a
+// label that never comes into view never costs any: on a phone, most of them.
+export const measurePolityText = (options = {}) => ({ canvas: null, ...layoutPolityText(options).metrics });
+
+export const rasterizePolityText = (options = {}) => {
+  const { value, haloWidth, metrics } = layoutPolityText(options);
+  const {
+    letterSpacingEm = 0.06,
+    fillStyle = "rgba(255, 52, 214, 1)",
+    haloStyle = "rgba(0, 0, 0, 0.95)",
+  } = options;
 
   const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(width + padding * 2);
-  canvas.height = Math.ceil(ascent + descent + padding * 2);
+  canvas.width = metrics.width;
+  canvas.height = metrics.height;
 
   const context = canvas.getContext("2d", { alpha: true });
   if (!context) throw new Error("Canvas2D is unavailable for polity text rasterization.");
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.font = font;
+  context.font = metrics.font;
   context.fontKerning = "normal";
   if ("letterSpacing" in context) {
     context.letterSpacing = `${Number(letterSpacingEm) || 0}em`;
@@ -96,8 +129,8 @@ export const rasterizePolityText = ({
   context.lineJoin = "round";
   context.miterLimit = 2;
 
-  const x = padding;
-  const y = padding + ascent;
+  const x = metrics.paddingPx;
+  const y = metrics.paddingPx + metrics.ascent;
   if (haloWidth > 0) {
     context.strokeStyle = haloStyle;
     context.lineWidth = haloWidth * 2;
@@ -106,18 +139,5 @@ export const rasterizePolityText = ({
   context.fillStyle = fillStyle;
   context.fillText(value, x, y);
 
-  return {
-    canvas,
-    width: canvas.width,
-    height: canvas.height,
-    contentWidth: width,
-    contentHeight: ascent + descent,
-    fontSizePx: fontSize,
-    paddingPx: padding,
-    ascent,
-    descent,
-    aspectRatio: canvas.width / Math.max(1, canvas.height),
-    familyCss,
-    font,
-  };
+  return { canvas, ...metrics };
 };
