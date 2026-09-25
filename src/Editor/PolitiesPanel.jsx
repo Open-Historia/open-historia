@@ -10,6 +10,7 @@ import { ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
+import { acceptFor } from "../runtime/fileAccept.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -637,7 +638,7 @@ const PolitiesPanel = ({
           <input
             ref={rosterInputRef}
             type="file"
-            accept=".json,application/json"
+            accept={acceptFor(".json,application/json")}
             style={{ display: "none" }}
             onChange={(e) => readRosterFile(e.target.files?.[0] || null)}
           />

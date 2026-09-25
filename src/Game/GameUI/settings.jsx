@@ -1559,7 +1559,7 @@ const DiagnosticsPanel = () => {
     // Two files, deliberately, and the .txt first. GitHub and Discord both preview
     // a .txt inline, so a maintainer reads the log without downloading anything;
     // a log zipped in beside the game would be a file nobody opens. In the
-    // Android app both go out through the share sheet (runtime/saveFile.js).
+    // Android app both go to Downloads/Open Historia (runtime/saveFile.js).
     const handleAttachGame = async () => {
         const { activeGame, activeGameId: gameId } = getLibraryState();
         if (!gameId) {
@@ -1620,7 +1620,7 @@ const DiagnosticsPanel = () => {
         {/* The save itself as a second file, for a report a maintainer has to
             reproduce: the log fingerprints the prompts, the game is what a prompt
             can be rebuilt from. Offered in the Android app too since files save
-            through the share sheet there (runtime/saveFile.js). */}
+            to Downloads/Open Historia there (runtime/saveFile.js). */}
         {(
         <button
         type="button"

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { saveBlobToDisk } from "../runtime/saveFile.js";
+import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
@@ -20,7 +21,7 @@ const buttonStyle = (active = false) => ({
   background: active ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.06)",
 });
 
-// runtime/saveFile.js: a download in a browser, the share sheet in the app.
+// runtime/saveFile.js: a download in a browser, Downloads/Open Historia in the app.
 const downloadGeoJSON = (fc, filename) =>
   saveBlobToDisk(new Blob([JSON.stringify(fc)], { type: "application/geo+json" }), filename);
 
@@ -1103,7 +1104,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
               <b>Optional HOI4 definition.csv</b>
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept={acceptFor(".csv,text/csv")}
                 onChange={(e) => { setDefinitionFile(e.target.files?.[0] || null); setResult(null); }}
                 style={{ ...inputStyle, padding: 7 }}
               />
@@ -1159,7 +1160,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
               <b>Region geometry GeoJSON</b>
               <input
                 type="file"
-                accept=".geojson,.json,application/geo+json,application/json"
+                accept={acceptFor(".geojson,.json,application/geo+json,application/json")}
                 onChange={(e) => {
                   setGeojsonFile(e.target.files?.[0] || null);
                   setGeoJoinKey("auto");
@@ -1178,7 +1179,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
               <b>Optional separate region metadata JSON</b>
               <input
                 type="file"
-                accept=".json,.geojson,application/json,application/geo+json"
+                accept={acceptFor(".json,.geojson,application/json,application/geo+json")}
                 onChange={(e) => {
                   setMetadataFile(e.target.files?.[0] || null);
                   setMetadataJoinKey("auto");
