@@ -19,15 +19,31 @@ test("desktop library chrome stays grouped and uses named icon actions", () => {
   assert.doesNotMatch(source, /Import game/);
 });
 
-test("library shelves use responsive desktop grids with section descriptions and dividers", () => {
+test("library landing uses one meaningful browse collection instead of duplicate sort shelves", () => {
   assert.match(source, /const MenuRow = \(\{ children, description, emptyText, icon, title \}\) =>/);
-  assert.match(source, /gridTemplateColumns: "repeat\(auto-fill, minmax\(min\(100%, 18\.75rem\), 20rem\)\)"/);
-  assert.match(source, /justifyContent: "start"/);
-  assert.match(source, /linear-gradient\(90deg, rgba\(255,255,255,0\.12\), rgba\(255,255,255,0\.02\)\)/);
-  assert.match(source, /description="Continue where you left off\."/);
-  assert.match(source, /description="Your most active games\."/);
-  assert.match(source, /description="Your most active scenarios\."/);
+  assert.match(source, /const LibraryCollection = \(\{ children, controls, description, emptyText, title \}\) =>/);
+  assert.match(source, /const LIBRARY_GRID_TEMPLATE = "repeat\(auto-fill, minmax\(min\(100%, 16\.5rem\), 1fr\)\)"/);
+  assert.match(source, /gridTemplateColumns: LIBRARY_GRID_TEMPLATE/);
+  assert.doesNotMatch(source, /LIBRARY_GRID_MAX_WIDTH/);
+  assert.ok((source.match(/<section style=\{\{ marginBottom: isMobile \? "1\.75rem"/g) || []).length >= 2);
+  assert.match(source, /lastPlayedGames\.slice\(0, isMobile \? 5 : 6\)/);
+  assert.match(source, /title="Continue Playing"/);
+  assert.match(source, /title="All Games"/);
+  assert.match(source, /title="Recently Used"/);
+  assert.match(source, /title="Scenario Library"/);
+  assert.doesNotMatch(source, /title="Most Played"/);
+  assert.doesNotMatch(source, /title="Last Updated"/);
 });
+
+test("games and scenarios expose search, filters and in-place sorting", () => {
+  assert.match(source, /aria-label="Search games"/);
+  assert.match(source, /\[['"]active['"], ['"]Active['"]\]/);
+  assert.match(source, /<option value="turns">Most turns<\/option>/);
+  assert.match(source, /aria-label="Search scenarios"/);
+  assert.match(source, /\[['"]community['"], ['"]Community['"]\]/);
+  assert.match(source, /<option value="updated">Recently updated<\/option>/);
+});
+
 
 test("scenario cards deliberately strengthen contrast behind authored text", () => {
   assert.match(source, /const SCENARIO_CARD_TEXT_SHADOW = "0 1px 2px rgba\(0,0,0,0\.96\), 0 6px 18px rgba\(0,0,0,0\.82\), 0 16px 34px rgba\(0,0,0,0\.64\)"/);
