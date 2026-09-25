@@ -20,6 +20,7 @@ import { getLibraryState } from "../../runtime/library.js";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { institutionMembershipDisplayLabel } from "./institutionMembershipPresentation.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLowerCase();
@@ -81,7 +82,7 @@ const InstitutionRow = ({ row, selected, unread = false, onClick }) => {
         {unread && <SmallPill tone="purple">new</SmallPill>}
       </div>
       <div style={{ marginTop: ".18rem", fontSize: ".62rem", color: "rgba(255,255,255,.45)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {row.member ? `${clean(row.member.role || row.member.status || "member")} · ${row.canParticipate ? "participating" : "read-only"}` : "world institution · public overview"}
+        {row.member ? `${institutionMembershipDisplayLabel(row.member)} · ${row.canParticipate ? "participating" : "read-only"}` : "world institution · public overview"}
         {row.openBallotCount ? ` · ${row.openBallotCount} open ballot${row.openBallotCount === 1 ? "" : "s"}` : ""}
       </div>
     </div>
@@ -93,7 +94,7 @@ export const Facts = ({ view }) => {
   const rule = view?.charterView?.defaultRule?.label || "unspecified";
   const items = [
     ["Members", `${view?.memberSummary?.active || 0}/${view?.memberSummary?.total || 0}`],
-    ["Your role", view?.member ? clean(view.member.role || view.member.status || "member") : "not a member"],
+    ["Your role", view?.member ? institutionMembershipDisplayLabel(view.member) : "not a member"],
     ["Decision rule", rule],
   ];
   return <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: ".45rem" }}>
@@ -722,7 +723,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
         <section>
           <div style={{ display: "flex", alignItems: "baseline", gap: ".5rem", marginBottom: ".45rem" }}><strong style={{ fontSize: ".78rem" }}>Current members</strong><span style={{ fontSize: ".64rem", color: "rgba(255,255,255,.32)" }}>{selectedView.members?.length || 0} listed</span></div>
           <div style={{ display: "flex", flexDirection: "column", gap: ".35rem" }}>{selectedView.members?.map((member) => <div key={member.polity} style={{ ...panel, padding: ".62rem .72rem", display: "flex", alignItems: "center", gap: ".55rem" }}>
-            <strong style={{ flex: 1, fontSize: ".69rem" }}>{member.polity}</strong><SmallPill tone={member.status === "suspended" ? "bad" : "neutral"}>{member.role || member.status}</SmallPill>{member.since && <span style={{ fontSize: ".61rem", color: "rgba(255,255,255,.3)" }}>since {member.since}</span>}
+            <strong style={{ flex: 1, fontSize: ".69rem" }}>{member.polity}</strong><SmallPill tone={member.status === "suspended" ? "bad" : "neutral"}>{institutionMembershipDisplayLabel(member)}</SmallPill>{member.since && <span style={{ fontSize: ".61rem", color: "rgba(255,255,255,.3)" }}>since {member.since}</span>}
             {selectedView.canParticipate && lower(member.polity) !== lower(playerCountry) && lower(institution.status) !== "dissolved" && <details style={{ position: "relative" }}><summary style={{ listStyle: "none", cursor: "pointer", color: "rgba(255,255,255,.46)", fontSize: ".75rem", padding: ".1rem .2rem" }}>•••</summary><div style={{ position: "absolute", right: 0, top: "1.5rem", zIndex: 20, minWidth: "10rem", display: "flex", flexDirection: "column", gap: ".25rem", padding: ".35rem", border: "1px solid rgba(255,255,255,.1)", borderRadius: 9, background: "rgba(18,18,23,.98)", boxShadow: "0 10px 28px rgba(0,0,0,.35)" }}>
               {lower(member.status) === "suspended" ? <button disabled={Boolean(busy)} onClick={() => proposeLifecycle("reinstate", member.polity)} style={{ border: 0, borderRadius: 7, background: "rgba(34,197,94,.06)", color: "#86efac", padding: ".38rem .45rem", fontSize: ".64rem", textAlign: "left", cursor: busy ? "wait" : "pointer" }}>Propose reinstatement</button> : <button disabled={Boolean(busy)} onClick={() => proposeLifecycle("suspend", member.polity)} style={{ border: 0, borderRadius: 7, background: "rgba(245,158,11,.06)", color: "#fde68a", padding: ".38rem .45rem", fontSize: ".64rem", textAlign: "left", cursor: busy ? "wait" : "pointer" }}>Propose suspension</button>}
               <button disabled={Boolean(busy)} onClick={() => proposeLifecycle("expel", member.polity)} style={{ border: 0, borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".38rem .45rem", fontSize: ".64rem", textAlign: "left", cursor: busy ? "wait" : "pointer" }}>Propose expulsion</button>

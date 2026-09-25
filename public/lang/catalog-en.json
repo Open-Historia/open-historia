@@ -2777,6 +2777,7 @@
  "Prompt pack",
  "Prompt passages",
  "Prompts",
+ "Proposal requires a stable id and title.",
  "Proposal title",
  "Proposal to dissolve {{name}}.",
  "Proposal to {{type}} {{target}} in {{name}}.",
@@ -5198,6 +5199,8 @@
  "⬇ Most Installed",
  "⬇ {{installs}} imported",
  "ⱶ Filters",
+ "＋ Found institution",
+ "＋ Table a matter",
  "🎯 Projects",
  "🎯 Projects {{summary}}",
  "🎯 Set a standing goal",
@@ -5245,7 +5248,5 @@
  "🧭 Ask advisor",
  "🧭 Ask the advisor to review or extend the board",
  "🧭 Ask your advisor to populate this",
- "🧭 What do we know?",
- "＋ Found institution",
- "＋ Table a matter"
+ "🧭 What do we know?"
 ]

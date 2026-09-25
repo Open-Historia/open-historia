@@ -53,6 +53,23 @@ test("founding creates a provisional canonical institution and invitations, not 
 
 
 
+test("founding supports institution names written wholly in non-Latin scripts", () => {
+  const result = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: {
+      type: "found",
+      name: "Балтийский союз",
+      shortName: "БС",
+      kind: "regional_bloc",
+      minimumFoundingMembers: 1,
+      invitees: [],
+    },
+  });
+  assert.match(result.institution.id, /^u-[a-z0-9]+$/);
+  assert.equal(result.institution.name, "Балтийский союз");
+  assert.equal(result.institution.status, "active");
+});
+
 test("pending founding invitations can recreate a missing negotiation thread from canonical lifecycle state", () => {
   const founded = foundBaltic(["Republic of Estonia", "Republic of Lithuania"]);
   const reopened = ensureInstitutionLifecycleNegotiationChatCore({

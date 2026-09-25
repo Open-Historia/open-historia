@@ -22,6 +22,7 @@ import { OWNER_SCHEMA } from "./ownerMigration.js";
 const WORLD_DIRECTION_DEFAULTS = { enabled: true, eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: "", territoryTempo: 0 };
 const PLAYER_FOCUS_DEFAULTS = { enabled: true, level: "balanced" };
 const PUPPET_STATES_DEFAULTS = { enabled: true };
+const PREGAME_HISTORY_DEFAULTS = { enabled: true };
 
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
 const STORE_URL = url.pathToFileURL(path.join(SERVER_DIR, "libraryStore.js")).href;
@@ -72,7 +73,7 @@ after(() => {
 test("a scenario stores a complete configuration and a game only its overrides", () => {
   const root = buildDataDir();
   const result = runStore(root, `
-    store.updateScenario("hand-drawn", { features: { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } } });
+    store.updateScenario("hand-drawn", { features: { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 }, pregameHistory: { enabled: false } } });
     store.updateGame("campaign", { features: { idleDiplomacy: { enabled: false }, nonsense: { enabled: false } } });
     const scenario = store.getScenarioDetails("hand-drawn").scenario;
     const game = store.getGameDetails("campaign");
@@ -85,7 +86,7 @@ test("a scenario stores a complete configuration and a game only its overrides",
       untouchedName: scenario.name,
     }`)}
   `);
-  assert.deepEqual(result.scenario, { espionage: { enabled: false }, idleDiplomacy: { enabled: true, averageMinutes: 30 }, puppetStates: PUPPET_STATES_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
+  assert.deepEqual(result.scenario, { espionage: { enabled: false }, idleDiplomacy: { enabled: true, averageMinutes: 30 }, puppetStates: PUPPET_STATES_DEFAULTS, pregameHistory: { enabled: false }, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
   assert.deepEqual(result.game, { idleDiplomacy: { enabled: false } });
   assert.deepEqual(result.gameScenario, result.scenario);
   assert.deepEqual(result.catalog, result.game);
@@ -106,7 +107,7 @@ test("a save that does not mention features keeps them, and a fresh install read
       game: store.getGameDetails("campaign").game.features,
     }`)}
   `);
-  assert.deepEqual(result.before, { espionage: { enabled: true }, idleDiplomacy: { enabled: true, averageMinutes: 8 }, puppetStates: PUPPET_STATES_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
+  assert.deepEqual(result.before, { espionage: { enabled: true }, idleDiplomacy: { enabled: true, averageMinutes: 8 }, puppetStates: PUPPET_STATES_DEFAULTS, pregameHistory: PREGAME_HISTORY_DEFAULTS, worldDirection: WORLD_DIRECTION_DEFAULTS, playerFocus: PLAYER_FOCUS_DEFAULTS });
   assert.equal(result.scenario.espionage.enabled, false);
   assert.deepEqual(result.game, { espionage: { enabled: true } });
 });
@@ -114,7 +115,7 @@ test("a save that does not mention features keeps them, and a fresh install read
 test("bundles carry the configuration, and a game cloned from a game keeps its overrides", () => {
   const root = buildDataDir();
   const result = runStore(root, `
-    store.updateScenario("hand-drawn", { features: { idleDiplomacy: { enabled: false } } });
+    store.updateScenario("hand-drawn", { features: { idleDiplomacy: { enabled: false }, pregameHistory: { enabled: false } } });
     store.updateGame("campaign", { features: { espionage: { enabled: false } } });
     const scenarioBundle = store.exportScenarioBundle("hand-drawn");
     const gameBundle = store.exportGameBundle("campaign");
@@ -130,6 +131,7 @@ test("bundles carry the configuration, and a game cloned from a game keeps its o
     }`)}
   `);
   assert.equal(result.scenarioBundle.idleDiplomacy.enabled, false);
+  assert.equal(result.scenarioBundle.pregameHistory.enabled, false);
   assert.deepEqual(result.gameBundle, { espionage: { enabled: false } });
   assert.deepEqual(result.imported, { espionage: { enabled: false } });
   assert.deepEqual(result.cloned, { espionage: { enabled: false } });

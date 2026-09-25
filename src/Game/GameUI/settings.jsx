@@ -38,6 +38,11 @@ import {
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import {
+    AI_REQUEST_CONTROL_EVENT,
+    cancelAllAiRequests,
+    getActiveAiRequestCount,
+} from "../AI/aiRequestControl.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { playerFocusOf } from "../../../server/gameFeatures.js";
@@ -92,6 +97,11 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
 import PoliticalWorldABLab from "./PoliticalWorldABLab.jsx";
+import {
+    APP_UPDATE_MANUAL_CHECK_RESULT_EVENT,
+    appUpdateCheckDescription,
+    requestAppUpdateCheck,
+} from "../../runtime/appUpdateManualCheck.js";
 
 const baseStyle = {
     position: "fixed",
@@ -1071,16 +1081,35 @@ const useRequestDay = () => {
 
 const RequestBudgetSection = () => {
     const day = useRequestDay();
+    const [activeAiRequests, setActiveAiRequests] = useState(() => getActiveAiRequestCount());
+    const [cancelNotice, setCancelNotice] = useState("");
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
     const [backgroundCap, setBackgroundCap] = useState(() => String(requestSettings.backgroundDailyCap()));
     const [sections, setSections] = useState(() => Object.fromEntries(REVIEW_SECTIONS.map((section) => [section, requestSettings.reviewSection(section)])));
 
+    useEffect(() => {
+        const refresh = () => setActiveAiRequests(getActiveAiRequestCount());
+        window.addEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+        return () => window.removeEventListener(AI_REQUEST_CONTROL_EVENT, refresh);
+    }, []);
+
     const apply = (message, write) => {
         write();
         logDebugEvent("setting", message);
         announceRequestBudgetChange();
+    };
+
+    const cancelActiveRequests = () => {
+        const cancelled = cancelAllAiRequests();
+        setActiveAiRequests(getActiveAiRequestCount());
+        setCancelNotice(cancelled
+            ? `Cancel requested for ${cancelled} active AI request${cancelled === 1 ? "" : "s"}.`
+            : "No AI requests are currently running.");
+        logDebugEvent("ai", cancelled
+            ? `Player cancelled ${cancelled} active AI request${cancelled === 1 ? "" : "s"} from Settings.`
+            : "Player pressed Cancel all AI requests, but none were active.");
     };
     const cost = describeJumpCost({ saveRequests: saving });
     const share = day.limit > 0 ? Math.min(1, day.used / day.limit) : 0;
@@ -1109,6 +1138,32 @@ const RequestBudgetSection = () => {
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
                 </div>
+            </div>
+
+            <div style={{ border: "1px solid rgba(248,113,113,0.18)", borderRadius: "10px", background: "rgba(239,68,68,0.055)", marginBottom: "0.95rem", padding: "0.7rem 0.75rem" }}>
+                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.6rem", justifyContent: "space-between" }}>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.76rem", fontWeight: 800 }}>Emergency AI stop</div>
+                        <div style={{ ...helperStyle, marginTop: "0.2rem" }}>
+                            Cancels all live AI generation requests the client can abort, including retries and fallback attempts. It does not undo finished work; an already-submitted provider batch job, or an Android native-LAN request already inside the native HTTP plugin, cannot be recalled.
+                        </div>
+                    </div>
+                    <button
+                    type="button"
+                    onClick={cancelActiveRequests}
+                    style={{
+                        ...smallButtonStyle,
+                        backgroundColor: activeAiRequests ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.06)",
+                        borderColor: activeAiRequests ? "rgba(248,113,113,0.4)" : "rgba(255,255,255,0.13)",
+                        color: activeAiRequests ? "#fecaca" : "rgba(255,255,255,0.72)",
+                        flexShrink: 0,
+                        fontWeight: 800,
+                    }}
+                    >
+                        Cancel all AI requests{activeAiRequests ? ` (${activeAiRequests})` : ""}
+                    </button>
+                </div>
+                {cancelNotice && <div role="status" style={{ ...helperStyle, color: "rgba(255,255,255,0.68)", marginTop: "0.45rem" }}>{cancelNotice}</div>}
             </div>
 
             <Toggle
@@ -2321,6 +2376,7 @@ const SettingsMenu = ({
     const isMobile = useIsMobile();
     const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection || null);
     const [activeQuickTab, setActiveQuickTab] = useState(initialSection ? "settings" : "tools");
+    const [updateCheckResult, setUpdateCheckResult] = useState({ status: "idle" });
     // The small menu's card: measured when a section opens so the workspace can
     // grow out of it, and told the button's size so it can grow out of the
     // button (the --oh-grow-* ratios the CSS keyframes read). Coming back from
@@ -2366,6 +2422,18 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+
+    useEffect(() => {
+        const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
+        window.addEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+        return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_RESULT_EVENT, onUpdateCheckResult);
+    }, []);
+
+    const checkForUpdatesNow = () => {
+        if (updateCheckResult.status === "checking") return;
+        setUpdateCheckResult({ status: "checking" });
+        if (!requestAppUpdateCheck()) setUpdateCheckResult({ status: "unsupported" });
+    };
     const labelFont = useMapSettingValue(MAP_SETTING_KEYS.labelFont);
     // The field shows the keystrokes; the setting stores them trimmed. Storing
     // on every keystroke through setMapSettingValue's trim and echoing the
@@ -2478,6 +2546,13 @@ const SettingsMenu = ({
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
                     <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    <QuickAction
+                        title={updateCheckResult.status === "checking" ? "Checking for updates…" : "Check for updates"}
+                        description={appUpdateCheckDescription(updateCheckResult)}
+                        symbol="↻"
+                        tone="blue"
+                        onClick={checkForUpdatesNow}
+                    />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>

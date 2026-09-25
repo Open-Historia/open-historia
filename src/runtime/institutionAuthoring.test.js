@@ -34,6 +34,21 @@ test("scenario institution authoring generates stable ids for new institutions",
   assert.equal(institutionAuthoringId("  Baltic & Nordic Union  "), "baltic-nordic-union");
 });
 
+test("scenario institution authoring supports names written wholly in non-Latin scripts", () => {
+  const id = institutionAuthoringId("Европейский совет");
+  assert.match(id, /^u-[a-z0-9]+$/);
+
+  const result = upsertScenarioInstitution({ institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} } }, {
+    name: "Европейский совет",
+    shortName: "ЕС",
+    kind: "consultative_group",
+    membersText: "",
+  });
+  assert.equal(result.error, "");
+  assert.equal(result.institution.id, id);
+  assert.equal(result.institution.name, "Европейский совет");
+});
+
 test("authoring rows expose canonical institutions in name order", () => {
   const rows = institutionAuthoringRows(world());
   assert.equal(rows.length, 1);

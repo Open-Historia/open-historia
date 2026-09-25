@@ -5,11 +5,17 @@ import {
   APP_UPDATE_CHECK_INTERVAL_MS,
   APP_UPDATE_REFOCUS_THROTTLE_MS,
   describeUpdateFailure,
+  desktopUpdateProgressIsStale,
+  desktopUpdateProgressMatchesBuild,
   isUpdateAvailable,
   isUpdateSettled,
   parseUpdateManifest,
 } from "./appUpdate.js";
 import { logDebugEvent } from "./debugLog.js";
+import {
+  APP_UPDATE_MANUAL_CHECK_EVENT,
+  publishAppUpdateCheckResult,
+} from "./appUpdateManualCheck.js";
 
 // Stamped into the native app build by the APK workflow (VITE_APP_BUILD / _TRACK).
 // Desktop and dev builds have no stamp, so the banner is a no-op there.
@@ -92,7 +98,27 @@ export default function AppUpdateBanner() {
   // Null until the player asks for one — the banner is otherwise the same as it
   // was, and a build that cannot update itself never sets this at all.
   const [progress, setProgress] = useState(null);
+  // Which release-manifest build this updater attempt was started for. The release
+  // manifest uses an opaque CI build id while electron-updater reports a semver, so
+  // the renderer owns this association explicitly.
+  const [progressBuild, setProgressBuild] = useState("");
+  const [manualCheckToken, setManualCheckToken] = useState(0);
   const lastRefocusRef = useRef(0);
+  const desktopBuild = String(desktop?.build || "");
+  const progressMatchesDesktop = desktopUpdateProgressMatchesBuild(progressBuild, desktopBuild);
+
+  // Settings does not duplicate any updater/network logic. It emits this command;
+  // changing the token makes the same automatic probes below run immediately.
+  useEffect(() => {
+    const onManualCheck = () => setManualCheckToken((value) => value + 1);
+    window.addEventListener(APP_UPDATE_MANUAL_CHECK_EVENT, onManualCheck);
+    return () => window.removeEventListener(APP_UPDATE_MANUAL_CHECK_EVENT, onManualCheck);
+  }, []);
+
+  const revealManuallyFoundUpdate = () => {
+    setDismissed(isWeb ? "" : 0);
+    try { localStorage.removeItem(DISMISS_KEY); } catch { /* a dismissed banner can still reappear this session */ }
+  };
 
   // A second-by-second poll, but only between pressing Update and the update being
   // ready (or failing) — never while the banner is merely sitting there. `progress`
@@ -131,53 +157,111 @@ export default function AppUpdateBanner() {
   useEffect(() => {
     if (isApp || isWeb) return undefined;
     let dropped = false;
-    const probe = async () => {
+    const probe = async ({ manual = false } = {}) => {
       try {
         const res = await fetch("/api/app-update?track=desktop", { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
         const data = await res.json();
         // `current` present = this is the desktop app. Any DIFFERENCE is an update:
         // the ids are opaque, so a rollback counts just as much as a newer build.
-        if (dropped || !data?.current || !data?.buildId || !data?.download) return;
-        if (data.buildId === data.current) return;
+        if (dropped) return;
+        if (!data?.current) {
+          if (manual) publishAppUpdateCheckResult({ status: "unsupported" });
+          return;
+        }
+        if (!data?.buildId || !data?.download) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
+        if (data.buildId === data.current) {
+          setDesktop(null);
+          if (manual) publishAppUpdateCheckResult({ status: "current", build: data.current });
+          return;
+        }
         setDesktop({ auto: Boolean(data.autoUpdate), build: data.buildId, notes: data.notes || "", url: data.download });
+        if (manual) {
+          revealManuallyFoundUpdate();
+          publishAppUpdateCheckResult({ status: "available", build: data.buildId });
+        }
       } catch {
-        /* fail open: no banner */
+        if (manual) publishAppUpdateCheckResult({ status: "error" });
+        /* automatic checks fail open: no banner */
       }
     };
-    probe();
-    const timer = setInterval(probe, APP_UPDATE_CHECK_INTERVAL_MS);
+    probe({ manual: manualCheckToken > 0 });
+    const timer = setInterval(() => probe(), APP_UPDATE_CHECK_INTERVAL_MS);
     return () => { dropped = true; clearInterval(timer); };
-  }, [isApp, isWeb]);
+  }, [isApp, isWeb, manualCheckToken]);
+
+  // A newer release can be published after an older one has downloaded but before
+  // the player applies it. Never let that old settled state turn into "Restart now"
+  // for the new release. Keep an in-flight attempt alive; once it settles, discard
+  // its stale renderer state and offer the newly-advertised build normally.
+  useEffect(() => {
+    if (!desktopUpdateProgressIsStale(progressBuild, desktopBuild, progress?.state)) return;
+    setProgress(null);
+    setProgressBuild("");
+    setUpdating(false);
+  }, [desktopBuild, progress?.state, progressBuild]);
 
   useEffect(() => {
     if (!supported) return undefined;
     let cancelled = false;
-    const check = async () => {
+    const check = async ({ manual = false } = {}) => {
       try {
         if (isWeb) {
           // no-store, or the browser hands back the very file we are trying to
           // notice a change in.
           const res = await fetch(VERSION_URL, { cache: "no-store", signal: AbortSignal.timeout(6000) });
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (manual) publishAppUpdateCheckResult({ status: "error" });
+            return;
+          }
           const deployed = String((await res.json())?.build ?? "");
+          if (cancelled) return;
           // Any DIFFERENCE means the deploy moved on. Not a > comparison: the ids are
           // opaque, and a rollback is just as much "not what you are running".
-          if (!cancelled && deployed && deployed !== WEB_BUILD) setLatest({ build: deployed, web: true });
+          if (deployed && deployed !== WEB_BUILD) {
+            setLatest({ build: deployed, web: true });
+            if (manual) {
+              revealManuallyFoundUpdate();
+              publishAppUpdateCheckResult({ status: "available", build: deployed });
+            }
+          } else if (manual) {
+            publishAppUpdateCheckResult({ status: deployed ? "current" : "error", build: deployed });
+          }
           return;
         }
         const res = await fetch(`/api/app-update?track=${encodeURIComponent(APP_TRACK)}`, {
           signal: AbortSignal.timeout(6000),
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (manual) publishAppUpdateCheckResult({ status: "error" });
+          return;
+        }
         const manifest = parseUpdateManifest(await res.json());
-        if (!cancelled && manifest) setLatest(manifest);
+        if (cancelled) return;
+        if (manifest) setLatest(manifest);
+        if (manual) {
+          if (isUpdateAvailable(APP_BUILD, manifest)) {
+            revealManuallyFoundUpdate();
+            publishAppUpdateCheckResult({ status: "available", build: manifest.build });
+          } else {
+            publishAppUpdateCheckResult({ status: manifest ? "current" : "error", build: manifest?.build });
+          }
+        }
       } catch {
-        /* fail-open: a failed check simply shows no banner */
+        if (manual) publishAppUpdateCheckResult({ status: "error" });
+        /* automatic checks fail open: no banner */
       }
     };
-    check();
-    const interval = setInterval(check, APP_UPDATE_CHECK_INTERVAL_MS);
+    // Desktop has its own manifest shape and reports the manual result from the
+    // desktop probe above. Native/web use this path.
+    check({ manual: manualCheckToken > 0 && (isApp || isWeb) });
+    const interval = setInterval(() => check(), APP_UPDATE_CHECK_INTERVAL_MS);
     const onVisibility = () => {
       if (document.visibilityState !== "visible") return;
       const now = Date.now();
@@ -191,7 +275,7 @@ export default function AppUpdateBanner() {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [supported, isWeb]);
+  }, [supported, isApp, isWeb, manualCheckToken]);
 
   if (!supported) return null;
   const info = desktop ?? latest;
@@ -207,6 +291,7 @@ export default function AppUpdateBanner() {
       // swaps the installation on restart, so there is nothing for the player to
       // find in a downloads folder and run.
       if (desktop.auto && progress?.state !== "error") {
+        setProgressBuild(desktopBuild);
         setProgress({ state: "checking", percent: 0 });
         try {
           const res = await fetch("/api/app-update/download", { method: "POST" });
@@ -281,12 +366,13 @@ export default function AppUpdateBanner() {
       const failure = progress?.state === "error" ? `${describeUpdateFailure(progress.error)} ` : "";
       return `${failure}Download the new version and run it — your games are kept.`;
     }
-    if (progress?.state === "ready") return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready" && progressMatchesDesktop) return "Downloaded. Restart to finish — your games are kept.";
+    if (progress?.state === "ready") return "A newer update is available. Download it before restarting.";
     if (progress?.state === "downloading") return `Downloading the update… ${progress.percent || 0}%`;
     if (progress?.state === "checking") return "Fetching the update…";
     return "Installs itself in the background — your games are kept.";
   };
-  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready");
+  const ready = Boolean(desktop && desktop.auto && progress?.state === "ready" && progressMatchesDesktop);
   // Anything the updater is still working through, by the same rule the poll uses —
   // so a state with no percentage to show yet still reads as busy rather than
   // falling through to the button's idle label and claiming a download is opening.

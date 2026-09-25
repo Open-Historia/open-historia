@@ -6,17 +6,12 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { stableAsciiId } from "./stableId.js";
 
 const clean = (value) => String(value ?? "").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
 
-export const institutionAuthoringId = (value) => clean(value)
-  .toLocaleLowerCase()
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 96);
+export const institutionAuthoringId = (value) => stableAsciiId(value, { maxLength: 96 });
 
 const uniqueText = (value) => {
   const raw = Array.isArray(value)

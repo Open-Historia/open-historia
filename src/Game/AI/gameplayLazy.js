@@ -15,6 +15,8 @@
 // prefetchGameplay() warms the chunk after first world idle so the player's
 // first turn does not also pay the download.
 
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
+
 let modulePromise = null;
 
 const gameplay = () => {
@@ -33,7 +35,14 @@ export const simulateTimelineJump = async (...args) => (await gameplay()).simula
 export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
-export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
+export const maybeGeneratePregameHistory = async (...args) => {
+  // This is the only production entry point for the automatic Round-Zero
+  // bootstrap. Gate it before importing the large gameplay chunk so an author
+  // who disables pre-game history spends no AI request and starts with exactly
+  // the canonical state already authored into the scenario.
+  if (!isActiveFeatureEnabled("pregameHistory")) return null;
+  return (await gameplay()).maybeGeneratePregameHistory(...args);
+};
 
 // --- Rollback ---------------------------------------------------------------
 export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
