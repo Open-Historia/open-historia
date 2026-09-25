@@ -76,7 +76,7 @@ test("dedupeByName is the picker's last line of defence", () => {
   assert.deepEqual(dedupeByName(null), []);
 });
 
-import { mergeStockAndDeclaredPolities } from "./countryList.js";
+import { holdsLand, landHolderNames, mergeStockAndDeclaredPolities, pickableCountries } from "./countryList.js";
 
 // The Fault Lines map names its Russia "Russian Federation"; the tiles say
 // "Russia". One polity, one picker entry, under the scenario's name.
@@ -119,4 +119,35 @@ test("a stock country folds onto the declared polity that carries its code", () 
   assert.ok(names.includes("Atlantis"), "an invented polity is listed beside the stock list");
   assert.ok(names.includes("United States"));
   assert.equal(new Set(names.map((name) => name.toLowerCase())).size, names.length, "no duplicates");
+});
+
+// An absorbed country stayed in the pickers because nothing asked the map: the
+// British Empire held all of Australia's regions and Australia was still listed.
+test("landHolderNames reads who holds land from overrides, baked owners and sovereigns", () => {
+  const regions = [
+    { id: "AUS.1_1", country: "Australia" },
+    { id: "AUS.2_1", country: "Australia" },
+    { id: "FRA.1_1", country: "France" },
+    { id: "UKR.1_1", country: "Ukraine" },
+  ];
+  const world = {
+    regionOwnershipOverrides: { "AUS.1_1": "British Empire", "AUS.2_1": "British Empire", "UKR.1_1": "Russia" },
+    regionSovereigntyOverrides: { "UKR.1_1": "Ukraine" },
+  };
+  const holders = landHolderNames(regions, world);
+  assert.deepEqual([...holders].sort(), ["british empire", "france", "russia", "ukraine"]);
+  assert.equal(holdsLand({ name: "Australia", code: "AUS" }, holders), false);
+  assert.equal(holdsLand({ name: "Ukraine" }, holders), true, "an occupied homeland still counts");
+});
+
+test("on a hand-drawn world a stock region with no override holds nothing", () => {
+  const regions = [{ id: "AUS.1_1", country: "Australia" }, { id: "drawn-1", country: "Albion" }];
+  const holders = landHolderNames(regions, { customRegions: true, regionOwnershipOverrides: {} });
+  assert.deepEqual([...holders], ["albion"]);
+});
+
+test("with no catalog to read, the pickers hide no one", () => {
+  assert.equal(landHolderNames([], {}), null);
+  const countries = [{ name: "Australia" }, { name: "France" }];
+  assert.deepEqual(pickableCountries(countries, { holders: null, world: {} }), countries);
 });
