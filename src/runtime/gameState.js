@@ -3305,6 +3305,34 @@ const normalizeRenamedKind = (value) => {
   return text === "catalyst" ? "interactive" : text;
 };
 
+// Two things only the Event Editor (GameUI/cheats.jsx) puts on an event: a line
+// someone said, and whether one polity may react to the event
+// (processPendingEventOutreach, AI/gameplay.js) and what came of it. The
+// normalizer used to return a fixed set of fields without them, so every read
+// lost them: a quote vanished on save, and a queued reaction always found its
+// event "disabled" and was cancelled, so none ever fired.
+const normalizeEventQuote = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const text = normalizeOptionalString(value.text);
+  if (!text) return null;
+  const speaker = normalizeOptionalString(value.speaker);
+  const role = normalizeOptionalString(value.role);
+  return { text, ...(speaker ? { speaker } : {}), ...(role ? { role } : {}) };
+};
+
+const normalizeEventNpcReaction = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const evaluatedAt = normalizeOptionalString(value.evaluatedAt);
+  const result = normalizeOptionalString(value.result);
+  const chatId = normalizeOptionalString(value.chatId);
+  return {
+    enabled: value.enabled === true,
+    ...(evaluatedAt ? { evaluatedAt } : {}),
+    ...(result ? { result } : {}),
+    ...(chatId ? { chatId } : {}),
+  };
+};
+
 export const normalizeEventEntry = (entry, index = 0) => {
   if (typeof entry === "string") {
     const title = normalizeString(entry);
@@ -3342,6 +3370,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
+  const quote = normalizeEventQuote(entry.quote);
+  const npcReaction = normalizeEventNpcReaction(entry.npcReaction);
+
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
@@ -3368,6 +3399,9 @@ export const normalizeEventEntry = (entry, index = 0) => {
     )].slice(0, 8),
     source: normalizeOptionalString(entry.source) || "scenario",
     title,
+    // Only when present, so an event without them saves exactly as before.
+    ...(quote ? { quote } : {}),
+    ...(npcReaction ? { npcReaction } : {}),
   };
 };
 
