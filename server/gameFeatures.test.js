@@ -17,6 +17,7 @@ import {
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
 const puppetStates = featureDefaults().puppetStates;
+const pregameHistory = featureDefaults().pregameHistory;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -39,6 +40,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
     puppetStates,
+    pregameHistory,
     worldDirection,
     playerFocus,
   });
@@ -47,10 +49,25 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
     puppetStates,
+    pregameHistory,
     worldDirection,
     playerFocus,
   });
   assert.deepEqual(normalizeFeatureSettings("garbage"), featureDefaults());
+});
+
+test("pre-game history is on by default, scenario-controlled, and game-overridable", () => {
+  const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === "pregameHistory");
+  assert.ok(definition, "the Features editor cannot expose pre-game history without a feature definition");
+  assert.equal(definition.label, "Pre-game history");
+  assert.deepEqual(definition.settings, []);
+  assert.equal(featureDefaults().pregameHistory.enabled, true, "existing scenarios keep current behaviour");
+  assert.equal(resolveFeatures({ pregameHistory: false }, {}).pregameHistory.enabled, false);
+  assert.equal(
+    resolveFeatures({ pregameHistory: false }, { pregameHistory: true }).pregameHistory.enabled,
+    true,
+    "a game can deliberately override its scenario like every other toggleable feature",
+  );
 });
 
 test("a game's overrides keep only what it set", () => {

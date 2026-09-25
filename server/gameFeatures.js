@@ -39,6 +39,12 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
     ]),
   }),
+  Object.freeze({
+    key: "pregameHistory",
+    label: "Pre-game history",
+    description: "When a fresh game first opens, turn the scenario's World Before Round One briefing into timeline events and use it to bootstrap the wars, relations, agreements and unresolved storylines already true on the start date. Off: no pre-game history AI request runs and no Round-One state is inferred from the briefing; canonical state authored directly into the scenario is left untouched.",
+    settings: Object.freeze([]),
+  }),
   // The director: what a scenario's author decides about HOW the world is run,
   // as numbers the engine reads and enforces rather than prose the model may or
   // may not follow (src/Game/AI/worldDirection.js). None of it costs a request:
