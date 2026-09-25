@@ -3,9 +3,10 @@
 // stats, reputation, units, spies, wars, treaties, chats, the player's standing
 // goal, the game's own polity.
 // Renaming a country therefore RE-KEYS it. One pass rewrites every store from
-// the old name to the new one, and the old name is kept as a former name so
+// the old name to the new one. In play the old name is kept as a former name so
 // history written under it, and a model still using it, fold onto the same
-// country (src/runtime/ownerNames.js buildOwnerAliasMap). The Workshop's
+// country (src/runtime/ownerNames.js buildOwnerAliasMap); the Workshop's rename
+// keeps none (authoredRecord), since it re-keys everything that used it. The Workshop's
 // Polities panel, an event's polityChanges (a rename, or an update that carries
 // a new name) and the GM console all come through here; gameplay.js finishes
 // what the world state does not carry — the game's own polity, queued orders,
@@ -86,13 +87,33 @@ const renamedRecord = (record, fromKey, to) => {
     formerNames: unique([...(Array.isArray(record.formerNames) ? record.formerNames : []), ...previous]).filter(notNew),
   };
 };
-const rekeyRegistry = (registry, fromKey, to, fallback) => {
+// The Workshop is where a country's name is authored, not where its history
+// happens, so a rename there keeps no trace of the old name (the user,
+// 2026-09-24: "when renaming a country in the map editor, it shouldnt save the
+// previous names"). Every reference in the document is re-keyed in the same
+// step, so nothing needs the old name to find the country. Aliases that were
+// old names go too; any other alias stays. A rename in play keeps its history
+// (renamedRecord): events and chats written under the old name still fold onto
+// the country.
+const authoredRecord = (record, fromKey, to) => {
+  const { formerNames, ...rest } = record;
+  const old = unique([fromKey, record.name, ...(Array.isArray(formerNames) ? formerNames : [])]);
+  const isOld = (name) => old.some((entry) => samePolityName(entry, name));
+  return {
+    ...rest,
+    code: to,
+    name: to,
+    aliases: unique(Array.isArray(record.aliases) ? record.aliases : []).filter((name) => !isOld(name) && !samePolityName(name, to)),
+  };
+};
+
+const rekeyRegistry = (registry, fromKey, to, fallback, rename = renamedRecord) => {
   const record = isRecord(registry[fromKey]) ? registry[fromKey] : fallback;
   const next = {};
   for (const [key, value] of Object.entries(registry)) {
     if (!samePolityName(key, fromKey)) next[key] = value;
   }
-  next[to] = renamedRecord(record, fromKey, to);
+  next[to] = rename(record, fromKey, to);
   return next;
 };
 const refuseClash = (registry, fromKey, to) => {
@@ -220,8 +241,9 @@ export const expandBakedRegionsForRename = (world, regions, from, to) => {
   return added ? { ...world, regionOwnershipOverrides: overrides } : world;
 };
 // The Workshop's document: the registry record moves to the new name and the
-// colour, flag, tags and city markers keyed by the old one follow. The map's
-// regions live in OpenLayers and are re-keyed by OlMap.renameOwner.
+// colour, flag, tags and city markers keyed by the old one follow. The record
+// keeps no old name (authoredRecord). The map's regions live in OpenLayers and
+// are re-keyed by OlMap.renameOwner.
 export const renamePolityInDocument = (doc, fromName, toName) => {
   const from = str(fromName);
   const to = str(toName);
@@ -229,7 +251,7 @@ export const renamePolityInDocument = (doc, fromName, toName) => {
   const polities = isRecord(doc?.polities) ? doc.polities : {};
   const fromKey = findPolityKey(polities, from) || from;
   refuseClash(polities, fromKey, to);
-  const next = { ...doc, polities: rekeyRegistry(polities, fromKey, to, { name: fromKey, aliases: [] }) };
+  const next = { ...doc, polities: rekeyRegistry(polities, fromKey, to, { name: fromKey, aliases: [] }, authoredRecord) };
   const put = (field, value) => {
     if (value !== undefined) next[field] = value;
   };
