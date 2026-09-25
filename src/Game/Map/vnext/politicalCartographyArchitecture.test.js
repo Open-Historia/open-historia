@@ -158,6 +158,20 @@ test("country fills are written again when MapLibre rebuilds the sources holding
   assert.doesNotMatch(nations, /^\s*applied(Custom|Tile)FillStateRef\.current = appliedAfterSync;/m);
 });
 
+test("an ownership transition caught by a lost WebGL context or a style rebuild still ends, and the queue moves on", () => {
+  // MapLibre drops the custom flood layer with its callbacks (onRemove on a lost
+  // context; silently on a rebuilt style), so the sweep that waits for them is
+  // ended by the fill-source watcher once the sources come back.
+  assert.match(nations, /sweep\.finish = finish;/);
+  assert.match(nations, /if \(seen\.custom !== next\.custom && ownershipSweepRef\.current\.active\) ownershipSweepRef\.current\.finish\?\.\(\);\s*appliedCustomFillStateRef\.current = new Map\(\);/);
+  // With no style nothing can be read or drawn: finish() waits for the restore
+  // instead of committing half a sweep, and the sweep's own frames stand down.
+  assert.match(nations, /const finish = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| committed\) return;[\s\S]{0,400}?if \(!mapInstance\.style\) return;\s*committed = true;/);
+  assert.match(nations, /data\?\.requestId !== requestId\) return;[\s\S]{0,200}?if \(!mapInstance\.style\) return;/);
+  assert.match(nations, /const waitForLayer = \(\) => \{\s*if \(token !== ownershipSweepRef\.current\.token \|\| !mapInstance\.style\) return;/);
+  assert.match(nations, /const hydrate = \(\) => \{\s*frame = 0;[\s\S]{0,120}?if \(!mapInstance\.style\) return;/);
+});
+
 test("dark promotional basemaps have dedicated runtime paths instead of bright raster aliases", () => {
   assert.match(world, /basemapId === "ocean-dark"/);
   assert.match(world, /loadNatGeoDarkStyle/);

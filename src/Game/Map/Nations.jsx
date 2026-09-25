@@ -578,6 +578,7 @@ const WorldMap = ({ isGlobe = false }) => {
     timeout: 0,
     regionIds: [],
     floodLayer: null,
+    finish: null,
   });
   const [ownershipTransitionQueueEpoch, setOwnershipTransitionQueueEpoch] = useState(0);
   const [ownershipTransitionSlices, setOwnershipTransitionSlices] = useState(EMPTY_FEATURE_COLLECTION);
@@ -1485,6 +1486,8 @@ const WorldMap = ({ isGlobe = false }) => {
     let frame = 0;
     const hydrate = () => {
       frame = 0;
+      // A frame queued just before a WebGL context loss runs with no style.
+      if (!mapInstance.style) return;
       const source = mapInstance.getSource?.("polity-boundaries-source");
       if (!source || sourceObjectsRef.current.boundary === source) return;
       sourceObjectsRef.current.boundary = source;
@@ -2380,6 +2383,10 @@ const WorldMap = ({ isGlobe = false }) => {
       };
       fillStateSourcesRef.current = next;
       if ((seen.custom && seen.custom !== next.custom) || (seen.repair && seen.repair !== next.repair)) {
+        // The rebuild dropped the ownership flood layer too, and with it the
+        // callback that ends the sweep: end it here (holds released, cartography
+        // published, queue moving), then let the replay draw every fill.
+        if (seen.custom !== next.custom && ownershipSweepRef.current.active) ownershipSweepRef.current.finish?.();
         appliedCustomFillStateRef.current = new Map();
         setCustomFillSourceEpoch((epoch) => epoch + 1);
       }
@@ -2641,6 +2648,10 @@ const WorldMap = ({ isGlobe = false }) => {
 
     const finish = () => {
       if (token !== ownershipSweepRef.current.token || committed) return;
+      // With the WebGL context lost the map has no style: nothing can be read
+      // or drawn. The fill-source watcher finishes the sweep once the restored
+      // style has brought the sources back.
+      if (!mapInstance.style) return;
       committed = true;
       if (sweep.frame) cancelAnimationFrame(sweep.frame);
       if (sweep.waitFrame) cancelAnimationFrame(sweep.waitFrame);
@@ -2681,6 +2692,7 @@ const WorldMap = ({ isGlobe = false }) => {
       setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
       mapInstance.triggerRepaint?.();
     };
+    sweep.finish = finish;
 
     let worker;
     try {
@@ -2720,6 +2732,9 @@ const WorldMap = ({ isGlobe = false }) => {
 
     worker.onmessage = ({ data }) => {
       if (token !== ownershipSweepRef.current.token || data?.requestId !== requestId) return;
+      // No style (a lost WebGL context): nothing to animate on. The restore
+      // finishes the sweep without it.
+      if (!mapInstance.style) return;
       if (data?.type === "ownership-transition-error") {
         if (!fallbackSweepRequested) {
           requestLegacySweep(data.error);
@@ -2831,7 +2846,7 @@ const WorldMap = ({ isGlobe = false }) => {
       };
 
       const waitForLayer = () => {
-        if (token !== ownershipSweepRef.current.token) return;
+        if (token !== ownershipSweepRef.current.token || !mapInstance.style) return;
         const sourceReady = mapInstance.getSource?.("ownership-transition-sweep-source");
         const layerReady = mapInstance.getLayer?.("ownership-transition-sweep-fill");
         if (!sourceReady || !layerReady) {
