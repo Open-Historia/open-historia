@@ -45,6 +45,7 @@ const readAiSetup = () => {
 // localStorage, and clamped to a readable min and a max that keeps the HUD
 // in view.
 const ADVISOR_WIDTH_VAR = "--oh-advisor-width";
+const RIGHT_DRAWER_SAFE_OFFSET_VAR = "--oh-right-drawer-safe-offset";
 const ADVISOR_MIN_WIDTH = 280;
 const ADVISOR_DEFAULT_WIDTH = 320; // 20rem, the old fixed width
 // The drawer may cover the map but not the HUD on its left. The tightest fit is
@@ -437,6 +438,17 @@ const Main = ({
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
   const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
+  // Publish the live desktop drawer width for fixed workspaces that need to
+  // coexist with it. The value points at --oh-advisor-width rather than
+  // copying pixels, so dragging the Advisor/Country edge updates consumers in
+  // the same frame without a React render. Phones use full-screen sheets.
+  const rightDrawerSafeOffset = rightDrawerOpen && !isMobile
+    ? `var(${ADVISOR_WIDTH_VAR}, ${advisorWidth}px)`
+    : "0px";
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset);
+    return () => document.documentElement.style.removeProperty(RIGHT_DRAWER_SAFE_OFFSET_VAR);
+  }, [rightDrawerSafeOffset]);
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
