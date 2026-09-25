@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   addInstitutionProposalAmendment,
   applyInstitutionGovernanceCommand,
+  applyInstitutionalPlayerMessage,
   castInstitutionProposalVote,
   castInstitutionProposalVoteBatch,
   closeInstitutionProposalVoting,
@@ -739,6 +740,57 @@ test("policy commitment is complete institutional state, not reusable execution 
   assert.equal(implemented.proposal.implementation.status, "complete");
   assert.deepEqual(implemented.proposal.implementation.pending, []);
   assert.equal(implemented.proposal.implementation.applied[0]?.kind, "policy-commitment");
+});
+
+test("Council writes never adopt an accession hearing that shares the institution foreign key", () => {
+  const world = makeWorld(simpleRule);
+  const lifecycle = {
+    id: "institution-invite-council-d-2000-01-02",
+    institutionId: "council",
+    lifecycleInstitutionId: "council",
+    lifecycleCaseIds: ["council-invitation-d-2000-01-02"],
+    countries: [{ polityKey: "D", code: "D", name: "D Republic" }],
+    messages: [{ role: "leader", speaker: "D Republic", text: "I accept the observer invitation.", time: "2000-01-02" }],
+    status: "open",
+    source: "institution-lifecycle",
+    title: "Continental Council invitation",
+  };
+  const council = {
+    id: "institution-channel-council",
+    institutionId: "council",
+    countries: [
+      { polityKey: "B", code: "B", name: "B Republic" },
+      { polityKey: "C", code: "C", name: "C Republic" },
+      { polityKey: "D", code: "D", name: "D Republic" },
+    ],
+    messages: [{ role: "leader", speaker: "B Republic", text: "Existing Council debate.", time: "2000-01-02" }],
+    status: "open",
+    source: "institution",
+    title: "Continental Council",
+  };
+
+  const result = applyInstitutionalPlayerMessage({
+    world,
+    // Lifecycle first reproduces the released failure: a loose `.find()` by
+    // institutionId used to select this temporary hearing as the Council.
+    chats: [lifecycle, council],
+    institutionId: "council",
+    playerCountry: "A",
+    text: "Continue the formal Council debate.",
+    date: "2000-01-03",
+  });
+
+  assert.equal(result.channel.id, "institution-channel-council");
+  assert.ok(result.channel.messages.some((message) => message.text === "Existing Council debate."));
+  assert.ok(result.channel.messages.some((message) => message.text === "Continue the formal Council debate."));
+  const preservedLifecycle = result.chats.find((chat) => chat.id === lifecycle.id);
+  assert.ok(preservedLifecycle, "the temporary accession hearing remains a distinct thread");
+  assert.ok(preservedLifecycle.messages.some((message) => message.text === "I accept the observer invitation."));
+  assert.equal(
+    preservedLifecycle.messages.some((message) => message.text === "Continue the formal Council debate."),
+    false,
+    "Council speech must never be written into the lifecycle hearing",
+  );
 });
 
 test("one-request institution batch keeps conversation and applies only explicit formal actions", async () => {

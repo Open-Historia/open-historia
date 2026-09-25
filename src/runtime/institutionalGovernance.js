@@ -20,7 +20,7 @@ import {
   normalizeEvents,
   reconcileChatsForPlayer,
 } from "./gameState.js";
-import { materializeInstitutionalChannel } from "./institutionalChannels.js";
+import { findInstitutionalChannel, materializeInstitutionalChannel } from "./institutionalChannels.js";
 import { getPoliticalProfile } from "./politicalActors.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -935,7 +935,7 @@ export const applyInstitutionGovernanceCommand = ({
     : normalizeEvents(eventsInput);
   return {
     ...result, outcome, implementation, events, chats,
-    channel: chats.find((chat) => lower(chat.institutionId) === lower(institution.id)) || materialized.channel,
+    channel: findInstitutionalChannel(chats, result.world, institution) || materialized.channel,
   };
 };
 
@@ -1116,7 +1116,7 @@ export const applyInstitutionalPlayerMessage = ({
     world: materialized.world,
     chats: reconciled,
     institution,
-    channel: reconciled.find((chat) => lower(chat?.institutionId) === lower(institution.id)) || materialized.channel,
+    channel: findInstitutionalChannel(reconciled, materialized.world, institution) || materialized.channel,
   };
 };
 
@@ -1139,7 +1139,7 @@ export const commitInstitutionalPlayerMessage = async ({
     ...result,
     world: committed.world,
     chats: committedChats,
-    channel: list(committedChats).find((chat) => lower(chat?.institutionId) === lower(result.channel?.institutionId)) || result.channel,
+    channel: findInstitutionalChannel(committedChats, committed.world, result.channel?.institutionId) || result.channel,
   };
 };
 
@@ -1257,7 +1257,7 @@ export const applyInstitutionalDiplomaticReply = ({
   return {
     world, chats, events, ballot, voteError, votedProposal, outcome, implementation,
     createdProposal, proposalError, createdAmendment, amendmentError, institution,
-    channel: chats.find((chat) => lower(chat?.institutionId) === lower(canonicalInstitutionIdentity(institution || materialized.institution).id)) || materialized.channel,
+    channel: findInstitutionalChannel(chats, world, institution || materialized.institution) || materialized.channel,
   };
 };
 
@@ -1283,7 +1283,7 @@ export const commitInstitutionalDiplomaticReply = async ({
     world: committed.world,
     chats: committedChats,
     events: committed.events || result.events,
-    channel: list(committedChats).find((chat) => lower(chat?.institutionId) === lower(result.channel?.institutionId)) || result.channel,
+    channel: findInstitutionalChannel(committedChats, committed.world, result.channel?.institutionId) || result.channel,
   };
 };
 
@@ -1388,7 +1388,7 @@ export const applyInstitutionalChatGovernanceBatch = ({
   }
   chats = reconcileChatsForPlayer(chats, world, playerCountry);
   const finalInstitution = resolveInstitutionRecord(world, institutionId) || institution;
-  const channel = chats.find((chat) => lower(chat?.institutionId) === lower(canonicalInstitutionIdentity(finalInstitution).id)) || materialized.channel;
+  const channel = findInstitutionalChannel(chats, world, finalInstitution) || materialized.channel;
   return { world, chats, events, institution: finalInstitution, channel, applied, rejected };
 };
 
@@ -1413,6 +1413,6 @@ export const commitInstitutionalChatGovernanceBatch = async ({
     world: committed.world,
     chats: committedChats,
     events: committed.events || result.events,
-    channel: list(committedChats).find((chat) => lower(chat?.institutionId) === lower(result.channel?.institutionId)) || result.channel,
+    channel: findInstitutionalChannel(committedChats, committed.world, result.channel?.institutionId) || result.channel,
   };
 };
