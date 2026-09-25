@@ -2,6 +2,7 @@
 
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { stableAsciiId } from "./stableId.js";
 
 export const INSTITUTIONS_SCHEMA_VERSION = 1;
 export const INSTITUTION_LEDGER_VERSION = 1;
@@ -14,12 +15,7 @@ const clone = (value) => {
   if (typeof structuredClone === "function") return structuredClone(value);
   return JSON.parse(JSON.stringify(value));
 };
-const slug = (value) => lower(value)
-  .normalize("NFKD")
-  .replace(/[\u0300-\u036f]/g, "")
-  .replace(/[^a-z0-9]+/g, "-")
-  .replace(/^-+|-+$/g, "")
-  .slice(0, 72);
+const slug = (value) => stableAsciiId(value, { maxLength: 72 });
 const unique = (values, limit = 128) => {
   const out = [];
   const seen = new Set();
