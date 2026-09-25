@@ -3,6 +3,7 @@ import fs from "node:fs";
 import test from "node:test";
 
 const source = fs.readFileSync(new URL("./chat.jsx", import.meta.url), "utf8");
+const main = fs.readFileSync(new URL("./main.jsx", import.meta.url), "utf8");
 
 test("diplomacy refresh keeps counterpart-first titles and modern thread rows", () => {
   assert.match(source, /const diplomaticCounterparts =/);
@@ -38,4 +39,12 @@ test("composer uses the modern send icon and preserves auto-growing textarea beh
   assert.match(source, /<SendIcon \/>/);
   assert.match(source, /onInput=\{fitComposer\}/);
   assert.doesNotMatch(source, /🚀/);
+});
+
+test("diplomacy yields space to the live desktop right drawer", () => {
+  assert.match(source, /width: "min\(58rem, calc\(72vw - var\(--oh-right-drawer-safe-offset, 0px\)\)\)"/);
+  assert.match(main, /const RIGHT_DRAWER_SAFE_OFFSET_VAR = "--oh-right-drawer-safe-offset"/);
+  assert.match(main, /const rightDrawerSafeOffset = rightDrawerOpen && !isMobile/);
+  assert.match(main, /style\.setProperty\(RIGHT_DRAWER_SAFE_OFFSET_VAR, rightDrawerSafeOffset\)/);
+  assert.match(main, /`var\(\$\{ADVISOR_WIDTH_VAR\}, \$\{advisorWidth\}px\)`/);
 });
