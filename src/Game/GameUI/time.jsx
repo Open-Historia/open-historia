@@ -3098,7 +3098,9 @@ const DateWidget = ({
                         world: liveStageBase,
                     });
                     setWorldStateOverride(livePreview);
-                    setUnitsOverride(livePreview.units ?? []);
+                    // The orders of the same moment, so a patrol's ring and a
+                    // march's heading move with their units (unitsController.js).
+                    setUnitsOverride(livePreview.units ?? [], livePreview.pendingUnitOrders ?? []);
                     return;
                 } catch (error) {
                     // Unvalidated impacts again: the map waits rather than taking the panel.
@@ -3143,7 +3145,7 @@ const DateWidget = ({
             world: stagedBase.world,
         });
         setWorldStateOverride(stagedWorld);
-        setUnitsOverride(stagedWorld.units ?? []);
+        setUnitsOverride(stagedWorld.units ?? [], stagedWorld.pendingUnitOrders ?? []);
     }, [latestTurnRecord, liveStageBase, liveTurnRecord, openPanel, skipInFlight, stagedBase, totalVisibleEvents, visibleEventCount]);
 
     // Never leave a stale override behind when this widget unmounts.

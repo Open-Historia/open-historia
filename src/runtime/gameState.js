@@ -1309,6 +1309,19 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
   });
 };
 
+// A patrol works the station its order names (toLng/toLat), and the map draws
+// its ring there. A unit placed somewhere else by hand (the admin placement seam,
+// unitsController.placeUnitAdmin) takes its station with it: left behind, the
+// ring would stay at the old spot and the next turn's patrol step would pull the
+// unit straight back to it. Any other standing order keeps its destination — a
+// march simply continues from wherever the unit now stands.
+export const recenterPatrolOrders = (orders, unitId, lng, lat) => {
+  const list = normalizePendingUnitOrders(orders);
+  if (!unitId || !Number.isFinite(lng) || !Number.isFinite(lat)) return list;
+  return list.map((order) =>
+    (order.unitId === unitId && order.kind === "patrol" ? { ...order, toLng: lng, toLat: lat } : order));
+};
+
 // A structure built during play: any named point on the map — city, military
 // base, bunker, missile silo, embassy, port. `kind` is deliberately free-form
 // (lowercased for stable styling/grouping); unknown kinds are first-class.
@@ -2938,6 +2951,12 @@ export const advanceStandingOrders = (
   // was taken per-event, against that event's own budget.
   const skip = new Set(normalizeArray(skipUnitIds));
   const expired = new Set();
+  // Formations that marched in under posture "patrol" and arrived this turn:
+  // they start working a station where they stand, as a unit that gets there
+  // within the turn does (applyUnitOpBatch). Otherwise the move order was pruned
+  // on arrival and the unit sat there reading "Patrolling" with no station and
+  // no ring.
+  const stations = new Map();
   const stamp = new Date().toISOString();
 
   const nextUnits = units.map((unit) => {
@@ -2964,6 +2983,7 @@ export const advanceStandingOrders = (
       { lng: order.toLng, lat: order.toLat },
       maxTravelKm(unit.type, toDate || fromDate, elapsed),
     );
+    if (step.arrived && unit.posture === "patrol") stations.set(unit.id, { lng: step.lng, lat: step.lat, type: unit.type });
     return {
       ...unit,
       lng: step.lng,
@@ -2974,7 +2994,22 @@ export const advanceStandingOrders = (
     };
   });
 
-  const kept = orders.filter((order) => !expired.has(order.id));
+  const kept = orders
+    .filter((order) => !expired.has(order.id))
+    .map((order) => {
+      const station = order.kind === "move" ? stations.get(order.unitId) : null;
+      if (!station) return order;
+      return normalizePendingUnitOrderEntry({
+        unitId: order.unitId,
+        kind: "patrol",
+        toLng: station.lng,
+        toLat: station.lat,
+        radiusKm: DEFAULT_PATROL_RADIUS_KM[station.type] ?? 0,
+        untilRound: round ? round + PATROL_ORDER_ROUNDS : 0,
+        issuedRound: round,
+      });
+    })
+    .filter(Boolean);
   return {
     ...world,
     units: nextUnits,

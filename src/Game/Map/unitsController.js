@@ -20,6 +20,7 @@ import {
   writeActionsState,
   clearStaleUnitMotion,
   normalizeUnitEntry,
+  recenterPatrolOrders,
 } from "../../runtime/gameState.js";
 
 let units = [];
@@ -54,9 +55,17 @@ export const subscribeUnits = (fn) => {
 // Visual override for the staged event reveal (see time.jsx): while a turn's
 // events are being revealed one by one, the map shows the units as of the last
 // revealed event rather than the final post-jump list. null = live state.
+//
+// The standing orders of that same moment ride with them. The map draws a
+// patrol's ring and a march's heading line from the orders, and the saved ones
+// belong to another moment — the pre-jump world while a skip streams its events,
+// the finished turn while a past one is replayed — so a patrolling unit moved
+// off to its new station while its ring stayed at the old one.
 let unitsOverride = null;
-export const setUnitsOverride = (list) => {
+let ordersOverride = null;
+export const setUnitsOverride = (list, orders = null) => {
   unitsOverride = Array.isArray(list) ? list : null;
+  ordersOverride = unitsOverride && Array.isArray(orders) ? orders : null;
   emit();
 };
 
@@ -65,9 +74,9 @@ export const getUnitById = (id) => (unitsOverride ?? units).find((unit) => unit.
 // Standing orders the ENGINE is advancing — a move still under way, or a patrol
 // working its station. Read by the map (heading lines and station rings) and by
 // the unit popup, which turns them into "en route to ..., about N km to go".
-export const getPendingUnitOrders = () => pendingOrders;
+export const getPendingUnitOrders = () => ordersOverride ?? pendingOrders;
 export const getUnitOrder = (unitId) =>
-  pendingOrders.find((order) => order.unitId === unitId) ?? null;
+  (ordersOverride ?? pendingOrders).find((order) => order.unitId === unitId) ?? null;
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;
@@ -268,13 +277,17 @@ export const startUnitsSync = () => {
 };
 
 // Read-modify-write world.units while preserving the rest of world state.
-const commit = async (mutator) => {
+// `orders`, when given, rewrites world.pendingUnitOrders in the same write from
+// the new unit list, so a unit and its standing order never disagree on disk.
+const commit = async (mutator, { orders = null } = {}) => {
   busy = true;
   try {
     const world = await readWorldState({ force: true });
     const nextUnits = mutator(world.units ?? []);
-    const saved = await writeWorldState({ ...world, units: nextUnits });
+    const nextOrders = orders ? orders(world.pendingUnitOrders ?? [], nextUnits) : null;
+    const saved = await writeWorldState({ ...world, units: nextUnits, ...(nextOrders ? { pendingUnitOrders: nextOrders } : {}) });
     units = saved.units ?? nextUnits;
+    if (nextOrders) pendingOrders = saved.pendingUnitOrders ?? nextOrders;
     emit();
     return units;
   } catch (error) {
@@ -314,6 +327,17 @@ const commitPendingOrders = async (mutator) => {
 export const updateUnitAdmin = async (unitId, patch = {}) => {
   const id = String(unitId ?? "").trim();
   if (!id || !patch || typeof patch !== "object") return null;
+  const moved = Object.prototype.hasOwnProperty.call(patch, "lng") || Object.prototype.hasOwnProperty.call(patch, "lat");
+  // A patrolling unit placed somewhere else takes its station with it
+  // (recenterPatrolOrders): the ring follows it, and the next turn's patrol step
+  // works the new station instead of pulling the unit back to the old one. Same
+  // write as the unit, so the two never disagree on disk.
+  const orders = moved
+    ? (list, nextUnits) => {
+      const unit = nextUnits.find((entry) => entry.id === id);
+      return unit ? recenterPatrolOrders(list, id, unit.lng, unit.lat) : list;
+    }
+    : null;
 
   await commit((list) =>
     list.map((unit, index) => {
@@ -338,6 +362,7 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
 
       return next || unit;
     }),
+    { orders },
   );
 
   return units.find((unit) => unit.id === id) ?? null;
