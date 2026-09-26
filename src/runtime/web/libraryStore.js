@@ -40,6 +40,7 @@ import {
   needsMigration as needsOwnerMigration,
   rekeyOwnerMap,
 } from "../../../server/ownerMigration.js";
+import { coverObjectUrl } from "./coverUrls.js";
 
 const SCENARIO_MANIFEST_KEY = "scenario-manifest";
 const GAME_MANIFEST_KEY = "game-manifest";
@@ -92,8 +93,8 @@ const emptyGameRecord = (id) => ({ id, meta: {}, json: {}, colors: undefined, fl
 
 const jsonAsset = (record, key) => (record?.json?.[key] !== undefined ? record.json[key] : cloneJson(JSON_ASSET_DEFAULTS[key] ?? {}));
 
-const coverDataUrl = (cover) =>
-  cover && cover.bytes ? `data:${cover.contentType || "application/octet-stream"};base64,${bytesToBase64(cover.bytes)}` : null;
+// Covers are shown through object URLs made once per record version
+// (coverUrls.js), not base64 data: URLs rebuilt on every listing.
 
 // --- Manifests ------------------------------------------------------------
 const getScenarioManifest = async () => {
@@ -244,7 +245,7 @@ const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
       assetStatus,
       cacheToken,
       canDelete: true,
-      coverImageUrl: assetStatus.cover ? coverDataUrl(proj.cover) : null,
+      coverImageUrl: assetStatus.cover ? coverObjectUrl(`scenario:${id}`, cacheToken, proj.cover) : null,
       gameCount: usage.get(id) ?? 0,
     };
   }).filter(Boolean);
@@ -281,7 +282,7 @@ const getGameCatalog = async (scenarioCatalog, gameMetas) => {
     const assetStatus = proj.assetStatus ?? {};
     const scenario = scenarioLookup.get(meta.scenarioId) ?? readScenarioMeta(meta.scenarioId, {});
     const cacheToken = `${id}-${meta.updatedAt}`;
-    const ownCoverImageUrl = assetStatus.cover ? coverDataUrl(proj.cover) : null;
+    const ownCoverImageUrl = assetStatus.cover ? coverObjectUrl(`game:${id}`, cacheToken, proj.cover) : null;
     return {
       ...meta,
       assetStatus,
