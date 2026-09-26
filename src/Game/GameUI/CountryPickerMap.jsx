@@ -16,7 +16,7 @@ import { defaults as defaultControls } from "ol/control/defaults";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
 import { loadRegionLabelGeometry } from "../../runtime/countryLabels.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import { APP_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { SCREEN_HEIGHT, isTouchPrimary, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 const codeToColor = (code) => {
   let h = 0;
@@ -148,6 +148,14 @@ const CountryPickerMap = ({
   const [query, setQuery] = useState("");
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
+  // While a search is typed on a phone the map folds away and the matches sit
+  // right under the box, above the keyboard. By the query, not by focus: a
+  // blur as the finger lands on a match would move the list under it.
+  const searching = isMobile && query.trim().length > 0;
+  // Unfolded again, the map measures its box anew.
+  useEffect(() => {
+    if (!searching) mapObjectRef.current?.updateSize?.();
+  }, [searching]);
   // Refs the once-created map's handlers read at click time — so switching mode or
   // toggling a region never rebuilds the map.
   const modeRef = useRef(selectionMode);
@@ -382,10 +390,11 @@ const CountryPickerMap = ({
           territory. Click again to release one.
         </div>
       ) : (
-        // Not focused on a touch screen: the keyboard would come up over the
-        // map and the list before the player had seen either.
+        // Not focused on a touch screen or a phone-sized one: the keyboard
+        // would come up over the map and the list before the player had seen
+        // either (mobileUi.js: a phone can report a fine pointer).
         <input
-          autoFocus={!isTouchPrimary()}
+          autoFocus={!isTouchPrimary() && !isMobile}
           className="oh-tap-row"          value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search countries…"
@@ -405,10 +414,13 @@ const CountryPickerMap = ({
         ref={containerRef}
         style={{
           width: "100%",
+          display: searching ? "none" : "block",
           // On a phone the map gives up height so the search, the list and the
-          // dialog's buttons fit on the screen with it: whatever the visible
-          // height leaves after them, between 150 and the usual 320 px.
-          height: isMobile ? `clamp(150px, calc(${APP_HEIGHT} - 28rem), 320px)` : "320px",
+          // dialog's buttons fit on the screen with it: whatever the screen
+          // leaves after them, between 150 and the usual 320 px. The screen
+          // height, not the visible one, which shrinks with the keyboard and
+          // took the map down to 150 px with it.
+          height: isMobile ? `clamp(150px, calc(${SCREEN_HEIGHT} - 28rem), 320px)` : "320px",
           borderRadius: 12,
           overflow: "hidden",
           border: "1px solid rgba(255,255,255,0.1)",
@@ -420,7 +432,7 @@ const CountryPickerMap = ({
           display: regionMode ? "none" : "flex",
           flexDirection: "column",
           gap: 2,
-          maxHeight: query.trim() ? 180 : 120,
+          maxHeight: searching ? 240 : query.trim() ? 180 : 120,
           overflowY: "auto",
         }}
       >
