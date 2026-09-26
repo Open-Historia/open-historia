@@ -28,7 +28,7 @@ const FORMER_GEMINI_DEFAULT = "gemini-3.5-flash-lite";
 // models, most of them no use for a turn, and asking /models for a list took a
 // request and still guessed; naming the one the game is built around is both
 // quicker and better. A model the player types is theirs instead.
-export const OPENAI_DEFAULT_MODEL = "gpt-5.6-luna";
+export const OPENAI_DEFAULT_MODEL = "gpt-6-luna";
 
 export const PROVIDER_OPTIONS = [
     {
