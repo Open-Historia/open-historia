@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
+import { SHIPPED_GUIDANCE_FINGERPRINTS } from "./shippedGuidance.js";
 import {
   PROMPT_GUIDANCE,
   PROMPT_MODEL_VERSION,
@@ -236,6 +237,18 @@ test("every default passage and every shipped translation is recorded as shipped
     walk(JSON.parse(readFileSync(new URL(file, packs), "utf8")), file);
   }
   assert.deepEqual(unrecorded.slice(0, 5), [], `${unrecorded.length} passage(s) not recorded: run node scripts/prompts/record-shipped-guidance.mjs`);
+});
+
+test("the shipped list merges without losing a line", () => {
+  // Merging one branch into another must keep what both ever shipped: one
+  // fingerprint per line, merged by git's union driver (.gitattributes).
+  const list = readFileSync(new URL("./shippedGuidance.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const body = list.slice(list.indexOf("const FINGERPRINTS = [\n") + "const FINGERPRINTS = [\n".length, list.indexOf("\n];"));
+  const lines = body.split("\n").filter((line) => line.trim());
+  assert.deepEqual(lines.filter((line) => !/^ {2}"[0-9a-z]+",$/.test(line)), [], "one fingerprint per line");
+  assert.equal(new Set(lines).size, SHIPPED_GUIDANCE_FINGERPRINTS.size);
+  const attributes = readFileSync(new URL("../../../.gitattributes", import.meta.url), "utf8");
+  assert.match(attributes, /^src\/Game\/AI\/shippedGuidance\.js\s+merge=union\s*$/m, "merged with git's union driver");
 });
 
 test("a passage's fingerprint ignores its whitespace and nothing else", () => {
