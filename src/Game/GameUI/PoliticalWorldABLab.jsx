@@ -48,7 +48,7 @@ const ArmBody = ({ arm }) => {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
         {parsed.events.length ? parsed.events.map((event, index) => (
-          <div key={`${event?.id || index}`} style={{ borderLeft: "2px solid rgba(167,139,250,0.55)", paddingLeft: "0.55rem" }}>
+          <div key={`${event?.id || index}`} style={{ borderLeft: "2px solid rgba(255,255,255,0.22)", paddingLeft: "0.55rem" }}>
             <div style={{ color: "#f8fafc", fontSize: "0.74rem", fontWeight: 800 }}>{event?.title || `Event ${index + 1}`}</div>
             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", marginTop: "0.12rem" }}>{event?.date || ""}</div>
             {(event?.description || event?.text) && <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.7rem", lineHeight: 1.4, marginTop: "0.2rem" }}>{event.description || event.text}</div>}
@@ -287,9 +287,9 @@ export default function PoliticalWorldABLab({ onClose }) {
 
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Political World A/B Lab" style={{ alignItems: "center", background: "rgba(3,3,5,0.74)", backdropFilter: "blur(18px)", display: "flex", inset: 0, justifyContent: "center", padding: "1rem", position: "fixed", zIndex: 2147483600 }}>
-      <div style={{ background: "linear-gradient(180deg, rgba(33,30,43,0.98), rgba(13,13,17,0.98))", border: "1px solid rgba(167,139,250,0.28)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.55)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: "min(900px, calc(100vh - 2rem))", maxWidth: "1320px", overflow: "hidden", width: "min(97vw, 1320px)" }}>
+      <div style={{ background: "var(--oh-grey-surface)", border: "1px solid var(--oh-grey-border)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.55)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: "min(900px, calc(100vh - 2rem))", maxWidth: "1320px", overflow: "hidden", width: "min(97vw, 1320px)" }}>
         <header style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", padding: "0.9rem 1rem" }}>
-          <div style={{ alignItems: "center", background: "rgba(139,92,246,0.16)", border: "1px solid rgba(167,139,250,0.24)", borderRadius: "9px", display: "flex", fontWeight: 900, height: "2.2rem", justifyContent: "center", width: "2.2rem" }}>A/B</div>
+          <div style={{ alignItems: "center", background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border)", borderRadius: "9px", display: "flex", fontWeight: 900, height: "2.2rem", justifyContent: "center", width: "2.2rem" }}>A/B</div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: "1rem", fontWeight: 900 }}>Political World A/B Lab</div>
             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.65rem", marginTop: "0.15rem" }}>Frozen, read-only paired Gemini/provider evaluation. Campaign canon is never applied or changed.</div>
@@ -300,7 +300,7 @@ export default function PoliticalWorldABLab({ onClose }) {
         <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(270px, 330px) minmax(0, 1fr)", minHeight: 0 }}>
           <aside style={{ borderRight: "1px solid rgba(255,255,255,0.08)", minHeight: 0, overflowY: "auto", padding: "0.85rem" }}>
             <div style={{ ...panel, marginBottom: "0.7rem" }}>
-              <div style={{ color: "#ddd6fe", fontSize: "0.66rem", fontWeight: 900, textTransform: "uppercase" }}>Frozen source</div>
+              <div style={{ color: "var(--oh-grey-text)", fontSize: "0.66rem", fontWeight: 900, textTransform: "uppercase" }}>Frozen source</div>
               {loadingSnapshot ? <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.45rem" }}>Reading current campaign...</div> : snapshot ? (
                 <div style={{ fontSize: "0.72rem", lineHeight: 1.55, marginTop: "0.4rem" }}>
                   <b>{snapshot.metadata.gameName || snapshot.metadata.scenarioName || snapshot.metadata.gameId || "Current campaign"}</b><br />
@@ -328,13 +328,13 @@ export default function PoliticalWorldABLab({ onClose }) {
                   <option value="frozenGoalAblation">Frozen capsules: autonomy-cost ablation</option>
                 </select>
               </Field>
-              {config.experimentMode === "sensitivity" && <div style={{ color: "rgba(196,181,253,0.72)", fontSize: "0.62rem", lineHeight: 1.45 }}>
+              {config.experimentMode === "sensitivity" && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.62rem", lineHeight: 1.45 }}>
                 Counterfactual diagnostic: for the selected actor only, an injected Political Decision Context overrides conflicting scenario-authored temperament for this task. Objective campaign facts, goals, relationships, capabilities and history stay unchanged. OFF keeps ordinary scenario characterization.
               </div>}
-              {config.experimentMode === "evolvedGoal" && <div style={{ color: "rgba(196,181,253,0.72)", fontSize: "0.62rem", lineHeight: 1.45 }}>
+              {config.experimentMode === "evolvedGoal" && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.62rem", lineHeight: 1.45 }}>
                 Controlled evolved-state diagnostic: both arms keep Political World enabled. Treatment replaces exactly one canonical goal in an isolated clone, preserves its list position, and changes no traits, disposition, government, perceptions, objective canon or live save state. The lab locks 8 control + 8 treatment calls with a predeclared 4/4 control-first vs treatment-first block order.
               </div>}
-              {config.experimentMode === "frozenGoalAblation" && <div style={{ color: "rgba(196,181,253,0.72)", fontSize: "0.62rem", lineHeight: 1.45 }}>
+              {config.experimentMode === "frozenGoalAblation" && <div style={{ color: "var(--oh-grey-muted)", fontSize: "0.62rem", lineHeight: 1.45 }}>
                 Follow-up isolation diagnostic: each arm first renders its Political Decision Context from the original source message, then replays that exact block byte-for-byte while the provider sees a different diplomacy proposal. CP3B is therefore held fixed for the call; production selection and Political World behavior are not changed.
               </div>}
               <Field title="Exact AI entry">
@@ -421,7 +421,7 @@ export default function PoliticalWorldABLab({ onClose }) {
                 Developer diagnostic: saved JSON reports include raw prompts/responses and may contain private Political World state or campaign spoilers.
               </div>
 
-              <button type="button" disabled={!canRun} onClick={run} style={{ ...input, background: canRun ? "rgba(124,58,237,0.34)" : "rgba(255,255,255,0.04)", borderColor: canRun ? "rgba(167,139,250,0.5)" : "rgba(255,255,255,0.08)", color: canRun ? "#ede9fe" : "rgba(255,255,255,0.3)", cursor: canRun ? "pointer" : "not-allowed", fontWeight: 900 }}>
+              <button type="button" disabled={!canRun} onClick={run} style={{ ...input, background: canRun ? "var(--oh-grey-raised)" : "rgba(255,255,255,0.04)", borderColor: canRun ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)", color: canRun ? "var(--oh-grey-text)" : "rgba(255,255,255,0.3)", cursor: canRun ? "pointer" : "not-allowed", fontWeight: 900 }}>
                 {running ? "Running paired evaluation..." : "Run paired test"}
               </button>
               {running && <button type="button" onClick={() => abortRef.current?.abort(new DOMException("Cancelled", "AbortError"))} style={{ ...input, cursor: "pointer" }}>Cancel</button>}
@@ -432,7 +432,7 @@ export default function PoliticalWorldABLab({ onClose }) {
             {error && <div style={{ ...panel, borderColor: "rgba(248,113,113,0.35)", color: "#fecaca", fontSize: "0.74rem", marginBottom: "0.7rem" }}>{error}</div>}
             {running && progress && (
               <div style={{ ...panel, marginBottom: "0.7rem" }}>
-                <div style={{ color: "#ddd6fe", fontSize: "0.75rem", fontWeight: 850 }}>{progress.label}</div>
+                <div style={{ color: "var(--oh-grey-text)", fontSize: "0.75rem", fontWeight: 850 }}>{progress.label}</div>
                 <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.66rem", marginTop: "0.25rem" }}>Completed {progress.completed}/{progress.total} arms. The campaign is not being modified.</div>
               </div>
             )}
@@ -484,7 +484,7 @@ export default function PoliticalWorldABLab({ onClose }) {
                       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.65rem" }}>
                         <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.64rem" }}>Which better reflects the campaign's politics?</span>
                         {["A", "B", "No meaningful difference"].map((choice) => (
-                          <button key={choice} type="button" onClick={() => setJudgements((prior) => ({ ...prior, [runIndex]: choice }))} style={{ ...input, background: judgements[runIndex] === choice ? "rgba(124,58,237,0.28)" : input.background, cursor: "pointer", fontSize: "0.65rem", padding: "0.38rem 0.52rem", width: "auto" }}>{choice}</button>
+                          <button key={choice} type="button" onClick={() => setJudgements((prior) => ({ ...prior, [runIndex]: choice }))} style={{ ...input, background: judgements[runIndex] === choice ? "var(--oh-grey-selected)" : input.background, cursor: "pointer", fontSize: "0.65rem", padding: "0.38rem 0.52rem", width: "auto" }}>{choice}</button>
                         ))}
                       </div>
                     )}
@@ -503,7 +503,7 @@ export default function PoliticalWorldABLab({ onClose }) {
                                 ["nonQualifying", "Non-qualifying"],
                                 ["canonIssue", "Canon/fabrication issue"],
                               ].map(([value, title]) => (
-                                <button key={value} type="button" onClick={() => setJudgements((prior) => ({ ...prior, [key]: value }))} style={{ ...input, background: judgements[key] === value ? "rgba(124,58,237,0.28)" : input.background, cursor: "pointer", fontSize: "0.65rem", padding: "0.38rem 0.52rem", width: "auto" }}>{title}</button>
+                                <button key={value} type="button" onClick={() => setJudgements((prior) => ({ ...prior, [key]: value }))} style={{ ...input, background: judgements[key] === value ? "var(--oh-grey-selected)" : input.background, cursor: "pointer", fontSize: "0.65rem", padding: "0.38rem 0.52rem", width: "auto" }}>{title}</button>
                               ))}
                             </div>
                           );

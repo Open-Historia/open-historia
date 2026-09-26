@@ -1252,9 +1252,9 @@ const BrowsePill = ({ active, children, onClick }) => (
     onClick={onClick}
     style={{
       ...browseControlStyle,
-      background: active ? "rgba(109,66,217,0.32)" : "rgba(255,255,255,0.05)",
-      borderColor: active ? "rgba(154,127,255,0.52)" : "rgba(255,255,255,0.08)",
-      color: active ? "#f5f3ff" : "rgba(246,246,248,0.78)",
+      background: active ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
+      borderColor: active ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
+      color: active ? "var(--oh-grey-text)" : "rgba(246,246,248,0.78)",
     }}
     type="button"
   >
@@ -3469,8 +3469,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   onClick={() => setActiveTab(tab)}
                   style={touchFit({
                     ...actionButtonStyle,
-                    background: activeTab === tab ? "rgba(109,66,217,0.34)" : "rgba(255,255,255,0.05)",
-                    borderColor: activeTab === tab ? "rgba(154,127,255,0.58)" : "rgba(255,255,255,0.08)",
+                    background: activeTab === tab ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.05)",
+                    borderColor: activeTab === tab ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.08)",
                     minWidth: isMobile ? "0" : "6.6rem",
                     padding: isMobile ? "0.55rem 0.6rem" : undefined,
                   }, touch)}

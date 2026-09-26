@@ -349,7 +349,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     className="oh-tap-row"
                     key={row.polityKey}
                     onClick={() => selectPolity(row.polityKey)}
-                    style={{ alignItems: "center", background: selected ? "rgba(124,58,237,0.2)" : "transparent", border: `1px solid ${selected ? "rgba(167,139,250,0.28)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
+                    style={{ alignItems: "center", background: selected ? "var(--oh-grey-selected)" : "transparent", border: `1px solid ${selected ? "var(--oh-grey-border-strong)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
                     type="button"
                   >
                     <span style={{ minWidth: 0 }}>
@@ -379,7 +379,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                     <button disabled={!dirty || busy} onClick={discard} style={{ ...buttonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
-                    <button disabled={!dirty || busy} onClick={save} style={{ ...buttonStyle, background: "rgba(124,58,237,0.24)", borderColor: "rgba(167,139,250,0.36)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save Political Actor"}</button>
+                    <button disabled={!dirty || busy} onClick={save} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save Political Actor"}</button>
                   </div>
                 </div>
 
@@ -501,11 +501,11 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                               <span style={{ color: isSet ? "#86efac" : "rgba(255,255,255,0.34)", fontSize: "0.54rem", fontWeight: 900, textTransform: "uppercase" }}>{isSet ? "set" : "unset"}</span>
                             </div>
                             <div style={{ alignItems: "center", display: "grid", gap: "0.45rem", gridTemplateColumns: "minmax(0, 1fr) 4.6rem", marginTop: "0.35rem" }}>
-                              <input aria-label={`${trait.label} slider`} max={trait.max} min={trait.min} step="0.1" style={{ accentColor: "#a78bfa", width: "100%" }} type="range" value={isSet ? rawValue : trait.min} onChange={(event) => editTrait(trait.key, event.target.value)} />
+                              <input aria-label={`${trait.label} slider`} max={trait.max} min={trait.min} step="0.1" style={{ accentColor: "rgba(231,231,234,0.72)", width: "100%" }} type="range" value={isSet ? rawValue : trait.min} onChange={(event) => editTrait(trait.key, event.target.value)} />
                               <input aria-label={`${trait.label} value`} max={trait.max} min={trait.min} placeholder="unset" step="0.1" style={inputStyle} type="number" value={rawValue} onChange={(event) => editTrait(trait.key, event.target.value)} />
                             </div>
                             <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.32rem" }}>{trait.description}</div>
-                            <code style={{ color: "rgba(196,181,253,0.68)", display: "block", fontSize: "0.54rem", marginTop: "0.28rem" }}>{trait.key}</code>
+                            <code style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.54rem", marginTop: "0.28rem" }}>{trait.key}</code>
                           </div>
                         );
                       })}
@@ -548,7 +548,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Edit scenario-start Political Actors directly: government, leaders, parties, blocs, strategic outlook, perceptions and the full canonical trait catalog.</div>
           <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", marginTop: "0.35rem" }}>{actorCount} actor{actorCount === 1 ? "" : "s"} configured across {rows.length} scenario polities.</div>
         </div>
-        <button onClick={() => setManagerOpen(true)} style={{ ...buttonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(167,139,250,0.34)", flex: "0 0 auto" }} type="button">Manage Political World</button>
+        <button onClick={() => setManagerOpen(true)} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">Manage Political World</button>
       </div>
       {manager}
     </div>
