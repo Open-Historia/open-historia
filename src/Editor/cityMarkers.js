@@ -72,6 +72,9 @@ export const cityRowToFeature = (row, id) => {
     regionId: row.regionId ? String(row.regionId) : row.sourceRegionId ? String(row.sourceRegionId) : null,
     population,
     tags,
+    ...(row.populationByYear && typeof row.populationByYear === "object" && Object.keys(row.populationByYear).length
+      ? { populationByYear: { ...row.populationByYear } }
+      : {}),
     ...(tier >= 1 && tier <= 3 ? { tier } : {}),
     ...(scale > 0 ? { scale } : {}),
     ...(labelScale > 0 ? { labelScale } : {}),

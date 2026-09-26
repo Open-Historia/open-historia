@@ -40,9 +40,12 @@ import {
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
-import { useWorldState } from "./useWorldState.js";
+import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
+import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
+import GroupAreaLayers from "./GroupAreaLayers.jsx";
+import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
 import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
@@ -510,6 +513,8 @@ const WorldMap = ({ isGlobe = false }) => {
     regionOwnershipOverrides,
     regionClaimants,
     polityOverrides,
+    groups,
+    groupAreas,
     labelFont,
     labelHaloColor,
     labelTextColor,
@@ -553,6 +558,14 @@ const WorldMap = ({ isGlobe = false }) => {
   const [customRegionMeta, setCustomRegionMeta] = useState(EMPTY_CUSTOM_REGION_META);
   const [regionRenderRepair, setRegionRenderRepair] = useState(EMPTY_REGION_RENDER_REPAIR);
   const [disputedRegionData, setDisputedRegionData] = useState(EMPTY_FEATURE_COLLECTION);
+  // Groups' areas (runtime/groups.js): the regions worker cuts each area's
+  // outline from its frontier topology (vnext/groupAreas.js). Asked outside
+  // the political pipeline — a group moves no owner and no border — through
+  // groupAreaRequestRef, which the worker effect sets once its worker has
+  // published catalog-ready.
+  const [groupAreaData, setGroupAreaData] = useState(EMPTY_GROUP_AREA_DATA);
+  const groupAreaInputRef = useRef({ groupAreas, groups });
+  const groupAreaRequestRef = useRef(null);
   const [polityLabelCollections, setPolityLabelCollections] = useState(EMPTY_POLITY_LABEL_COLLECTIONS);
   const [derivedSourceEpoch, setDerivedSourceEpoch] = useState(0);
   const boundaryFeatureMapRef = useRef(new Map());
@@ -1176,7 +1189,9 @@ const WorldMap = ({ isGlobe = false }) => {
         : {
           source: "city",
           name: props.city || props.name || "",
-          population: props.population,
+          // The drawn figure is already the year's (Cities.jsx); one the AI set
+          // by hand is the city's population from then on.
+          population: effectiveCityPopulation(props, { cityPopulations: getWorldStateSnapshot()?.cityPopulations }),
           capital: props.capital,
           tier: props.tier,
           ownerCode: hostCountry,
@@ -1474,6 +1489,7 @@ const WorldMap = ({ isGlobe = false }) => {
     boundaryFeatureMapRef.current.clear();
     setPolityLabelCollections(EMPTY_POLITY_LABEL_COLLECTIONS);
     setDisputedRegionData(EMPTY_FEATURE_COLLECTION);
+    setGroupAreaData(EMPTY_GROUP_AREA_DATA);
     setAcknowledgedBoundaryOwnership(null);
     if (resetMetadata) setCustomRegionMeta(EMPTY_CUSTOM_REGION_META);
     const mapInstance = map?.getMap ? map.getMap() : map;
@@ -1622,6 +1638,24 @@ const WorldMap = ({ isGlobe = false }) => {
     }
     polityBoundaryWorkerRef.current = worker;
 
+    // Groups' areas: asked of THIS worker only once it has published its
+    // catalog (before that it holds no regions, or the last map's), and every
+    // answer but the newest is dropped.
+    let groupAreasReady = false;
+    let groupAreaRequest = 0;
+    const requestGroupAreas = () => {
+      if (!groupAreasReady || worker !== polityBoundaryWorkerRef.current) return;
+      groupAreaRequest += 1;
+      const { groupAreas: areas, groups: registry } = groupAreaInputRef.current;
+      if (!Object.keys(areas ?? {}).length) {
+        setGroupAreaData(EMPTY_GROUP_AREA_DATA);
+        return;
+      }
+      const colors = Object.fromEntries(Object.entries(registry ?? {}).map(([name, group]) => [name, { color: group?.color }]));
+      worker.postMessage({ type: "group-areas", requestId: `group-areas-${groupAreaRequest}`, geometryEpoch, groupAreas: areas, groups: colors });
+    };
+    groupAreaRequestRef.current = requestGroupAreas;
+
     // On a phone the worker's first message waits until MapLibre has parsed the
     // same file (regionsSourceMemory.js): the two parses of a classic map at
     // once are what took phones down on the second loading screen. The
@@ -1704,6 +1738,21 @@ const WorldMap = ({ isGlobe = false }) => {
     worker.onmessage = ({ data: result }) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
 
+      if (result?.messageType === "group-areas-result") {
+        if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
+        if (result.requestId !== `group-areas-${groupAreaRequest}`) return;
+        if (result.error) {
+          console.warn("Group areas could not be drawn:", result.error);
+          return;
+        }
+        setGroupAreaData({
+          fills: result.fills?.features ? result.fills : EMPTY_FEATURE_COLLECTION,
+          outlines: result.outlines?.features ? result.outlines : EMPTY_FEATURE_COLLECTION,
+          labels: result.labels?.features ? result.labels : EMPTY_FEATURE_COLLECTION,
+        });
+        return;
+      }
+
       if (result?.messageType === "render-repair-ready") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
         const repairData = result.repairData?.type === "FeatureCollection"
@@ -1719,6 +1768,8 @@ const WorldMap = ({ isGlobe = false }) => {
         setRegionRenderRepair({ geometryEpoch, data: repairData, repairedIds });
         setInitialRegionRepairSettled(true);
         if (result.disputedData) setDisputedRegionData(result.disputedData);
+        // Repaired shapes replace malformed ones in the groups' tint too.
+        requestGroupAreas();
         if (Number.isFinite(result.stats?.elapsedMs)) {
           reportPerfOperation("map targeted region render repair", result.stats.elapsedMs, {
             warnAt: PERF_MAP_WARN_MS,
@@ -1754,6 +1805,8 @@ const WorldMap = ({ isGlobe = false }) => {
       if (result?.messageType === "catalog-ready") {
         if (result.geometryEpoch && result.geometryEpoch !== geometryEpoch) return;
         catalogReady = true;
+        groupAreasReady = true;
+        requestGroupAreas();
         const metadata = { ...EMPTY_CUSTOM_REGION_META, ...(result.metadata ?? {}), ready: true };
         setCustomRegionMeta(metadata);
         primeCustomRegionCatalogEntries(metadata.records, { url: regionsGeojsonUrl, invalidateCatalog: false });
@@ -1985,6 +2038,7 @@ const WorldMap = ({ isGlobe = false }) => {
     }, { timeoutMs: 120000 + (parseHeld ? REGIONS_PARSE_HOLD_MS : 0) });
 
     return () => {
+      if (groupAreaRequestRef.current === requestGroupAreas) groupAreaRequestRef.current = null;
       parseHold?.cancel();
       scheduler.stop();
       worker.terminate();
@@ -2005,6 +2059,27 @@ const WorldMap = ({ isGlobe = false }) => {
     releaseOwnershipPresentation,
     updateBoundarySourceFromPatch,
   ]);
+
+  useEffect(() => {
+    groupAreaInputRef.current = { groupAreas, groups };
+    groupAreaRequestRef.current?.();
+  }, [groupAreas, groups]);
+
+  // Group layers mount with a best-guess beforeId (GroupAreaLayers.jsx); the
+  // canonical stack (mapLayerOrder.js) settles them once they exist.
+  useEffect(() => {
+    if (!groupAreaData.fills.features.length && !groupAreaData.outlines.features.length) return undefined;
+    const mapInstance = map?.getMap ? map.getMap() : map;
+    if (!mapInstance?.style) return undefined;
+    const frame = requestAnimationFrame(() => {
+      try {
+        if (mapInstance.style && mapInstance.getLayer("group-areas-tint")) enforceMapLayerOrder(mapInstance);
+      } catch {
+        // The style is being rebuilt; the next change settles the stack.
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [groupAreaData, map]);
 
   // Opening-screen readiness now includes the authoritative PTR first paint
   // AND targeted geometry-safety settlement. Catalog metadata still publishes
@@ -3469,6 +3544,8 @@ const WorldMap = ({ isGlobe = false }) => {
           />
         </Source>
       )}
+
+      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown)} hasMapLayer={hasMapLayer} />
 
       <Source id="polity-boundaries-source" type="geojson" data={EMPTY_FEATURE_COLLECTION} tolerance={0.25}>
         <Layer

@@ -5,8 +5,9 @@ import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { polityRoleOf } from "../../../server/polityRole.js";
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -1553,7 +1554,6 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
   ]);
 
   const rows = [];
-  const shownIds = [];
   for (const regionId of ids) {
     const region = byId.get(regionId);
     const baseOwner = normalizeString(region?.country || toCountryName(region?.countryCode) || "");
@@ -1563,7 +1563,6 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 
     if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
 
-    shownIds.push(regionId);
     rows.push(
       `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
       `controller ${controller || "unknown"}` +
@@ -1571,25 +1570,23 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
     );
   }
 
-  if (!rows.length) return "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
-  const shown = rows.slice(0, maxRows);
-  // What the claimants in these rows are, in the map author's or the AI's own
-  // words (server/polityRole.js) — once each, under the rows, so the names in
-  // the rows stay exact.
-  const roles = new Map();
-  for (const regionId of shownIds.slice(0, maxRows)) {
-    for (const name of normalizeArray(world.regionClaimants?.[regionId]).map(normalizeString).filter(Boolean)) {
-      const role = polityRoleOf(world.polityOverrides, name);
-      if (role && !roles.has(name)) roles.set(name, role);
-    }
-  }
-  return shown.join("\n")
-    + (rows.length > maxRows
+  return rows.length > 0
+    ? rows.slice(0, maxRows).join("\n") + (rows.length > maxRows
       ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
       : "")
-    + (roles.size
-      ? `\nWhat these claimants are:\n${[...roles].map(([name, role]) => `- ${name}: ${role}`).join("\n")}`
-      : "");
+    : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+};
+
+// Groups (runtime/groups.js) as the model reads them: each exact name, what it
+// is, and the regions it controls, by name with the id a groupOps entry copies.
+// Empty when the world has none, so a game without groups pays nothing.
+const buildGroupsContext = async (worldLike) => {
+  if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
+  const world = normalizeWorldState(worldLike);
+  if (!Object.keys(world.groups).length) return "";
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const names = new Map(catalog.map((region) => [region.id, region.name]));
+  return describeGroupsForPrompt(world, { regionName: (id) => names.get(id) || id });
 };
 
 const buildGameMasterStorylineContext = (worldLike) => {
@@ -1765,6 +1762,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
+  variables.groupsContext = await buildGroupsContext(bundle.world);
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1803,7 +1801,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // full menu of world-changing levers the tool schema exposes, so the model always ends
 // its system prompt with an explicit list of what it can do and how. Injected at call
 // time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. toCode may name a polity that does not exist yet: the exact name you write founds it (a new state, a breakaway, a successor), so spell a new polity as it should appear on the map and an existing polity exactly as the map does, since a short form or translation of an existing country founds a second country beside it; add a polityChanges entry in the same event only to give the new polity a colour, aliases or a note. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"role\":\"<what it is, only when it is new or changes: a terrorist organisation, a street gang, the rebel side of the civil war, a government in exile>\",\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color, or simply by handing it territory in regionTransfers or regionControlOps (it is founded under that exact name; an entry here then sets its colour, aliases and note). Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then re-keys the country to the new one, so from then on the country IS the new name everywhere and the old one survives only as a former name; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's non-political national statistics move through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. IMPORTANT: Political Actors are the canonical write authority for government, leaders, parties, coalitions, political systems, traits, strategy and perceptions. Do NOT use stats.leader or stats.government to enact a political change; use politicalActorOps below. Native code projects the canonical Political Actor back into an existing legacy Stats sheet where needed, never the other way around.\n\n• politicalActorOps — Make a durable political change caused by this event. Shape: {\"op\":\"<native operation>\",\"polityKey\":\"<exact CURRENT full polity name; if this event also renames it, use the NEW name>\",\"argsJson\":\"<one JSON object string with the operation-specific fields>\"}. Use set-government for administration details, replace-leader for head-of-state/head-of-government succession, form-coalition/leave-coalition for governing membership, create/update/set-party-* for party change, create/update/set-power-bloc-* for power blocs, set-political-system for constitutional structure, set-strategy for goals/fears/ambitions/domestic pressures, set-traits for persistent leader/government traits, and set-perceptions/remove-perception for campaign-derived political beliefs. Never guess the decoded argsJson shape.\n" + POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE + "\nNever use native-derived set-political-pressures or set-behavioral-disposition here. A political event that changes who governs but emits no politicalActorOps changes only the story, not canonical politics. FOUNDATIONAL POLITICAL MATURATION: when an election result or government formation is the first durable settlement of a sparse/emergent polity, do not stop at one government label. Establish the represented parties/power actors and their support/influence, governing force/coalition/leadership, system, goals/fears/ambitions and justified decision-maker traits in the SAME event. Use set-traits only with canonical keys: " + POLITICAL_TRAIT_KEYS.join(", ") + ". Omit facts the campaign has not established; if results are not known, narrate polling/counting rather than a completed result.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. A claimant need not be a state: a rebel movement, one side of a civil war, a terrorist organisation, a cartel or a gang can claim land too, and claimantRole says what it is - give it whenever the claimant is new or what it is has changed, and it is shown wherever that claimant appears. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"claimantRole\":\"<what the claimant is, e.g. a country claiming this land as its own, a terrorist organisation, the rebel side of the civil war>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-100,\"composition\":\"\",\"at\":\"<where, in words: near Kharkiv / eastern Ukraine / off Sevastopol>\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"at\":\"<where, in words>\",\"posture\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-100,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. Say WHERE with at, in words (see [Placing Things]); the engine finds the point and keeps counters off each other. Give lng/lat only for a spot no name describes. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"at\":\"<where, in words: near Odesa / coast of Crimea>\",\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• institutionLifecycleOps — Change the LIVE lifecycle of canonical institutions when this event actually contains such a political act. Operations: found, invite, apply, respond, withdraw, expel, suspend, reinstate, dissolve. Every op names actorPolity using the exact current polity name. Existing institutions use institutionId copied exactly from canonical institution context; respond also copies the exact pending caseId. These are sovereign political decisions, not bookkeeping: judge them through the actor's current PWv2 government/ideology/goals/fears/domestic pressure, relations with current members, the institution's purpose/geographic scope/obligations and its threat model. FRIENDLY RELATIONS ALONE NEVER MEAN JOIN. A government can prefer observer status, reject, delay or demand terms because the institution is the wrong regional/political fit. An actor explicitly named as the institution's adversary ordinarily should not seek/accept membership absent a real campaign transformation. NEVER act for the human player's acceptance/application/founding/withdrawal/response; AI governments may invite or formally discipline the player, but the player decides their own membership. An invitation/application is NOT membership: native institution law/ballots resolve it. founding invitees are invitations, not automatic founders.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. toCode may name a polity that does not exist yet: the exact name you write founds it (a new state, a breakaway, a successor), so spell a new polity as it should appear on the map and an existing polity exactly as the map does, since a short form or translation of an existing country founds a second country beside it; add a polityChanges entry in the same event only to give the new polity a colour, aliases or a note. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color, or simply by handing it territory in regionTransfers or regionControlOps (it is founded under that exact name; an entry here then sets its colour, aliases and note). Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then re-keys the country to the new one, so from then on the country IS the new name everywhere and the old one survives only as a former name; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's non-political national statistics move through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. IMPORTANT: Political Actors are the canonical write authority for government, leaders, parties, coalitions, political systems, traits, strategy and perceptions. Do NOT use stats.leader or stats.government to enact a political change; use politicalActorOps below. Native code projects the canonical Political Actor back into an existing legacy Stats sheet where needed, never the other way around.\n\n• politicalActorOps — Make a durable political change caused by this event. Shape: {\"op\":\"<native operation>\",\"polityKey\":\"<exact CURRENT full polity name; if this event also renames it, use the NEW name>\",\"argsJson\":\"<one JSON object string with the operation-specific fields>\"}. Use set-government for administration details, replace-leader for head-of-state/head-of-government succession, form-coalition/leave-coalition for governing membership, create/update/set-party-* for party change, create/update/set-power-bloc-* for power blocs, set-political-system for constitutional structure, set-strategy for goals/fears/ambitions/domestic pressures, set-traits for persistent leader/government traits, and set-perceptions/remove-perception for campaign-derived political beliefs. Never guess the decoded argsJson shape.\n" + POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE + "\nNever use native-derived set-political-pressures or set-behavioral-disposition here. A political event that changes who governs but emits no politicalActorOps changes only the story, not canonical politics. FOUNDATIONAL POLITICAL MATURATION: when an election result or government formation is the first durable settlement of a sparse/emergent polity, do not stop at one government label. Establish the represented parties/power actors and their support/influence, governing force/coalition/leadership, system, goals/fears/ambitions and justified decision-maker traits in the SAME event. Use set-traits only with canonical keys: " + POLITICAL_TRAIT_KEYS.join(", ") + ". Omit facts the campaign has not established; if results are not known, narrate polling/counting rather than a completed result.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• groupOps — Groups are actors that are not countries: a terrorist organisation, a cartel, a militia, a warlord's band, a zombie outbreak, a cult - whatever the world has. A group owns no land; it CONTROLS an area of regions that stay their countries', drawn on the map as an outlined, tinted area, and [Groups] lists the current ones with what each is. create founds a group with a description (what it is and wants) and, optionally, the regions it controls; update changes its description, colour or name (newName); take adds regions to its area; release gives regions back (all of them when regionIds is empty); dissolve erases the group and its area. Shape: {\"op\":\"create|update|dissolve|take|release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"\",\"color\":\"#RRGGBB\",\"regionIds\":[\"<exact id, or the plain region name>\"],\"note\":\"<why>\"}. Emit it whenever an event has such a group appear, spread, lose ground, change or be destroyed. A group taking a region is NOT a regionTransfer and moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-100,\"composition\":\"\",\"at\":\"<where, in words: near Kharkiv / eastern Ukraine / off Sevastopol>\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"at\":\"<where, in words>\",\"posture\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-100,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. Say WHERE with at, in words (see [Placing Things]); the engine finds the point and keeps counters off each other. Give lng/lat only for a spot no name describes. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"at\":\"<where, in words: near Odesa / coast of Crimea>\",\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• institutionLifecycleOps — Change the LIVE lifecycle of canonical institutions when this event actually contains such a political act. Operations: found, invite, apply, respond, withdraw, expel, suspend, reinstate, dissolve. Every op names actorPolity using the exact current polity name. Existing institutions use institutionId copied exactly from canonical institution context; respond also copies the exact pending caseId. These are sovereign political decisions, not bookkeeping: judge them through the actor's current PWv2 government/ideology/goals/fears/domestic pressure, relations with current members, the institution's purpose/geographic scope/obligations and its threat model. FRIENDLY RELATIONS ALONE NEVER MEAN JOIN. A government can prefer observer status, reject, delay or demand terms because the institution is the wrong regional/political fit. An actor explicitly named as the institution's adversary ordinarily should not seek/accept membership absent a real campaign transformation. NEVER act for the human player's acceptance/application/founding/withdrawal/response; AI governments may invite or formally discipline the player, but the player decides their own membership. An invitation/application is NOT membership: native institution law/ballots resolve it. founding invitees are invitations, not automatic founders.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -1934,7 +1932,13 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
             name: renamed || name,
             aliases: renamed ? [name] : [],
             coordinates: feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null,
-            population: Number(props.population) || 0,
+            // For the game's date where the scenario gives it by year, unless it
+            // was set by hand (runtime/cityPopulation.js).
+            population: effectiveCityPopulation(props, {
+              date: normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate),
+              cityPopulations: world.cityPopulations,
+              name,
+            }),
             capital: normalizeString(props.capital),
           };
         });
@@ -2396,7 +2400,10 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     // campaigns carry frozen prompts, so a defaultPrompts.json rule never
     // reaches them. This also disarms an over-cautious reading of the agency
     // rule above ("don't act for the player") as "don't move the map".
-    systemPrompt = `${systemPrompt}\n\n[Map Truth — Control is not Sovereignty]\nTerritorial narration and the map must never disagree, but wartime control and legal sovereignty are DIFFERENT things. A battle capture, occupation, liberation or retaking uses impacts.regionControlOps (usually op=control; op=contest while the region is actively disputed). A side need not be a state - rebels, one side of a civil war, a militia, a cartel, a terrorist organisation - and actorRole (on a contest) or toRole (on a control) says what it is whenever that side is new or what it is has changed. A treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement uses impacts.regionTransfers because legal sovereignty changed. Do NOT turn every front-line advance into a permanent legal border. When you do not know the exact region id, preserve the grounded place wording in regionId and set fromCode so the native geography resolver can map it conservatively. Resolving ${playerName}'s own ordered military operations into their real control consequences is REQUIRED and is never a player-agency violation. If nothing actually changed control or sovereignty this period, keep capture/cession language out of the event text.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    systemPrompt = `${systemPrompt}\n\n[Map Truth — Control is not Sovereignty]\nTerritorial narration and the map must never disagree, but wartime control and legal sovereignty are DIFFERENT things. A battle capture, occupation, liberation or retaking uses impacts.regionControlOps (usually op=control; op=contest while the region is actively disputed). A treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement uses impacts.regionTransfers because legal sovereignty changed. Do NOT turn every front-line advance into a permanent legal border. When you do not know the exact region id, preserve the grounded place wording in regionId and set fromCode so the native geography resolver can map it conservatively. Resolving ${playerName}'s own ordered military operations into their real control consequences is REQUIRED and is never a player-agency violation. If nothing actually changed control or sovereignty this period, keep capture/cession language out of the event text.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    if (normalizeString(variables.groupsContext)) {
+      systemPrompt = `${systemPrompt}\n\n[Groups]\nActors that are not countries, each controlling an area of regions that stay their countries'. Their exact names, what each is, and where it controls (groupOps creates, changes, erases them and moves their areas):\n${normalizeString(variables.groupsContext)}`;
+    }
     // The prose rule above, as a field the model has to fill in and the engine
     // reads (runtime/territoryBasis.js): a transfer that admits it is only a claim
     // becomes a claim instead of a border.
@@ -2750,6 +2757,9 @@ So use the wider picture to choose the sender and the moment — never to give t
   // every narrated place must have its own operation.
   if (taskKey === "gameMaster") {
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    if (normalizeString(variables.groupsContext)) {
+      systemPrompt = `${systemPrompt}\n\n[Groups]\nActors that are not countries, each controlling an area of regions that stay their countries'. Their exact names, what each is, and where it controls (groupOps creates, changes, erases them and moves their areas):\n${normalizeString(variables.groupsContext)}`;
+    }
   }
 
   if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
@@ -3938,7 +3948,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
   "regionTransfers", "regionClaims", "regionControlOps", "polityChanges", "politicalActorOps",
-  "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "actionIds",
+  "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "groupOps", "actionIds",
 ];
 const eventCarriesOwnConsequence = (event) =>
   OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
@@ -5719,6 +5729,47 @@ const resolveRegionTransfers = async (containers, world, {
     }
     impacts.regionClaims = kept;
   }
+
+  // A group's area names regions the way a claim does — an exact id, or a plain
+  // name — and, like a claim, moves no border, so a region that matches nothing
+  // is dropped with a note instead of costing a retry. A release whose every
+  // region was dropped is dropped whole: an empty list means "release all".
+  for (const { impacts, path } of containers) {
+    const ops = normalizeArray(impacts?.groupOps);
+    if (ops.length === 0) continue;
+    const kept = [];
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const list = Array.isArray(op.regionIds) ? op.regionIds
+        : Array.isArray(op.regions) ? op.regions
+          : op.regionId ? [op.regionId] : [];
+      const resolved = [];
+      for (const token of list) {
+        const id = normalizeString(token);
+        if (byId.has(id)) {
+          resolved.push(id);
+          continue;
+        }
+        const aliased = byAliasId.get(id) ?? [];
+        const named = byName.get(regionKey(token)) ?? [];
+        const matches = aliased.length === 1 ? aliased : named;
+        if (matches.length === 1) {
+          resolved.push(matches[0].id);
+          continue;
+        }
+        console.warn(
+          `[ai] ${path}.groupOps dropped region "${id}" for ${normalizeString(op.name)}: ` +
+            "no single map region matches that id or name.",
+        );
+      }
+      if (list.length > 0 && resolved.length === 0 && normalizeGroupOp(op)?.op === "release") continue;
+      delete op.regions;
+      delete op.regionId;
+      op.regionIds = [...new Set(resolved)];
+      kept.push(op);
+    }
+    impacts.groupOps = kept;
+  }
   // The foundings this pass decided, as create entries on the first event that
   // named each polity (the collector skipped names the payload already declares).
   // Prepended, so a model's own later entry for the same name still lands on top
@@ -5825,6 +5876,29 @@ const validateExactApprovedRegionClaims = (containers) => {
     const regionId = normalizeString(claim?.regionId);
     if (!regionId || !exactIds.has(regionId)) {
       return `${path}.regionClaims[${claimIndex}].regionId "${regionId || "(blank)"}" is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved claim.`;
+    }
+  }
+  return "";
+};
+
+// The same guard for groups' areas: Apply takes the previewed ids as they are.
+const validateExactApprovedGroupAreas = (containers) => {
+  const entries = [];
+  for (const { impacts, path } of containers) {
+    for (const [opIndex, op] of normalizeArray(impacts?.groupOps).entries()) {
+      for (const regionId of normalizeArray(op?.regionIds)) entries.push({ regionId: normalizeString(regionId), opIndex, path });
+    }
+  }
+  if (entries.length === 0) return "";
+
+  const exactCatalog = getPrimedScenarioRegionCatalog() ?? [];
+  if (!Array.isArray(exactCatalog) || exactCatalog.length === 0) {
+    return "Approved group areas cannot be revalidated because the compact scenario region catalog is not primed; regenerate the GM preview after the map finishes loading.";
+  }
+  const exactIds = new Set(exactCatalog.map((region) => normalizeString(region?.id)).filter(Boolean));
+  for (const { regionId, opIndex, path } of entries) {
+    if (!regionId || !exactIds.has(regionId)) {
+      return `${path}.groupOps[${opIndex}].regionIds has "${regionId || "(blank)"}", which is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved group area.`;
     }
   }
   return "";
@@ -6098,6 +6172,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
+    const exactGroupError = validateExactApprovedGroupAreas(containers);
+    if (exactGroupError) return exactGroupError;
   }
   // Reluctance guard (strict attempt only): events that NARRATE a capture while
   // the whole payload ships ZERO regionTransfers are the recurring field report
@@ -8058,7 +8134,6 @@ const buildTargetDossier = async (bundle, code, normalizedWorld = null) => {
         polity.aliases?.length > 0 ? ` — also known as ${polity.aliases.join(", ")}` : ""
       }`,
     );
-    if (polity.role) lines.push(`What it is: ${polity.role}`);
     if (polity.note) lines.push(`Notes: ${polity.note}`);
   }
 
@@ -14571,6 +14646,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     "markerOps",
     "institutionLifecycleOps",
     "projectOps",
+    "groupOps",
   ]) {
     if (normalizeArray(impacts[field]).length > 0) return true;
   }
@@ -15322,12 +15398,14 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
   const controlOps = impactCount("regionControlOps");
   const claims = impactCount("regionClaims");
   const politicalOps = impactCount("politicalActorOps");
+  const groupOps = impactCount("groupOps");
   const parts = [
     events.length ? `wrote ${events.length === 1 ? "the event" : `${events.length} events`} ${titles}${events.length > 3 ? " and more" : ""} into the record` : "",
     legalTransfers ? `${legalTransfers} legal territorial transfer${legalTransfers === 1 ? "" : "s"}` : "",
     controlOps ? `${controlOps} de-facto control operation${controlOps === 1 ? "" : "s"}` : "",
     claims ? `${claims} territorial claim operation${claims === 1 ? "" : "s"}` : "",
     politicalOps ? `${politicalOps} political-actor operation${politicalOps === 1 ? "" : "s"}` : "",
+    groupOps ? `${groupOps} group operation${groupOps === 1 ? "" : "s"}` : "",
     statCountries.length ? `set the figures of ${statCountries.join(", ")}` : "",
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
@@ -15354,6 +15432,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
       ["unitOps", "unit"],
       ["markerOps", "marker"],
       ["institutionLifecycleOps", "institution"],
+      ["groupOps", "group"],
       ["createdChats", "event-chat"],
     ]) {
       normalizeArray(impacts[field]).forEach((_, index) => labels.push(`${prefix}:${eventIndex}:${index}`));

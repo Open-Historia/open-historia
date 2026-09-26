@@ -163,6 +163,19 @@ const rekeyPoliticalActors = (politicalActors, fromKey, to) => {
   return { ...politicalActors, byPolity };
 };
 
+// A subordination names both parties, and whoever knows of it.
+const renamePuppetRow = (row, from, to) => ({
+  ...row,
+  overlord: mapName(row.overlord, from, to),
+  puppet: mapName(row.puppet, from, to),
+  ...(Array.isArray(row.knownTo)
+    ? {
+        knownTo: row.knownTo.map((entry) => (
+          typeof entry === "string" ? mapName(entry, from, to) : isRecord(entry) ? { ...entry, polity: mapName(entry.polity, from, to) } : entry
+        )),
+      }
+    : {}),
+});
 // The rename in a world: returns { world, from, to } with `from` the key the
 // old name resolved to. Throws when the new name is another polity's.
 export const renamePolityInWorld = (world, fromName, toName) => {
@@ -193,6 +206,7 @@ export const renamePolityInWorld = (world, fromName, toName) => {
     ...(agreement.beneficiary ? { beneficiary: one(agreement.beneficiary) } : {}),
   })));
   put("storylines", mapRows(world?.storylines, (storyline) => ({ ...storyline, participants: mapList(storyline.participants, fromKey, to) })));
+  put("puppets", mapRows(world?.puppets, (row) => renamePuppetRow(row, fromKey, to)));
   put("projects", mapRows(world?.projects, (project) => ({ ...project, ownerCode: one(project.ownerCode) })));
   for (const field of ["countryStats", "countryTags", "internationalReputation", "intelligence", "playerGoals"]) {
     put(field, mapKeys(world?.[field], fromKey, to));
@@ -263,5 +277,8 @@ export const renamePolityInDocument = (doc, fromName, toName) => {
     ...(typeof feature.country === "string" ? { country: mapName(feature.country, fromKey, to) } : {}),
     ...(typeof feature.owner === "string" ? { owner: mapName(feature.owner, fromKey, to) } : {}),
   })));
+  // The starting units and the puppet states follow their polity too.
+  put("units", mapRows(doc?.units, (unit) => ({ ...unit, ownerCode: mapName(unit.ownerCode, fromKey, to) })));
+  put("puppets", mapRows(doc?.puppets, (row) => renamePuppetRow(row, fromKey, to)));
   return next;
 };

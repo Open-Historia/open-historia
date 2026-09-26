@@ -1,11 +1,11 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
+import { applyGroupOps, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
-import { normalizePolityRole } from "../../server/polityRole.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
@@ -209,6 +209,13 @@ export const WORLD_DEFAULTS = {
   // bakes in again. A region disputed anew leaves the list. See
   // settleRegionClaims.
   settledRegionClaims: [],
+  // Groups: actors that are not countries — a terrorist organisation, a cartel,
+  // a zombie outbreak — keyed by exact name, each with a description (what the
+  // AI is told it is) and a colour (runtime/groups.js). A group owns no land;
+  // groupAreas says which regions it CONTROLS (region id -> group name, one
+  // group per region), drawn outlined and tinted over the countries' colours.
+  groups: {},
+  groupAreas: {},
   regionOwnershipOverrides: {},
   // Legal sovereignty where it differs from the polity administering a region
   // (an occupation). Sparse: normal territory has no row. Written by legal
@@ -1041,14 +1048,8 @@ const normalizeRegionClaim = (entry) => {
     return null;
   }
 
-  // What the claimant IS, when the claim says ("a terrorist organisation", "the
-  // rebel side of the civil war"): written onto the claimant's record as its
-  // role (server/polityRole.js), so it follows the claimant everywhere. Only
-  // present when given — a claim that says nothing leaves the role alone.
-  const claimantRole = normalizePolityRole(entry.claimantRole ?? entry.role ?? entry.claimantType);
   return {
     claimantCode,
-    ...(claimantRole ? { claimantRole } : {}),
     drop: entry.drop === true || entry.drop === "true" || entry.op === "drop" || entry.op === "renounce",
     note: normalizeOptionalString(entry.note || entry.reason),
     regionId,
@@ -1075,27 +1076,22 @@ const normalizeRegionControlOp = (entry) => {
 
   if (!regionId) return null;
 
-  // What the contesting or newly controlling side is ("the rebel side of the
-  // civil war"): its role (server/polityRole.js), only when the op says.
   if (op === "contest") {
     const actorCode = toCountryName(normalizeOptionalString(entry.actorCode || entry.claimantCode || entry.toCode));
     if (!fromCode || !actorCode || fromCode.toLowerCase() === actorCode.toLowerCase()) return null;
-    const actorRole = normalizePolityRole(entry.actorRole ?? entry.claimantRole ?? entry.role);
-    return { op, regionId, regionName, fromCode, actorCode, ...(actorRole ? { actorRole } : {}), note };
+    return { op, regionId, regionName, fromCode, actorCode, note };
   }
 
   if (op === "control" || op === "control_flip") {
     const toCode = toCountryName(normalizeOptionalString(entry.toCode || entry.controllerCode || entry.ownerCode));
     if (!fromCode || !toCode || fromCode.toLowerCase() === toCode.toLowerCase()) return null;
     const basis = normalizeTerritoryBasis(entry.basis);
-    const toRole = normalizePolityRole(entry.toRole ?? entry.role);
     return {
       op: "control",
       regionId,
       regionName,
       fromCode,
       toCode,
-      ...(toRole ? { toRole } : {}),
       note,
       ...(basis ? { basis } : {}),
       ...(entry.wholeCountry === true ? { wholeCountry: true } : {}),
@@ -1157,9 +1153,6 @@ const normalizePolityChange = (entry) => {
   const rawOperation = normalizeOptionalString(entry.operation || entry.op || entry.action).toLowerCase();
   const operation = POLITY_OPERATION_SET.has(rawOperation) ? rawOperation : "update";
 
-  // A new role replaces the old one; nothing (or an empty string, which a model
-  // fills optional fields with) keeps it.
-  const role = normalizePolityRole(entry.role ?? entry.polityRole);
   return {
     aliases: normalizeActionParticipants(entry.aliases || entry.additionalNames),
     code,
@@ -1169,7 +1162,6 @@ const normalizePolityChange = (entry) => {
     note: normalizeOptionalString(entry.note || entry.reason),
     operation,
     reputation,
-    ...(role ? { role } : {}),
     stats,
     tags,
   };
@@ -3248,6 +3240,7 @@ const normalizeEventImpacts = (value) => {
     return {
       actionIds: [],
       createdChats: [],
+      groupOps: [],
       institutionLifecycleOps: [],
       markerOps: [],
       polityChanges: [],
@@ -3265,6 +3258,9 @@ const normalizeEventImpacts = (value) => {
   return {
     actionIds: normalizeActionParticipants(value.actionIds),
     createdChats: normalizeArray(value.createdChats).map(normalizeCreatedChat).filter(Boolean),
+    // Groups the event creates, changes or erases, and the regions they take or
+    // lose (runtime/groups.js).
+    groupOps: normalizeArray(value.groupOps).map(normalizeGroupOp).filter(Boolean),
     institutionLifecycleOps: normalizeArray(value.institutionLifecycleOps).map(normalizeInstitutionLifecycleImpactOp).filter(Boolean),
     markerOps: normalizeArray(value.markerOps).map(normalizeMarkerOp).filter(Boolean),
     polityChanges: normalizeArray(value.polityChanges).map(normalizePolityChange).filter(Boolean),
@@ -3463,8 +3459,6 @@ const normalizePolityOverride = (key, value) => {
     ...(normalizeOptionalString(value.mapDistinctLabel) ? { mapDistinctLabel: normalizeOptionalString(value.mapDistinctLabel) } : {}),
     name: normalizeOptionalString(value.name || value.label),
     note: normalizeOptionalString(value.note),
-    // What this power is, in the author's or the AI's own words (server/polityRole.js).
-    ...(normalizePolityRole(value.role) ? { role: normalizePolityRole(value.role) } : {}),
     ...(POLITY_STATUS_SET.has(status) ? { status } : {}),
     ...(value.verbatim === true ? { verbatim: true } : {}),
   };
@@ -3928,6 +3922,9 @@ export const normalizeWorldState = (world) => {
 
   // Settled disputes: unique region ids, none of them disputed again — a live
   // claimant list is the region's state and wins.
+  const groups = normalizeGroups(nextWorld.groups);
+  const groupAreas = normalizeGroupAreas(nextWorld.groupAreas, groups);
+
   const settledRegionClaims = [...new Set(
     normalizeArray(nextWorld.settledRegionClaims).map((regionId) => normalizeOptionalString(regionId)),
   )].filter((regionId) => regionId && !Object.prototype.hasOwnProperty.call(regionClaimants, regionId));
@@ -4052,6 +4049,8 @@ export const normalizeWorldState = (world) => {
     polityOverrides,
     regionClaimants,
     settledRegionClaims,
+    groups,
+    groupAreas,
     regionOwnershipOverrides,
     regionSovereigntyOverrides,
     simulationHistory: normalizeArray(nextWorld.simulationHistory)
@@ -4785,20 +4784,6 @@ const writeRegionSovereign = (world, regionId, sovereign) => {
 
 const POLITY_LIFECYCLE_STORES = ["countryStats", "countryTags", "internationalReputation", "intelligence"];
 
-// Writes a polity's role (server/polityRole.js) onto its record, found under any
-// case of its name; a polity with no record yet — a claimant the map knows only
-// from a claimant list, a real country the scenario never registered — gets one.
-const recordPolityRole = (world, name, role) => {
-  const text = normalizePolityRole(role);
-  const code = normalizeOptionalString(name);
-  if (!text || !code) return false;
-  if (!world.polityOverrides || typeof world.polityOverrides !== "object") world.polityOverrides = {};
-  const key = Object.keys(world.polityOverrides).find((entry) => samePolity(entry, code)) || code;
-  const current = world.polityOverrides[key] ?? { aliases: [], code: key, color: "", name: key, note: "", status: "active" };
-  world.polityOverrides[key] = { ...current, role: text };
-  return true;
-};
-
 const applyPolityAndTerritoryImpacts = ({
   colors, eventDate = "", eventId = "", polityChanges = [], regionClaims = [], regionControlOps = [], regionTransfers = [], resolveOwner, world,
 }) => {
@@ -4854,9 +4839,6 @@ const applyPolityAndTerritoryImpacts = ({
     const claimant = resolveOwner(claim.claimantCode) || claim.claimantCode;
     // A claimant nobody knows becomes a landless polity rather than a phantom name.
     if (!claim.drop) foundPolityIfUnknown(world, colors, claimant);
-    // What the claimant is, when the claim says: onto its record, which a
-    // claimant known only from a claimant list gets now.
-    if (!claim.drop && claim.claimantRole) recordPolityRole(world, claimant, claim.claimantRole);
     const current = normalizeArray(world.regionClaimants[claim.regionId])
       .map((entry) => normalizeOptionalString(entry))
       .filter(Boolean);
@@ -4925,7 +4907,6 @@ const applyPolityAndTerritoryImpacts = ({
       const actor = resolveOwner(op.actorCode) || normalizeOptionalString(op.actorCode);
       if (!actor || samePolity(actor, currentController)) continue;
       foundPolityIfUnknown(world, colors, actor);
-      if (op.actorRole) recordPolityRole(world, actor, op.actorRole);
       const claimants = [...existing, actor];
       if (legalSovereign && currentController && !samePolity(legalSovereign, currentController)) claimants.push(legalSovereign);
       writeRegionClaimants(world, regionId, claimants.filter((name) => !samePolity(name, currentController)));
@@ -4936,7 +4917,6 @@ const applyPolityAndTerritoryImpacts = ({
       const toCode = resolveOwner(op.toCode) || normalizeOptionalString(op.toCode);
       if (!toCode) continue;
       foundPolityIfUnknown(world, colors, toCode);
-      if (op.toRole) recordPolityRole(world, toCode, op.toRole);
       world.regionOwnershipOverrides[regionId] = toCode;
       writeRegionSovereign(world, regionId, legalSovereign);
       const claimants = existing.filter((name) => !samePolity(name, toCode));
@@ -5000,7 +4980,6 @@ const applyPolityAndTerritoryImpacts = ({
       ...(change.color ? { color: change.color } : {}),
       name: code,
       ...(change.note ? { note: change.note } : {}),
-      ...(change.role ? { role: change.role } : {}),
     };
 
     if (change.color) {
@@ -5192,6 +5171,14 @@ export const applyEventImpactsToWorld = ({
       // to the new key. This ordering is what makes rename + replace-leader in
       // one event mutate one canonical actor rather than minting a stale-key twin.
       resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+    }
+
+    // Groups after the land has moved, so a group can take what the same event
+    // just changed hands.
+    if (event.impacts.groupOps?.length) {
+      const applied = applyGroupOps(nextWorld, event.impacts.groupOps);
+      nextWorld.groups = applied.groups;
+      nextWorld.groupAreas = applied.groupAreas;
     }
 
     if (event.impacts.politicalActorOps?.length) {

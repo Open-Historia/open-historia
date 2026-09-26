@@ -14,6 +14,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { mergeCityMarkers } from "./cityMarkers.js";
+import { withoutPolities } from "./scenarioPuppets.js";
 
 // The official editor ships a handful of region "types" carrying render +
 // gameplay settings. We seed the two core ones (Land / Coastal); users add more.
@@ -103,6 +104,13 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // mirrors world.polityOverrides instead of the old editor rule that
     // "a country exists because a region contains its display name".
     polities: {},
+    // Groups (runtime/groups.js): name -> { name, description, color }. A region
+    // in a group's area carries the group's name as its `group`; the export
+    // writes world.groups and world.groupAreas (exportPreset.js).
+    groups: {},
+    // Puppet states the scenario starts with, as world.puppets rows
+    // (scenarioPuppets.js); set in the Countries panel.
+    puppets: [],
   };
 };
 
@@ -242,7 +250,7 @@ export const useMapDocument = (initial) => {
       delete colorOverrides[stableKey];
       delete flags[stableKey];
       delete tags[stableKey];
-      return { ...d, polities, colorOverrides, flags, tags };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey) };
     });
     setSaveStatus("dirty");
   }, []);
@@ -261,7 +269,7 @@ export const useMapDocument = (initial) => {
         delete flags[stableKey];
         delete tags[stableKey];
       }
-      return { ...d, polities, colorOverrides, flags, tags };
+      return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys) };
     });
     setSaveStatus("dirty");
   }, []);
@@ -415,6 +423,14 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, features: typeof updater === "function" ? updater(d.features) : updater }));
     setSaveStatus("dirty");
   }, []);
+  const setGroups = useCallback((updater) => {
+    setDoc((d) => ({ ...d, groups: typeof updater === "function" ? updater(d.groups || {}) : (updater || {}) }));
+    setSaveStatus("dirty");
+  }, []);
+  const setPuppets = useCallback((updater) => {
+    setDoc((d) => ({ ...d, puppets: typeof updater === "function" ? updater(d.puppets || []) : (updater || []) }));
+    setSaveStatus("dirty");
+  }, []);
   const setUnits = useCallback((updater) => {
     setDoc((d) => ({ ...d, units: typeof updater === "function" ? updater(d.units || []) : (updater || []) }));
     setSaveStatus("dirty");
@@ -451,6 +467,10 @@ export const useMapDocument = (initial) => {
     setFeatures,
     units: doc.units || [],
     setUnits,
+    groups: doc.groups || {},
+    setGroups,
+    puppets: doc.puppets || [],
+    setPuppets,
     metadata: doc.metadata,
     basemap: doc.metadata.basemap,
     setBasemap,

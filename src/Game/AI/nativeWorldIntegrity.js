@@ -591,6 +591,7 @@ const hardImpactKeysForEvent = (event) => {
   for (const key of [
     "regionTransfers",
     "regionClaims",
+    "groupOps",
     "regionControlOps",
     "politicalActorOps",
     "unitOps",
