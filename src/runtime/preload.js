@@ -12,6 +12,7 @@ import {
   warmRemoteResources,
 } from "./assets.js";
 import { warmCountryLabelCollections } from "./countryLabels.js";
+import { warmsWholeMapArchives } from "./deviceProfile.js";
 import { logDebugEvent } from "./debugLog.js";
 import { isBrowserOnline } from "./networkStatus.js";
 
@@ -23,8 +24,8 @@ const INITIAL_VIEWPORT = {
 
 // ESRI and the AWS terrain bucket both speak HTTP/2, so these are multiplexed
 // streams rather than sockets — 6 left the pipe mostly idle for the whole warm.
-// 12 matches the parallelism configureMapRuntime() already hands MapLibre for
-// exactly these hosts.
+// 12 sits within the parallelism Game/Map/mapLibreSetup.js hands MapLibre for
+// exactly these hosts on a desktop.
 const TEXTURE_WARM_CONCURRENCY = 12;
 
 const buildGlobalTextureUrls = (template, maxZoom) => {
@@ -156,7 +157,8 @@ const STARTUP_TASKS = [
     weight: 26,
     deps: [],
     background: true,
-    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal }),
+    // Not in a phone's browser: range reads there (deviceProfile.js warmsWholeMapArchives).
+    run: ({ signal }) => (warmsWholeMapArchives() ? warmPmtilesArchive(PMTILES_ARCHIVES.countries, { signal }) : null),
   },
   {
     id: "country-index",
@@ -207,7 +209,8 @@ const STARTUP_TASKS = [
     weight: 24,
     deps: [],
     background: true,
-    run: ({ signal }) => warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal }),
+    // Not in a phone's browser: range reads there (deviceProfile.js warmsWholeMapArchives).
+    run: ({ signal }) => (warmsWholeMapArchives() ? warmPmtilesArchive(PMTILES_ARCHIVES.regions, { signal }) : null),
   },
 ];
 

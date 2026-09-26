@@ -1,5 +1,4 @@
 import { createRoot } from "react-dom/client";
-import { configureMapRuntime } from "./runtime/assets.js";
 import { installAppHeight } from "./runtime/mobileUi.js";
 import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
 import { isGenerating } from "./Game/AI/simulationStatus.js";
@@ -30,7 +29,8 @@ const mount = () => {
     // Before the first render: every panel sizes itself from the visible height
     // (runtime/mobileUi.js), which on a phone is not 100vh.
     installAppHeight();
-    configureMapRuntime();
+    // MapLibre is configured by the map's own chunk as it loads
+    // (Game/Map/mapLibreSetup.js), so the library stays out of this one.
     createRoot(document.getElementById("root"), {
         // React console.errors every error a boundary catches, before the
         // boundary's componentDidCatch runs. Still printed for a developer, but
