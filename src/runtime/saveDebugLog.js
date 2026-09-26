@@ -13,10 +13,10 @@
 //   * Logging turned off. There is no log to send, so the buttons go back to
 //     copying the failure on its own (copyIncidentReport) under their old
 //     labels, and switch over live if logging is turned back on.
-//   * The Android app. Its WebView cannot save a file — its download listener
-//     hands every URL to the system browser, and a blob: URL means nothing
-//     there — so the same report goes to the clipboard instead, and the button
-//     says so. Anything else that stops the download falls back the same way.
+//   * A save that fails. The file goes out through runtime/saveFile.js — a
+//     download in a browser, Downloads/Open Historia in the Android app — and if that
+//     throws, the same report goes to the clipboard instead, and the button says
+//     so.
 import { useState, useSyncExternalStore } from "react";
 import { copyToClipboard } from "./clipboard.js";
 import {
@@ -26,28 +26,18 @@ import {
     isDebugLogEnabled,
     subscribeToDebugLog,
 } from "./debugLog.js";
-import { isNativeApp } from "./web/nativeBoot.js";
+import { saveBlobToDisk } from "./saveFile.js";
 
 // Resolves to "saved", "copied" (the clipboard fallback) or "failed". The file
 // carries the Desktop log too, where there is one (see buildLoggingFile).
 export const saveDebugLogFile = async ({ incident } = {}) => {
     const report = await buildLoggingFile({ incident });
-    if (!isNativeApp()) {
-        try {
-            const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = debugLogFilename(incident?.kind);
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            // Revoked on the next tick, not immediately: Firefox cancels a
-            // download whose blob URL is revoked in the same task as the click.
-            setTimeout(() => URL.revokeObjectURL(url), 1000);
-            return "saved";
-        } catch { /* fall through to the clipboard */ }
-    }
+    // runtime/saveFile.js: a download in a browser, Downloads/Open Historia (or the
+    // share sheet) in the Android app. Either failing falls through to the clipboard below.
+    try {
+        const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+        return await saveBlobToDisk(blob, debugLogFilename(incident?.kind));
+    } catch { /* fall through to the clipboard */ }
     return (await copyToClipboard(report)) ? "copied" : "failed";
 };
 

@@ -19,6 +19,7 @@ import {
   resolveBasemapId,
 } from "../../runtime/assets.js";
 import { MAP_SETTING_KEYS, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { useBrowserOnline } from "../../runtime/networkStatus.js";
 import { markMapIdle } from "../../runtime/mapReadiness.js";
 
 // The high-res source goes through the ohbase protocol so ESRI's "Map Data
@@ -78,6 +79,28 @@ const PAX_WORLD_RELIEF_PAINT = {
     4.00, 0.42,
     4.45, 0.16,
     4.85, 0,
+  ],
+};
+
+// With no network at all every basemap here is out of reach (they are remote
+// tile services), so the sea used to be plain black offline and each start
+// logged ~90 failed tile requests. The game carries its own copy of the same
+// ETOPO1 relief for that: levels 0-3, public domain (public/offline-relief/
+// SOURCE.txt), overzoomed past z3 and dimmed as it blurs.
+const OFFLINE_RELIEF_TILES = "/offline-relief/{z}/{y}/{x}.jpg";
+
+const OFFLINE_RELIEF_PAINT = {
+  "raster-resampling": "linear",
+  "raster-fade-duration": 0,
+  "raster-saturation": -0.26,
+  "raster-contrast": 0.36,
+  "raster-brightness-min": 0.015,
+  "raster-brightness-max": 0.68,
+  "raster-opacity": [
+    "interpolate", ["linear"], ["zoom"],
+    0, 1,
+    5, 1,
+    8, 0.55,
   ],
 };
 
@@ -230,7 +253,7 @@ const WORLD_IMAGE_COORDS_GLOBE = [
   [-180, -89.9],
 ];
 
-const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled) => {
+const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled, offline = false) => {
   // A custom uploaded map replaces the ESRI basemap entirely — no satellite or
   // terrain tiles load at all (saves those requests), the uploaded map is the
   // base layer, and the regions/labels from <Nations> paint on top of it.
@@ -276,6 +299,28 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       version: 8,
       sources: {},
       layers: [{ id: "custom-bg-loading", type: "background", paint: { "background-color": "#0b1a2b" } }],
+      sky: { "atmosphere-blend": 0 },
+    };
+  }
+  // No network at all: the bundled relief, whichever basemap was picked, and no
+  // remote source — not the ESRI tiles, not the DEM (3D terrain waits for the
+  // network to come back).
+  if (offline) {
+    return {
+      version: 8,
+      sources: {
+        "offline-relief": {
+          type: "raster",
+          tiles: [OFFLINE_RELIEF_TILES],
+          tileSize: 256,
+          maxzoom: 3,
+          attribution: "Relief: NOAA/NCEI ETOPO1",
+        },
+      },
+      layers: [
+        { id: "strategy-map-base", type: "background", paint: { "background-color": "#0b1017" } },
+        { id: "offline-relief-layer", type: "raster", source: "offline-relief", paint: OFFLINE_RELIEF_PAINT },
+      ],
       sky: { "atmosphere-blend": 0 },
     };
   }
@@ -564,9 +609,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // layers locally. Keep the official source JSON cached for the session; while
   // it arrives, render the already-label-free Atlas Relief Dark composition so
   // the user never sees a bright or politically-labelled flash.
+  // No network at all: buildWorldStyle draws the bundled relief instead of any
+  // remote basemap, and the NatGeo vector style is not fetched.
+  const online = useBrowserOnline();
   const natGeoDarkActive = effectiveBasemap === "natgeo-dark"
     && !effectiveCustomBg
-    && !effectiveBgDeclared;
+    && !effectiveBgDeclared
+    && online;
   const [natGeoDarkStyle, setNatGeoDarkStyle] = useState(null);
   useEffect(() => {
     if (!natGeoDarkActive) {
@@ -619,6 +668,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       effectiveBgDeclared,
       styleUsesGlobeCoords,
       terrainEnabled,
+      !online,
     );
   }, [
     effectiveBasemap,
@@ -626,6 +676,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     effectiveCustomBg,
     natGeoDarkActive,
     natGeoDarkStyle,
+    online,
     styleUsesGlobeCoords,
     terrainEnabled,
   ]);
@@ -637,9 +688,14 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // Remount once the remote vector style becomes ready. MapLibre style swaps
   // otherwise destroy/recreate style-owned layers under a live React Source
   // tree; a clean remount is both safer and covered by the existing map loader.
+  // Losing or regaining the network remounts too, like a basemap change: swapped
+  // in place, the style diff dropped every layer the React tree had added (the
+  // political fills went grey when the network came back), and MapLibre will not
+  // remove the DEM source while 3D terrain is using it.
+  const connectivityKey = online ? "" : ":offline";
   const mapInstanceKey = natGeoDarkActive
     ? `${basemapRenderKey}:natgeo-dark-${natGeoDarkStyle ? "ready" : "loading"}`
-    : basemapRenderKey;
+    : `${basemapRenderKey}${connectivityKey}`;
   // 3D terrain deforms the mesh using the same raster-dem source that drives
   // the "hills" hillshade layer in buildWorldStyle. It only applies against the
   // real ESRI/NOAA basemap — a custom uploaded image or vector background has
@@ -647,13 +703,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // the player has the setting enabled.
   const terrain = useMemo(
     () =>
-      terrainEnabled && !effectiveCustomBg && !effectiveBgDeclared
+      terrainEnabled && online && !effectiveCustomBg && !effectiveBgDeclared
         ? {
             source: "terrain-source",
             exaggeration: 15,
           }
         : null,
-    [terrainEnabled, effectiveCustomBg, effectiveBgDeclared],
+    [terrainEnabled, online, effectiveCustomBg, effectiveBgDeclared],
   );
   // R5.1: use one renderer density for the entire session.
   // R5.0 switched between 1x and native DPR around z4.5/z5.0.

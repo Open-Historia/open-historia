@@ -1,6 +1,9 @@
 /*! Open Historia — portions (loading-screen cycling + creator credit) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "./mobileUi.js";
+// Cinzel + EB Garamond from the bundle rather than Google Fonts: no request to
+// Google on every start, and the right faces with no network.
+import "../assets/fonts/fonts.css";
 
 // Loading-screen artwork. The first is the original; the rest cycle in once the
 // files exist in /public. Missing files are skipped (see the preload check), so
@@ -10,7 +13,7 @@ const LOADING_IMAGES = [
   "/loading_screen_2.jpg",
   "/loading_screen_3.jpg",
   "/loading_screen_4.jpg",
-  "/loading_screen_5.png",
+  "/loading_screen_5.webp",
 ];
 const IMAGE_ROTATE_MS = 4500;
 
@@ -84,8 +87,6 @@ const StartupScreen = ({
   return (
     <>
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap');
-
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
       .ss-shell {

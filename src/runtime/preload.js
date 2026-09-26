@@ -13,6 +13,7 @@ import {
 } from "./assets.js";
 import { warmCountryLabelCollections } from "./countryLabels.js";
 import { logDebugEvent } from "./debugLog.js";
+import { isBrowserOnline } from "./networkStatus.js";
 
 export const STARTUP_TIME_BUDGET_MS = 30_000;
 const INITIAL_VIEWPORT = {
@@ -129,6 +130,9 @@ const STARTUP_TASKS = [
       // world.json was already warmed into cache by the "state" task above.
       const world = await readJson(JSON_URLS.world, { defaultValue: {} }).catch(() => ({}));
       if (world?.background?.kind) return undefined;
+      // No network at all: the map draws its bundled relief (World.jsx), and
+      // every one of these requests would only fail.
+      if (!isBrowserOnline()) return undefined;
       return warmRemoteResources(
         [
           ...buildGlobalTextureUrls(esriTileTemplate(selectedBasemapId()), 2),
@@ -162,7 +166,9 @@ const STARTUP_TASKS = [
     // getPmtilesArchive serves over range reads while the full archive warms in
     // the background; waiting for the whole thing would put 60 MB in front of a
     // 40 KB read. The archive is registered under its URL either way, so whichever
-    // source is live when this runs answers with the same bytes.
+    // source is live when this runs answers with the same bytes. (Not on Android:
+    // its APK assets cannot be range-read, so there the read waits for the whole
+    // file — see wholeFileSource.js.)
     deps: [],
     run: () => loadCountryNames(),
   },

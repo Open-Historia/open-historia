@@ -58,7 +58,8 @@ import {
 import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
-import { isNativeApp } from "../../runtime/web/nativeBoot.js";
+import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { acceptFor } from "../../runtime/fileAccept.js";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -135,7 +136,7 @@ export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isM
 // fullscreen, a home-screen app); the inset is 0 everywhere else.
 const TOP_BAR_OFFSET = `calc(0.5rem + ${SAFE_TOP})`;
 
-const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.png";
+const DEFAULT_SCENARIO_COVER = "/scenario-placeholder.webp";
 
 const surfaceStyle = {
   background:
@@ -302,21 +303,10 @@ const buildGameEditorState = (details) => {
   };
 };
 
-// Scenario exports and JSON bundles only. It revokes the object URL in the same
-// task as the click, which Firefox treats as a cancelled download — a latent bug
-// in those two paths, left alone here because fixing them is not this change's
-// business. Anything NEW that saves a file should use saveGameZipToDisk in
-// runtime/gameZip.js, which defers the revoke.
-const saveBlobToDisk = (blob, fileName) => {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-};
+// Scenario exports and JSON bundles save through runtime/saveFile.js like every
+// other file: the anchor with the deferred revoke in a browser, Downloads/Open
+// Historia in the Android app. (The copy that lived here revoked the object URL in the
+// same task as the click, which Firefox treats as a cancelled download.)
 
 const saveJsonBundleToDisk = (bundle, fileName) => {
   saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
@@ -487,7 +477,7 @@ const PromptSectionEditor = ({
                   Import all prompts
                 </button>
                 <input
-                  accept=".json,application/json"
+                  accept={acceptFor(".json,application/json")}
                   onChange={handlePromptImportFile}
                   ref={promptFileInputRef}
                   style={{ display: "none" }}
@@ -860,12 +850,9 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
   const cardMenuItems = [
     ["Edit", () => { setCardMenuOpen(false); onEdit(game.id); }, false],
     ["Clone", () => { setCardMenuOpen(false); onClone(game); }, false],
-    // Android's WebView cannot save a file at all — its download listener hands
-    // every URL to the system browser, where a blob: URL means nothing (see
-    // saveDebugLog.js). The Diagnostics log copes by falling back to the
-    // clipboard; a multi-megabyte zip has nothing to fall back to, so the row is
-    // not offered rather than failing in silence. Same gate as Settings.
-    ...(isNativeApp() ? [] : [[exporting ? "Exporting…" : "Export", runExport, exporting]]),
+    // Offered everywhere, the Android app included: runtime/saveFile.js saves
+    // the zip into Downloads/Open Historia there (runtime/native/fileSave.js).
+    [exporting ? "Exporting…" : "Export", runExport, exporting],
   ];
 
   return (
@@ -1026,7 +1013,7 @@ const GameCard = ({ active, busy, game, onActivate, onArchive, onClone, onEdit, 
                         {label}
                       </button>
                     ))}
-                    {!isNativeApp() && (
+                    {(
                       <div
                         style={{
                           borderTop: "1px solid rgba(255,255,255,0.08)",
@@ -1507,7 +1494,7 @@ const EditorDrawer = ({
                       ref={(node) => {
                         fileInputsRef.current[assetKey] = node;
                       }}
-                      accept={(kind === "scenario" ? scenarioAssetAccept : gameAssetAccept)[assetKey]}
+                      accept={acceptFor((kind === "scenario" ? scenarioAssetAccept : gameAssetAccept)[assetKey])}
                       onChange={(event) => onFileSelect(assetKey, event)}
                       style={{ display: "none" }}
                       type="file"
@@ -1699,17 +1686,18 @@ const LibraryTopBar = () => {
     // the remounted menu must come up closed, over the new game.
     setMenuOpen(false);
     try {
+      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
+      // startDate/gameDate/round (the "Undated" bug). It rides on the create
+      // itself: patched in a second request, after `setActive` had switched to
+      // the game, the opening cover and the HUD named the scenario's default
+      // country until it landed.
+      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
       const details = await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
+        ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      // gamePatch merges — a full `game` write would REPLACE game.json and wipe
-      // startDate/gameDate/round (the "Undated" bug).
-      const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
-      if (Object.keys(gamePatch).length) {
-        await saveGame(details.game.id, { gamePatch });
-      }
       await openGameEditor(details.game.id);
     } catch (nextError) {
       setMenuOpen(true);
@@ -1732,6 +1720,10 @@ const LibraryTopBar = () => {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
         scenarioId: scenario.id,
+        // The faction's name from the first moment the game is active (the
+        // opening cover reads it); the save below writes it again once the
+        // faction is in the world it resolves against.
+        gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
       const gameId = details.game.id;
@@ -2653,12 +2645,10 @@ const LibraryTopBar = () => {
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
+      ...(seed.game?.country ? { gamePatch: { country: seed.game.country } } : null),
       setActive: true,
     });
     const newGameId = gameDetails.game.id;
-    if (seed.game?.country) {
-      await saveGame(newGameId, { gamePatch: { country: seed.game.country } });
-    }
 
     // Tear down all the library UI so the freshly-activated game is visible.
     setIsMapEditorOpen(false);
@@ -3132,7 +3122,7 @@ const LibraryTopBar = () => {
 
       <input
         ref={importScenarioInputRef}
-        accept=".json,application/json,.zip,application/zip"
+        accept={acceptFor(".json,application/json,.zip,application/zip")}
         onChange={handleImportScenarioFile}
         style={{ display: "none" }}
         type="file"
@@ -3142,7 +3132,7 @@ const LibraryTopBar = () => {
           because its restore points and any map ride beside it. */}
       <input
         ref={importGameInputRef}
-        accept=".zip,application/zip"
+        accept={acceptFor(".zip,application/zip")}
         onChange={handleImportGameFile}
         style={{ display: "none" }}
         type="file"

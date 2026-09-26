@@ -10,6 +10,10 @@ lerna-debug.log*
 node_modules
 dist
 dist-web
+# The Android bundle (npm run build:android) and the verified map data
+# mobile/scripts/stage-map-assets.mjs downloads for it.
+dist-android
+mobile/map-cache
 # Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and
 # big enough that a stray `git add -A` commits a whole copy of the website.
 dist-site

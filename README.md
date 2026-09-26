@@ -93,28 +93,25 @@ while preserving your saves, scenarios, and map data.
 > which can hide a Node.js that was installed for your own account.
 
 
-#### Android app (thin APK)
+#### Android app
 
-Easiest: download **`open-historia.apk`** from the
+Download **`open-historia.apk`** from the
 [**Android release**](https://github.com/Open-Historia/open-historia/releases/tag/android)
 and open it to install (allow installs from your browser when Android asks).
-It's a thin client: the game itself runs on whatever server it connects to, so you need
-one of the two:
-
-- **A desktop on the same network** running the launcher — turn on
-  **Settings → Network → "Let other devices connect"** there, then type the
-  address it shows you (e.g. `http://192.168.1.20:3000`) into the app once;
-  it's remembered. See
-  [Reaching the server from another device](#reaching-the-server-from-another-device).
-- **[Termux](https://termux.dev/) on the phone itself** running the server — the app
-  finds it on first launch by itself, no address needed.
+Everything is on the phone: your saves and scenarios, the scenario workshop and
+the world map — it plays in airplane mode from the first launch. The community
+hub and your own AI provider are the only things that use the network. A model
+running on your own network (Ollama, LM Studio) works too, with no CORS setup.
 
 <details>
 <summary>Build the APK yourself (needs the Android SDK)</summary>
 
 ```bash
+npm run build:android          # the app's bundle → dist-android/
 cd mobile
 npm install
+npm run map                    # fetches + verifies the map data into map-cache/
+npm run www                    # stages the bundle and the map into www/
 npx cap sync android
 cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
 ```
@@ -122,7 +119,8 @@ cd android && ./gradlew assembleDebug   # gradlew.bat on Windows
 The APK lands in `mobile/android/app/build/outputs/apk/debug/`. (Or open
 `mobile/android` in Android Studio and press Run.) Maintainers: the
 **Build Android APK** action in the Actions tab builds and republishes the
-release APK — run it after changing `mobile/`.
+release APK — run it after changing `mobile/` or the client. See
+[docs/mobile.md](docs/mobile.md).
 
 </details>
 

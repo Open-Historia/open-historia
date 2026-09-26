@@ -85,7 +85,6 @@ import {
 } from "../../runtime/debugLog.js";
 import { saveDebugLogFile } from "../../runtime/saveDebugLog.js";
 import { buildGameZipBlob, formatZipSize, saveGameZipToDisk } from "../../runtime/gameZip.js";
-import { isNativeApp } from "../../runtime/web/nativeBoot.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { usePresenceLeaving } from "./presence.jsx";
 import { ESRI_BASEMAPS, isBuiltinBasemapId } from "../../runtime/assets.js";
@@ -1549,8 +1548,8 @@ const DiagnosticsPanel = () => {
         setTimeout(() => setCopyState("idle"), 2500);
     };
 
-    // The same save the failure buttons use. Where no file can be saved (the
-    // Android app) it copies instead, and says so on the Copy button beside it.
+    // The same save the failure buttons use. Where the save fails it copies
+    // instead, and says so on the Copy button beside it.
     const handleDownload = async () => {
         if (await saveDebugLogFile() !== "copied") return;
         setCopyState("copied");
@@ -1559,9 +1558,8 @@ const DiagnosticsPanel = () => {
 
     // Two files, deliberately, and the .txt first. GitHub and Discord both preview
     // a .txt inline, so a maintainer reads the log without downloading anything;
-    // a log zipped in beside the game would be a file nobody opens. Hidden on
-    // Android, where the WebView cannot save a file at all (saveDebugLog.js) and
-    // a 4 MB zip has no clipboard to fall back to.
+    // a log zipped in beside the game would be a file nobody opens. In the
+    // Android app both go to Downloads/Open Historia (runtime/saveFile.js).
     const handleAttachGame = async () => {
         const { activeGame, activeGameId: gameId } = getLibraryState();
         if (!gameId) {
@@ -1621,8 +1619,9 @@ const DiagnosticsPanel = () => {
 
         {/* The save itself as a second file, for a report a maintainer has to
             reproduce: the log fingerprints the prompts, the game is what a prompt
-            can be rebuilt from. */}
-        {!isNativeApp() && (
+            can be rebuilt from. Offered in the Android app too since files save
+            to Downloads/Open Historia there (runtime/saveFile.js). */}
+        {(
         <button
         type="button"
         className="oh-tap-row"

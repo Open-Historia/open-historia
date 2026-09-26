@@ -5,6 +5,8 @@
 // basemap's payload into the map layer it needs. Thumbnails are generated small
 // so the picker can show many previews without lag.
 
+import { sha256Hex as sharedSha256Hex } from "./sha256.js";
+
 const API = "/api/basemaps";
 
 export const listBasemaps = async () => {
@@ -39,13 +41,10 @@ export const deleteBasemap = async (id) => {
 };
 
 // SHA-256 hex of a string — the basemap's content hash, used to dedupe identical
-// uploads locally and (later) to reference a matching community basemap.
-export const sha256Hex = async (str) => {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(str)));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-};
+// uploads locally and (later) to reference a matching community basemap. The
+// shared implementation (runtime/sha256.js) so it also works where WebCrypto is
+// withheld: the Android app's http origin.
+export const sha256Hex = (str) => sharedSha256Hex(String(str));
 
 // Downscale an image data URL to a small JPEG thumbnail (low-res preview so the
 // picker can render lots of them cheaply). Returns null on failure.

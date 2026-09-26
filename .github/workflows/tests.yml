@@ -39,3 +39,19 @@ jobs:
       # The same step the installer workflows run before they build.
       - name: Run the tests
         run: npm test
+
+      # The website's signed content manifest carries an expiry (trust.js), and an
+      # expired one silently turns every node fetch into an unverified origin
+      # fallback — which is exactly what happened when it lapsed on 2026-08-12 and
+      # nobody noticed for six weeks. Fail here two weeks before it lapses again.
+      - name: The content manifest is not about to expire
+        # Non-blocking until the owner re-signs the manifest with the offline root
+        # key: a red step that says why, not a wall in front of every push.
+        continue-on-error: true
+        run: |
+          node -e '
+            const { expires } = require("./public/content-manifest.json");
+            const left = (Date.parse(expires) - Date.now()) / 86400000;
+            if (!(left > 14)) { console.error(`public/content-manifest.json expires ${expires} (${left.toFixed(1)} days): re-sign it with scripts/sign-release.mjs`); process.exit(1); }
+            console.log(`content manifest valid for ${left.toFixed(0)} more days`);
+          '

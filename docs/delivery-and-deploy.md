@@ -15,7 +15,7 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 | `build` | `vite build` | `dist/` | *(default/desktop)* | `/` | The desktop/local app bundle. Served by the Express server (`server/server.js`) and copied into the Android app. |
 | `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`). Used by `WEB-DEPLOY.md`'s manual path. |
 | `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`. This is what actually deploys to production. |
-| `build:mobile-server` | `node scripts/build-mobile-server.mjs` | `mobile/nodejs-project/` | — | — | Assembles the embedded Node server for the APK. Runs *after* `build`. |
+| `build:android` | `node scripts/seed-web-defaults.mjs && vite build --mode android --outDir dist-android --emptyOutDir` | `dist-android/` | `VITE_OH_WEB` + `VITE_OH_NATIVE` | `.env.android` | The Android app's bundle. `mobile/scripts/stage-www.mjs` then lays the verified map data under `www/assets`. |
 | `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts:87`). |
 
 **The map-binary trap** (`vite.config.ts:10-60`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
@@ -37,11 +37,11 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 
 | Channel branch | What it feeds | CI trigger | Reaches players via |
 |---|---|---|---|
-| `main` | Stable | `app-bundle.yml` (push) → `app-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages | Desktop stable download; the live website |
-| `beta` | Beta testers | `app-bundle.yml` (push) → `app-beta` release | Desktop beta download |
-| `alpha` | Experimental staging | *(no push-triggered workflow)* — `android-apk-beta.yml` checks out `alpha` on demand | Only reaches users when its work is **bridged** into `beta`/`main`, or via a manually dispatched beta APK |
+| `main` | Stable | `app-bundle.yml` (push) → `app-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages; `android-apk.yml` (dispatch) → `android` release | Desktop stable download; the live website; the Android app |
+| `beta` | Beta testers | `app-bundle.yml` (push) → `app-beta` release; `android-apk-beta.yml` (dispatch) → `android-beta` release | Desktop beta download; the Android beta app |
+| `alpha` | Experimental staging | *(no push-triggered workflow)* | Only reaches users when its work is **bridged** into `beta`/`main` |
 
-`alpha` is a staging branch with **no CI publish trigger of its own**. Work on `alpha` does not reach any installed app or the website until it is bridged forward into `beta` (then `main`). The one exception is `android-apk-beta.yml`, which is dispatch-only and always builds from `alpha` regardless of where it is run (§4.3).
+`alpha` is a staging branch with **no CI publish trigger of its own**. Work on `alpha` does not reach any installed app or the website until it is bridged forward into `beta` (then `main`).
 
 ### The PR-triplet convention
 
@@ -67,17 +67,17 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 |---|---|---|---|---|---|
 | `app-stable` | `app-bundle.yml` | push to `main` | `Open-Historia.zip` (source + map data) | no (`--latest=false`) | One-download desktop install, stable |
 | `app-beta` | `app-bundle.yml` | push to `beta` | `Open-Historia.zip` | no (`--latest=false`) | One-download desktop install, beta |
-| `android` | `android-apk.yml` | `workflow_dispatch` / `android-v*` tag | `open-historia.apk` | no | Stable Android app; the app self-updates from here |
-| `android-beta` | `android-apk-beta.yml` *(off-main, §4.3)* | `workflow_dispatch`, checks out `alpha` | `pax-historia.apk` | **yes** (`--prerelease`) | Experimental in-app-server Android build; isolated from stable |
+| `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (`io.github.arkniem.paxhistoria`); it self-updates from here |
+| `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (`io.github.arkniem.paxhistoria.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
 | `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
 
-The APK asset name is contractual — it (and the Android `appId`) must not change, because anything holding a fixed release/asset URL keeps pointing at the old name. It WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match). The old asset has since been deleted from the `android` release (only `open-historia.apk` is there, checked 2026-09-10), so anything still fetching it by name gets a 404. In practice the in-app check reads `apk` out of `android/latest.json` rather than a fixed filename — and that file does not exist and is written by no workflow, so the in-app Android update is inert either way. Decide which of those two to fix before renaming it again.
+The APK asset names are contractual — they, and the two Android application ids (`io.github.arkniem.paxhistoria`, and the beta's `io.github.arkniem.paxhistoria.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
 
 ---
 
 ## 4. GitHub Actions workflows (`.github/workflows/`)
 
-Three workflow files live on `main`. A fourth (`android-apk-beta.yml`) lives only on the beta-APK lineage.
+Three workflow files live on `main`. `android-apk-beta.yml` (§4.3) is there too, only so its Run workflow entry appears; it refuses to run from anything but `beta`.
 
 ### 4.1 `app-bundle.yml` — full-app one-download bundle
 
@@ -95,29 +95,31 @@ Runs on **every** push to `main`/`beta` so the download never goes stale. The zi
 
 ### 4.2 `android-apk.yml` — stable Android APK
 
-`.github/workflows/android-apk.yml`. Builds the thin Android client (`mobile/`) with an **in-process** `nodejs-mobile` server and attaches the APK to the rolling `android` release.
+`.github/workflows/android-apk.yml`. Builds the Android app (`mobile/`) — the `--mode android` web bundle with the world map inside the APK — and attaches the APK and its update manifest to the rolling `android` release.
 
 | Aspect | Detail |
 |---|---|
-| Triggers | `workflow_dispatch`; push tag `android-v*` |
-| Toolchain | Node 20, Temurin Java 21 |
-| Build number | `sed` stamps `${{ github.run_number }}` into `mobile/www/index.html` over `__APP_BUILD__`. The boot screen compares this against `Build: N` in the release notes to decide whether to self-update (`.github/workflows/android-apk.yml:32`) |
-| Build | `npm ci` → `npm run build` (produces `dist/`) → `node scripts/build-mobile-server.mjs` (assembles the embedded server) → in `mobile/`: `npm ci` → `npx cap sync android` → `./gradlew assembleDebug --no-daemon` |
-| Collect | copies `app-debug.apk` → `open-historia.apk` |
-| Publish | `gh release create android … || gh release edit android`; `gh release upload android open-historia.apk --clobber`; notes end with `Build: ${{ github.run_number }}` |
+| Triggers | `workflow_dispatch` from `main` (from any other branch its first step fails: a dispatch from `beta` once published the beta's code as the stable app, build 14 on 2026-09-25); push tag `android-v*` |
+| Toolchain | Node 24, Temurin Java 21 |
+| Build number | `VITE_APP_BUILD=${{ github.run_number }}` is baked into the bundle and `OH_ANDROID_BUILD` becomes `versionCode`/`versionName`; the update banner compares the bundle's number against `latest.json` |
+| Build | `npm ci` → `npm run build:android` (→ `dist-android/`) → in `mobile/`: `npm ci` → `npm run map` (map data, cached on the manifest hash) → `npm run www` → `npx cap sync android` → `./gradlew assembleRelease` with the `ANDROID_KEYSTORE_*` secrets, or `assembleDebug` without them |
+| Collect | copies the APK → `open-historia.apk` |
+| Publish | `gh release create android … || gh release edit android`; uploads `open-historia.apk` and `latest.json` (`{ build, apk, notes }`) with `--clobber` |
 
-The embedded server must be assembled **before** `cap sync` copies it into the native app — that ordering is why `build-mobile-server.mjs` runs between `npm run build` and the Gradle step.
+The map data must be staged **before** `cap sync` copies `www/` into the native project — that ordering is why `npm run map` and `npm run www` run between the bundle build and the Gradle step. One keystore for the life of the app: a fresh debug keystore on each runner is a different certificate, and Android refuses to install over a package signed with another one.
 
-### 4.3 `android-apk-beta.yml` — experimental Android beta *(off-main)*
+### 4.3 `android-apk-beta.yml` — the Android beta app
 
-Lives on the `beta-apk-workflow` lineage (e.g. `upstream/beta-apk-workflow`), **not on `main`**. Builds the experimental embedded-node-server app and publishes to the **isolated `android-beta` pre-release**, leaving stable `android` and every installed stable app untouched.
+`.github/workflows/android-apk-beta.yml`. The same build as §4.2 with the channel set to beta, which makes it a second app, as `desktop-beta.yml` makes the desktop beta: "Open Historia Beta", application id `io.github.arkniem.paxhistoria.beta`, the compass with a BETA banner for its icon. It installs **beside** the stable app rather than over it, keeps its own saves (a package's WebView storage is its own; Export and Import carry games across), and updates itself from its own release. Same keystore as the stable app.
 
 | Aspect | Detail |
 |---|---|
-| Trigger | `workflow_dispatch` only |
-| Source | `actions/checkout@v4` with `ref: alpha` — always builds `alpha`'s node-server code regardless of dispatch branch |
-| Self-update redirect | `sed 's#releases/tags/android"#releases/tags/android-beta"#'` on `mobile/www/index.html`, so the beta polls `android-beta` and never nags a tester back to stable |
-| Publish | `gh release create android-beta --prerelease … || gh release edit android-beta --prerelease …`; `--clobber` upload |
+| Triggers | `workflow_dispatch` from `beta` (from any other branch its first step fails; the copy on `main` is only there for the Run workflow entry); push tag `android-beta-v*`, which the stable `android-v*` does not match |
+| Channel | `OH_ANDROID_CHANNEL=beta`: `mobile/android/app/build.gradle` picks the application id, `versionName` `1.0.N-beta` and the manifest placeholders `appLabel` / `appIcon` / `appIconRound` (the icons come from `scripts/make-android-beta-icons.ps1`, committed) |
+| Update feed | `VITE_APP_TRACK=beta`: the web router reads `android-beta/latest.json`, so a tester is never offered the stable build; `versionCode` is this workflow's own run number |
+| Publish | `gh release create android-beta --prerelease …` or `gh release edit android-beta --prerelease …`; uploads `open-historia-beta.apk` and `latest.json` with `--clobber` |
+
+`server/androidBetaPackaging.test.js` holds these together, and the stable workflow to the `android` release. The file replaced an experimental embedded-node-server build (2026-07) that checked out `alpha` and never ran green.
 
 ### 4.4 `deploy-site.yml` — website via CI *(superseded, still present)*
 
@@ -269,20 +271,16 @@ When a map file changes: upload the new asset to the `map-data` Release, then up
 
 ---
 
-## 9. Mobile embedded-server assembly (`build-mobile-server.mjs`)
+## 9. Android staging (`mobile/scripts/`)
 
-`scripts/build-mobile-server.mjs` populates `mobile/nodejs-project/` with everything `nodejs-mobile` needs to run the real Express server in-process inside the APK. It runs **after** `vite build` (it needs `dist/`) and is idempotent (wipes and rebuilds copied dirs, leaving the committed `main.js` / `fetchMapAssets.mjs` alone).
+The Android app has no server of its own: it is the `--mode android` web bundle, and the world map ships **inside** the APK. Two scripts in `mobile/scripts/` put it together; both are idempotent.
 
-| Step | What it copies/does |
+| Script | What it does |
 |---|---|
-| 1 | `server/` verbatim; `dist/` **minus** heavy map files (`copyLight` strips `*.pmtiles`, `*.geojson`, `cities-seed.json`) |
-| 2 | `public/lang/` (the server's read-only lang fallback); `public/assets` pmtiles intentionally excluded |
-| 3 | `seed/` = default scenarios + `scenario-manifest.json` + `game-manifest.json`, minus heavy map files |
-| 4 | `scripts/map-assets.json` → the first-run map fetch manifest |
-| 5 | Writes a minimal `package.json` whose only runtime dep is `express`, pinned to the root's version so the phone runs the same Express as desktop |
-| 6 | `npm install --omit=dev` into the project so the APK bundles `node_modules` (skip with `--no-install`) |
+| `stage-map-assets.mjs` (`npm run map`) | Downloads the six files in `mobile/map-assets.android.json` from the `map-data` release into `mobile/map-cache/` and verifies size + sha256; a file already present and correct is skipped. The archives are the z8 trims (`scripts/trim-pmtiles.mjs`): regions 21.1 MB, countries 12.6 MB — the map never renders past z8 — plus `cities.pmtiles`, the 12.8 MB `default-regions.geojson`, `regions-seed.geojson` and `cities-seed.json`. The 55 MB desktop-only variants never ship. |
+| `stage-www.mjs` (`npm run www`) | Copies `dist-android/` into `mobile/www/`, prunes the website-only files (marketing pages, screenshots, sitemap, the signed node directory), and lays `map-cache/*` under `www/assets/`. |
 
-The ~200 MB map binaries deliberately never ship in the APK — the app downloads them on first run (`mobile/nodejs-project/fetchMapAssets.mjs`).
+`build.gradle` stores `*.pmtiles` uncompressed (`androidResources { noCompress 'pmtiles' }`) so a Range read never inflates from byte 0; `versionCode`/`versionName` come from `OH_ANDROID_BUILD`; the `release` type signs with `OH_ANDROID_KEYSTORE` when set and the debug key otherwise. See [mobile.md](mobile.md).
 
 ---
 
@@ -306,8 +304,8 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 |---|---|---|---|---|
 | **Desktop (stable)** | `main` | `Open-Historia.zip` on `app-stable` | `app-bundle.yml` on push | Download zip once, or run "Update Open Historia" |
 | **Desktop (beta)** | `beta` | `Open-Historia.zip` on `app-beta` | `app-bundle.yml` on push | Download the beta zip |
-| **Android (stable)** | `main` (mobile client) | `open-historia.apk` on `android` | `android-apk.yml` (dispatch / `android-v*` tag) | App self-updates by comparing `Build: N` |
-| **Android (beta)** | `alpha` | `pax-historia.apk` on `android-beta` | `android-apk-beta.yml` (dispatch, off-main) | Sideload from the pre-release; self-updates from `android-beta` |
+| **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; the app self-updates from `android/latest.json` |
+| **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; self-updates from `android-beta/latest.json` |
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — next page load |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
@@ -317,7 +315,7 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 Key asymmetries a newcomer should internalize:
 
 - **A push to `main` or `beta` re-ships the desktop zip automatically; a push does *not* ship the website or the APK.** The website waits for a maintainer to click 🚀 (or dispatch `deploy-site.yml`); the APK waits for a `workflow_dispatch` or an `android-v*` tag.
-- **`alpha` ships nothing on its own** — it only reaches users via the manually dispatched `android-beta` build, or once bridged into `beta`/`main`.
+- **`alpha` ships nothing on its own** — it reaches users only once bridged into `beta`/`main`.
 - **Worker code and website move together** through the admin-panel deploy engine, precisely to stop merged worker code from sitting undeployed.
 - **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit.
 
@@ -327,8 +325,8 @@ Key asymmetries a newcomer should internalize:
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
-- **The Android `appId` must never change.** The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
-- **Assemble the mobile server before `cap sync`** — `android-apk.yml` runs `build-mobile-server.mjs` between `npm run build` and Gradle.
+- **Neither Android application id may ever change** (`io.github.arkniem.paxhistoria`; the beta's `io.github.arkniem.paxhistoria.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
+- **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
 - **`--branch=main` / `--branch=<BRANCH>` is what makes a Pages upload production** — omit it and the live domain keeps the old build while the deploy still reports success.

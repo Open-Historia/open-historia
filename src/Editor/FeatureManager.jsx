@@ -15,6 +15,7 @@ import { pillButton, inputStyle } from "./editorStyles.js";
 import { TextField, SelectField } from "./fields.jsx";
 import { importAllCities, importMajorCities } from "./citiesImport.js";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
+import { acceptFor } from "../runtime/fileAccept.js";
 
 const SYMBOLS = [
   { value: "square", label: "Square" },
@@ -169,7 +170,7 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json,.geojson,application/json,application/geo+json"
+          accept={acceptFor(".json,.geojson,application/json,application/geo+json")}
           style={{ display: "none" }}
           onChange={(e) => importFile(e.target.files?.[0] || null)}
         />

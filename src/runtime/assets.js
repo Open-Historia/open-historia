@@ -5,6 +5,8 @@ import { resolveRegionName } from "./regionNameFixes.js";
 import { logDebugEvent } from "./debugLog.js";
 import { resolvePolityIdentity, resolveStockCountryCode } from "./polityIdentity.js";
 import { mergeStockAndDeclaredPolities } from "./countryList.js";
+import { WholeFileSource } from "./wholeFileSource.js";
+import { isNativeBuild } from "./native/bridge.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
 
@@ -222,6 +224,16 @@ const isMutableRuntimeJsonUrl = (url) =>
   url === JSON_URLS.world;
 
 const pmtilesProtocol = new Protocol();
+// MapLibre asks this protocol for archives by URL, and one it has not been
+// handed yet it opens itself — as a FetchSource, over Range, which the Android
+// app cannot serve (see wholeFileSource.js). There, every archive MapLibre asks
+// for is opened through getPmtilesArchive instead, so it is read whole.
+// Guarded: `tiles` is internal to the pmtiles package.
+if (isNativeBuild() && pmtilesProtocol.tiles instanceof Map) {
+  const opened = pmtilesProtocol.tiles;
+  const lookup = opened.get.bind(opened);
+  opened.get = (url) => lookup(url) ?? getPmtilesArchive(url);
+}
 let pmtilesProtocolReady = false;
 let nationColorsPromise = null;
 let nationColorsPromiseKey = "";
@@ -668,7 +680,10 @@ const fetchWithPersistence = async (
   }
 
   const response = await fetch(url, {
-    cache: bypassPersistentCache ? "no-store" : "force-cache",
+    // The Android app has no Cache Storage (an http origin is not a secure
+    // context) and its archives come from inside the APK: nothing to keep a
+    // second copy of in the WebView's HTTP cache.
+    cache: bypassPersistentCache || import.meta.env.VITE_OH_NATIVE ? "no-store" : "force-cache",
     signal,
   });
   if (!response.ok) {
@@ -699,10 +714,24 @@ class MemorySource {
   }
 }
 
+// The Android app never range-reads an archive: Capacitor's local server
+// ignores the end of a Range (see wholeFileSource.js). Its reads wait for the
+// one whole-file load the warm makes and slice that.
+const loadWholeArchive = async (url) => {
+  await warmPmtilesArchive(url);
+  const buffer = binaryValueCache.get(url);
+  // Swept by a runtime-token change (a game switch) mid-read: fail the read
+  // rather than hand pmtiles an empty archive.
+  if (!buffer) throw new Error(`${url} was released while it was being read.`);
+  return buffer;
+};
+
 const createPmtilesArchive = (url) => {
   const source = binaryValueCache.has(url)
     ? new MemorySource(url, binaryValueCache.get(url))
-    : url;
+    : import.meta.env.VITE_OH_NATIVE
+      ? new WholeFileSource(url, loadWholeArchive)
+      : url;
 
   return new PMTiles(source, pmtilesCache);
 };
@@ -1258,7 +1287,10 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
     // against the signed content manifest. On any miss/failure we fall through to
     // the canonical origin below, so a node outage is invisible. This whole block
     // (and the content-trust module) is stripped from the local download.
-    if (import.meta.env.VITE_OH_WEB) {
+    // The Android app reads its archives from inside the APK and skips both the
+    // swarm and the manifest check: bytes that shipped with the app are not a
+    // download to verify, and its http origin has no crypto.subtle anyway.
+    if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
       try {
         const { fetchVerifiedBuffer } = await import("./web/contentTrust.js");
         buffer = await fetchVerifiedBuffer(url, { signal });
@@ -1276,7 +1308,7 @@ export const warmPmtilesArchive = async (url, { signal } = {}) => {
       // than degrading quietly: the caller already handles a failed archive by
       // painting the procedural fallback, and a map that fails loudly beats a
       // map someone else chose.
-      if (import.meta.env.VITE_OH_WEB) {
+      if (import.meta.env.VITE_OH_WEB && !import.meta.env.VITE_OH_NATIVE) {
         const { verifyOriginBuffer } = await import("./web/contentTrust.js");
         const { checked, ok } = await verifyOriginBuffer(url, buffer);
         if (checked && !ok) {
