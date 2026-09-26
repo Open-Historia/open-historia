@@ -136,7 +136,7 @@ export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = 
   const actions = [];
   const claims = Array.isArray(regionClaims) ? [...regionClaims] : [];
 
-  const findClaim = (regionId, claimant) => claims.find((claim) =>
+  const hasClaim = (regionId, claimant) => claims.some((claim) =>
     clean(claim?.regionId).toLowerCase() === clean(regionId).toLowerCase()
     && clean(claim?.claimantCode).toLowerCase() === clean(claimant).toLowerCase()
     && claim?.drop !== true);
@@ -154,20 +154,13 @@ export const screenTerritoryBasis = ({ regionTransfers = [], regionControlOps = 
       // A claim on a whole country has no single region to stripe, and the
       // expansion that would find them belongs to a real transfer. Refused.
       const becomesClaim = basis === "claim" && Boolean(toCode) && !wholeCountry && Boolean(clean(entry.regionId));
-      // What the claimant is (a control flip's toRole) goes with the claim, so a
-      // side the model described is described on the map (server/polityRole.js).
-      const role = clean(entry.toRole);
-      const existing = becomesClaim ? findClaim(entry.regionId, toCode) : null;
-      if (becomesClaim && !existing) {
+      if (becomesClaim && !hasClaim(entry.regionId, toCode)) {
         claims.push({
           claimantCode: toCode,
-          ...(role ? { claimantRole: role } : {}),
           note: clean(entry.note) || "Asserted without holding the ground.",
           regionId: clean(entry.regionId),
           regionName: clean(entry.regionName),
         });
-      } else if (existing && role && !clean(existing.claimantRole)) {
-        claims[claims.indexOf(existing)] = { ...existing, claimantRole: role };
       }
       actions.push({
         basis,

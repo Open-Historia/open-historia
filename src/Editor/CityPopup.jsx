@@ -10,7 +10,7 @@
 // is an independent tag. Legacy features without tier derive a display tier from
 // population until the user explicitly chooses a size.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { panelSurface, inputStyle, pillButton } from "./editorStyles.js";
 
 const SIZES = [
@@ -30,8 +30,31 @@ const cityTier = (feature) => {
   return tierFromPopulation(feature?.population);
 };
 
+// A population by year as text, one "year: population" a line (BC negative),
+// and back. Lines that are not a year and a figure are dropped.
+const seriesToText = (byYear) => Object.entries(byYear || {})
+  .sort((a, b) => Number(a[0]) - Number(b[0]))
+  .map(([year, population]) => `${year}: ${population}`)
+  .join("\n");
+const textToSeries = (text) => {
+  const out = {};
+  for (const line of String(text || "").split(/\n/)) {
+    const match = /^\s*(-?\d{1,6})\s*[:=,\s]\s*([\d.,_\s]+)$/.exec(line);
+    if (!match) continue;
+    const year = Number(match[1]);
+    const population = Number(match[2].replace(/[,_\s]/g, ""));
+    if (Number.isInteger(year) && year !== 0 && Number.isFinite(population) && population > 0) out[year] = Math.round(population);
+  }
+  return out;
+};
+
 const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
   const nameRef = useRef(null);
+  // The population-by-year text being typed, for the city it was typed for; any
+  // other city shows its own series.
+  const [typed, setTyped] = useState(null);
+  const seriesDraft = typed && typed.id === feature?.id ? typed.text : null;
+  const setSeriesDraft = (text) => setTyped(text === null ? null : { id: feature?.id, text });
 
   // New city: focus the name and select the placeholder so typing replaces it.
   useEffect(() => {
@@ -42,7 +65,8 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === "Escape" || e.key === "Enter") onClose();
+      // Enter in the population-by-year box starts a new line; it does not close.
+      if (e.key === "Escape" || (e.key === "Enter" && e.target?.tagName !== "TEXTAREA")) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -126,6 +150,27 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
           style={{ ...inputStyle, padding: "5px 7px" }}
           aria-label="City population"
         />
+      </label>
+
+      <label style={{ display: "grid", gap: 4, color: "rgba(255,255,255,0.7)" }}>
+        <span style={{ fontSize: 10.5, fontWeight: 700 }}>Population by year</span>
+        <textarea
+          value={seriesDraft ?? seriesToText(feature.populationByYear)}
+          onChange={(e) => setSeriesDraft(e.target.value)}
+          onBlur={() => {
+            if (seriesDraft === null) return;
+            const byYear = textToSeries(seriesDraft);
+            onChange({ populationByYear: Object.keys(byYear).length ? byYear : undefined });
+            setSeriesDraft(null);
+          }}
+          rows={3}
+          placeholder={"1950: 1200000\n2000: 3400000"}
+          style={{ ...inputStyle, padding: "5px 7px", resize: "vertical", fontFamily: "inherit", fontSize: 12 }}
+          aria-label="Population by year"
+        />
+        <span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", lineHeight: 1.35 }}>
+          One year a line. The game reads the population for its date from these, until the AI changes this city's population itself.
+        </span>
       </label>
 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>

@@ -48,7 +48,9 @@ const overlappingRun = (ax, ay, bx, by, cx, cy, dx, dy, tolerance) => {
   return { a: at(start), b: at(end) };
 };
 
-const stitchSegments = (segments, precision) => {
+// Exported for the group-area outline (groupAreas.js), which walks the same
+// edges for a different question.
+export const stitchSegments = (segments, precision) => {
   const touching = new Map();
   const addTouch = (key, index) => {
     const entries = touching.get(key);

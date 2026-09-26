@@ -23,11 +23,16 @@ export const MAP_LAYER_ORDER = [
   "custom-regions-local-outline",
   "custom-regions-repair-local-outline",
   "custom-regions-disputed-vnext",
+  // A group's area tints the land it controls, over every fill and stripe.
+  "group-areas-tint",
 
   // Sovereign frontiers are presentation, but must remain above every
   // political fill and below every semantic object/label layer.
   "polity-boundaries-shadow",
   "polity-boundaries",
+  // ...and its outline sits above the sovereign borders it may run along.
+  "group-areas-outline-casing",
+  "group-areas-outline",
 
   // Draped standing-order lines belong above map cartography but below symbols.
   "units-heading",
@@ -43,6 +48,7 @@ export const MAP_LAYER_ORDER = [
   // PTR-0 replacement typography proof. It intentionally sits above the old
   // polity symbols while both systems coexist, and below cities/objects.
   "polity-text-renderer",
+  "group-areas-labels",
 
   // Physical/world objects must never be buried by political cartography.
   "cities-shapes",

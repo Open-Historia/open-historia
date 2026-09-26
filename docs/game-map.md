@@ -217,7 +217,11 @@ Claimants come from `world.regionClaimants[id]` first (how the modern-world scen
 - `custom-regions-disputed-vnext` — the worker's `disputedData` (every claimant-carrying region with its live owner and claimants), striped at `0.90` whenever `customActive && worldKnown`.
 - `regions-disputed` — the tile twin for GADM disputed regions (uses `disputedTileStops`, opacity `TILE_FILL_FADE`), excluding `editedStockIds`.
 
-The region popup (`Selection/Regions.jsx`) lists each claimant on its own line with what it is beside it, muted (the polity's `role`, `polityRoleOf` in `server/polityRole.js`). Its claimants are the world's as the game reads them, the map file's disputes included (`withMapClaims`, [World state](world-state.md)), so the popup, the stripes and the AI name the same claimants.
+### 6b. Group areas
+
+A group (`world.groups`, `world.groupAreas`; `src/runtime/groups.js`) controls an area without owning it, and the map draws that over the owners' colours: a light tint in the group's colour (`group-areas-tint`, fill opacity `0.2`, above every fill and stripe), one outline around the whole area (`group-areas-outline` over `group-areas-outline-casing`, above the sovereign borders) and the group's name (`group-areas-labels`, below cities, structures and units). All four ids are in `MAP_LAYER_ORDER`.
+
+The shapes come from the regions worker, asked outside the political pipeline — a group moves no owner and no border — with a `group-areas` message that `Nations.jsx` sends once this worker has published `catalog-ready` (and again when repaired shapes land, and whenever `useWorldState`'s `groups` / `groupAreas` change); only the newest answer is drawn. `vnext/groupAreas.js` cuts the outline from the frontier topology, never from a polygon union: an edge is on it when a region outside the group shares it or no region does (the coast), unless it is a seam whose two sides were simplified apart and recovered as a run between two members. On the built-in map that is one closed ring for Syria, 67 for Indonesia's islands and ≤17 ms for Russia. The tint is each member region's shape (the repaired one where there is one), one surface per group. The region card (`Selection/Regions.jsx`) says **Group control** with the group's colour, name and description.
 
 `DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx:338`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
 
@@ -280,6 +284,8 @@ Custom scenarios never show the 70k modern database (anachronistic), and while t
 
 - `cities-shapes` — a glyph per city: `★` capital / `◆` major / `■` other (transparent text, white halo, so only the outline shows).
 - `cities-labels` — the city name (`Open Sans Semibold`, white with dark halo, variable anchor).
+
+A city in the scenario's `cities.geojson` may carry its **population by year** — a `populationByYear` object (`{"1950": 3400000}`, BC years negative), rows of `{year, population}`, or Natural Earth's flat `POP1950`-style fields (`src/runtime/cityPopulation.js`). `Cities.jsx` redraws those cities once a game year with the figure for the year (straight between the two years around it, the nearest year's outside them); the city card and the AI's city lookups read it for the exact date. A population the AI sets (`markerOps` `population` → `world.cityPopulations`), or the GM changes by hand in the Map Feature Editor, wins from then on, and the series is no longer read for that city.
 
 ### Markers (built structures) — `MarkersLayer.jsx`
 

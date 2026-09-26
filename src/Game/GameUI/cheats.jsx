@@ -22,7 +22,20 @@ import {
     writeWorldState,
 } from "../../runtime/gameState.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
-import { POLITY_ROLE_PLACEHOLDER, polityRoleOf } from "../../../server/polityRole.js";
+import {
+    GROUP_DESCRIPTION_MAX,
+    GROUP_NAME_MAX,
+    GROUP_PALETTE,
+    defaultGroupColor,
+    findGroupKey,
+    groupRegions,
+    normalizeGroupAreas,
+    normalizeGroupColor,
+    normalizeGroupDescription,
+    normalizeGroupName,
+    normalizeGroups,
+} from "../../runtime/groups.js";
+import { cityPopulationKey, hasPopulationByYear } from "../../runtime/cityPopulation.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
@@ -90,6 +103,7 @@ const TOOLS = [
     { id: "edit-country", title: "Country Editor", subtitle: "Edit a country's identity and properties", icon: "◆" },
     { id: "add-country", title: "Add Country", subtitle: "Create a new polity for custom or fantasy campaigns", icon: "+", badge: "Advanced" },
     { id: "regions", title: "Region Inspector", subtitle: "Inspect control, sovereignty, claims, and region identity", icon: "▦" },
+    { id: "groups", title: "Groups", subtitle: "Cartels, militias, outbreaks: groups that control an area without owning it, and what each is", icon: "⬡" },
     { id: "edit-feature", title: "Map Feature Editor", subtitle: "Inspect and edit runtime features and scenario cities", icon: "◉" },
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
@@ -111,7 +125,7 @@ const TOOL_GROUPS = [
         title: "Countries & Territory",
         subtitle: "Edit political actors, borders, and individual regions.",
         icon: "◇",
-        tools: ["edit-country", "annex-country", "annex-regions", "regions", "add-country"],
+        tools: ["edit-country", "annex-country", "annex-regions", "regions", "groups", "add-country"],
     },
     {
         id: "military",
@@ -2709,6 +2723,272 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     );
 };
 
+// Groups (runtime/groups.js): actors that are not countries — a cartel, a
+// militia, an outbreak — each controlling an area of regions that stay their
+// countries'. Every change is the groupOps an AI event carries, applied through
+// the same seam, so a hand edit lands as the simulation's would; the next time
+// skip is told (runtime/gmChanges.js).
+const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode, setStatus }) => {
+    const [world, setWorld] = useState(null);
+    const [selected, setSelected] = useState(null);
+    const [form, setForm] = useState({ name: "", description: "", color: GROUP_PALETTE[0] });
+    const [deleteArmed, setDeleteArmed] = useState(false);
+
+    useEffect(() => {
+        readWorldState({ force: true })
+            .then((next) => setWorld(next ?? {}))
+            .catch(() => setWorld({}));
+        const onWorldUpdated = (event) => {
+            if (event?.detail?.world) setWorld(event.detail.world);
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
+    }, []);
+
+    const groups = useMemo(() => normalizeGroups(world?.groups), [world]);
+    const areas = useMemo(() => groupRegions(normalizeGroupAreas(world?.groupAreas, groups)), [world, groups]);
+    const [regionNames, setRegionNames] = useState(new Map());
+    useEffect(() => {
+        loadRegionCatalog()
+            .then((catalog) => setRegionNames(new Map((catalog ?? []).map((region) => [String(region.id), region.name]))))
+            .catch(() => {});
+    }, []);
+    const names = Object.keys(groups);
+    const editing = selected !== null;
+    const current = selected ? groups[selected] : null;
+    const currentArea = selected ? areas[selected] ?? [] : [];
+
+    const open = (name) => {
+        const group = groups[name];
+        setSelected(name);
+        setForm({ name: group?.name ?? name, description: group?.description ?? "", color: group?.color ?? GROUP_PALETTE[0] });
+        setDeleteArmed(false);
+        setStatus("");
+    };
+    const startNew = () => {
+        setSelected("");
+        setForm({ name: "", description: "", color: GROUP_PALETTE[names.length % GROUP_PALETTE.length] });
+        setDeleteArmed(false);
+        setStatus("");
+    };
+
+    // One administrative event carrying the operations, applied as an AI event is.
+    const applyOps = async (ops, patch = null) => {
+        const world = await readWorldState({ force: true });
+        const result = applyEventImpactsToWorld({
+            world,
+            round: game?.round || 0,
+            events: [{
+                id: `admin-groups-${Date.now().toString(36)}`,
+                date: game?.gameDate || game?.startDate || "",
+                title: "Groups administrative change",
+                description: "Structured administrative mutation from the Groups tool.",
+                importance: "minor",
+                kind: "world",
+                notable: false,
+                playerRelated: false,
+                impacts: { groupOps: ops },
+                source: "manual-admin",
+            }],
+        });
+        const next = patch ? patch(result.world) : result.world;
+        await writeWorldState(next);
+        setWorld(next);
+        return next;
+    };
+
+    const save = () => runBusy(async () => {
+        const name = normalizeGroupName(form.name);
+        if (!name) throw new Error("Give the group a name.");
+        const description = normalizeGroupDescription(form.description);
+        const color = normalizeGroupColor(form.color) || defaultGroupColor(name);
+        const clash = findGroupKey(groups, name);
+        if (!selected) {
+            if (clash) throw new Error(`There is already a group called ${clash}.`);
+            await applyOps([{ op: "create", name, description, color }]);
+            await noteGmChange("groups", `Created the group ${name} by hand${description ? ` — ${description.slice(0, 160)}` : ""}.`);
+            setSelected(name);
+            return `${name} created. Give it an area: Edit the area on the map.`;
+        }
+        if (clash && clash !== selected) throw new Error(`There is already a group called ${clash}.`);
+        const renamed = name !== selected;
+        // An emptied description is cleared here: an AI update never clears one.
+        await applyOps(
+            [{ op: "update", name: selected, ...(renamed ? { newName: name } : {}), ...(description ? { description } : {}), color }],
+            description ? null : (next) => ({ ...next, groups: { ...next.groups, [name]: { ...next.groups?.[name], description: "" } } }),
+        );
+        await noteGmChange("groups", `Changed the group ${selected}${renamed ? `, now called ${name},` : ""} by hand${description ? ` — ${description.slice(0, 160)}` : ""}.`);
+        setSelected(name);
+        return `${name} saved.`;
+    });
+
+    const erase = () => runBusy(async () => {
+        const name = selected;
+        await applyOps([{ op: "dissolve", name }]);
+        await noteGmChange("groups", `Erased the group ${name} and the area it controlled by hand.`);
+        setSelected(null);
+        setDeleteArmed(false);
+        return `${name} erased.`;
+    });
+
+    const clearArea = () => runBusy(async () => {
+        const name = selected;
+        await applyOps([{ op: "release", name, regionIds: [] }]);
+        await noteGmChange("groups", `Took away all of ${name}'s area by hand.`);
+        return `${name} controls no area now.`;
+    });
+
+    // A click puts a region under the group, or takes it out when it is already
+    // the group's.
+    const editArea = () => {
+        const name = selected;
+        beginClickMode(`Click regions to add to or take out of ${name}'s area — Done when finished`, async (props) => {
+            try {
+                const regionId = String(props?.GID_1 ?? props?.id ?? "").trim();
+                if (!regionId) return;
+                const world = await readWorldState({ force: true });
+                const had = normalizeGroupAreas(world?.groupAreas, normalizeGroups(world?.groups))[regionId] === name;
+                await applyOps([{ op: had ? "release" : "take", name, regionIds: [regionId] }]);
+                const label = String(props?.NAME_1 || regionNames.get(regionId) || regionId);
+                await noteGmChange("groups", "", {
+                    group: `group-${had ? "release" : "take"}→${name}`,
+                    template: had ? `Took {items} out of ${name}'s area by hand.` : `Put {items} under ${name}'s control by hand.`,
+                    item: label,
+                });
+                setStatus(`${label}: ${had ? `no longer ${name}'s` : `now controlled by ${name}`}. Keep clicking, or press Done.`);
+            } catch (error) {
+                setStatus(`Failed: ${error.message}`);
+            }
+        });
+    };
+
+    const statusLine = status && (
+        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        {status}
+        </div>
+    );
+    const swatch = (color, size = "0.8rem") => (
+        <span aria-hidden="true" style={{ background: color, borderRadius: 3, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)", display: "inline-block", flexShrink: 0, height: size, width: size }} />
+    );
+
+    return (
+        <>
+        {header(meta.title, meta.subtitle)}
+        <div style={{ overflowY: "auto", paddingRight: "0.08rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.17)", borderRadius: 10, color: "#e4e4e7", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.55rem 0.65rem" }}>
+                A group controls an area without owning it: the regions stay their countries', and the map outlines and tints the group's area in its colour. The description is what the AI is told the group is; the AI can found, change, move and erase groups too.
+            </div>
+
+            {!editing && (
+                <>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem", marginTop: "0.55rem" }}>
+                    {world === null ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>Loading…</div>
+                    ) : names.length === 0 ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No groups yet.</div>
+                    ) : names.map((name) => (
+                        <button
+                            key={name}
+                            type="button"
+                            className="oh-tap-row"
+                            onClick={() => open(name)}
+                            style={{ ...buttonStyle, alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
+                        >
+                            {swatch(groups[name].color)}
+                            <span style={{ flex: 1, fontWeight: 750, minWidth: 0, overflowWrap: "anywhere" }}>{name}</span>
+                            <span style={{ color: "rgba(255,255,255,0.45)", flexShrink: 0, fontSize: "0.66rem" }}>
+                                {(areas[name] ?? []).length === 1 ? "1 region" : `${(areas[name] ?? []).length} regions`}
+                            </span>
+                        </button>
+                    ))}
+                </div>
+                <button type="button" className="oh-tap-row" disabled={busy || world === null} onClick={startNew} style={{ ...primaryButtonStyle, marginTop: "0.55rem", width: "100%" }}>
+                    New group
+                </button>
+                </>
+            )}
+
+            {editing && (
+                <>
+                <button type="button" className="oh-tap-row" onClick={() => { setSelected(null); setStatus(""); }} style={{ ...buttonStyle, marginTop: "0.55rem" }}>
+                    ← All groups
+                </button>
+                <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                    <div style={editorSectionLabelStyle}>{selected ? "Group" : "New group"}</div>
+                    <label style={labelStyle}>Name</label>
+                    <input style={inputStyle} value={form.name} maxLength={GROUP_NAME_MAX} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="Cartel del Norte" />
+                    <label style={labelStyle}>What it is (the AI is told this)</label>
+                    <textarea
+                        style={{ ...inputStyle, minHeight: "5.5rem", resize: "vertical" }}
+                        value={form.description}
+                        maxLength={GROUP_DESCRIPTION_MAX}
+                        onChange={(event) => setForm({ ...form, description: event.target.value })}
+                        placeholder="A drug cartel that runs the border towns, taxes the smuggling routes and fights the army for the highways."
+                    />
+                    <label style={labelStyle}>Tint colour</label>
+                    <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                        {GROUP_PALETTE.map((color) => (
+                            <button
+                                key={color}
+                                type="button"
+                                className="oh-tap"
+                                aria-label={color}
+                                onClick={() => setForm({ ...form, color })}
+                                style={{ background: color, border: normalizeGroupColor(form.color) === color ? "2px solid #fff" : "1px solid rgba(0,0,0,0.5)", borderRadius: 5, cursor: "pointer", height: "1.5rem", padding: 0, width: "1.5rem" }}
+                            />
+                        ))}
+                        <input
+                            type="color"
+                            className="oh-tap"
+                            aria-label="Custom colour"
+                            value={normalizeGroupColor(form.color) || GROUP_PALETTE[0]}
+                            onChange={(event) => setForm({ ...form, color: event.target.value })}
+                            style={{ background: "none", border: "none", cursor: "pointer", height: "1.7rem", padding: 0, width: "2.2rem" }}
+                        />
+                    </div>
+                    <button type="button" className="oh-tap-row" disabled={busy || !form.name.trim()} onClick={save} style={{ ...primaryButtonStyle, marginTop: "0.6rem", width: "100%" }}>
+                        {selected ? "Save group" : "Create group"}
+                    </button>
+                </div>
+
+                {selected && current && (
+                    <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                        <div style={editorSectionLabelStyle}>Area</div>
+                        <div style={{ color: currentArea.length ? "#f4f4f5" : "rgba(255,255,255,0.45)", fontSize: "0.72rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+                            {currentArea.length
+                                ? `${currentArea.length === 1 ? "1 region" : `${currentArea.length} regions`}: ${currentArea.slice(0, 24).map((id) => regionNames.get(id) || id).join(", ")}${currentArea.length > 24 ? ` and ${currentArea.length - 24} more` : ""}`
+                                : "It controls no area yet."}
+                        </div>
+                        <button type="button" className="oh-tap-row" disabled={busy} onClick={editArea} style={{ ...primaryButtonStyle, marginTop: "0.5rem", width: "100%" }}>
+                            Edit the area on the map →
+                        </button>
+                        {currentArea.length > 0 && (
+                            <button type="button" className="oh-tap-row" disabled={busy} onClick={clearArea} style={{ ...buttonStyle, marginTop: "0.4rem", width: "100%" }}>
+                                Clear the whole area
+                            </button>
+                        )}
+                    </div>
+                )}
+
+                {selected && current && (
+                    <button
+                        type="button"
+                        className="oh-tap-row"
+                        disabled={busy}
+                        onClick={() => (deleteArmed ? erase() : setDeleteArmed(true))}
+                        style={{ ...buttonStyle, borderColor: "rgba(248,113,113,0.5)", color: "#fca5a5", marginTop: "0.55rem", width: "100%" }}
+                    >
+                        {deleteArmed ? `Erase ${selected} and its area — click again to confirm` : "Erase group"}
+                    </button>
+                )}
+                </>
+            )}
+            {statusLine}
+        </div>
+        </>
+    );
+};
+
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
@@ -2858,6 +3138,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     const nameOf = (code) => politiesByCode.get(code)?.name || code || "unclaimed land";
 
     // ----- individual tools -----
+
+    if (tool === "groups") {
+        return (
+            <GroupsView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                game={game}
+                runBusy={runBusy}
+                beginClickMode={beginClickMode}
+                setStatus={setStatus}
+            />
+        );
+    }
 
     if (tool === "reminders") {
         return (
@@ -4125,6 +4420,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 ? String(sovereignty[resolvedId] ?? "").trim()
                 : currentOwner;
             const currentClaimants = normalizeClaimants(claims[resolvedId], currentOwner);
+            const groupRegistry = normalizeGroups(world?.groups);
+            const currentGroup = normalizeGroupAreas(world?.groupAreas, groupRegistry)[resolvedId] ?? "";
 
             const geojson = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null, force: true }).catch(() => null);
             const customFeature = geojson?.features?.find((entry) =>
@@ -4148,17 +4445,14 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 controller: currentOwner,
                 sovereign: currentSovereign,
                 claimants: currentClaimants,
-                // What each claimant is (server/polityRole.js), and the edits
-                // typed into the rows below before they are saved.
-                claimantRoles: Object.fromEntries(currentClaimants.map((claimant) => [claimant, polityRoleOf(world?.polityOverrides, claimant)])),
-                claimantRoleDrafts: {},
+                group: currentGroup,
+                groupRegistry,
+                groupTarget: "",
                 canRename: Boolean(customFeature),
                 ownerTarget: currentOwner,
                 controllerTarget: currentOwner,
                 sovereignTarget: currentSovereign,
                 claimantTarget: "",
-                claimantTyped: "",
-                claimantRoleNew: "",
             };
             setFields(next);
             return { world, geojson, customFeature, next };
@@ -4194,6 +4488,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     .map((op) => `${region} now belongs legally to ${nameOf(op.toCode)}${was(op.fromCode)}`),
                 ...(impacts.regionClaims ?? [])
                     .map((op) => `${nameOf(op.claimantCode)} ${op.drop ? "no longer claims" : "now claims"} ${region}`),
+                ...(impacts.groupOps ?? [])
+                    .map((op) => `${op.name} ${op.op === "release" ? "no longer controls" : "now controls"} ${region}`),
             ];
             if (edits.length) await noteGmChange("territory", `${edits.join("; ")} — set by hand.`);
             await refresh();
@@ -4342,17 +4638,12 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                     <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
                         <div style={editorSectionLabelStyle}>Claims & disputed state</div>
                         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
-                            A claim marks the region disputed — striped in the claimant's colour — without moving the border. A claimant can be anyone: a country claiming the land as its own, a terrorist organisation, a gang, one side of a civil war. What you write under it is what the AI is told it is, wherever it appears.
+                            A claim marks the region disputed — striped in the claimant's colour — without moving the border.
                         </div>
                         {claimants.length ? (
                             <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem" }}>
-                                {claimants.map((claimant) => {
-                                    const savedRole = fields.claimantRoles?.[claimant] ?? "";
-                                    const draftRole = fields.claimantRoleDrafts?.[claimant] ?? savedRole;
-                                    const roleChanged = draftRole.trim() !== savedRole && draftRole.trim() !== "";
-                                    return (
-                                    <div key={claimant} style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "grid", gap: "0.3rem", padding: "0.38rem 0.5rem" }}>
-                                        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                                {claimants.map((claimant) => (
+                                    <div key={claimant} style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.38rem 0.5rem" }}>
                                         <span style={{ color: "#f4f4f5", fontSize: "0.73rem", fontWeight: 700, minWidth: 0, overflowWrap: "anywhere" }}>{nameOf(claimant)}</span>
                                         <button
                                             type="button"
@@ -4371,86 +4662,34 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                         >
                                             Withdraw
                                         </button>
-                                        </div>
-                                        <div style={{ display: "flex", gap: "0.35rem" }}>
-                                            <input
-                                                value={draftRole}
-                                                placeholder={POLITY_ROLE_PLACEHOLDER}
-                                                aria-label={`What ${nameOf(claimant)} is`}
-                                                onChange={(event) => setFields({ ...fields, claimantRoleDrafts: { ...(fields.claimantRoleDrafts ?? {}), [claimant]: event.target.value } })}
-                                                style={{ ...inputStyle, flex: 1, minWidth: 0, fontSize: "0.68rem", padding: "0.3rem 0.45rem" }}
-                                            />
-                                            <button
-                                                type="button"
-                                                disabled={busy || !roleChanged}
-                                                // Restating the claim with a role: the list is unchanged,
-                                                // and the role lands on the claimant's record.
-                                                onClick={() => runBusy(() => applyTerritoryImpacts({
-                                                    regionClaims: [{
-                                                        regionId,
-                                                        regionName: fields.name || "",
-                                                        claimantCode: claimant,
-                                                        claimantRole: draftRole.trim(),
-                                                        note: "Region Inspector describes a claimant",
-                                                    }],
-                                                }, `${nameOf(claimant)} is now described as ${draftRole.trim()}.`))}
-                                                style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.66rem", padding: "0.24rem 0.42rem" }}
-                                            >
-                                                Save
-                                            </button>
-                                        </div>
                                     </div>
-                                    );
-                                })}
+                                ))}
                             </div>
                         ) : (
                             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No active claimants.</div>
                         )}
 
-                        {(() => {
-                            // An existing power from the list, or any name typed in: a
-                            // name the world does not know is founded as a landless
-                            // claimant when the claim lands (runtime/polityFounding.js).
-                            const typed = String(fields.claimantTyped ?? "").trim();
-                            const target = typed || fields.claimantTarget || "";
-                            const newRole = String(fields.claimantRoleNew ?? "").trim();
-                            return (
-                            <div style={{ display: "grid", gap: "0.35rem", marginTop: "0.5rem" }}>
-                                <PolitySelect polities={polities} value={fields.claimantTarget ?? ""} onChange={(value) => setFields({ ...fields, claimantTarget: value, claimantTyped: "" })} placeholder="Add a claimant…" />
-                                <input
-                                    value={fields.claimantTyped ?? ""}
-                                    placeholder="…or type any name (a movement, a gang, a faction)"
-                                    onChange={(event) => setFields({ ...fields, claimantTyped: event.target.value })}
-                                    style={{ ...inputStyle, fontSize: "0.7rem" }}
-                                />
-                                <div style={{ display: "flex", gap: "0.4rem" }}>
-                                    <input
-                                        value={fields.claimantRoleNew ?? ""}
-                                        placeholder={`What it is — ${POLITY_ROLE_PLACEHOLDER}`}
-                                        onChange={(event) => setFields({ ...fields, claimantRoleNew: event.target.value })}
-                                        style={{ ...inputStyle, flex: 1, minWidth: 0, fontSize: "0.7rem" }}
-                                    />
-                                    <button
-                                        type="button"
-                                        className="oh-tap-row"
-                                        disabled={busy || !target || target === owner || claimants.includes(target)}
-                                        onClick={() => runBusy(() => applyTerritoryImpacts({
-                                            regionClaims: [{
-                                                regionId,
-                                                regionName: fields.name || "",
-                                                claimantCode: target,
-                                                ...(newRole ? { claimantRole: newRole } : {}),
-                                                note: "Region Inspector asserts a claim",
-                                            }],
-                                        }, `${nameOf(target)} now claims the region.`))}
-                                        style={{ ...primaryButtonStyle, flexShrink: 0, padding: "0.5rem 0.7rem" }}
-                                    >
-                                        Add
-                                    </button>
-                                </div>
+                        <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <PolitySelect polities={polities} value={fields.claimantTarget ?? ""} onChange={(value) => setFields({ ...fields, claimantTarget: value })} placeholder="Add a claimant…" />
                             </div>
-                            );
-                        })()}
+                            <button
+                                type="button"
+                                className="oh-tap-row"
+                                disabled={busy || !fields.claimantTarget || fields.claimantTarget === owner || claimants.includes(fields.claimantTarget)}
+                                onClick={() => runBusy(() => applyTerritoryImpacts({
+                                    regionClaims: [{
+                                        regionId,
+                                        regionName: fields.name || "",
+                                        claimantCode: fields.claimantTarget,
+                                        note: "Region Inspector asserts a claim",
+                                    }],
+                                }, `${nameOf(fields.claimantTarget)} now claims the region.`))}
+                                style={{ ...primaryButtonStyle, flexShrink: 0, padding: "0.5rem 0.7rem" }}
+                            >
+                                Add
+                            </button>
+                        </div>
 
                         {claimants.length > 0 && (
                             <button
@@ -4470,6 +4709,59 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             >
                                 Withdraw all claims
                             </button>
+                        )}
+                    </div>
+
+                    <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                        <div style={editorSectionLabelStyle}>Group control</div>
+                        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.65rem", lineHeight: 1.4, marginBottom: "0.45rem" }}>
+                            A group controls the region without owning it: the border stays where it is, and the group's area is outlined and tinted in its colour. Groups are made in the Groups tool.
+                        </div>
+                        {fields.group ? (
+                            <div style={{ alignItems: "center", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", padding: "0.38rem 0.5rem" }}>
+                                <span style={{ alignItems: "center", display: "flex", gap: "0.4rem", minWidth: 0 }}>
+                                    <span aria-hidden="true" style={{ background: fields.groupRegistry?.[fields.group]?.color, borderRadius: 3, flexShrink: 0, height: "0.75rem", width: "0.75rem" }} />
+                                    <span style={{ color: "#f4f4f5", fontSize: "0.73rem", fontWeight: 700, overflowWrap: "anywhere" }}>{fields.group}</span>
+                                </span>
+                                <button
+                                    type="button"
+                                    className="oh-tap-row"
+                                    disabled={busy}
+                                    onClick={() => runBusy(() => applyTerritoryImpacts({
+                                        groupOps: [{ op: "release", name: fields.group, regionIds: [regionId], note: "Region Inspector ends a group's control" }],
+                                    }, `${fields.group} no longer controls the region.`))}
+                                    style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.66rem", padding: "0.24rem 0.42rem" }}
+                                >
+                                    Release
+                                </button>
+                            </div>
+                        ) : (
+                            <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No group controls this region.</div>
+                        )}
+                        {Object.keys(fields.groupRegistry ?? {}).length > 0 && (
+                            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.5rem" }}>
+                                <select
+                                    style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                                    value={fields.groupTarget ?? ""}
+                                    onChange={(event) => setFields({ ...fields, groupTarget: event.target.value })}
+                                >
+                                    <option value="">Put under a group…</option>
+                                    {Object.keys(fields.groupRegistry ?? {}).map((name) => (
+                                        <option key={name} value={name}>{name}</option>
+                                    ))}
+                                </select>
+                                <button
+                                    type="button"
+                                    className="oh-tap-row"
+                                    disabled={busy || !fields.groupTarget || fields.groupTarget === fields.group}
+                                    onClick={() => runBusy(() => applyTerritoryImpacts({
+                                        groupOps: [{ op: "take", name: fields.groupTarget, regionIds: [regionId], note: "Region Inspector sets a group's control" }],
+                                    }, `${fields.groupTarget} now controls the region.`))}
+                                    style={{ ...primaryButtonStyle, flexShrink: 0, padding: "0.5rem 0.7rem" }}
+                                >
+                                    Set
+                                </button>
+                            </div>
                         )}
                     </div>
 
@@ -4646,6 +4938,15 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 };
             });
             await saveScenarioCities(nextCities);
+            // A city the scenario gives by year is read off its series
+            // (runtime/cityPopulation.js) until someone sets it by hand — as a
+            // changed figure here does, just as the AI's population op would.
+            const previous = Number(current?.properties?.population);
+            if (hasPopulationByYear(current?.properties) && String(populationRaw ?? "").trim()
+                && Number.isFinite(population) && population >= 0 && Math.round(population) !== previous) {
+                const world = await readWorldState({ force: true });
+                await writeWorldState({ ...world, cityPopulations: { ...(world?.cityPopulations || {}), [cityPopulationKey(name)]: Math.round(population) } });
+            }
             return { name, tier };
         };
 
