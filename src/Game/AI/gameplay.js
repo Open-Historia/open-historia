@@ -360,10 +360,14 @@ import {
   buildWorldDirectionDirective,
   dateKey,
   ensureScriptedEvents,
-  parseScriptedEvents,
   scriptedBeatsInSpan,
   worldShareShortfall,
 } from "./worldDirection.js";
+import {
+  commitScriptedEventPlan,
+  normalizeScriptedEventState,
+  planScriptedEvents,
+} from "./scriptedEventResolution.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   NO_RESPONSE_BODY_NOTE,
@@ -7163,6 +7167,7 @@ const applySimulationResult = async ({
     ...baseGame,
     gameDate: normalizeString(result.stopDate) || baseGame.gameDate,
     round: (baseGame.round || 1) + 1,
+    scriptedEventState: normalizeScriptedEventState(result.scriptedEventState ?? baseGame.scriptedEventState),
   });
   const plannedActionSnapshot = normalizeActions(baseActions).filter((action) => action.status === "planned");
   // An order is resolved by the event that answered it, not by the turn having
@@ -13064,15 +13069,26 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // The scenario author's settings (worldDirection.js): the pace scales what
       // the period is asked for here, and the world's share is counted below.
       const direction = getActiveWorldDirection();
-      // The author's scripted events that fall in this span (worldDirection.js):
-      // asked for by name, and each one a slot of its own on top of the range.
-      // The game's first skip covers its origin day too; after that the origin
-      // day belongs to the period before.
-      const scriptedBeats = scriptedBeatsInSpan(parseScriptedEvents(direction?.scriptedEvents), {
-        originDate: state.segmentOrigin,
-        targetDate: segmentTarget,
-        includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
+      // Conditional scripted events are decided by native canonical state at the
+      // start of the segment. The plan is ephemeral until the segment is accepted:
+      // retries reuse it (so Chance never rerolls), while an auto jump that stops
+      // before an event's date discards that not-yet-due decision.
+      const ledgerWorld = state.ledgerWorld || bundle.world;
+      const authoredScriptedBeats = scriptedBeatsInSpan(
+        Array.isArray(direction?.scriptedEvents) ? direction.scriptedEvents : [],
+        {
+          originDate: state.segmentOrigin,
+          targetDate: segmentTarget,
+          includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
+        },
+      );
+      const scriptedPlan = planScriptedEvents(authoredScriptedBeats, {
+        world: ledgerWorld,
+        resolvedState: state.scriptedEventState,
+        pendingState: state.scriptedEventPending,
       });
+      state.scriptedEventPending = scriptedPlan.pendingState;
+      const scriptedBeats = scriptedPlan.eligible;
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
@@ -13081,10 +13097,8 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       // targetDate reaches only these two variables (promptContext.js), so the
       // expensive context — region catalog, city seed, territory index — is built
       // once for the whole jump and only the dates move per segment.
-      // The ledgers as the segments already in hand left them: what this segment
-      // is validated against, and what it is shown (the rest of the expensive
-      // context is built once for the whole jump).
-      const ledgerWorld = state.ledgerWorld || bundle.world;
+      // The ledgers as the segments already in hand left them are what this
+      // segment is validated against and what its native scripted conditions read.
       // The native world director reads the world as the segments in hand left
       // it (ledgers and storylines) plus the events generated so far, and
       // returns the attention/exploration analysis this segment is validated
@@ -13323,6 +13337,30 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         }),
         variables: segmentVariables,
       });
+
+      // Resolve a dated trigger only after this segment has actually been
+      // accepted. A held/rejected attempt persists nothing; its ephemeral plan
+      // remains on `state` so Retry sees the same Chance roll and condition result.
+      const scriptedStopDate = normalizeString(payload?.stopDate) || segmentTarget;
+      const scriptedCommit = commitScriptedEventPlan(state.scriptedEventState, scriptedPlan, {
+        throughDate: scriptedStopDate,
+      });
+      state.scriptedEventState = scriptedCommit.state;
+      state.scriptedEventPending = {};
+
+      // runJsonTask's deterministic fallback bypasses the candidate validator.
+      // Preserve the existing scripted-event guarantee there too: an eligible
+      // authored beat omitted by the fallback is inserted in the author's words.
+      if (segmentGeneration?.source === "fallback" && scriptedCommit.fired.length) {
+        const fallbackScripted = ensureScriptedEvents(payload?.events, scriptedCommit.fired);
+        if (fallbackScripted.inserted.length) {
+          payload.events = fallbackScripted.events;
+          sortTimelineEventsChronologically(payload);
+          for (const beat of fallbackScripted.inserted) {
+            noteReceipt(state.receipt, "adjusted", `The scripted event of ${beat.date} â€” "${beat.title}" â€” was not in the fallback answer, so the engine wrote it in the author's words, with no impacts.`);
+          }
+        }
+      }
 
       // Only now is the answer taken, so only now does its draft count.
       if (segmentGeneration?.source !== "fallback") {
@@ -14150,6 +14188,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     filedEvents: state.filedEvents,
     boardProvisionalEventIds: state.boardProvisionalEventIds,
     receipt: state.receipt,
+    scriptedEventState: state.scriptedEventState,
   };
   const applyArgs = {
     baseActions: bundle.actions,
@@ -14301,6 +14340,10 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
     nextSegment: 0,
     segmentOrigin: originDate,
     segmentPayloads: [],
+    // Scripted-event resolutions are campaign state, but are committed only when
+    // the whole accepted turn lands. Pending is an in-memory retry cache.
+    scriptedEventState: normalizeScriptedEventState(bundle.game?.scriptedEventState),
+    scriptedEventPending: {},
     // The base world plus the ledger and storyline records of the segments in hand.
     ledgerWorld: bundle.world,
     // One exploration audit per segment; the quietest is re-searched after curation.

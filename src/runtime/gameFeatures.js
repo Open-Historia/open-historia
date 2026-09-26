@@ -16,6 +16,9 @@ export {
   isFeatureEnabled,
   normalizeFeatureOverrides,
   normalizeFeatureSettings,
+  normalizeScriptedEvents,
+  SCRIPTED_EVENT_CONDITION_TYPES,
+  SCRIPTED_EVENT_TRIGGER_MODES,
   resolveFeatures,
 } from "../../server/gameFeatures.js";
 
