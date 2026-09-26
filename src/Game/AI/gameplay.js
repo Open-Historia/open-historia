@@ -1083,11 +1083,14 @@ const validateSegmentStorylines = (candidate, {
 // per segment for the post-curation breadth repair. The segment's temporary
 // event ids are already bound into its ledger records (validateSegmentLedgers),
 // so storyline ids are attached to the events in place, never by re-labelling.
+// The screen keeps only the actionIds of orders still queued, so it needs the
+// turn's orders: without them it takes every event's citations away.
 const screenSegmentPayload = (payload, {
   analysis,
   priorEvents,
   world,
   game,
+  actions,
   state,
   originDate,
   targetDate,
@@ -1120,6 +1123,7 @@ const screenSegmentPayload = (payload, {
     priorEvents,
     world,
     game,
+    actions,
     analysis,
   });
   if (screened.dropped?.length) {
@@ -7100,6 +7104,7 @@ const applySimulationResult = async ({
       priorEvents: [...priorEvents, ...curatedEvents],
       world: baseWorld,
       game: baseGame,
+      actions: baseActions,
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
@@ -13337,6 +13342,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         priorEvents: segmentBundle.events,
         world: ledgerWorld,
         game: bundle.game,
+        actions: bundle.actions,
         state,
         originDate: state.segmentOrigin,
         targetDate: segmentTarget,
