@@ -100,11 +100,6 @@ const regionClaimSchema = {
     regionId: regionIdSchema,
     regionName: regionNameSchema,
     claimantCode: textSchema("Claiming polity's FULL name (\"Spain\"), never a code."),
-    // What the claimant is, written onto its record as its role
-    // (server/polityRole.js) and shown wherever it appears. One line: the
-    // examples live in the actions reference and the GM rules, because this
-    // schema rides on every jump request (projectOpSchema.test.js).
-    claimantRole: textSchema("What the claimant IS in a few words (\"a terrorist organisation\"), when new or changed."),
     drop: {
       type: "boolean",
       description: "True to WITHDRAW the claim (renounced, traded away, given up in defeat). Unset asserts it.",
@@ -189,7 +184,6 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Defending controller's FULL name."),
         actorCode: nonEmptyTextSchema("Attacking polity's FULL name."),
-        actorRole: textSchema("What the attacker IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
       },
       required: ["op", "regionId", "fromCode", "actorCode"],
@@ -203,7 +197,6 @@ const regionControlOpSchema = {
         regionName: regionNameSchema,
         fromCode: nonEmptyTextSchema("Previous controller's FULL name."),
         toCode: nonEmptyTextSchema("New controller's FULL name."),
-        toRole: textSchema("What the new controller IS in a few words, when new or changed."),
         note: textSchema("Brief reason."),
         basis: { type: "string", enum: [...TERRITORY_BASIS_ENUM], description: TERRITORY_BASIS_DESCRIPTION_SHORT },
         wholeCountry: {
@@ -265,7 +258,6 @@ const polityChangeSchema = {
       "Defining traits after this change — ideology, alignment, posture (socialist, authoritarian, anti-nato). "
       + "Only when they change, and then the COMPLETE list, not a delta.",
     ),
-    role: textSchema("What this polity IS in a few words (\"a street gang\"), when new or changed."),
     note: textSchema("Brief reason."),
     stats: statsUpdateSchema,
   },
@@ -878,6 +870,29 @@ const politicalActorImpactOpSchema = {
   additionalProperties: false,
 };
 
+// Groups (runtime/groups.js): actors that are not countries, each controlling an
+// area of regions it does not own. One object discriminated by op, like
+// projectOpSchema — the friendliest shape for Gemini and for small local models.
+const groupOpSchema = {
+  type: "object",
+  description: "One change to a group — an actor that is not a country (a terrorist organisation, a cartel, a militia, a zombie outbreak) — or to the regions it controls.",
+  properties: {
+    op: {
+      type: "string",
+      enum: ["create", "update", "dissolve", "take", "release"],
+      description: "create a group; update its description, colour or name; dissolve it (the group and its area are erased); take regions into its area; release regions from it (all of them when regionIds is empty).",
+    },
+    name: nonEmptyTextSchema("The group's exact name (a new one for create)."),
+    newName: textSchema("update only: the group's new name."),
+    description: textSchema("What the group is and does: for create, or when it changes."),
+    color: textSchema("#RRGGBB tint for its area; optional."),
+    regionIds: stringArraySchema("The regions it takes (create/take) or releases: exact ids or plain region names."),
+    note: textSchema("Brief reason."),
+  },
+  required: ["op", "name"],
+  additionalProperties: false,
+};
+
 const impactsSchema = {
   type: "object",
   description: "World-state effects; include only the arrays that apply.",
@@ -949,6 +964,13 @@ const impactsSchema = {
         + "changed hands is regionTransfers.",
       items: regionClaimSchema,
     },
+    groupOps: {
+      type: "array",
+      description:
+        "Groups - actors that are not countries - founded, changed, erased, or taking or losing control of regions. "
+        + "The regions stay their countries'; a group's area is drawn over them.",
+      items: groupOpSchema,
+    },
     projectOps: {
       type: "array",
       description:
@@ -997,6 +1019,7 @@ const compactJumpImpactSchema = (schema) => ({
 const JUMP_COMPACT_IMPACT_DESCRIPTIONS = new Set([
   "markerOps",
   "institutionLifecycleOps",
+  "groupOps",
 ]);
 
 const jumpImpactsSchema = {
@@ -3557,6 +3580,7 @@ const PAYLOAD_IMPACT_ARRAYS = [
   "regionTransfers",
   "regionControlOps",
   "regionClaims",
+  "groupOps",
   "unitOps",
   "markerOps",
   "projectOps",
@@ -3603,6 +3627,7 @@ const normalizeEventShape = (entry) => {
       regionTransfers: ["transfers", "territoryChanges"],
       regionControlOps: ["controlOps", "controlChanges"],
       regionClaims: ["claims"],
+      groupOps: ["groups", "groupOperations"],
       polityChanges: ["polities", "countryChanges"],
       unitOps: ["units", "unitOperations"],
       markerOps: ["markers", "markerOperations"],

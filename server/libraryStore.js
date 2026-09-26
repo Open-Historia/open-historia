@@ -507,6 +507,12 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "powerStatus",
   "agreements",
   "units",
+  // What the Workshop authors besides the map: structures (markers), puppet
+  // states, and groups with the areas they control.
+  "markers",
+  "puppets",
+  "groups",
+  "groupAreas",
   "regionClaimants",
   "regionOwnershipOverrides",
   "regionSovereigntyOverrides",

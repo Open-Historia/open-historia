@@ -65,6 +65,8 @@ const createDocument = async (body = {}) => {
     flags: body.flags && typeof body.flags === "object" ? cloneJson(body.flags) : {},
     tags: body.tags && typeof body.tags === "object" ? cloneJson(body.tags) : {},
     polities: body.polities && typeof body.polities === "object" ? cloneJson(body.polities) : {},
+    units: Array.isArray(body.units) ? cloneJson(body.units) : [],
+    groups: body.groups && typeof body.groups === "object" ? cloneJson(body.groups) : {},
     createdAt: timestamp,
     updatedAt: timestamp,
   };

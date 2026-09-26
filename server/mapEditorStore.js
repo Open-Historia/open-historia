@@ -154,6 +154,13 @@ export const createMapEditorDocument = (body = {}) => {
     // no error, and only shows up as "my colours vanished when I reopened the map".
     colorOverrides: body.colorOverrides || {},
     flags: body.flags || {},
+    // The rest of what the Workshop saves, as the website's store keeps it
+    // (src/runtime/web/editorStore.js); the first save of a map creates it.
+    ownerSchema: Number(body.ownerSchema || 1),
+    tags: body.tags || {},
+    polities: body.polities || {},
+    units: Array.isArray(body.units) ? body.units : [],
+    groups: body.groups && typeof body.groups === "object" ? body.groups : {},
     createdAt: now,
     updatedAt: now,
   };

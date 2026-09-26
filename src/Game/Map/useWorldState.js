@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
+import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -153,6 +154,13 @@ const deriveMapState = (state) => ({
     };
   })(),
   polityOverrides: state?.polityOverrides ?? EMPTY_OBJECT,
+  // Groups and the regions they control (runtime/groups.js), read through the
+  // same normalizer the game uses; a world without groups costs nothing.
+  ...(() => {
+    if (!state?.groups || !Object.keys(state.groups).length) return { groups: EMPTY_OBJECT, groupAreas: EMPTY_OBJECT };
+    const groups = normalizeGroups(state.groups);
+    return { groups, groupAreas: normalizeGroupAreas(state.groupAreas, groups) };
+  })(),
   markers: Array.isArray(state?.markers) ? state.markers : EMPTY_MARKERS,
   cityRenames: state?.cityRenames ?? EMPTY_OBJECT,
   cityPopulations: state?.cityPopulations ?? EMPTY_OBJECT,
@@ -177,6 +185,8 @@ const sameMapState = (prev, next) =>
   prev.markers === next.markers &&
   prev.cityRenames === next.cityRenames &&
   prev.cityPopulations === next.cityPopulations &&
+  prev.groups === next.groups &&
+  prev.groupAreas === next.groupAreas &&
   prev.polityOverrides === next.polityOverrides;
 
 const stabilizeMapStateReferences = (prev, next) => {
@@ -207,6 +217,8 @@ const stabilizeMapStateReferences = (prev, next) => {
     cityPopulations: areEqualStructured(prev.cityPopulations, next.cityPopulations)
       ? prev.cityPopulations
       : next.cityPopulations,
+    groups: areEqualStructured(prev.groups, next.groups) ? prev.groups : next.groups,
+    groupAreas: areEqualStructured(prev.groupAreas, next.groupAreas) ? prev.groupAreas : next.groupAreas,
   };
 };
 
