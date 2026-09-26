@@ -505,8 +505,10 @@ button:active:not(:disabled) {
    to reach, above all the close buttons, which were 14-26 px; with a mouse the
    query never matches and desktop keeps its compact sizes. .oh-tap is for icon
    buttons (square), .oh-tap-row for text buttons, tabs and rows that set their
-   own width. */
-@media (pointer: coarse) {
+   own width. The query is mobileUi.js's TOUCH_QUERY: an older Android WebView
+   reports a touchscreen that also takes a stylus as a FINE pointer, so a screen
+   that cannot hover, or a touchscreen on a phone-sized screen, counts too. */
+@media (pointer: coarse), (hover: none), (any-pointer: coarse) and (max-width: 700px) {
   .oh-tap {
     min-width: 2.75rem;
     min-height: 2.75rem;
