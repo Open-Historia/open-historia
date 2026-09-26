@@ -138,6 +138,12 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     rollupOptions: {
+      // The game, and the hidden page a desktop host runs a shared game's
+      // engine in (engine.html, src/multiplayer/host/engineMain.js).
+      input: {
+        main: 'index.html',
+        engine: 'engine.html',
+      },
       output: {
         // Explicit entries so the split is stable across builds rather than
         // incidental. The AI stack reaches the graph only through

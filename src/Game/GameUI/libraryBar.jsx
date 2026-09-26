@@ -77,6 +77,8 @@ const UNIT_TYPE_LABELS = {
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 // Lazy so the GitHub-backed Community tab costs nothing until opened.
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
+// Shared games: host, join with a token, and the public browser (multiplayer/).
+const MultiplayerPanel = lazy(() => import("../../multiplayer/ui/MultiplayerPanel.jsx"));
 // Lazy so OpenLayers only loads when the country picker map is opened.
 const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 
@@ -3356,7 +3358,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 scrollbarWidth: "none",
               }}
             >
-              {["games", "scenarios", "community"].map((tab) => (
+              {["games", "scenarios", "community", "multiplayer"].map((tab) => (
                 <button
                   key={tab}
                   className="oh-tap-row"
@@ -3370,7 +3372,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   }, touch)}
                   type="button"
                 >
-                  {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : "Community"}
+                  {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : tab === "community" ? "Community" : "Multiplayer"}
                 </button>
               ))}
             </div>
@@ -3419,7 +3421,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 ))}
               </div>
             )}
-            {activeTab === "community" ? (
+            {activeTab === "multiplayer" ? (
+              <Suspense
+                fallback={
+                  <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
+                    Loading Multiplayer…
+                  </div>
+                }
+              >
+                <MultiplayerPanel onEnterGame={() => setMenuOpen(false)} />
+              </Suspense>
+            ) : activeTab === "community" ? (
               <Suspense
                 fallback={
                   <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>

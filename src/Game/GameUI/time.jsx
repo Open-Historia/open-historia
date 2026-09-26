@@ -53,6 +53,7 @@ import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../r
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { normalizeGroupOp } from "../../runtime/groups.js";
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 
 dayjs.extend(advancedFormat);
 
@@ -2281,6 +2282,13 @@ const DateWidget = ({
 
     const runJump = async (days, mode = "jump") => {
         if (!gameData || days == null || isLoading) {
+            return;
+        }
+        // A shared game's rounds are the host's (multiplayer/): each ends on the
+        // host's timer, or sooner when enough players are ready.
+        if (inSharedGame()) {
+            setPanel("skip");
+            setError("In a shared game the host's timer ends each round, or enough players pressing Ready on the round bar at the top.");
             return;
         }
 

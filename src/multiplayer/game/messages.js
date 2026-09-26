@@ -18,6 +18,11 @@
 import { HEX_ID, NAME, bool, int, json, list, literal, obj, str } from "../protocol/validate.js";
 import { SETTINGS_SCHEMA } from "../host/settings.js";
 
+// A host and its players must speak the same game: raised whenever these
+// messages or the views (host/projection.js) change in a way an older player's
+// screen would misread. The session refuses a player on another version.
+export const SHARED_GAME_VERSION = "1";
+
 // Orders are free text in single player; in a shared game one is held to this.
 export const ORDER_MAX_CHARS = 1500;
 export const SAY_MAX_CHARS = 2000;

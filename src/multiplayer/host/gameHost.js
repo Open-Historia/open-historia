@@ -22,6 +22,7 @@ import { SEAT_STATUS, createSeatBook } from "./seats.js";
 import { roundSettingsOf } from "./settings.js";
 import { projectForViewer } from "./projection.js";
 import { ORDER_MAX_CHARS } from "../game/messages.js";
+import { withPlayerGoal } from "../../runtime/playerGoal.js";
 
 export const MAX_ORDERS_PER_ROUND = 12;
 const SEEN_REQUESTS = 64;
@@ -232,13 +233,8 @@ export const createGameHost = ({
       return found ? "" : "That is not one of your queued orders.";
     },
     goal: async (connection, { text }, seat) => {
-      const goal = clean(text);
-      await store.updateWorld((world) => {
-        const goals = { ...(world?.playerGoals && typeof world.playerGoals === "object" ? world.playerGoals : {}) };
-        if (goal) goals[seat.country] = { text: goal, setAt: new Date(now()).toISOString() };
-        else delete goals[seat.country];
-        return { ...world, playerGoals: goals };
-      });
+      // The game's own rule for a standing goal (runtime/playerGoal.js).
+      await store.updateWorld((world) => withPlayerGoal(world, seat.country, text));
       round.touch(seat.country);
       return "";
     },

@@ -54,6 +54,7 @@ import { commitInstitutionalPlayerMessage } from "../../runtime/institutionalGov
 import { buildPlayerPoliticalKnowledgeView } from "../../runtime/politicalKnowledge.js";
 import { commitInstitutionLifecycleCommand, institutionLifecycleCasesForPolity, institutionLifecycleConversationState, institutionPortfolioForPolity } from "../../runtime/institutionLifecycle.js";
 import { buildLifecycleReplyRevealPlan } from "./institutionLifecyclePresentation.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Who the player is and when it is: all this panel reads of game.json.
 const selectGameIdentity = (game) => ({
@@ -1716,6 +1717,20 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!text || isLoading) return;
             // Speaking while the table is still talking cuts it off.
             cutIn();
+            // In a shared game the host keeps every thread and answers for the AI
+            // governments: the line is sent to it, and the thread comes back in the
+            // next view. A thread started here reaches the host with its first line.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("say", chat.pendingShared
+                    ? { thread: null, to: countries.map((country) => country.name).filter(Boolean).slice(0, 8), text }
+                    : { thread: String(chat.id), to: [], text });
+                if (!answer.ok) {
+                    pushMessages([...messagesRef.current, { role: "error", speaker: "System", text: answer.error || "The host did not take the message.", time: gameDate }]);
+                    return;
+                }
+                if (chat.pendingShared) onBack?.();
+                return;
+            }
             // What the world did since this thread last spoke, told to the
             // leaders with the player's line and kept on it (AI/conversationCatchUp.js
             // buildThreadCatchUp), dated from the moment the player is looking at.
@@ -3504,6 +3519,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     };
 
     const handleStartChat = (selected) => {
+        // In a shared game a thread is the host's to open, with its first line
+        // (ConversationView's submitPlayerText); until then it lives only here.
+        if (inSharedGame()) {
+            setShowSelector(false);
+            setActiveChat({ id: `pending-${Date.now()}`, countries: selected, messages: [], status: "open", pendingShared: true });
+            return;
+        }
         const newChat = { id: Date.now(), countries: selected, messages: [], status: "open" };
         setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
         setShowSelector(false);

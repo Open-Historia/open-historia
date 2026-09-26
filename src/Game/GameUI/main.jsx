@@ -31,6 +31,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -295,7 +296,8 @@ const Main = ({
     // message the player while they are browsing/editing outside the campaign.
     if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      // A shared game's world is the host's to move (multiplayer/).
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
@@ -312,7 +314,7 @@ const Main = ({
   useEffect(() => {
     if (hasNoGames) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
       import("../AI/gameplay.js")
         .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
         .catch(() => {});
