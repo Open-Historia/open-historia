@@ -52,6 +52,11 @@ export const isSimulationBusy = () => activeSimulations > 0
 
 export const isChatGenerationLikely = () => chatGenerationInFlight;
 
+// A turn or a reply is being written right now. Unlike isSimulationBusy, a jump
+// held for the player does not count: nothing runs until they answer. The
+// Android app rests in the background on this (runtime/native/backgroundPause.js).
+export const isGenerating = () => activeSimulations > 0 || chatGenerationInFlight;
+
 // Both discards stay synchronous: time.jsx fires them next to a setState, and an
 // async one would leave isSimulationBusy() true for a tick afterwards. Nothing
 // was written either way, so there is nothing to undo.
