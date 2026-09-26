@@ -54,7 +54,7 @@ const looksTechnical = (text) => {
   if (/(?:^|\s)(?:-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b)/.test(t) && !/[a-z]{4,}\s+[a-z]{3,}/i.test(t.replace(/-?\d*\.?\d+(?:px|rem|em|vh|vw|%|ms|s|deg|fr)\b/g, ""))) return true;
   if (/rgba?\(|hsla?\(|#[0-9a-f]{3,8}\b|var\(--|calc\(|color-mix\(|linear-gradient|cubic-bezier|translate[XY]?\(|scale\(|rotate\(/i.test(t)) return true;
   if (CSS_WORD.test(t)) return true;
-  if (/^[\w-]+(?:\s+[\w-]+)*$/.test(t) && t.split(/\s+/).every((w) => CSS_WORD.test(w))) return true;
+  if (/^[\w.-]+(?:\s+[\w.-]+)*$/.test(t) && t.split(/\s+/).every((w) => CSS_WORD.test(w) || /^-?\d*\.?\d+$/.test(w))) return true; // "0 1 auto"
   if (/^[\w.-]+\.(?:js|jsx|mjs|json|png|jpg|webp|svg|geojson|pmtiles|css|html|zip)$/i.test(t)) return true;
   if (/^application\/|^text\/|^image\//.test(t)) return true;
   if (/^\p{Extended_Pictographic}+$/u.test(t)) return true;
@@ -270,8 +270,12 @@ const DISPLAY_KEYS = new Set([
   "message", "tooltip", "caption", "summary", "emptyText", "emptyLabel", "confirmLabel", "cancelLabel",
   "actionLabel", "buttonLabel", "heroTitle", "heroSubtitle", "shortLabel", "longLabel", "question", "answer",
   "explanation", "detail", "details", "note", "warning", "helper", "help", "intro", "tagline", "headline",
-  "prompt_label", "noun", "plural", "singular", "verb", "phase", "stage", "step",
+  "prompt_label", "noun", "plural", "singular", "verb", "phase", "stage", "step", "publicDescription",
 ]);
+// A camelCase key ending in "Label" (mappedLabel, centerSubLabel) holds display
+// text too, and may be a single lowercase word ("landscape").
+const LABEL_KEY = /^[a-z][A-Za-z0-9]*Label$/;
+const isDisplayKey = (key) => DISPLAY_KEYS.has(key) || LABEL_KEY.test(key ?? "");
 const STATUS_CALLS = new Set([
   "setStatus", "setError", "setMessage", "setNotice", "setToast", "showToast", "notify", "alert", "confirm",
   "setHint", "setLabel", "setWarning", "setInfo", "setBanner", "setNote", "setSaveMessage", "setStatusText",
@@ -347,10 +351,11 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
   const add = (map, text, node) => {
     if (!map.has(text)) map.set(text, `${file}:${node?.loc?.start?.line ?? 0}`);
   };
-  const addText = (raw, node, { requireProse = false } = {}) => {
+  // `word`: a lone lowercase word is display text here (a *Label key), not an id.
+  const addText = (raw, node, { requireProse = false, word = false } = {}) => {
     const t = String(raw ?? "").trim();
     if (!translatable(t)) return;
-    if (requireProse ? !proseLike(t) : looksTechnical(t)) return;
+    if (requireProse ? !proseLike(t) : looksTechnical(t) && !(word && /^[a-z]{2,}$/.test(t))) return;
     add(exact, t, node);
   };
   // Each alternative of a shape is one string the translator will see whole:
@@ -407,7 +412,7 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     if (parent.isObjectProperty() && pn.key === p.node) return true; // a key
     if (parent.isObjectProperty()) {
       const key = pn.key?.name ?? pn.key?.value;
-      if (DISPLAY_KEYS.has(key)) return false;
+      if (isDisplayKey(key)) return false;
       if (NON_TEXT_PROPS.has(key)) return true;
       // Inside a style object: the whole object is technical.
       const obj = parent.parentPath;
@@ -511,10 +516,10 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     },
     ObjectProperty(p) {
       const key = p.node.key?.name ?? p.node.key?.value;
-      if (!DISPLAY_KEYS.has(key) || p.node.computed) return;
+      if (!isDisplayKey(key) || p.node.computed) return;
       if (insideNoTranslate(p)) return;
       const shape = shapeOf(p.node.value, code);
-      if (shape) addShape(shape, p.node.value, { requireProse: !["label", "title", "hint", "description", "placeholder", "subtitle", "blurb", "heroTitle", "heroSubtitle", "eyebrow"].includes(key) });
+      if (shape) addShape(shape, p.node.value, { requireProse: !["label", "title", "hint", "description", "placeholder", "subtitle", "blurb", "heroTitle", "heroSubtitle", "eyebrow"].includes(key) && !LABEL_KEY.test(key), word: LABEL_KEY.test(key) });
     },
     ArrayExpression(p) {
       // [key, "Label"] rows (tab lists).
@@ -573,7 +578,7 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     },
     StringLiteral(p) {
       if (!catchAll) return;
-      if (p.parentPath.isJSXAttribute() || p.parentPath.isObjectProperty() && DISPLAY_KEYS.has(p.parentPath.node.key?.name)) return; // handled above
+      if (p.parentPath.isJSXAttribute() || p.parentPath.isObjectProperty() && isDisplayKey(p.parentPath.node.key?.name)) return; // handled above
       if (technicalPosition(p) || insideNoTranslate(p)) return;
       if (p.findParent((q) => q.isCallExpression() && (calleeName(q.node.callee) === "console" || NON_UI_CALLS.has(calleeName(q.node.callee))))) return;
       addText(p.node.value, p.node, { requireProse: true });
@@ -608,11 +613,18 @@ const walkFiles = (dir, out = []) => {
 // The interface: every .jsx file, and the .js registries whose display fields
 // reach the screen. The AI directory is prompts and parsers except for the
 // registries that feed the Prompts tab and Settings → AI, and the modules
-// whose messages the player reads (MESSAGE_FILES).
+// whose messages the player reads (MESSAGE_FILES). A .jsx file's thrown and
+// returned prose is read too: its screen shows error.message.
 const JS_REGISTRY_DIRS = ["src/runtime", "src/Game/GameUI", "src/Game/Selection", "src/Game/Map", "src/Editor"];
 const MESSAGE_FILES = [
   "src/Game/AI/providerErrors.js", "src/Game/AI/fallbackRunner.js", "src/Game/AI/contextWindow.js",
   "src/Game/AI/requestBudget.js",
+  // The institutions: what their commands refuse with shows in the Institutions
+  // tab, and the events and channel lines they write are read in the log.
+  "src/runtime/institutionLifecycle.js", "src/runtime/institutionLifecycleCore.js",
+  "src/runtime/institutionalChannels.js", "src/runtime/institutionalGovernance.js",
+  "src/runtime/institutionAuthoring.js", "src/runtime/politicalWorldCapability.js",
+  "src/Game/GameUI/advisorInstitutionDrafts.js", "src/Game/GameUI/countryEditorPolitical.js",
 ];
 const JS_REGISTRY_FILES = [
   "src/Game/AI/gameplayPrompts.js", "src/Game/AI/promptGuidance.js", "src/Game/AI/providerConfig.js",
@@ -642,7 +654,7 @@ export const extractTree = (root) => {
     const rel = path.relative(root, file).split(path.sep).join("/");
     const code = fs.readFileSync(file, "utf8");
     const jsx = rel.endsWith(".jsx");
-    const result = extractFromSource(code, rel, { jsx, catchAll: jsx, factories: FACTORIES, messages: MESSAGE_FILES.includes(rel) });
+    const result = extractFromSource(code, rel, { jsx, catchAll: jsx, factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
     if (result.error) errors.push(result.error);
     for (const [t, where] of result.exact) if (!exact.has(t)) exact.set(t, where);
     for (const [t, where] of result.patterns) if (!patterns.has(t)) patterns.set(t, where);

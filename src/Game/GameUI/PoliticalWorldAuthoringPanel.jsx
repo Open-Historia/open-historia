@@ -375,7 +375,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                       <span style={{ background: selectedActor ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${selectedActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: selectedActor ? "#86efac" : "#fbbf24", fontSize: "0.56rem", fontWeight: 900, padding: "0.12rem 0.38rem", textTransform: "uppercase" }}>{selectedActor ? "Canonical actor" : "Creates actor on save"}</span>
                     </div>
                     <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", marginTop: "0.18rem" }}>Stable polity key: <code>{selectedKey}</code></div>
-                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>Edits write directly to the scenario's canonical <code>world.politicalActors</code> ledger. Blank trait values remain unset, not zero. Hidden native/derived Political World state is preserved.</div>
+                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>Edits write directly to the scenario's canonical world.politicalActors ledger. Blank trait values remain unset, not zero. Hidden native/derived Political World state is preserved.</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                     <button disabled={!dirty || busy} onClick={discard} style={{ ...buttonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
