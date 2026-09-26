@@ -236,11 +236,3 @@ export const describeReportsForPrompt = (reports, { sees = null, limit = 12, bod
     });
     return `${heading}\n${lines.join("\n")}`;
 };
-
-// What the simulator is told about writing them. Short; it rides on every jump.
-export const REPORT_VOICE_DIRECTIVE = [
-    "[Reports — documents, not summaries]",
-    "An event is public: everyone reads the timeline. What only some governments know goes in a REPORT on the event (impacts.reports, op create): a secret pact or protocol, a private letter between leaders, an intelligence assessment, an ultimatum's full text, a treaty's articles. Write the document itself, in its own voice — first person for a letter or a cable, numbered Articles for a treaty, FROM / TO / SUBJECT / DATE for an intelligence report, a signature where one belongs; the title is the document's own heading, and dateline its date.",
-    "visibleTo lists the polities that hold it, by their full names; leave it empty only for a document genuinely published to all. from names the polity whose document it is — who wrote or sent it. Widen an existing report with op share and its id when it reaches more hands, with from naming the holder who passed it on.",
-    "The hard boundary: anything that moved the map — a border, a unit, a structure — is observable and stays in the public event. A report never carries impacts, and the public event describes only the observable surface of what the report contains.",
-].join("\n");
