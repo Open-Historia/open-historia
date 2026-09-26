@@ -350,11 +350,11 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
           <aside style={{ borderBottom: isMobile ? "1px solid rgba(255,255,255,0.08)" : undefined, borderRight: isMobile ? undefined : "1px solid rgba(255,255,255,0.08)", display: "flex", flexDirection: "column", minHeight: 0 }}>
             <div style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", display: "grid", gap: "0.45rem", padding: "0.72rem" }}>
               <input aria-label="Search institutions" onChange={(event) => setQuery(event.target.value)} placeholder="Search institutions..." style={inputStyle} value={query} />
-              <button onClick={createNew} style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(167,139,250,0.34)", width: "100%" }} type="button">+ Create institution</button>
+              <button onClick={createNew} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", width: "100%" }} type="button">+ Create institution</button>
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: "0.45rem" }}>
               {selectedIsNew && (
-                <button className="oh-tap-row" style={{ alignItems: "center", background: "rgba(124,58,237,0.2)", border: "1px solid rgba(167,139,250,0.28)", borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.3rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }} type="button">
+                <button className="oh-tap-row" style={{ alignItems: "center", background: "var(--oh-grey-selected)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.3rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }} type="button">
                   <span style={{ minWidth: 0 }}>
                     <span style={{ display: "block", fontSize: "0.76rem", fontWeight: 800 }}>New institution</span>
                     <span style={{ color: "rgba(255,255,255,0.4)", display: "block", fontSize: "0.59rem", marginTop: "0.12rem" }}>Unsaved draft</span>
@@ -370,7 +370,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                     className="oh-tap-row"
                     key={institution.id}
                     onClick={() => chooseInstitution(institution)}
-                    style={{ alignItems: "center", background: selected ? "rgba(124,58,237,0.2)" : "transparent", border: `1px solid ${selected ? "rgba(167,139,250,0.28)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
+                    style={{ alignItems: "center", background: selected ? "var(--oh-grey-selected)" : "transparent", border: `1px solid ${selected ? "var(--oh-grey-border-strong)" : "transparent"}`, borderRadius: "10px", color: "#fff", cursor: "pointer", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.22rem", padding: "0.55rem 0.6rem", textAlign: "left", width: "100%" }}
                     type="button"
                   >
                     <span style={{ minWidth: 0 }}>
@@ -399,7 +399,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                 <button disabled={!dirty || busy} onClick={discard} style={{ ...actionButtonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
-                <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.24)", borderColor: "rgba(167,139,250,0.36)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save institution"}</button>
+                <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save institution"}</button>
               </div>
             </div>
 
@@ -491,7 +491,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                       const unresolved = polityOptions.length > 0 && !option;
                       const label = option?.label || name;
                       return (
-                        <span key={name.toLocaleLowerCase()} title={unresolved ? "This member does not resolve to the scenario polity roster and must be removed or corrected before saving." : option?.polityKey || name} style={{ alignItems: "center", background: unresolved ? "rgba(248,113,113,0.08)" : "rgba(124,58,237,0.08)", border: `1px solid ${unresolved ? "rgba(248,113,113,0.24)" : "rgba(167,139,250,0.16)"}`, borderRadius: "999px", color: unresolved ? "#fecaca" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
+                        <span key={name.toLocaleLowerCase()} title={unresolved ? "This member does not resolve to the scenario polity roster and must be removed or corrected before saving." : option?.polityKey || name} style={{ alignItems: "center", background: unresolved ? "rgba(248,113,113,0.08)" : "rgba(255,255,255,0.05)", border: `1px solid ${unresolved ? "rgba(248,113,113,0.24)" : "var(--oh-grey-border)"}`, borderRadius: "999px", color: unresolved ? "#fecaca" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
                           {label}{unresolved ? " · unresolved" : ""}
                           <button aria-label={`Remove ${label}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
                         </span>
@@ -573,10 +573,10 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Create institutions that already exist when the scenario begins. Political World generation may enrich membership and governance later, but it will preserve the identity and artwork you author here.</div>
           <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", marginTop: "0.35rem" }}>{rows.length} institution{rows.length === 1 ? "" : "s"} configured · {totalMembers} starting member{totalMembers === 1 ? "" : "s"}.</div>
         </div>
-        <button onClick={() => setManagerOpen(true)} style={{ ...actionButtonStyle, background: "rgba(124,58,237,0.22)", borderColor: "rgba(167,139,250,0.34)", flex: "0 0 auto" }} type="button">Manage institutions</button>
+        <button onClick={() => setManagerOpen(true)} style={{ ...actionButtonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">Manage institutions</button>
       </div>
       {!rows.length && (
-        <div style={{ background: "rgba(124,58,237,0.07)", border: "1px solid rgba(167,139,250,0.18)", borderRadius: 12, color: "rgba(237,233,254,0.86)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}><strong>No institutions created yet.</strong> Open the manager to author one manually, or leave this empty and let Political World generation establish relevant institutions later.</div>
+        <div style={{ background: "rgba(255,255,255,0.035)", border: "1px solid var(--oh-grey-border)", borderRadius: 12, color: "var(--oh-grey-muted)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.75rem", padding: "0.65rem 0.7rem" }}><strong>No institutions created yet.</strong> Open the manager to author one manually, or leave this empty and let Political World generation establish relevant institutions later.</div>
       )}
       {manager}
     </div>
