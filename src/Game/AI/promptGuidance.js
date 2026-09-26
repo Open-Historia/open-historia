@@ -20,6 +20,7 @@
 // spy desks, the board) are entirely technical by design.
 
 import { readUnderTaskKey } from "./formerTaskKeys.js";
+import { SHIPPED_GUIDANCE_FINGERPRINTS } from "./shippedGuidance.js";
 
 const segment = (id, label, start, end, hint = "") => Object.freeze({ id, label, start, end, hint });
 
@@ -274,6 +275,27 @@ export const buildGuidanceDefaults = (defaults) => ({
   ),
 });
 
+// A passage's fingerprint: cyrb53 (53 bits, base 36) of its text with the
+// whitespace collapsed, so a copy that went through a line-ending conversion
+// still matches.
+export const guidanceFingerprint = (text) => {
+  const source = String(text ?? "").replace(/\s+/g, " ").trim();
+  let h1 = 0xdeadbeef ^ source.length;
+  let h2 = 0x41c6ce57 ^ source.length;
+  for (let i = 0; i < source.length; i += 1) {
+    const code = source.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+};
+
+// Is this, word for word, a default passage some version of the game shipped,
+// in English or in a shipped translation (shippedGuidance.js)?
+export const isShippedGuidanceDefault = (text) => SHIPPED_GUIDANCE_FINGERPRINTS.has(guidanceFingerprint(text));
+
 // The edits a stored pack carries, normalised: known sections and segments
 // only, trimmed, with blanks and default-identical text dropped. A pack of any
 // other shape carries nothing — the old model stored whole prompts, technical
@@ -281,18 +303,29 @@ export const buildGuidanceDefaults = (defaults) => ({
 // every scenario and game runs the current defaults plus its guidance. A
 // renamed task's edits are read from its old key when its new one has none
 // (formerTaskKeys.js), and kept under the new one.
+//
+// A passage identical to a default that any version shipped is dropped too
+// (isShippedGuidanceDefault): it was copied into the pack, not written.
+// "Export all prompts" writes every passage, and a scenario that imported
+// such a file stored them all; kept, they would pin that version's defaults
+// in the scenario and in every game played from it after the game changed
+// them. Only stored packs are read this way: composePrompt takes whatever
+// passages it is given, the translated defaults included.
 export const normalizePackGuidance = (rawPack, guidanceDefaults = null) => {
   const pack = isRecord(rawPack) ? rawPack : {};
   const source = Number(pack.promptModel) === PROMPT_MODEL_VERSION && isRecord(pack.guidance) ? pack.guidance : {};
   const tasks = isRecord(source.tasks) ? source.tasks : {};
+  const edits = (sectionKey, raw, defaults) => Object.fromEntries(
+    Object.entries(normalizeSectionGuidance(sectionKey, raw, defaults)).filter(([, text]) => !isShippedGuidanceDefault(text)),
+  );
   const taskGuidance = {};
   for (const key of Object.keys(PROMPT_GUIDANCE.tasks)) {
-    const bucket = normalizeSectionGuidance(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? null);
+    const bucket = edits(key, readUnderTaskKey(tasks, key), guidanceDefaults?.tasks?.[key] ?? null);
     if (Object.keys(bucket).length) taskGuidance[key] = bucket;
   }
   return {
-    advisor: normalizeSectionGuidance("advisor", source.advisor, guidanceDefaults?.advisor ?? null),
-    leader: normalizeSectionGuidance("leader", source.leader, guidanceDefaults?.leader ?? null),
+    advisor: edits("advisor", source.advisor, guidanceDefaults?.advisor ?? null),
+    leader: edits("leader", source.leader, guidanceDefaults?.leader ?? null),
     tasks: taskGuidance,
   };
 };
