@@ -1,11 +1,11 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
-import { applyGroupOps, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { applyGroupOps, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
-import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from "../../server/polityRename.js";
+import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, samePolityName } from "../../server/polityRename.js";
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
@@ -5214,7 +5214,42 @@ export const applyEventImpactsToWorld = ({
     // Groups after the land has moved, so a group can take what the same event
     // just changed hands.
     if (event.impacts.groupOps?.length) {
-      const applied = applyGroupOps(nextWorld, event.impacts.groupOps);
+      // A group that is also a polity (the player leading a group, groups.js
+      // playerGroupKey) is one actor under one name. The model may not dissolve
+      // it: losing its whole area is a release, and it goes on with none. A
+      // rename of it renames the polity, which renames the group with it
+      // (server/polityRename.js), so the game's own polity follows.
+      const groupOps = [];
+      for (const raw of event.impacts.groupOps) {
+        const op = normalizeGroupOp(raw);
+        if (!op) continue;
+        const key = findGroupKey(nextWorld.groups, op.name);
+        const isPolity = Boolean(key) && Object.keys(nextWorld.polityOverrides ?? {}).some((name) => samePolityName(name, key));
+        if (!isPolity) {
+          groupOps.push(op);
+          continue;
+        }
+        if (op.op === "dissolve") {
+          console.info(`[groups] "${key}" is a polity as well as a group; it is not dissolved (a release takes its area).`);
+          continue;
+        }
+        let name = key;
+        if (op.newName && !findGroupKey(nextWorld.groups, op.newName)) {
+          try {
+            const result = renamePolityInWorld(nextWorld, key, op.newName);
+            Object.assign(nextWorld, result.world);
+            nextColors = renamePolityInColors(nextColors, result.from, result.to);
+            renamedPolities.push({ from: result.from, to: result.to });
+            resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
+            name = findGroupKey(nextWorld.groups, result.to) || key;
+          } catch (error) {
+            console.warn(`[groups] could not rename "${key}" as "${op.newName}": ${error?.message || error}`);
+          }
+        }
+        const { newName: _newName, ...rest } = op;
+        groupOps.push({ ...rest, name });
+      }
+      const applied = applyGroupOps(nextWorld, groupOps);
       nextWorld.groups = applied.groups;
       nextWorld.groupAreas = applied.groupAreas;
     }

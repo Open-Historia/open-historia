@@ -6,7 +6,7 @@ import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDem
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
-import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
   createApplicationReceipt,
@@ -1562,6 +1562,16 @@ const buildGroupsContext = async (worldLike) => {
   return describeGroupsForPrompt(world, { regionName: (id) => names.get(id) || id });
 };
 
+// When the player leads a group rather than a country (runtime/groups.js
+// playerGroupKey): what it is, where it holds. Empty for a country.
+const buildPlayerGroupContext = async (worldLike, playerName) => {
+  if (!worldLike?.groups || !normalizeString(playerName)) return "";
+  const world = normalizeWorldState(worldLike);
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const names = new Map(catalog.map((region) => [region.id, region.name]));
+  return describePlayerGroupForPrompt(world, playerName, { regionName: (id) => names.get(id) || id });
+};
+
 const buildGameMasterStorylineContext = (worldLike) => {
   const world = normalizeWorldState(worldLike);
   const storylines = normalizeArray(world.storylines)
@@ -1736,6 +1746,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
   variables.groupsContext = await buildGroupsContext(bundle.world);
+  variables.playerGroupContext = await buildPlayerGroupContext(bundle.world, bundle.game?.country);
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -2373,6 +2384,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
   blocks.push(buildJumpGroupsBlock(variables.groupsContext));
+  // The player leads a group rather than a country (runtime/groups.js).
+  if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);
 
   // What is in motion: storylines, pressures, economies and the diplomatic
   // slice (nativeWorldDirector.js), built per segment.
@@ -2470,6 +2483,12 @@ ${brief}`);
   return blocks.filter(Boolean).join("\n\n");
 };
 
+// The tasks that speak for, to or about the player's side.
+const PLAYER_GROUP_TASKS = new Set([
+  "actions", "chatActions", "descriptionToAction", "interactiveCreation", "interactiveExecutor",
+  "interactiveSummary", "idleDiplomacy", "gameMaster",
+]);
+
 const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true } = {}) => {
   const prompts = await loadPromptCatalog();
   const statSheetDefinition = STAT_INDEX_CONTEXT_TASKS.has(taskKey)
@@ -2533,6 +2552,13 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     } catch {
       // Without game data the task still runs at its default temperament.
     }
+  }
+
+  // The player leads a group rather than a country (runtime/groups.js): every
+  // task about the player's side is told what it is; a time skip has it in its
+  // live records.
+  if (!jumpTask && PLAYER_GROUP_TASKS.has(taskKey) && normalizeString(variables.playerGroupContext)) {
+    systemPrompt = `${systemPrompt}\n\n${variables.playerGroupContext}`;
   }
 
   // The board pass gets the espionage picture (a time skip has it in its live

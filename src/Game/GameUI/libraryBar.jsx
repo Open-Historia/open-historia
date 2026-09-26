@@ -41,6 +41,7 @@ import {
 import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
 import { LABEL_FONT_SUGGESTIONS } from "../../runtime/mapSettings.js";
 import FactionCreator from "./FactionCreator.jsx";
+import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
@@ -1937,6 +1938,78 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     }
   };
 
+  // The groups a scenario has, for the picker's "Play as a group" tab: name,
+  // colour, what it is and how much it controls (runtime/groups.js).
+  const scenarioGroupsFor = (world) => {
+    const groups = normalizeGroups(world?.groups);
+    const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
+    return Object.values(groups).map((group) => ({ ...group, regionCount: (areas[group.name] ?? []).length }));
+  };
+
+  // Create a game led by a group rather than a country (runtime/groups.js). The
+  // player's polity is a LANDLESS polity and the group of the same name: the polity
+  // carries everything keyed by the player (flag, colour, diplomacy, orders), the
+  // group the area the map draws and what the story knows the player is. Written
+  // into the game's own world, like a faction, so the scenario is never touched.
+  const startGameForGroup = async (scenario, group, difficulty) => {
+    setCountryPicker(null);
+    setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
+    setEditorError(null);
+    setIsBusy(true);
+    setMenuOpen(false);
+    try {
+      const name = String(group.name ?? "").trim();
+      const details = await createGame({
+        name: `${name} — ${scenario.name}`,
+        scenarioId: scenario.id,
+        gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
+        setActive: true,
+      });
+      const gameId = details.game.id;
+      // The same read-merge-write as a faction (see startGameForFaction): saveGame
+      // writes `world` whole.
+      const gameDetails = await loadGameDetails(gameId).catch(() => null);
+      const world = { ...(gameDetails?.data?.world ?? {}) };
+      const groups = normalizeGroups(world.groups);
+      const known = Object.keys(groups).find((key) => key.toLowerCase() === name.toLowerCase());
+      const hexColor = /^#[0-9a-fA-F]{6}$/.test(group.color ?? "") ? group.color : (known ? groups[known].color : "#a1a1aa");
+      const description = String(group.lore ?? group.description ?? "").trim() || (known ? groups[known].description : "");
+      const key = known || name;
+
+      world.groups = { ...groups, [key]: { ...(groups[key] ?? {}), name: key, description, color: hexColor } };
+      if (!group.existing) {
+        world.groupAreas = { ...(world.groupAreas ?? {}) };
+        for (const regionId of group.regionIds ?? []) world.groupAreas[regionId] = key;
+      }
+      world.polityOverrides = {
+        ...(world.polityOverrides ?? {}),
+        [key]: { name: key, aliases: [], color: hexColor, note: description, ...(world.polityOverrides?.[key] ?? {}) },
+      };
+      // ownerCodes lists who is playable — a group owns nothing, so name it here.
+      world.ownerCodes = [...new Set([...(world.ownerCodes ?? []), key])].sort();
+
+      await saveGame(gameId, { world, gamePatch: { country: key, ...(difficulty ? { difficulty } : null) } });
+
+      try {
+        const colors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
+        await writeJson(JSON_URLS.colors, { ...colors, [key]: hexToRgbArray(hexColor) }, { pretty: true });
+      } catch { /* colours are cosmetic — the group's area draws in its own colour */ }
+      if (group.flag) {
+        try {
+          const flags = await readJson(JSON_URLS.flags, { defaultValue: {}, force: true });
+          await writeJson(JSON_URLS.flags, { ...flags, [key]: group.flag }, { pretty: true });
+        } catch { /* flag is cosmetic */ }
+      }
+
+      await openGameEditor(gameId);
+    } catch (nextError) {
+      setMenuOpen(true);
+      setEditorError(nextError.message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   // Build the start-country list for a scenario: only the factions that actually
   // exist in it (world.ownerCodes), named as era polities where defined. Falls
   // back to every country for scenarios without an owner list.
@@ -2002,6 +2075,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
     setPlayGameId(null);
     setPickerTab("country");
+    setPickerGroups([]);
     setCountryPicker(scenario);
     Promise.all([loadCountryNames().catch(() => []), loadScenarioDetails(scenario.id).catch(() => null)])
       .then(([allCountries, details]) => {
@@ -2014,6 +2088,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // stock seed is repainted in this scenario's owners, without it the picker
         // shows modern countries the scenario does not contain.
         setPickerOwnerOverrides(details?.data?.world?.regionOwnershipOverrides ?? null);
+        setPickerGroups(scenarioGroupsFor(details?.data?.world));
         // Load custom region geometry so the map renders the scenario's actual
         // boundaries instead of the stock world seed.
         if (details?.data?.world?.customRegions) {
@@ -2639,7 +2714,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [pickerBackground, setPickerBackground] = useState(null);
   const [countryQuery, setCountryQuery] = useState("");
   // Which tab of the new-game dialog: pick an existing country, or invent one.
-  const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction"
+  const [pickerTab, setPickerTab] = useState("country"); // "country" | "faction" | "group"
+  const [pickerGroups, setPickerGroups] = useState([]);
   // When set, the country picker refines the country of this already-active game
   // (the Apply-&-Play flow) instead of creating a brand new game.
   const [playGameId, setPlayGameId] = useState(null);
@@ -2888,12 +2964,18 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // A created faction routes through the SAME difficulty step as a picked country —
   // it just carries a faction draft instead of a country code.
   const pickFaction = (faction) => setDifficultyPick({ faction });
+  // A group (one of the scenario's, or one just made) takes the same step.
+  const pickGroup = (group) => setDifficultyPick({ group });
 
   const pickDifficulty = (difficultyId) => {
     const draft = difficultyPick;
     setDifficultyPick(null);
     if (draft?.faction) {
       startGameForFaction(countryPicker, draft.faction, difficultyId);
+      return;
+    }
+    if (draft?.group) {
+      startGameForGroup(countryPicker, draft.group, difficultyId);
       return;
     }
     const countryCode = draft?.countryCode || "";
@@ -3112,6 +3194,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     <span>{selectedCountryOption.name}</span>
                   </div>
                 )}
+                {difficultyPick?.group && (
+                  <div style={{ alignItems: "center", display: "flex", fontSize: "0.9rem", fontWeight: 700, gap: "0.5rem", marginBottom: "0.7rem" }}>
+                    <span aria-hidden="true" style={{ background: difficultyPick.group.color || "#a1a1aa", borderRadius: 4, display: "inline-block", height: 16, width: 16 }} />
+                    <span data-no-translate>{difficultyPick.group.name}</span>
+                  </div>
+                )}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", overflowY: "auto" }}>
                   {DIFFICULTY_LEVELS.map((level) => (
                     <button
@@ -3141,7 +3229,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             ) : (
               <>
                 <div style={{ fontWeight: 800, fontSize: "1rem" }}>
-                  {pickerTab === "faction" ? "Create your faction" : "Choose your country"}
+                  {pickerTab === "faction" ? "Create your faction" : pickerTab === "group" ? "Play as a group" : "Choose your country"}
                 </div>
                 <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.75rem", margin: "0.15rem 0 0.6rem" }}>
                   Starting “{countryPicker.name}”
@@ -3179,9 +3267,63 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     >
                       Create a faction
                     </button>
+                    <button
+                      type="button"
+                      className="oh-tap-row"
+                      onClick={() => setPickerTab("group")}
+                      style={touchFit({
+                        ...actionButtonStyle,
+                        flex: 1,
+                        fontWeight: 700,
+                        background: pickerTab === "group" ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
+                        borderColor: pickerTab === "group" ? "rgba(255,255,255,0.28)" : undefined,
+                      }, touch)}
+                    >
+                      Play as a group
+                    </button>
                   </div>
                 )}
-                {pickerTab === "faction" && !playGameId ? (
+                {pickerTab === "group" && !playGameId ? (
+                  <>
+                    {/* A group controls an area without owning it (runtime/groups.js):
+                        lead one of the scenario's, or make one. */}
+                    <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.76rem", lineHeight: 1.45, marginBottom: "0.6rem" }}>
+                      Lead a group instead of a country: a cartel, a militia, a movement, an outbreak. It owns no land; it controls an area, and the world deals with it as what it is.
+                    </div>
+                    {pickerGroups.length > 0 && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem", marginBottom: "0.8rem" }}>
+                        <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.78rem", fontWeight: 700 }}>This scenario's groups</div>
+                        {pickerGroups.map((entry) => (
+                          <button
+                            key={entry.name}
+                            type="button"
+                            className="oh-tap-row"
+                            onClick={() => pickGroup({ name: entry.name, color: entry.color, description: entry.description, existing: true })}
+                            style={touchFit({ ...actionButtonStyle, alignItems: "center", display: "flex", gap: "0.6rem", justifyContent: "flex-start", textAlign: "left" }, touch)}
+                          >
+                            <span aria-hidden="true" style={{ background: entry.color, borderRadius: 4, flex: "0 0 auto", height: 16, width: 16 }} />
+                            <span style={{ display: "flex", flexDirection: "column", gap: "0.1rem", minWidth: 0 }}>
+                              <span data-no-translate style={{ fontWeight: 700 }}>{entry.name}</span>
+                              <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem" }}>
+                                {entry.regionCount === 1 ? "Controls 1 region" : entry.regionCount ? `Controls ${entry.regionCount} regions` : "Controls no area yet"}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.78rem", fontWeight: 700, marginBottom: "0.3rem" }}>
+                      {pickerGroups.length ? "Or make a new group" : "Make a group"}
+                    </div>
+                    <FactionCreator
+                      mode="group"
+                      regionsGeojson={customRegionData}
+                      busy={isBusy}
+                      onCreate={(created) => pickGroup({ ...created, existing: false })}
+                      onCancel={() => { setCountryPicker(null); setPickerTab("country"); setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null); }}
+                    />
+                  </>
+                ) : pickerTab === "faction" && !playGameId ? (
                   <FactionCreator
                     regionsGeojson={customRegionData}
                     busy={isBusy}

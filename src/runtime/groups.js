@@ -222,3 +222,44 @@ export const describeGroupsForPrompt = (world, { regionName = (id) => id, maxReg
     return `- ${name}${group.description ? ` — ${group.description.replace(/\n+/g, " ")}` : ""} [${where}]`;
   }).join("\n");
 };
+
+// ---- playing as a group ---------------------------------------------------------
+//
+// The player can lead a group instead of a country (the new-game picker's "Play as
+// a group", libraryBar startGameForGroup). The game's polity is then a landless
+// polity AND the group of the same name: the polity carries everything the game
+// keys by the player (flag, colour, diplomacy, orders), the group what the map
+// draws and what the story knows the player is. Renaming either renames both
+// (server/polityRename.js), and the AI may not dissolve it (gameState.js).
+
+// The group the player leads, or "" when they lead a country. The player's own
+// name, in any case; a group's former name is not the player.
+export const playerGroupKey = (world, playerName) => {
+  const wanted = fold(playerName);
+  if (!wanted) return "";
+  return Object.keys(normalizeGroups(world?.groups)).find((key) => fold(key) === wanted) ?? "";
+};
+
+// What every task that concerns the player is told when the player leads a group.
+// Empty for a country, so nothing changes for anyone else.
+export const describePlayerGroupForPrompt = (world, playerName, { regionName = (id) => id, maxRegions = 12 } = {}) => {
+  const key = playerGroupKey(world, playerName);
+  if (!key) return "";
+  const groups = normalizeGroups(world?.groups);
+  const group = groups[key];
+  const regions = groupRegions(normalizeGroupAreas(world?.groupAreas, groups))[key] ?? [];
+  const shown = regions.slice(0, maxRegions).map((id) => `${regionName(id)} (${id})`);
+  const area = regions.length
+    ? `It controls ${regions.length} region${regions.length === 1 ? "" : "s"}: ${shown.join(", ")}${regions.length > shown.length ? `, +${regions.length - shown.length} more` : ""}.`
+    : "It controls no area on the map yet.";
+  const description = group.description ? `: ${group.description.replace(/\n+/g, " ")}` : "";
+  return [
+    `[${key} Is a Group, Not a Country]`,
+    `${key}, the side the player leads, is a group, not a state${description}`,
+    `It owns no land: every region it holds stays its country's. It cannot sign for a country, be annexed like one or govern one. ${area}`,
+    "Governments, rivals and the people where it operates deal with it as what it is: they may hunt it, bargain with it, use it, fear it or ignore it.",
+  ].join("\n");
+};
+
+// What a time skip is told on top: how the player's group gains and loses ground.
+export const PLAYER_GROUP_JUMP_RULE = "Its orders act through that area: ground it gains is a groupOps take naming it, ground it loses a release. The world may push it back as a consequence, but never dissolve or rename it.";

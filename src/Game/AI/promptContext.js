@@ -16,6 +16,7 @@ import { buildRegionOwnershipText, regionOwnerName } from "./regionVocab.js";
 import { selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
+import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
@@ -1418,6 +1419,8 @@ const LANDLESS_PLAYER_TEXT =
   + "and its story is about influence, alliances, insurgency, and the fight to gain "
   + "or retake territory — not about administering provinces it does not have.";
 
+const regionNameById = (catalog, id) => (Array.isArray(catalog) ? catalog.find((region) => region?.id === id)?.name : null) || id;
+
 export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null) => {
   const playerCode = normalizeString(bundle.game.country);
   if (!playerCode) return "No player polity is currently set.";
@@ -1429,6 +1432,13 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null)
   // the player owns their country through the base tiles, not an override).
   // isPolityLandless is the shared source of truth for that line (see gameState).
   if (!owns) {
+    // Leading a group rather than a country (runtime/groups.js): no land, an
+    // area it controls, and what it is.
+    const groupCatalog = world.groups && Object.keys(world.groups).length ? (regionCatalog ?? await loadRegions()) : [];
+    const groupText = describePlayerGroupForPrompt(world, playerCode, {
+      regionName: (id) => regionNameById(groupCatalog, id),
+    });
+    if (groupText) return `None — ${playerCode} is a group, not a country.\n${groupText}`;
     return isPolityLandless(world, playerCode)
       ? LANDLESS_PLAYER_TEXT
       : "No explicit player region override list is currently recorded.";
