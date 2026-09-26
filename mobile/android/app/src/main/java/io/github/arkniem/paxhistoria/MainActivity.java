@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.util.TypedValue;
 import android.view.ViewGroup;
 import android.webkit.WebView;
@@ -18,8 +19,20 @@ import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private static final String TAG = "OpenHistoria";
+
+    // The app rests in the background. Capacitor keeps the WebView running there
+    // (its KeepRunning default), and with it every timer the page has; a player's
+    // phone listed the app at 2 Ah of background battery in a day. The page asks
+    // for the pause once it is hidden and nothing is being generated
+    // (src/runtime/native/backgroundPause.js, BackgroundPausePlugin); onStart lifts it.
+    private boolean inBackground = false;
+    private boolean restRequested = false;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        // Before super.onCreate, which is where Capacitor loads its plugins.
+        registerPlugin(BackgroundPausePlugin.class);
         super.onCreate(savedInstanceState);
         // The WebView itself cannot download files. Hand any download (the
         // self-update APK) to the system browser, which downloads it and lets
@@ -107,6 +120,44 @@ public class MainActivity extends BridgeActivity {
         if (view == null) return;
         view.clearCache(false);
         view.evaluateJavascript("window.dispatchEvent(new Event('oh:memory-pressure'))", null);
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        inBackground = false;
+        restRequested = false;
+        // Always, not only after a pause of ours: pauseTimers holds for every
+        // WebView in the process, so it would outlive an activity recreated while
+        // the app was away.
+        WebView view = webView();
+        if (view != null) {
+            view.resumeTimers();
+            view.onResume();
+        }
+    }
+
+    @Override
+    public void onStop() {
+        super.onStop();
+        inBackground = true;
+        // The page can report idle a moment before the activity stops.
+        if (restRequested) restInBackground();
+    }
+
+    // Called on the UI thread when the page reports it is hidden and idle.
+    void restInBackground() {
+        restRequested = true;
+        if (!inBackground) return;
+        WebView view = webView();
+        if (view == null) return;
+        view.onPause();
+        view.pauseTimers();
+        Log.i(TAG, "In the background with nothing to finish: the page's timers are paused.");
+    }
+
+    private WebView webView() {
+        return getBridge() != null ? getBridge().getWebView() : null;
     }
 
     // Whether Capacitor keeps the page clear of the system bars itself: the
