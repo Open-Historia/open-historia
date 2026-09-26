@@ -19,6 +19,8 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
+import { humanCountriesOf } from "../../runtime/humanPolities.js";
+import { SHARED_WORLD_TASKS, buildSharedGameDirective } from "./sharedGameDirective.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -860,10 +862,17 @@ export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
 // longEventLimit); actions simply never were. Matching longEventLimit here.
 export const ACTION_HISTORY_LIMIT = 24;
 
+// "France", "France and Spain", "France, Spain and Italy".
+export const joinPolityNames = (names) => {
+  const list = normalizeArray(names).map(normalizeString).filter(Boolean);
+  return list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list.at(-1)}` : list[0] || "";
+};
+
 export const buildActionHistoryText = (actions, { includeResolved = false, limit = ACTION_HISTORY_LIMIT } = {}) => {
   const normalizedActions = normalizeActions(actions);
   const renderAction = (action) => {
-    const kindLabel = action.kind === "chat" ? "chat" : "action";
+    // In a shared game every order names the polity that gave it.
+    const kindLabel = `${action.kind === "chat" ? "chat" : "action"}${action.ownerCode ? `, ${action.ownerCode}` : ""}`;
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
     return `- (${kindLabel}) ${action.title}${statusLabel}: ${buildActionDisplayText(action)}`;
   };
@@ -896,7 +905,8 @@ export const formatActionsForPrompt = (actions) => normalizeArray(actions)
   .map((entry) => {
     if (typeof entry === "string") return entry.trim();
     const normalized = normalizeActionEntry(entry);
-    return normalized ? `- ${normalized.title}: ${buildActionDisplayText(normalized)}` : "";
+    const owner = normalized?.ownerCode ? `(${normalized.ownerCode}) ` : "";
+    return normalized ? `- ${owner}${normalized.title}: ${buildActionDisplayText(normalized)}` : "";
   })
   .filter(Boolean)
   .join("\n");
@@ -1927,7 +1937,12 @@ export const buildPromptContext = async (bundle, {
   if (wants("numberOfRegions")) {
     result.numberOfRegions = String(regionCatalog.length);
   }
-  put("playerPolity", bundle.game.country || "Unknown polity");
+  // A shared game's world passes speak to every polity people play
+  // (humanPolities.js), and say so (sharedGameDirective.js); every other task
+  // speaks to the one polity in bundle.game.country.
+  const people = SHARED_WORLD_TASKS.has(taskKey) ? humanCountriesOf(bundle.game) : [];
+  put("playerPolity", people.length > 1 ? joinPolityNames(people) : bundle.game.country || "Unknown polity");
+  if (people.length > 1) result.sharedGameDirective = buildSharedGameDirective(bundle.game);
   if (wants("playerPolityRegions")) {
     result.playerPolityRegions = await buildPlayerPolityRegionsText(
       bundle,

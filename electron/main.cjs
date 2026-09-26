@@ -298,6 +298,60 @@ const MANIFEST = path.join(APP_ROOT, "scripts", "map-assets.json");
 let mainWindow = null;
 let setupWindow = null;
 
+// --- a shared game's engine window ------------------------------------------
+
+// A host runs its shared game in a hidden window of its own
+// (src/multiplayer/host/engineMain.js, on engine.html): the game's engine lives
+// there, and the host's ordinary window plays it like any other player, so the
+// host's screen shows only what the host's government may know. Unthrottled,
+// because it keeps time for every player while nobody looks at it.
+//
+// Reachable from the page the same way the updater is: server.js runs in THIS
+// process and serves /api/multiplayer/engine/{open,close} straight off the handle
+// published below, with no preload on either window.
+let engineWindow = null;
+
+const closeEngineWindow = () => {
+  if (engineWindow && !engineWindow.isDestroyed()) engineWindow.destroy();
+  engineWindow = null;
+};
+
+const installSharedGameEngine = () => {
+  globalThis.__ohSharedGameEngine = {
+    status: () => ({ open: Boolean(engineWindow && !engineWindow.isDestroyed()) }),
+    open: async () => {
+      if (engineWindow && !engineWindow.isDestroyed()) return { open: true };
+      const port = process.env.PORT || 3000;
+      const origin = `http://localhost:${port}`;
+      engineWindow = new BrowserWindow({
+        show: false,
+        width: 640,
+        height: 480,
+        title: "Open Historia — shared game",
+        webPreferences: { backgroundThrottling: false, spellcheck: false },
+      });
+      // It never goes anywhere, and never opens anything.
+      engineWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      engineWindow.webContents.on("will-navigate", (event, targetUrl) => {
+        if (!targetUrl.startsWith(`${origin}/engine.html`)) event.preventDefault();
+      });
+      engineWindow.webContents.on("render-process-gone", (_event, details) => {
+        logMain("warn", "engine.gone", String(details?.reason || "unknown"));
+        closeEngineWindow();
+      });
+      engineWindow.on("closed", () => {
+        engineWindow = null;
+      });
+      await engineWindow.loadURL(`${origin}/engine.html`);
+      return { open: true };
+    },
+    close: () => {
+      closeEngineWindow();
+      return { open: false };
+    },
+  };
+};
+
 // --- map data ---------------------------------------------------------------
 
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
@@ -542,6 +596,9 @@ const createMainWindow = () => {
   attachEditingContextMenu(win);
   win.webContents.on("render-process-gone", (_event, details) => handlePageGone(win, details, { quitting }));
   win.once("ready-to-show", () => win.show());
+  // A shared game's hidden engine window would otherwise keep the app running
+  // with nothing on screen.
+  win.on("closed", closeEngineWindow);
   return win;
 };
 
@@ -630,6 +687,7 @@ const startServer = async () => {
 
 const boot = async () => {
   installAutoUpdater();
+  installSharedGameEngine();
   relocateLegacyStockMap();
   const pending = missingAssets();
   if (pending.length) {

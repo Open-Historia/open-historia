@@ -19,6 +19,7 @@ import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runti
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
+import { inSharedGame, requestFromHost } from "../../multiplayer/client/sharedGameBridge.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 
 dayjs.extend(advancedFormat);
@@ -321,6 +322,13 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
         setSaving(true);
         setError("");
         try {
+            // In a shared game the host keeps the goal: it is asked to.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("goal", { text: String(text || "").trim() });
+                if (!answer.ok) throw new Error(answer.error);
+                setEditing(false);
+                return;
+            }
             const current = await readWorldState({ force: true });
             await writeWorldState(withPlayerGoal(current, country, text, { round, date: gameDate }));
             const wording = String(text || "").trim();
@@ -553,6 +561,18 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         setIsSubmitting(true);
         try {
+            // In a shared game an order is the host's to queue; its answer comes
+            // back in the next view.
+            if (inSharedGame()) {
+                const answer = await requestFromHost("order", { text: nextAction.text || trimmed });
+                if (!answer.ok) {
+                    console.warn("[actions] the host refused the order:", answer.error);
+                    return;
+                }
+                logDebugEvent("action", `Order sent to the host: ${nextAction.title || nextAction.text || "(untitled)"}`);
+                setInputValue("");
+                return;
+            }
             await persistActions([...actions, nextAction]);
             // What the player told their country to do is half of "the series of
             // events they did" — a turn that goes wrong usually goes wrong
@@ -600,6 +620,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
     const handleDelete = async (index) => {
         const removed = actions[index];
+        if (inSharedGame()) {
+            await requestFromHost("unorder", { order: String(removed?.id || "") });
+            return;
+        }
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -625,7 +649,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             return;
         }
 
-        await persistActions([...actions, queuedAction]);
+        if (inSharedGame()) {
+            const answer = await requestFromHost("order", { text: queuedAction.text || queuedAction.title });
+            if (!answer.ok) return;
+        } else {
+            await persistActions([...actions, queuedAction]);
+        }
         logDebugEvent("action", `Suggested order queued: ${queuedAction.title || queuedAction.text || "(untitled)"}`);
         // Visible click feedback: the suggestion button flips to "✓ Queued".
         setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));

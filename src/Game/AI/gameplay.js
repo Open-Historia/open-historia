@@ -8,6 +8,7 @@ import { collectFoundedPolities, foundingPolityChange } from "../../runtime/poli
 import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
+import { humanCountriesOf } from "../../runtime/humanPolities.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -156,8 +157,10 @@ import {
   filterToRenderedRegions,
   formatDateReadable,
   getUnconsolidatedEvents,
+  joinPolityNames,
   resolveHelperValues,
 } from "./promptContext.js";
+import { SHARED_WORLD_TASKS } from "./sharedGameDirective.js";
 import {
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
@@ -2943,6 +2946,13 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   if (PLAYER_GOAL_TASKS.has(taskKey)) {
     const block = await playerGoalBlock(normalizeString(variables?.playerPolity));
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
+  }
+
+  // Several people play (sharedGameDirective.js): in the passes that simulate
+  // the world, the prompt's one player is each of them. Nothing in single player.
+  if (SHARED_WORLD_TASKS.has(taskKey)) {
+    const sharedDirective = normalizeString(variables?.sharedGameDirective);
+    if (sharedDirective) systemPrompt = `${systemPrompt}\n\n${sharedDirective}`;
   }
 
   if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
@@ -7344,7 +7354,7 @@ const applySimulationResult = async ({
         skipUnitIds: movedThisTurn,
       },
     ), result.clearActions ? plannedActionSnapshot : []),
-    { playerCode: baseGame.country },
+    { playerCode: baseGame.country, playerCodes: humanCountriesOf(baseGame) },
   );
 
   // The war ledger merges BEFORE espionage, so a war declared this turn already
@@ -13051,8 +13061,12 @@ const playerTerritoryNames = async (world, playerNames) => {
 
 // The focus, the player's names and the test the counter uses, once per jump.
 const readPlayerFocusContext = async (bundle) => {
-  const playerName = normalizeString(bundle?.game?.country);
-  const playerNames = [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
+  // A shared game's focus is every polity people play (humanPolities.js).
+  const people = humanCountriesOf(bundle?.game);
+  const playerName = people.length > 1 ? joinPolityNames(people) : normalizeString(bundle?.game?.country);
+  const playerNames = people.length > 1
+    ? [...new Set(people.flatMap((name) => [name, toCountryName(name)]).map(normalizeString).filter(Boolean))]
+    : [...new Set([playerName, toCountryName(playerName)].map(normalizeString).filter(Boolean))];
   const territoryNames = await playerTerritoryNames(bundle?.world, playerNames);
   // The scenario's default under this game's own choice (gameFeatures.js).
   return {
@@ -16946,7 +16960,7 @@ const applyIdlePulseUnitOps = (freshWorld, bundle, unitOps) => {
   });
   return enforceUnitVolume(
     { ...drifted, idlePulseTick: tick },
-    { playerCode: normalizeString(bundle.game?.country) },
+    { playerCode: normalizeString(bundle.game?.country), playerCodes: humanCountriesOf(bundle.game) },
   );
 };
 
@@ -17074,7 +17088,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     // --- movement ---------------------------------------------------------
     // Only what the world may do: never the player's forces (idlePulse.js).
     // With nothing left there is nothing to apply and no sighting to report.
-    const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), bundle.game?.country);
+    const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), humanCountriesOf(bundle.game));
     if (unitOps.length > 0 && !isSimulationBusy()) {
       // Placed by name, and kept off each other, like a turn's own ops.
       try {

@@ -17,7 +17,13 @@
 //   { type: "object", props: {…}, optional?: [names] }
 //   { type: "record", keys: <string node>, values, max }
 //   { type: "union", tag: "t", variants: { name: <object node> } }
+//   { type: "json", maxDepth }           any JSON value, copied (see below)
 // and any node may add nullable: true.
+//
+// "json" is for what only the host sends: a player's view of the world is a
+// large document the game's own normalizers check when it is read, and writing
+// a closed schema for all of it would duplicate them. It is still a fresh copy
+// of plain JSON, bounded in depth, with no prototype keys: never trusted blind.
 //
 // Import-free, so node tests and every runtime use the same checks.
 
@@ -38,6 +44,25 @@ const checkString = (node, value, path) => {
   if (node.pattern && !node.pattern.test(value)) invalid(path, "does not match its pattern");
   if (node.enum && !node.enum.includes(value)) invalid(path, "not an allowed value");
   return value;
+};
+
+// A deep copy of plain JSON: strings, finite numbers, booleans, null, lists
+// and plain objects, nothing else, no prototype keys, no deeper than asked.
+const copyJson = (value, path, maxDepth, depth) => {
+  if (depth > maxDepth) invalid(path, `nested deeper than ${maxDepth}`);
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) invalid(path, "not a finite number");
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item, index) => copyJson(item, `${path}[${index}]`, maxDepth, depth + 1));
+  if (!isPlainObject(value)) invalid(path, "not plain JSON");
+  const out = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (FORBIDDEN_KEYS.has(key)) invalid(path, "forbidden key");
+    out[key] = copyJson(item, path, maxDepth, depth + 1);
+  }
+  return out;
 };
 
 const check = (node, value, path) => {
@@ -102,6 +127,8 @@ const check = (node, value, path) => {
       }
       return check(node.variants[tag], value, path);
     }
+    case "json":
+      return copyJson(value, path, node.maxDepth ?? 64, 0);
     default:
       throw new TypeError(`Unknown schema node type "${node?.type}".`);
   }
@@ -170,6 +197,7 @@ export const list = (items, max, extra = {}) => ({ type: "array", items, max, ..
 export const obj = (props, optional = []) => ({ type: "object", props, optional });
 export const record = (keys, values, max) => ({ type: "record", keys, values, max });
 export const union = (tag, variants) => ({ type: "union", tag, variants });
+export const json = (maxDepth = 64, extra = {}) => ({ type: "json", maxDepth, ...extra });
 
 // Common value shapes on the wire.
 export const HEX_ID = (bytes) => str(bytes * 2, { min: bytes * 2, pattern: /^[0-9a-f]+$/ });

@@ -12,6 +12,7 @@ import {
 } from "../../runtime/institutionalAuthority.js";
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { compareGameDates, gameDateDayNumber } from "../../runtime/gameDates.js";
+import { humanCountriesOf } from "../../runtime/humanPolities.js";
 // Native World Integrity (ported from kernely's Continuum branch).
 //
 // This module is deliberately separate from the World Director and Timeline
@@ -282,7 +283,9 @@ const activeBelligerentSet = (world) => {
   return set;
 };
 
-const polityAliasRecords = (world, gameCountry = "") => {
+// `humans` are a shared game's other human polities (runtime/humanPolities.js):
+// known here even when no ledger names them yet, like the player.
+const polityAliasRecords = (world, gameCountry = "", humans = []) => {
   const records = [];
   const overrideAliasMap = new Map();
 
@@ -331,6 +334,7 @@ const polityAliasRecords = (world, gameCountry = "") => {
   };
 
   add(gameCountry);
+  for (const human of normalizeArray(humans)) add(human);
 
   for (const [key, entry] of Object.entries(world?.polityOverrides || {})) {
     add(
@@ -392,8 +396,8 @@ const polityAliasRecords = (world, gameCountry = "") => {
   return [...byCanonical.values()];
 };
 
-export const createWorldActorResolver = (world, gameCountry = "") => {
-  const records = polityAliasRecords(world, gameCountry);
+export const createWorldActorResolver = (world, gameCountry = "", { humans = [] } = {}) => {
+  const records = polityAliasRecords(world, gameCountry, humans);
   const byAlias = new Map();
   const byCanonical = new Map();
   const stockToCanonicals = new Map();
@@ -418,6 +422,7 @@ export const createWorldActorResolver = (world, gameCountry = "") => {
   // storyline alias is exactly what this precedence layer is meant to heal.
   const authoritativeTokens = uniqueStrings([
     gameCountry,
+    ...normalizeArray(humans),
     ...Object.entries(world?.polityOverrides || {}).flatMap(([keyValue, entry]) => [
       keyValue,
       entry?.code,
@@ -1926,7 +1931,7 @@ const currentActionRecords = (actions) => normalizeArray(actions)
 
 const currentActionIds = (actions) => new Set(currentActionRecords(actions).map((entry) => entry.id));
 
-const playerCommitmentRecords = (chats, resolver, playerCanonical) => {
+const playerCommitmentRecords = (chats, resolver, playerCanonical, { roleFallback = true } = {}) => {
   const records = [];
   for (const chat of normalizeArray(chats)) {
     for (const message of normalizeArray(chat?.messages)) {
@@ -1940,7 +1945,7 @@ const playerCommitmentRecords = (chats, resolver, playerCanonical) => {
       // Only fall back to role=user/player when the transport has no actor identity.
       const authoredByPlayer = claimedActor
         ? resolver.equivalent(claimedActor, playerCanonical)
-        : role === "user" || role === "player";
+        : roleFallback && (role === "user" || role === "player");
       if (!authoredByPlayer) continue;
       records.push({ id, source: message, text });
     }
@@ -1948,9 +1953,47 @@ const playerCommitmentRecords = (chats, resolver, playerCanonical) => {
   return records;
 };
 
-const playerCommitmentMessageIds = (chats, resolver, playerCanonical) => new Set(
-  playerCommitmentRecords(chats, resolver, playerCanonical).map((entry) => entry.id),
-);
+// The human polities whose sovereignty the guard protects, and what each has
+// authorized: its own queued orders and the diplomatic messages it wrote.
+// Single player has one, the player, and every order is theirs. In a shared
+// game (runtime/humanPolities.js) an order counts only for the polity that gave
+// it (ownerCode, the player's when blank) and a message only for its speaker:
+// with several people writing, a bare "user" role says nothing about whose word
+// it is. The resolver must know every human (createWorldActorResolver humans).
+const humanAuthorities = ({ resolver, gameCountry = "", humanCountries = [], actions = [], chats = [] }) => {
+  const primary = resolver.canonical(normalizeString(gameCountry));
+  const canonicals = uniqueStrings(
+    [gameCountry, ...normalizeArray(humanCountries)]
+      .map((name) => resolver.canonical(normalizeString(name)))
+      .filter(Boolean),
+  );
+  const shared = canonicals.length > 1;
+  const records = currentActionRecords(actions);
+  const humans = canonicals.map((canonical) => {
+    const commitmentRecords = playerCommitmentRecords(chats, resolver, canonical, { roleFallback: !shared });
+    return {
+      canonical,
+      actionRecords: records.filter((entry) => {
+        const owner = normalizeString(entry.source?.ownerCode);
+        return resolver.equivalent(owner || primary, canonical);
+      }),
+      commitmentRecords,
+      commitmentIds: new Set(commitmentRecords.map((entry) => entry.id)),
+    };
+  });
+  // The human a polity name stands for, or null for everyone else.
+  const find = (polity) => {
+    const canonical = resolver.canonical(normalizeString(polity));
+    return canonical ? humans.find((human) => resolver.equivalent(canonical, human.canonical)) || null : null;
+  };
+  return { primary, humans, shared, find };
+};
+
+// The other humans of a shared game, for createWorldActorResolver.
+const otherHumans = (gameCountry, humanCountries) => {
+  const player = normalizeString(gameCountry).toLowerCase();
+  return uniqueStrings(normalizeArray(humanCountries).map(normalizeString).filter((name) => name && name.toLowerCase() !== player));
+};
 
 const canonicalProcessIds = (world) => {
   const ids = new Set();
@@ -2096,6 +2139,9 @@ const nativeCanonicalProcessCandidates = (event, world) => {
 export const bindWorldEventAuthorityRefs = (candidate, {
   world = {},
   gameCountry = "",
+  // A shared game's human polities (runtime/humanPolities.js humanCountriesOf);
+  // single player passes none and has only gameCountry.
+  humanCountries = [],
   actions = [],
   chats = [],
 } = {}) => {
@@ -2110,10 +2156,8 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     includeStorylineUpdates: false,
   });
 
-  const resolver = createWorldActorResolver(world, gameCountry);
-  const playerCanonical = resolver.canonical(normalizeString(gameCountry));
-  const actionRecords = currentActionRecords(actions);
-  const commitmentRecords = playerCommitmentRecords(chats, resolver, playerCanonical);
+  const resolver = createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
+  const authorities = humanAuthorities({ resolver, gameCountry, humanCountries, actions, chats });
   const bindings = [];
   const unresolved = [];
   let applied = 0;
@@ -2135,9 +2179,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       const derived = deriveNativeEventAgency(event, {
         world,
         resolver,
-        playerCanonical,
-        actionRecords,
-        commitmentRecords,
+        humans: authorities.humans,
       });
       if (derived.agency) {
         rawAgency = derived.agency;
@@ -2162,6 +2204,8 @@ export const bindWorldEventAuthorityRefs = (candidate, {
           candidateCount: 0,
           bestScore: 0,
           source: derived.source || "native-unresolved",
+          // The human whose choice it was, when several people play.
+          ...(derived.polity ? { polity: derived.polity } : {}),
         });
         return eventWithAgency;
       }
@@ -2209,18 +2253,20 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       const polity = normalizeString(row?.polity || row?.sovereignPolity);
       const canonical = resolver.canonical(polity);
       const authority = normalizeString(row?.authority).toLowerCase();
-      const isPlayer = Boolean(playerCanonical && canonical && resolver.equivalent(canonical, playerCanonical));
+      // Which human this row speaks for; its authority can come only from that
+      // human's own orders and messages.
+      const human = canonical ? authorities.find(canonical) : null;
 
       // Opaque ids on autonomous AI sovereign rows are never meaningful.
       if (authority === "autonomous") {
         next.authorityRef = "";
         return next;
       }
-      if (!isPlayer) return next;
+      if (!human) return next;
 
       if (authority === "player-order") {
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, actionRecords, {
-          playerCanonical,
+        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, human.actionRecords, {
+          playerCanonical: human.canonical,
           threshold: 0.34,
           margin: 0.1,
         });
@@ -2241,7 +2287,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
             rowIndex,
             authority,
             reason: resolved.reason,
-            candidateCount: actionRecords.length,
+            candidateCount: human.actionRecords.length,
             bestScore: resolved.scored[0]?.score || 0,
           });
         }
@@ -2249,8 +2295,8 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       }
 
       if (authority === "player-commitment") {
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, commitmentRecords, {
-          playerCanonical,
+        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, human.commitmentRecords, {
+          playerCanonical: human.canonical,
           threshold: 0.28,
           margin: 0.08,
         });
@@ -2270,7 +2316,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
             rowIndex,
             authority,
             reason: resolved.reason,
-            candidateCount: commitmentRecords.length,
+            candidateCount: human.commitmentRecords.length,
             bestScore: resolved.scored[0]?.score || 0,
           });
         }
@@ -2542,14 +2588,18 @@ const nativeDomesticAgency = (event, playerCanonical, authority) => ({
   } : {}),
 });
 
-const deriveNativeEventAgency = (event, {
+// One human's reading of an event: that human as "the player", with its own
+// orders and messages, and every other polity as a foreign power. Single player
+// has exactly this reading; deriveNativeEventAgency combines one per human.
+const deriveNativeEventAgencyFor = (event, {
   world = {},
   resolver,
-  playerCanonical = "",
-  actionRecords = [],
-  commitmentRecords = [],
+  human = null,
 } = {}) => {
   if (!event || typeof event !== "object") return { agency: null, reason: "not-an-event", source: "none" };
+  const playerCanonical = human?.canonical || "";
+  const actionRecords = human?.actionRecords || [];
+  const commitmentRecords = human?.commitmentRecords || [];
   const rawAgency = event?.agency;
   if (rawAgencyClaimsPlayerSovereignty(rawAgency, resolver, playerCanonical)) {
     return { agency: null, reason: "model-agency-claims-player-sovereignty", source: "model" };
@@ -2778,6 +2828,107 @@ const deriveNativeEventAgency = (event, {
   return { agency: null, reason: "no-unique-native-provenance", source: "native-unresolved" };
 };
 
+// The reasons a reading gives when an event makes a human polity's own
+// sovereign choice without that human's order or message: the boundary a
+// shared game holds hard (screenGeneratedWorldEvents).
+export const HUMAN_SOVEREIGN_REFUSALS = Object.freeze([
+  "model-agency-claims-player-sovereignty",
+  "joint-player-sovereign-choice-without-authority",
+  "player-fresh-sovereign-choice-without-authority",
+  "institution-event-also-implicates-player-fresh-sovereign-choice",
+]);
+const HUMAN_SOVEREIGN_REFUSAL_SET = new Set(HUMAN_SOVEREIGN_REFUSALS);
+
+// Who decided an event when several people play. Each human's reading is
+// taken (deriveNativeEventAgencyFor), then:
+//   1  a reading that finds its human's own sovereign choice made without that
+//      human's authority refuses the event, whoever else it concerns;
+//   2  a shared commitment (a treaty, a pact, a new joint body) naming several
+//      humans needs each of them to have authorized it, by order or message;
+//   3  a reading that makes a human polity an autonomous (AI) sovereign is set
+//      aside: from one human's side another human looks like a foreign power;
+//   4  of the rest, the reading that traces the event to its human's own order
+//      or message is taken (the event's subject decides between two, and with
+//      no subject to decide it nothing is bound); failing that, the first.
+// One human is single player: exactly its one reading.
+const deriveNativeEventAgency = (event, { world = {}, resolver, humans = [] } = {}) => {
+  if (normalizeArray(humans).length <= 1) {
+    return deriveNativeEventAgencyFor(event, { world, resolver, human: normalizeArray(humans)[0] || null });
+  }
+  if (!event || typeof event !== "object") return { agency: null, reason: "not-an-event", source: "none" };
+
+  const readings = humans.map((human) => ({ human, result: deriveNativeEventAgencyFor(event, { world, resolver, human }) }));
+  const refused = readings.find(({ result }) => !result.agency && HUMAN_SOVEREIGN_REFUSAL_SET.has(result.reason));
+  if (refused) return { ...refused.result, polity: refused.human.canonical };
+
+  const isHuman = (polity) => humans.some((human) => resolver.equivalent(polity, human.canonical));
+  const fullText = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  if (eventCrossesFreshSovereignPolicyBoundary(event) && JOINT_SOVEREIGN_COMMITMENT_RE.test(fullText)) {
+    const actorPolities = semanticActorPolities(event, resolver);
+    const explicit = Boolean(semanticActorTokens(event).length && actorPolities.length);
+    const named = humans.filter((human) => (explicit
+      ? actorPolities.some((polity) => resolver.equivalent(polity, human.canonical))
+      : actorFamilyMentioned(fullText, resolver.aliasesFor(human.canonical))));
+    if (named.length >= 2) {
+      const sovereignActors = [];
+      for (const human of named) {
+        const order = resolveUniqueSemanticAuthority(event, human.actionRecords, {
+          playerCanonical: human.canonical,
+          threshold: 0.34,
+          margin: 0.1,
+        });
+        const message = order.match ? null : resolveUniqueSemanticAuthority(event, human.commitmentRecords, {
+          playerCanonical: human.canonical,
+          threshold: 0.28,
+          margin: 0.08,
+        });
+        const authority = order.match ? "player-order" : message?.match ? "player-commitment" : "";
+        if (!authority) {
+          return {
+            agency: null,
+            reason: "joint-player-sovereign-choice-without-authority",
+            source: "native-unresolved-player",
+            polity: human.canonical,
+          };
+        }
+        sovereignActors.push({ polity: human.canonical, authority, authorityRef: "" });
+      }
+      for (const polity of explicit ? actorPolities : []) {
+        if (!isHuman(polity)) sovereignActors.push({ polity, authority: "autonomous", authorityRef: "" });
+      }
+      const primary = sovereignActors[0];
+      return {
+        source: "native-joint-humans",
+        reason: "joint-human-authorities",
+        agency: {
+          principal: primary.polity,
+          principalKind: "polity",
+          sovereignPolity: primary.polity,
+          authority: primary.authority,
+          authorityRef: "",
+          sovereignActors,
+        },
+      };
+    }
+  }
+
+  const makesHumanAutonomous = (agency) => normalizeArray(agency?.sovereignActors).some((row) =>
+    normalizeString(row?.authority).toLowerCase() === "autonomous" && isHuman(row?.polity));
+  const usable = readings.filter(({ result }) => result.agency && !makesHumanAutonomous(result.agency));
+  const authorized = usable.filter(({ human, result }) => normalizeArray(result.agency?.sovereignActors).some((row) =>
+    resolver.equivalent(row?.polity, human.canonical)
+    && ["player-order", "player-commitment"].includes(normalizeString(row?.authority).toLowerCase())));
+  if (authorized.length === 1) return authorized[0].result;
+  if (authorized.length > 1) {
+    const subject = subjectPolityFromEvent(event, resolver);
+    const bySubject = subject ? authorized.find(({ human }) => resolver.equivalent(subject, human.canonical)) : null;
+    return bySubject ? bySubject.result : { agency: null, reason: "ambiguous-human-authority", source: "native-unresolved" };
+  }
+  if (usable.length) return usable[0].result;
+  return readings.find(({ result }) => !result.agency)?.result
+    || { agency: null, reason: "no-unique-native-provenance", source: "native-unresolved" };
+};
+
 const delegatedStructuredSovereignReason = (event) => {
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   for (const key of ["actionIds", "polityChanges", "politicalActorOps", "regionTransfers", "regionClaims", "spyOps"]) {
@@ -2848,6 +2999,7 @@ const nonSovereignPlayerActivityReason = (event, agency, { world = {}, resolver,
 const eventAgencyAuthorityReason = (event, {
   world = {},
   gameCountry = "",
+  humanCountries = [],
   actions = [],
   chats = [],
   requireAgency = false,
@@ -2882,26 +3034,32 @@ const eventAgencyAuthorityReason = (event, {
       : "";
   }
 
-  const resolver = createWorldActorResolver(world, player);
-  const playerCanonical = resolver.canonical(player);
+  const resolver = createWorldActorResolver(world, player, { humans: otherHumans(player, humanCountries) });
+  const authorities = humanAuthorities({ resolver, gameCountry: player, humanCountries, actions, chats });
+  const playerCanonical = authorities.primary;
   const sovereignActors = normalizeArray(agency.sovereignActors);
 
-  const playerPoliticalActorMutation = normalizeArray(event?.impacts?.politicalActorOps).some((operation) => {
+  // Every human polity whose government the event's politicalActorOps rewrite.
+  const mutatedHumans = [];
+  for (const operation of normalizeArray(event?.impacts?.politicalActorOps)) {
     const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
-    return Boolean(target && playerCanonical && resolver.equivalent(target, playerCanonical));
-  });
-  if (playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary(event)) {
-    const authorizedPlayerRow = sovereignActors.some((row) => {
-      const target = resolver.canonical(normalizeString(row?.polity));
-      const authority = normalizeString(row?.authority).toLowerCase();
-      return Boolean(
-        target
-        && resolver.equivalent(target, playerCanonical)
-        && ["player-order", "player-commitment"].includes(authority)
-      );
-    });
-    if (!authorizedPlayerRow) {
-      return `politicalActorOps encodes a fresh sovereign-policy choice for the human-controlled polity ${playerCanonical} without player-order or player-commitment authority`;
+    const human = target ? authorities.find(target) : null;
+    if (human && !mutatedHumans.includes(human)) mutatedHumans.push(human);
+  }
+  if (mutatedHumans.length && eventCrossesFreshSovereignPolicyBoundary(event)) {
+    for (const human of mutatedHumans) {
+      const authorizedPlayerRow = sovereignActors.some((row) => {
+        const target = resolver.canonical(normalizeString(row?.polity));
+        const authority = normalizeString(row?.authority).toLowerCase();
+        return Boolean(
+          target
+          && resolver.equivalent(target, human.canonical)
+          && ["player-order", "player-commitment"].includes(authority)
+        );
+      });
+      if (!authorizedPlayerRow) {
+        return `politicalActorOps encodes a fresh sovereign-policy choice for the human-controlled polity ${human.canonical} without player-order or player-commitment authority`;
+      }
     }
   }
 
@@ -2915,7 +3073,6 @@ const eventAgencyAuthorityReason = (event, {
   if (sovereignActors.length) {
     const seen = new Set();
     const actionsById = currentActionIds(actions);
-    const commitmentIds = playerCommitmentMessageIds(chats, resolver, playerCanonical);
     const eventActionIds = new Set(
       normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean),
     );
@@ -2936,28 +3093,33 @@ const eventAgencyAuthorityReason = (event, {
       }
       seen.add(identityKey);
 
-      const isPlayer = Boolean(canonical && resolver.equivalent(canonical, playerCanonical));
+      // Which human this row speaks for, if any: its authority can come only
+      // from that human's own orders and messages.
+      const human = canonical ? authorities.find(canonical) : null;
       if (authority === "autonomous") {
-        if (isPlayer) {
-          return `${playerCanonical} is human-controlled, but event.agency grants it autonomous sovereign authority as a principal, co-signatory, or joint participant without pre-existing player authorization`;
+        if (human) {
+          return `${human.canonical} is human-controlled, but event.agency grants it autonomous sovereign authority as a principal, co-signatory, or joint participant without pre-existing player authorization`;
         }
         if (authorityRef) return `autonomous authority for ${canonical || polity} must leave authorityRef blank`;
         continue;
       }
 
-      if (!isPlayer) {
+      if (!human) {
         return `${authority} authority is valid only for the human-controlled polity, not ${canonical || polity}`;
       }
-      if (!authorityRef) return `${authority} authority for ${playerCanonical} requires authorityRef`;
+      if (!authorityRef) return `${authority} authority for ${human.canonical} requires authorityRef`;
 
       if (authority === "player-order") {
         if (!actionsById.has(authorityRef)) {
           return `player-order authorityRef "${authorityRef}" does not match a current queued player action`;
         }
+        if (!human.actionRecords.some((entry) => entry.id === authorityRef)) {
+          return `player-order authorityRef "${authorityRef}" is another player's order, not one ${human.canonical} gave`;
+        }
         if (!eventActionIds.has(authorityRef)) {
           return `player-order authorityRef "${authorityRef}" must also appear in impacts.actionIds`;
         }
-      } else if (!commitmentIds.has(authorityRef)) {
+      } else if (!human.commitmentIds.has(authorityRef)) {
         return `player-commitment authorityRef "${authorityRef}" does not match an existing player-authored diplomatic message`;
       }
     }
@@ -3049,20 +3211,24 @@ export const resolveWorldEventProvenance = (candidate, options = {}) =>
 const eventReferencesPlayerSovereignty = (event, {
   world = {},
   gameCountry = "",
+  humanCountries = [],
   unresolved = null,
 } = {}) => {
-  const resolver = createWorldActorResolver(world, gameCountry);
-  const playerCanonical = resolver.canonical(normalizeString(gameCountry));
-  if (!playerCanonical) return false;
-  if (rawAgencyClaimsPlayerSovereignty(event?.agency, resolver, playerCanonical)) return true;
+  const resolver = createWorldActorResolver(world, gameCountry, { humans: otherHumans(gameCountry, humanCountries) });
+  const humans = uniqueStrings([gameCountry, ...normalizeArray(humanCountries)]
+    .map((name) => resolver.canonical(normalizeString(name)))
+    .filter(Boolean));
+  if (!humans.length) return false;
+  const isHuman = (polity) => humans.some((human) => resolver.equivalent(polity, human));
+  if (humans.some((human) => rawAgencyClaimsPlayerSovereignty(event?.agency, resolver, human))) return true;
   const playerPoliticalActorMutation = normalizeArray(event?.impacts?.politicalActorOps).some((operation) => {
     const target = resolver.canonical(normalizeString(operation?.polityKey || operation?.polity || operation?.country));
-    return Boolean(target && resolver.equivalent(target, playerCanonical));
+    return Boolean(target && isHuman(target));
   });
   if (playerPoliticalActorMutation && eventCrossesFreshSovereignPolicyBoundary(event)) return true;
   if (normalizeString(unresolved?.source).includes("player")) return true;
   const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
-  return actorFamilyMentioned(text, resolver.aliasesFor(playerCanonical))
+  return humans.some((human) => actorFamilyMentioned(text, resolver.aliasesFor(human)))
     && eventCrossesFreshSovereignPolicyBoundary(event);
 };
 
@@ -3171,6 +3337,7 @@ export const quarantineIndependentWorldEventIssues = (
 export const validateWorldPlayerAgencyPayload = (candidate, {
   world = {},
   gameCountry = "",
+  humanCountries = [],
   actions = [],
   chats = [],
   salvageIndependent = false,
@@ -3185,6 +3352,7 @@ export const validateWorldPlayerAgencyPayload = (candidate, {
   const binding = bindWorldEventAuthorityRefs(candidate, {
     world,
     gameCountry,
+    humanCountries,
     actions,
     chats,
   });
@@ -3206,6 +3374,7 @@ export const validateWorldPlayerAgencyPayload = (candidate, {
     const reason = eventAgencyAuthorityReason(event, {
       world,
       gameCountry,
+      humanCountries,
       actions,
       chats,
       requireAgency: true,
@@ -3216,6 +3385,7 @@ export const validateWorldPlayerAgencyPayload = (candidate, {
     const hardPlayerBoundary = eventReferencesPlayerSovereignty(event, {
       world,
       gameCountry,
+      humanCountries,
       unresolved,
     });
 
@@ -3435,6 +3605,11 @@ export const screenGeneratedWorldEvents = ({
   let strippedPolityUpdates = 0;
   let mergedDuplicatePolityUpdates = 0;
   let strippedNoOpRegionControlOps = 0;
+  // The polities people play (runtime/humanPolities.js). Single player keeps an
+  // event it cannot attribute, as it always has; a shared game holds the human
+  // boundary hard, so one person's orders never make another's country choose.
+  const humanCountries = humanCountriesOf(game);
+  const sharedGame = humanCountries.length > 1;
 
   for (const original of normalizeArray(events)) {
     const processSanitized = sanitizeProcessOnlyPolityUpdates(original);
@@ -3453,21 +3628,28 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const eventWrapper = { events: [controlSanitized.event] };
-    bindWorldEventAuthorityRefs(eventWrapper, {
+    const binding = bindWorldEventAuthorityRefs(eventWrapper, {
       world,
       gameCountry: normalizeString(game?.country),
+      humanCountries,
       actions,
       chats,
     });
     const event = eventWrapper.events[0];
 
-    const agencyReason = eventAgencyAuthorityReason(event, {
-      world,
-      gameCountry: normalizeString(game?.country),
-      actions,
-      chats,
-      requireAgency: false,
-    });
+    const refusal = sharedGame
+      ? binding.unresolved.find((entry) => entry.rowIndex === -1 && HUMAN_SOVEREIGN_REFUSAL_SET.has(entry.reason))
+      : null;
+    const agencyReason = refusal
+      ? `${refusal.polity || "a human-controlled polity"} is played by a person, and only its own orders and messages make its government's choices`
+      : eventAgencyAuthorityReason(event, {
+        world,
+        gameCountry: normalizeString(game?.country),
+        humanCountries,
+        actions,
+        chats,
+        requireAgency: false,
+      });
     if (agencyReason) {
       dropped.push({
         id: normalizeString(event?.id),

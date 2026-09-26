@@ -1,5 +1,5 @@
 /*! Open Historia — portions (mobile HUD wiring + advisor/forces launchers) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { GenerationRatingToast } from "./generationRatingToast.jsx";
 import { SettingsButton, SettingsMenu } from "./settings";
 import { Presence } from "./presence.jsx";
@@ -31,6 +31,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { inSharedGame, sharedGameRole, subscribeSharedGameRole } from "../../multiplayer/client/sharedGameBridge.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -256,8 +257,11 @@ const Main = ({
     setApiPromptAnsweredFor(id);
     try { sessionStorage.setItem("oh:api-setup-answered", id); } catch { /* the prompt just shows again next time */ }
   };
+  // A guest in a shared game plays on the host's key: nothing to set up.
+  const sharedRole = useSyncExternalStore(subscribeSharedGameRole, sharedGameRole, sharedGameRole);
   const showApiPrompt = loaded && Boolean(activeGame?.id) && !mainMenuOpen && !providerReady
-    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading;
+    && apiPromptAnsweredFor !== String(activeGame?.id) && !isSettingsOpen && !showGameLoading
+    && sharedRole !== "guest";
 
   useEffect(() => {
     if (!checkWebGL()) setShowWebGLWarning(true);
@@ -295,7 +299,8 @@ const Main = ({
     // message the player while they are browsing/editing outside the campaign.
     if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      // A shared game's world is the host's to move (multiplayer/).
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
@@ -312,7 +317,7 @@ const Main = ({
   useEffect(() => {
     if (hasNoGames) return undefined;
     const iv = setInterval(() => {
-      if (document.visibilityState !== "visible") return;
+      if (document.visibilityState !== "visible" || inSharedGame()) return;
       import("../AI/gameplay.js")
         .then(({ maybeGatherIntelligence }) => maybeGatherIntelligence())
         .catch(() => {});

@@ -10,6 +10,7 @@ import {
 // Registers the Logging file's settings snapshot (every setting's current value).
 import "./runtime/settingsLog.js";
 import App from "./App.jsx";
+import { installRemoteRuntime } from "./multiplayer/client/remoteRuntime.js";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 
@@ -54,6 +55,9 @@ setDebugLogContext({
 });
 logDebugEvent("app", "Open Historia started.");
 
+// A shared game's documents are answered from the host's view
+// (multiplayer/client/remoteRuntime.js). Installed after the website's own /api
+// router so it sees each request first; it does nothing until a shared game begins.
 if (import.meta.env.VITE_OH_WEB) {
     // Web build (the hosted website): install the IndexedDB-backed /api
     // interceptor before anything makes a request, then mount. This whole
@@ -62,7 +66,11 @@ if (import.meta.env.VITE_OH_WEB) {
     import("./runtime/web/index.js")
         .then(({ installWebBackend }) => installWebBackend())
         .catch((error) => console.error("Web backend failed to install:", error))
-        .finally(mount);
+        .finally(() => {
+            installRemoteRuntime();
+            mount();
+        });
 } else {
+    installRemoteRuntime();
     mount();
 }

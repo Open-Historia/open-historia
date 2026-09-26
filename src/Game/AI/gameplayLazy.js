@@ -15,11 +15,30 @@
 // prefetchGameplay() warms the chunk after first world idle so the player's
 // first turn does not also pay the download.
 
+import { inSharedGame } from "../../multiplayer/client/sharedGameBridge.js";
+
 let modulePromise = null;
 
 const gameplay = () => {
   if (!modulePromise) modulePromise = import("./gameplay.js");
   return modulePromise;
+};
+
+// A page playing a shared game (multiplayer/) never runs the game itself: the
+// host's engine does, and the page's screens send it requests instead. So
+// everything here that writes the game refuses there, with a reason, rather
+// than spending the player's AI key on a change the host would never accept.
+// What only reads, or answers on the player's own screen (suggestions,
+// wording an order, reading its own intercepts), still runs.
+export class SharedGameRefusal extends Error {
+  constructor() {
+    super("In a shared game the host's computer runs the game; this is done there.");
+    this.name = "SharedGameRefusal";
+  }
+}
+const hostOnly = (run) => async (...args) => {
+  if (inSharedGame()) throw new SharedGameRefusal();
+  return run(...args);
 };
 
 export const prefetchGameplay = () => {
@@ -29,49 +48,49 @@ export const prefetchGameplay = () => {
 };
 
 // --- Timeline ---------------------------------------------------------------
-export const simulateTimelineJump = async (...args) => (await gameplay()).simulateTimelineJump(...args);
-export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
-export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
-export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
-export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
+export const simulateTimelineJump = hostOnly(async (...args) => (await gameplay()).simulateTimelineJump(...args));
+export const simulateAutoJump = hostOnly(async (...args) => (await gameplay()).simulateAutoJump(...args));
+export const retryPendingJumpSegment = hostOnly(async (...args) => (await gameplay()).retryPendingJumpSegment(...args));
+export const retryPendingProjectsJump = hostOnly(async (...args) => (await gameplay()).retryPendingProjectsJump(...args));
+export const maybeGeneratePregameHistory = hostOnly(async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args));
 
 // --- Rollback ---------------------------------------------------------------
 export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);
-export const rollBackToSnapshot = async (...args) => (await gameplay()).rollBackToSnapshot(...args);
+export const rollBackToSnapshot = hostOnly(async (...args) => (await gameplay()).rollBackToSnapshot(...args));
 // Intervene: stop the last turn after the events revealed so far (intervene.js).
 export const canInterveneInLastTurn = async (...args) => (await gameplay()).canInterveneInLastTurn(...args);
-export const interveneAfterEvent = async (...args) => (await gameplay()).interveneAfterEvent(...args);
+export const interveneAfterEvent = hostOnly(async (...args) => (await gameplay()).interveneAfterEvent(...args));
 
 // --- Interactive events -----------------------------------------------------
 // A moment played out as a scene (GameUI/interactive.jsx): offered now and then
 // by a time skip (runtime/interactiveOffer.js), taken up or let pass by the
 // player, played beat by beat, taken back (interactiveRewind.js), ended into
 // the record or set aside.
-export const createInteractive = async (...args) => (await gameplay()).createInteractive(...args);
-export const declineInteractiveOffer = async (...args) => (await gameplay()).declineInteractiveOffer(...args);
-export const advanceActiveInteractive = async (...args) => (await gameplay()).advanceActiveInteractive(...args);
-export const rewindActiveInteractive = async (...args) => (await gameplay()).rewindActiveInteractive(...args);
-export const endActiveInteractive = async (...args) => (await gameplay()).endActiveInteractive(...args);
-export const setAsideActiveInteractive = async (...args) => (await gameplay()).setAsideActiveInteractive(...args);
+export const createInteractive = hostOnly(async (...args) => (await gameplay()).createInteractive(...args));
+export const declineInteractiveOffer = hostOnly(async (...args) => (await gameplay()).declineInteractiveOffer(...args));
+export const advanceActiveInteractive = hostOnly(async (...args) => (await gameplay()).advanceActiveInteractive(...args));
+export const rewindActiveInteractive = hostOnly(async (...args) => (await gameplay()).rewindActiveInteractive(...args));
+export const endActiveInteractive = hostOnly(async (...args) => (await gameplay()).endActiveInteractive(...args));
+export const setAsideActiveInteractive = hostOnly(async (...args) => (await gameplay()).setAsideActiveInteractive(...args));
 
 // --- Chat and diplomacy -----------------------------------------------------
 // One request acts for every AI participant in a thread (AI/chatActions.js).
-export const runChatActionBatch = async (...args) => (await gameplay()).runChatActionBatch(...args);
-export const checkDemandReply = async (...args) => (await gameplay()).checkDemandReply(...args);
-export const ensureCountryAssessed = async (...args) => (await gameplay()).ensureCountryAssessed(...args);
-export const processPendingEventOutreach = async (...args) => (await gameplay()).processPendingEventOutreach(...args);
+export const runChatActionBatch = hostOnly(async (...args) => (await gameplay()).runChatActionBatch(...args));
+export const checkDemandReply = hostOnly(async (...args) => (await gameplay()).checkDemandReply(...args));
+export const ensureCountryAssessed = hostOnly(async (...args) => (await gameplay()).ensureCountryAssessed(...args));
+export const processPendingEventOutreach = hostOnly(async (...args) => (await gameplay()).processPendingEventOutreach(...args));
 
 // --- Actions ----------------------------------------------------------------
 export const generateActionSuggestions = async (...args) => (await gameplay()).generateActionSuggestions(...args);
 export const refinePlayerAction = async (...args) => (await gameplay()).refinePlayerAction(...args);
 
 // --- Game master (cheats panel, itself already lazy) -------------------------
-export const previewGameMasterCommand = async (...args) => (await gameplay()).previewGameMasterCommand(...args);
-export const applyGameMasterPreview = async (...args) => (await gameplay()).applyGameMasterPreview(...args);
-export const consolidateHistoryNow = async (...args) => (await gameplay()).consolidateHistoryNow(...args);
+export const previewGameMasterCommand = hostOnly(async (...args) => (await gameplay()).previewGameMasterCommand(...args));
+export const applyGameMasterPreview = hostOnly(async (...args) => (await gameplay()).applyGameMasterPreview(...args));
+export const consolidateHistoryNow = hostOnly(async (...args) => (await gameplay()).consolidateHistoryNow(...args));
 
 // --- Stats and intelligence -------------------------------------------------
-export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);
+export const ensureIntelligenceRated = hostOnly(async (...args) => (await gameplay()).ensureIntelligenceRated(...args));
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
-export const generateCountryStatSheet = async (...args) => (await gameplay()).generateCountryStatSheet(...args);
-export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
+export const generateCountryStatSheet = hostOnly(async (...args) => (await gameplay()).generateCountryStatSheet(...args));
+export const generateCountryStats = hostOnly(async (...args) => (await gameplay()).generateCountryStats(...args));
