@@ -9,3 +9,9 @@
 # Release assets and downloaded by scripts/fetch-map-assets.mjs, because LFS's
 # free bandwidth (1 GB/mo, org-wide) could not cover player installs. Do not
 # re-add them to LFS. See scripts/map-assets.json.
+
+# Every default prompt passage any version has shipped
+# (scripts/prompts/record-shipped-guidance.mjs): one fingerprint per line, only
+# ever added to. Merging alpha into beta or beta into main keeps both sides'
+# lines instead of conflicting, so no branch forgets the other's old defaults.
+src/Game/AI/shippedGuidance.js merge=union
