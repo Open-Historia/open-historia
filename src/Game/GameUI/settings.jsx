@@ -2209,7 +2209,7 @@ const SettingsWorkspace = ({
                     <button
                     type="button"
                     onClick={() => setPoliticalWorldLabOpen(true)}
-                    style={{ background: "rgba(124,58,237,0.16)", border: "1px solid rgba(167,139,250,0.32)", borderRadius: "8px", color: "#ddd6fe", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
+                    style={{ background: "var(--oh-grey-raised)", border: "1px solid var(--oh-grey-border-strong)", borderRadius: "8px", color: "var(--oh-grey-text)", cursor: "pointer", fontSize: "0.72rem", fontWeight: 800, padding: "0.45rem 0.65rem", whiteSpace: "nowrap" }}
                     >
                     Open A/B Lab
                     </button>

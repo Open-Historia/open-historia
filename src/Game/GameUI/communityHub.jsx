@@ -885,9 +885,9 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
                         onClick={() => setBrowseSort(value)}
                         style={touchFit({
                           ...pillButton,
-                          background: browseSort === value ? "rgba(109,66,217,0.32)" : "rgba(255,255,255,0.06)",
-                          borderColor: browseSort === value ? "rgba(154,127,255,0.52)" : "rgba(255,255,255,0.1)",
-                          color: browseSort === value ? "#f5f3ff" : "rgba(255,255,255,0.78)",
+                          background: browseSort === value ? "var(--oh-grey-selected)" : "rgba(255,255,255,0.06)",
+                          borderColor: browseSort === value ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,0.1)",
+                          color: browseSort === value ? "var(--oh-grey-text)" : "rgba(255,255,255,0.78)",
                         }, touch)}
                       >
                         {label}

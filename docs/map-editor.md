@@ -310,7 +310,7 @@ One style function for all regions, memoised per `typeId|owner|selected|zoomBand
 
 ## 12. Flags (`FlagPicker.jsx`)
 
-A full-screen overlay (community-hub purple, not editor blue) mounted at `MapEditor`'s root — **not** inside the inspector, because the panel's `backdrop-filter` makes a containing block that would trap a `position:fixed` overlay (`FlagPicker.jsx:31`). Opened via `flagPickerFor` state, wired to `d.setFlag(flagPickerFor, value)`.
+A full-screen flat dark-grey overlay mounted at `MapEditor`'s root — **not** inside the inspector, because the panel's `backdrop-filter` makes a containing block that would trap a `position:fixed` overlay (`FlagPicker.jsx:31`). Opened via `flagPickerFor` state, wired to `d.setFlag(flagPickerFor, value)`.
 
 Tabs:
 - **In the game** — *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`listBuiltInFlags()`).

@@ -1257,7 +1257,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                                 onChange={(event) => changeTrait(trait.key, event.target.value)}
                                             />
                                             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.57rem", lineHeight: 1.35, marginTop: "0.32rem" }}>{trait.description}</div>
-                                            <code style={{ color: "rgba(196,181,253,0.72)", display: "block", fontSize: "0.55rem", marginTop: "0.3rem" }}>{trait.key}</code>
+                                            <code style={{ color: "var(--oh-grey-muted)", display: "block", fontSize: "0.55rem", marginTop: "0.3rem" }}>{trait.key}</code>
                                         </div>
                                     );
                                 })}
@@ -1312,7 +1312,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                     {(politicsDebug?.traitCatalog?.traits || POLITICAL_TRAIT_REGISTRY.map((trait) => ({ ...trait, value: null, status: "unset" }))).map((trait) => (
                                         <div key={trait.key} style={{ alignItems: "center", background: "rgba(255,255,255,0.025)", borderRadius: 7, display: "flex", fontSize: "0.62rem", justifyContent: "space-between", padding: "0.35rem 0.45rem" }}>
                                             <span>{trait.label}</span>
-                                            <code style={{ color: trait.value == null ? "rgba(255,255,255,0.34)" : "#c4b5fd" }}>{trait.value == null ? "unset" : trait.value}</code>
+                                            <code style={{ color: trait.value == null ? "rgba(255,255,255,0.34)" : "var(--oh-grey-text)" }}>{trait.value == null ? "unset" : trait.value}</code>
                                         </div>
                                     ))}
                                 </div>

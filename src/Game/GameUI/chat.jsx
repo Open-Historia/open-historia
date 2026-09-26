@@ -886,9 +886,9 @@ const InstitutionRecord = ({ msg }) => {
     const text = established ? raw.replace(/\s+institutional channel established\.?$/i, " council opened.") : raw;
     return (
         <div style={{ display: "flex", justifyContent: "center", padding: ".12rem .75rem" }}>
-            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid rgba(139,92,246,.28)", background: "rgba(139,92,246,.065)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
-                <span aria-hidden="true" style={{ color: "#a78bfa", fontSize: ".72rem" }}>◇</span>
-                <span style={{ color: "#a78bfa", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
+            <div style={{ maxWidth: "76%", display: "inline-flex", alignItems: "center", gap: ".45rem", border: "1px solid var(--oh-grey-border)", background: "rgba(255,255,255,.035)", borderRadius: 8, padding: ".34rem .58rem", color: "rgba(255,255,255,.58)", fontSize: ".6rem", lineHeight: 1.35 }}>
+                <span aria-hidden="true" style={{ color: "rgba(231,231,234,.72)", fontSize: ".72rem" }}>◇</span>
+                <span style={{ color: "rgba(231,231,234,.72)", fontSize: ".52rem", fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Institution record</span>
                 <span>{text}</span>
             </div>
         </div>
@@ -926,7 +926,7 @@ const LifecycleThinkingBubble = ({ count = 0 }) => (
     <span style={{ fontSize: "0.7rem", color: "rgba(255,255,255,0.42)", marginBottom: "0.25rem" }}>
         {count > 1 ? `${count} invited governments` : "Invited government"}
     </span>
-    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(139,92,246,0.09)", border: "1px solid rgba(167,139,250,.14)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: ".55rem", padding: "0.6rem 0.85rem", borderRadius: "12px 12px 12px 4px", backgroundColor: "rgba(255,255,255,0.035)", border: "1px solid var(--oh-grey-border)", fontSize: "0.78rem", color: "rgba(255,255,255,.58)" }}>
         <span>Considering membership</span><ThinkingDots />
     </div>
     </div>
@@ -937,7 +937,7 @@ const lifecycleOutcomePresentation = (entry = {}) => {
     if (status === "accepted") return { label: entry?.requestedStatus === "observer" ? "Observer accepted" : "Accepted", tone: "good" };
     if (status === "rejected") return { label: "Declined", tone: "bad" };
     if (status === "pending-approval") return { label: "Awaiting member approval", tone: "live" };
-    if (status === "negotiating") return { label: entry?.decision === "delay" ? "Decision delayed" : "Negotiating terms", tone: "purple" };
+    if (status === "negotiating") return { label: entry?.decision === "delay" ? "Decision delayed" : "Negotiating terms", tone: "neutral" };
     if (status === "resolved") return { label: "Resolved", tone: "good" };
     return { label: "Awaiting response", tone: "neutral" };
 };
@@ -945,13 +945,13 @@ const lifecycleOutcomePresentation = (entry = {}) => {
 const LifecycleOutcomePanel = ({ cases = [], institution = null, concluded = false, onViewInstitution = null }) => {
     if (!cases.length) return null;
     return (
-        <div data-lifecycle-outcome-panel="true" style={{ marginBottom: ".45rem", padding: ".55rem .62rem", border: `1px solid ${concluded ? "rgba(34,197,94,.2)" : "rgba(167,139,250,.16)"}`, borderRadius: 9, background: concluded ? "rgba(34,197,94,.045)" : "rgba(139,92,246,.045)" }}>
+        <div data-lifecycle-outcome-panel="true" style={{ marginBottom: ".45rem", padding: ".55rem .62rem", border: `1px solid ${concluded ? "rgba(34,197,94,.2)" : "var(--oh-grey-border)"}`, borderRadius: 9, background: concluded ? "rgba(34,197,94,.045)" : "rgba(255,255,255,.025)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
                 <div style={{ flex: "1 1 15rem", minWidth: 0 }}>
-                    <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "#ddd6fe" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
+                    <div style={{ fontSize: ".56rem", fontWeight: 850, color: concluded ? "#bbf7d0" : "var(--oh-grey-text)" }}>{concluded ? "Membership negotiation concluded" : "Membership responses"}</div>
                     {concluded && institution?.status && <div style={{ marginTop: ".14rem", fontSize: ".51rem", color: "rgba(255,255,255,.4)" }}>{institution.name || "Institution"} is now {String(institution.status).replace(/[-_]/g, " ")}.</div>}
                 </div>
-                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ede9fe", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
+                {concluded && onViewInstitution && <button type="button" className="oh-tap-row" onClick={onViewInstitution} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".28rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: "pointer" }}>View institution →</button>}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: ".3rem", marginTop: ".45rem" }}>
                 {cases.map((entry) => {
@@ -1912,7 +1912,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         ["charter", "Charter"],
                         ["members", "Members"],
                         ["documents", "Documents"],
-                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(139,92,246,.95)" : "transparent"}`, background: "transparent", color: key === "council" ? "#ede9fe" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
+                    ].map(([key, label]) => <button key={key} className="oh-tap-row" onClick={() => key !== "council" && onInstitutionNavigate?.(key)} style={{ border: 0, borderBottom: `2px solid ${key === "council" ? "rgba(231,231,234,.72)" : "transparent"}`, background: "transparent", color: key === "council" ? "var(--oh-grey-text)" : "rgba(255,255,255,.48)", padding: ".48rem .58rem .56rem", fontSize: ".61rem", fontWeight: 760, cursor: key === "council" ? "default" : "pointer" }}>{label}</button>)}
                 </div>
                 {institutionPendingActions > 0 && <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ margin: ".65rem 1rem 0", padding: ".58rem .7rem", display: "flex", alignItems: "center", gap: ".7rem", border: "1px solid rgba(245,158,11,.28)", borderRadius: 10, background: "rgba(245,158,11,.08)", color: "#fde68a", cursor: "pointer", textAlign: "left", flexShrink: 0 }}>
                     <span style={{ flex: 1 }}><span style={{ display: "block", fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", textTransform: "uppercase", color: "rgba(253,230,138,.7)" }}>Action required</span><span style={{ display: "block", marginTop: ".12rem", fontSize: ".62rem", fontWeight: 700 }}>{institutionPendingBallots ? `${institutionPendingBallots} ballot${institutionPendingBallots === 1 ? "" : "s"} awaiting you` : ""}{institutionPendingBallots && institutionPendingAmendments ? " · " : ""}{institutionPendingAmendments ? `${institutionPendingAmendments} amendment review${institutionPendingAmendments === 1 ? "" : "s"}` : ""}</span></span>
@@ -2027,17 +2027,17 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 <div data-diplomacy-composer="modern" style={{ padding: isInstitutionCouncil ? ".65rem 1rem .8rem" : ".72rem 1rem .82rem", borderTop: "1px solid rgba(255,255,255,0.08)", background: isInstitutionCouncil ? "transparent" : "rgba(13,13,16,.56)", flexShrink: 0 }}>
                 {isInstitutionCouncil && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: ".6rem", marginBottom: ".38rem" }}>
                     <span style={{ fontSize: ".52rem", fontWeight: 850, letterSpacing: ".07em", color: "rgba(255,255,255,.4)", textTransform: "uppercase" }}>Council message</span>
-                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "#c4b5fd", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
+                    <button type="button" className="oh-tap-row" onClick={() => onInstitutionNavigate?.("agenda")} style={{ border: 0, background: "transparent", color: "rgba(231,231,234,.72)", cursor: "pointer", fontSize: ".58rem", fontWeight: 800 }}>Formal business →</button>
                 </div>}
                 {isLifecycleConversation && !lifecycleRevealInProgress && lifecycleHasRecordedResponse && <LifecycleOutcomePanel cases={lifecycleState.cases} institution={lifecycleState.institution} concluded={lifecycleTerminal || lifecycleNegotiationConcluded} onViewInstitution={onInstitutionNavigate ? () => onInstitutionNavigate("members") : null} />}
-                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid rgba(167,139,250,.16)", borderRadius: 9, background: "rgba(139,92,246,.055)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
-                    <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "#ddd6fe" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
+                {isLifecycleConversation && !lifecycleTerminal && <div data-institution-lifecycle-negotiation="true" style={{ marginBottom: ".45rem", padding: ".48rem .58rem", border: "1px solid var(--oh-grey-border)", borderRadius: 9, background: "rgba(255,255,255,.03)", display: "flex", alignItems: "center", gap: ".55rem", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 18rem", minWidth: 0 }}><div style={{ fontSize: ".55rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>{isInstitutional ? "Institution accession hearing" : "Institution membership negotiation"}</div><div style={{ marginTop: ".13rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>{playerLifecycleCase ? "This invitation requires your government's explicit decision. The AI cannot accept, reject or alter membership for you." : isInstitutional ? "The application is now before the institution's canonical voters. Their positions should follow current PWv2, relations, charter obligations and political fit; native governance records every formal ballot." : "The invited government decides from current PWv2, relations, strategic fit and the institution's charter. A diplomatic invitation is not membership."}</div></div>
                     {playerLifecycleCase ? <div data-player-lifecycle-chat-controls="true" style={{ display: "flex", gap: ".28rem", flexWrap: "wrap" }}>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("accept")} style={{ border: "1px solid rgba(34,197,94,.25)", borderRadius: 8, background: "rgba(34,197,94,.09)", color: "#bbf7d0", padding: ".3rem .46rem", fontSize: ".54rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer" }}>Accept</button>
-                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.1)", color: "#ddd6fe", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
+                        <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("seek-observer")} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 8, background: "rgba(255,255,255,.055)", color: "var(--oh-grey-text)", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Observer instead</button>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 8, background: "rgba(245,158,11,.07)", color: "#fde68a", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Later</button>
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
-                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid rgba(167,139,250,.25)", borderRadius: 8, background: "rgba(139,92,246,.12)", color: "#ede9fe", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
+                    </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
                 </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     {canDemand && (
@@ -2063,13 +2063,13 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     // quarter of the visible height (never under one line) and
                     // scrolls past that.
                     style={{ flex: 1, backgroundColor: isInstitutionCouncil ? "rgba(0,0,0,0.2)" : "rgba(9,9,12,.58)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "12px", color: "white", fontSize: "0.875rem", padding: ".62rem .78rem", resize: "none", outline: "none", fontFamily: "sans-serif", lineHeight: "1.5", maxHeight: isTouch ? `max(2.75rem, min(12rem, calc(${APP_HEIGHT} / 4)))` : "12rem", overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.22) transparent", boxShadow: "inset 0 1px 0 rgba(255,255,255,.025)", transition: "border-color 0.2s, background-color .2s" }}
-                    onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(139,92,246,.65)" : "rgba(59,130,246,0.6)"}
+                    onFocus={e => e.target.style.borderColor = isInstitutionCouncil ? "rgba(255,255,255,.42)" : "rgba(59,130,246,0.6)"}
                     onBlur={e => e.target.style.borderColor = "rgba(255,255,255,0.15)"}
                     />
                     {/* An inline min-width beats the class's, so the icon-only
                         button is widened to a thumb here, not by oh-tap. */}
                     <button className="oh-tap" aria-label="Send message" onClick={handlePlayerSubmit} disabled={!playerInput.trim()}
-                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "rgba(91,33,182,.85)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(91,33,182,.28)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid rgba(167,139,250,.26)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
+                    style={{ backgroundColor: playerInput.trim() ? (isInstitutionCouncil ? "var(--oh-grey-raised)" : "#3b82f6") : (isInstitutionCouncil ? "rgba(255,255,255,.04)" : "rgba(59,130,246,0.3)"), border: isInstitutionCouncil ? "1px solid var(--oh-grey-border-strong)" : "none", borderRadius: "10px", minWidth: isInstitutionCouncil ? "4.3rem" : isTouch ? "2.75rem" : "2.5rem", height: "2.5rem", padding: isInstitutionCouncil ? "0 .7rem" : 0, display: "flex", alignItems: "center", justifyContent: "center", cursor: playerInput.trim() ? "pointer" : "not-allowed", flexShrink: 0, fontSize: isInstitutionCouncil ? ".66rem" : "1rem", fontWeight: 800, color: "white", transition: "background-color 0.2s" }}
                     >{isInstitutionCouncil ? "Send ↗" : <SendIcon />}</button>
                 </div>
                 <div style={{ marginTop: ".28rem", fontSize: isInstitutionCouncil ? ".5rem" : ".54rem", color: "rgba(255,255,255,.26)" }}>Enter to send · Shift+Enter for a new line</div>
@@ -2641,7 +2641,6 @@ const InterceptView = ({ target, exchange, clarity, seal, onBack }) => {
 
 const intelCard = ({ tone = "neutral" } = {}) => {
     const tones = {
-        purple: { bg: "rgba(139,92,246,.12)", border: "rgba(167,139,250,.28)", value: "#ddd6fe" },
         green: { bg: "rgba(34,197,94,.09)", border: "rgba(34,197,94,.25)", value: "#86efac" },
         amber: { bg: "rgba(245,158,11,.09)", border: "rgba(245,158,11,.25)", value: "#fde68a" },
         neutral: { bg: "rgba(255,255,255,.035)", border: "rgba(255,255,255,.09)", value: "rgba(255,255,255,.86)" },
@@ -2960,14 +2959,14 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         <div data-intelligence-workspace="restored" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", gap: ".35rem", alignItems: "center", padding: ".65rem 1rem .55rem", borderBottom: "1px solid rgba(255,255,255,.06)", flexShrink: 0 }}>
                 {navItems.map(([key, label]) => (
-                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid #8b5cf6" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
+                    <button key={key} className="oh-tap-row" onClick={() => setSection(key)} style={{ padding: isMobile ? ".35rem .5rem" : ".35rem .75rem", border: 0, borderBottom: section === key ? "2px solid rgba(231,231,234,.72)" : "2px solid transparent", background: "transparent", color: section === key ? "white" : "rgba(255,255,255,.46)", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif" }}>{label}</button>
                 ))}
             </div>
 
             {section === "overview" && (
                 <div data-intelligence-section="overview" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".8rem 1rem", display: "flex", flexDirection: "column", gap: ".75rem" }}>
                     <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".55rem" }}>
-                        <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="purple" />
+                        <IntelligenceStatCard label="Service capability" value={intelligenceCapabilityLabel(myIntel)} hint="National intelligence capability" tone="neutral" />
                         <IntelligenceStatCard label="Active networks" value={spies.length} hint={`${MAX_ACTIVE_SPIES - spies.length} field slots available`} tone="green" />
                         <IntelligenceStatCard label="Current reports" value={currentReportCount} hint="Latest political assessments retained" />
                         <IntelligenceStatCard label="Counterintel alerts" value={visibleForeign.length} hint="Detected or turned foreign agents" tone={visibleForeign.length ? "amber" : "neutral"} />
@@ -3003,7 +3002,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                                 const active = sameCountry(country.name, selectedCountryRecord?.name);
                                 const network = spies.some((spy) => sameCountry(spy.target, country.name));
                                 return (
-                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "rgba(167,139,250,.32)" : "transparent"}`, background: active ? "rgba(139,92,246,.12)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
+                                    <button key={country.name} className="oh-tap-row" onClick={() => setSelectedCountry(country.name)} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".48rem .55rem", borderRadius: 7, border: `1px solid ${active ? "var(--oh-grey-border-strong)" : "transparent"}`, background: active ? "var(--oh-grey-selected)" : "transparent", color: "white", fontFamily: "sans-serif", textAlign: "left", cursor: "pointer" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".68rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{country.name}</span>
                                         {network && <span title="Active intelligence network" style={{ width: ".38rem", height: ".38rem", borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />}
                                     </button>
@@ -3014,9 +3013,9 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                     <div style={{ ...panel, minHeight: 0, padding: ".8rem", overflowY: "auto", scrollbarWidth: "none" }}>
                         <IntelligenceCountryHeader country={selectedCountryRecord} subtitle={selectedSpy ? `Active network · since ${selectedSpy.deployedAt || "an earlier date"}` : "No active network · public sources only"} />
                         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))", gap: ".45rem", marginTop: ".75rem" }}>
-                            <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone={selectedSpy ? "purple" : "neutral"} />
-                            <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone={selectedKnowledge?.level !== "public" ? "purple" : "neutral"} />
-                            <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone={selectedSpy ? "purple" : "neutral"} />
+                            <IntelligenceStatCard label="Network" value={selectedNetworkLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Political" value={selectedPoliticalLabel} tone="neutral" />
+                            <IntelligenceStatCard label="Diplomatic" value={selectedDiplomaticLabel} tone="neutral" />
                             <IntelligenceStatCard label="Source" value={selectedSourceLabel} tone={selectedSourceLabel === "Low" ? "amber" : selectedSourceLabel === "None" ? "neutral" : "green"} />
                         </div>
                         <div style={{ ...panel, padding: ".65rem .7rem", marginTop: ".65rem" }}>
@@ -3029,7 +3028,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                                 {selectedInstitutionPortfolio.length ? selectedInstitutionPortfolio.slice(0, 10).map(({ institution, member, history, cases }) => (
                                     <div key={institution.id} style={{ display: "flex", alignItems: "center", gap: ".45rem", padding: ".38rem .45rem", borderRadius: 7, background: "rgba(255,255,255,.025)", border: "1px solid rgba(255,255,255,.05)" }}>
                                         <span style={{ flex: 1, minWidth: 0, fontSize: ".62rem", color: "rgba(255,255,255,.68)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{institution.name}</span>
-                                        <span style={{ fontSize: ".53rem", color: member ? "#c4b5fd" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
+                                        <span style={{ fontSize: ".53rem", color: member ? "rgba(231,231,234,.68)" : "rgba(255,255,255,.35)", textTransform: "capitalize" }}>{member ? (member.role || member.status || "member") : "former / historical"}</span>
                                         {cases?.length ? <span style={{ fontSize: ".49rem", color: "#fde68a" }}>{cases.length} pending</span> : null}
                                         {!member && history?.length ? <span style={{ fontSize: ".49rem", color: "rgba(255,255,255,.28)" }}>{history.at(-1)?.action || "history"}</span> : null}
                                     </div>
@@ -3046,7 +3045,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
 
             {section === "operations" && (
                 <div data-intelligence-section="operations" style={{ flex: 1, overflowY: "auto", scrollbarWidth: "none", padding: ".75rem .8rem", display: "flex", flexDirection: "column", gap: ".65rem" }}>
-                    <div style={{ ...panel, padding: ".55rem .7rem", background: "rgba(139,92,246,.09)", borderColor: "rgba(167,139,250,.22)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ ...panel, padding: ".55rem .7rem", background: "rgba(255,255,255,.035)", borderColor: "var(--oh-grey-border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <div><div style={{ fontSize: ".72rem", fontWeight: 750 }}>Field networks</div><div style={{ fontSize: ".58rem", color: "rgba(255,255,255,.35)" }}>Persistent HUMINT networks also appear as covert Projects.</div></div>
                         <div style={{ fontSize: ".7rem", fontWeight: 800 }}>{spies.length}/{MAX_ACTIVE_SPIES}</div>
                     </div>
@@ -3061,7 +3060,7 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
                     <div style={{ ...subhead, marginTop: ".15rem" }}>Counterintelligence cases</div>
                     {visibleForeign.length ? visibleForeign.map(renderCounterintelCase) : <div style={{ ...panel, padding: ".7rem", fontSize: ".66rem", color: "rgba(255,255,255,.34)" }}>No detected foreign agents currently require action.</div>}
                     {error && <div style={{ fontSize: ".66rem", color: "#fca5a5" }}>{error}</div>}
-                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#e9d5ff", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
+                    <button className="oh-tap-row" onClick={() => setChoosing(true)} disabled={full} style={{ width: "100%", marginTop: ".1rem", padding: ".65rem", borderRadius: 8, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", fontSize: ".72rem", fontWeight: 750, cursor: full ? "not-allowed" : "pointer", fontFamily: "sans-serif", opacity: full ? .5 : 1 }}>♟ Deploy a network</button>
                 </div>
             )}
 
@@ -3739,7 +3738,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 <div data-diplomacy-workspace-header="modern" style={{ padding: isTouch ? ".35rem .85rem .3rem" : ".7rem .85rem .65rem", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}>
                     <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: ".75rem" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: ".55rem", minWidth: 0 }}>
-                            <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid rgba(167,139,250,.35)", background: "rgba(139,92,246,.16)", color: "#ddd6fe", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
+                            <div aria-hidden="true" style={{ width: "1.65rem", height: "1.65rem", borderRadius: 7, border: "1px solid var(--oh-grey-border-strong)", background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><WorkspaceTabIcon type="contacts" size={15} /></div>
                             <div style={{ minWidth: 0 }}>
                                 <div style={{ fontSize: ".98rem", fontWeight: 800, lineHeight: 1.1 }}>Diplomacy</div>
                                 <div style={{ marginTop: ".13rem", fontSize: ".56rem", color: "rgba(255,255,255,.32)" }}>Conversations, institutions and statecraft</div>
@@ -3757,7 +3756,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                             ["institutions", "institutions", "Institutions", institutionUnreadCount],
                             ...(espionageOn ? [["spy", "intelligence", "Intelligence", 0]] : []),
                         ].map(([key, iconType, label, count]) => (
-                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "rgba(167,139,250,0.45)" : "rgba(255,255,255,.07)"), background: currentView === key ? "rgba(139,92,246,0.20)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
+                            <button key={key} className="oh-tap-row" onClick={() => setView(key)} style={{ display: "flex", alignItems: "center", gap: ".38rem", padding: ".34rem .68rem", borderRadius: "8px", fontSize: ".72rem", fontWeight: 750, cursor: "pointer", fontFamily: "sans-serif", border: "1px solid " + (currentView === key ? "var(--oh-grey-border-strong)" : "rgba(255,255,255,.07)"), background: currentView === key ? "var(--oh-grey-selected)" : "rgba(255,255,255,.025)", color: currentView === key ? "white" : "rgba(255,255,255,0.48)" }}>
                                 <span aria-hidden="true" style={{ display: "inline-flex", opacity: .8 }}><WorkspaceTabIcon type={iconType} size={13} /></span>
                                 <span>{label}</span>
                                 {Number(count) > 0 && <span style={{ minWidth: "1.05rem", height: "1.05rem", padding: "0 .25rem", borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", background: currentView === key ? "rgba(255,255,255,.14)" : "rgba(96,165,250,.16)", color: currentView === key ? "#fff" : "#93c5fd", fontSize: ".57rem", fontWeight: 800 }}>{count}</span>}
