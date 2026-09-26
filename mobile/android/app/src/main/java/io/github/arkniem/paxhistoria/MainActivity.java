@@ -3,10 +3,16 @@ package io.github.arkniem.paxhistoria;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.util.TypedValue;
+import android.view.ViewGroup;
 import android.webkit.WebView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -27,6 +33,35 @@ public class MainActivity extends BridgeActivity {
                 }
             });
         }
+        // Room for the keyboard. Android 15 draws every app edge to edge, and
+        // an edge-to-edge window no longer shrinks for the keyboard (the
+        // manifest's adjustResize still does that on older versions): the app
+        // is told how tall the keyboard is and has to make room itself.
+        // Capacitor's margins (capacitor.config.json adjustMarginsForEdgeToEdge)
+        // cover the status and navigation bars only, so the keyboard covered
+        // the bottom half of the page, the AI key box and the chat's composer
+        // with it, and nothing moved. These are the same margins with the
+        // keyboard's height at the bottom while it is up, so the page shrinks
+        // above it as the website does (index.html interactive-widget).
+        if (webView != null && edgeToEdgeMargins()) {
+            ViewCompat.setOnApplyWindowInsetsListener(webView, (view, insets) -> {
+                Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+                Insets keyboard = insets.getInsets(WindowInsetsCompat.Type.ime());
+                int bottom = Math.max(bars.bottom, keyboard.bottom);
+                ViewGroup.MarginLayoutParams margins = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
+                if (margins.leftMargin != bars.left || margins.topMargin != bars.top
+                        || margins.rightMargin != bars.right || margins.bottomMargin != bottom) {
+                    margins.leftMargin = bars.left;
+                    margins.topMargin = bars.top;
+                    margins.rightMargin = bars.right;
+                    margins.bottomMargin = bottom;
+                    view.setLayoutParams(margins);
+                }
+                // Don't pass window insets to children, as Capacitor's own does.
+                return WindowInsetsCompat.CONSUMED;
+            });
+            ViewCompat.requestApplyInsets(webView);
+        }
         // Back closes the panel on top. Capacitor leaves the Back button to its
         // App plugin, which this app does not ship, so without this every Back
         // left the game, whatever was open. Each panel the page opens adds a
@@ -46,5 +81,16 @@ public class MainActivity extends BridgeActivity {
                 setEnabled(true);
             }
         });
+    }
+
+    // Whether Capacitor keeps the page clear of the system bars itself: the
+    // test its CapacitorWebView.edgeToEdgeHandler makes.
+    private boolean edgeToEdgeMargins() {
+        String mode = getBridge().getConfig().adjustMarginsForEdgeToEdge();
+        if ("force".equals(mode)) return true;
+        if (!"auto".equals(mode) || Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return false;
+        TypedValue value = new TypedValue();
+        boolean optOut = getTheme().resolveAttribute(android.R.attr.windowOptOutEdgeToEdgeEnforcement, value, true);
+        return !(optOut && value.data != 0);
     }
 }

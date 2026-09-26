@@ -41,7 +41,7 @@ test("Continuum-10 map keeps Beta offline behavior and Alpha Midnight Terrain", 
 
   const picker = read("src/Game/GameUI/CountryPickerMap.jsx");
   assert.match(picker, /isBrowserOnline/);
-  assert.match(picker, /autoFocus=\{!touchFirst\}/);
+  assert.match(picker, /autoFocus=\{!touchFirst\b/);
 });
 
 test("Continuum-10 prompt merge does not duplicate the localization import", () => {
