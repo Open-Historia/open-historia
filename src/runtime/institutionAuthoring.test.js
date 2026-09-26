@@ -115,3 +115,41 @@ test("authoring preserves the dedicated uploaded-logo marker without embedding i
   assert.equal(result.institution.logoAsset, true);
   assert.equal(result.institution.logoUrl, "");
 });
+
+test("scenario institution authoring rejects members that are not in the canonical scenario polity roster", () => {
+  const source = {
+    polityOverrides: {
+      Latvia: { name: "Latvia" },
+      Estonia: { name: "Estonia" },
+    },
+    ownerCodes: ["Latvia", "Estonia"],
+    institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  };
+  const result = upsertScenarioInstitution(source, {
+    name: "Baltic Council",
+    shortName: "BC",
+    kind: "regional_bloc",
+    membersText: "Latvia\nAtlantis",
+  });
+  assert.match(result.error, /Unknown institution member "Atlantis"/);
+  assert.equal(result.institution, null);
+});
+
+test("scenario institution authoring canonicalizes recognized polity aliases to stable scenario polity keys", () => {
+  const source = {
+    polityOverrides: {
+      ITA: { name: "Kingdom of Italy", aliases: ["Italy"] },
+      FRA: { name: "French Republic", aliases: ["France"] },
+    },
+    ownerCodes: ["ITA", "FRA"],
+    institutions: { schemaVersion: 1, ledgerVersion: 0, byId: {} },
+  };
+  const result = upsertScenarioInstitution(source, {
+    name: "Test Alliance",
+    shortName: "TA",
+    kind: "security_alliance",
+    membersText: "Italy\nFrench Republic",
+  });
+  assert.equal(result.error, "");
+  assert.deepEqual(result.institution.members.map((member) => member.polity).sort(), ["FRA", "ITA"]);
+});

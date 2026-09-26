@@ -6,6 +6,7 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { collectScenarioPoliticalPolities, createScenarioPolityResolver } from "./scenarioPolities.js";
 import { stableAsciiId } from "./stableId.js";
 
 const clean = (value) => String(value ?? "").trim();
@@ -66,6 +67,14 @@ export const validateInstitutionAuthoringDraft = (draft = {}, world = {}) => {
     return "Logo must be an http(s) URL, a normal image asset path, or a persistent raster image data URL.";
   }
 
+  const polityRows = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
+  if (polityRows.length) {
+    const polityKeys = new Set(polityRows.map((entry) => entry.polityKey));
+    const resolvePolity = createScenarioPolityResolver(world);
+    const invalidMember = uniqueText(draft.membersText).find((member) => !polityKeys.has(resolvePolity(member)));
+    if (invalidMember) return `Unknown institution member "${invalidMember}". Choose a polity from the scenario roster.`;
+  }
+
   const institutions = normalizeInstitutions(world?.institutions, world);
   const existing = institutions.byId?.[normalizedId];
   if (existing && !clean(draft.id)) {
@@ -96,8 +105,11 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   const id = clean(draft.id) ? institutionAuthoringId(draft.id) : institutionAuthoringId(draft.name);
   const existing = institutions.byId?.[id] || null;
-  const existingMembers = new Map((existing?.members || []).map((member) => [lower(member?.polity), member]));
-  const members = uniqueText(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
+  const polityRows = collectScenarioPoliticalPolities(world).filter((entry) => entry.active !== false);
+  const resolvePolity = createScenarioPolityResolver(world);
+  const canonicalizePolity = (value) => polityRows.length ? resolvePolity(value) : clean(value);
+  const existingMembers = new Map((existing?.members || []).map((member) => [lower(canonicalizePolity(member?.polity)), member]));
+  const members = uniqueText(draft.membersText).map((polity) => preserveMember(existingMembers, canonicalizePolity(polity)));
   const memberKeys = new Set(members.map((member) => lower(member.polity)));
   const leaders = (existing?.leaders || []).filter((polity) => memberKeys.has(lower(polity)));
 

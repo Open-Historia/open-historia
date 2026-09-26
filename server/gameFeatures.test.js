@@ -10,6 +10,7 @@ import {
   playerFocusOf,
   resolveFeatures,
   worldDirectionOf,
+  normalizeScriptedEvents,
 } from "./gameFeatures.js";
 
 // A feature this file is not about, at its defaults: a complete configuration
@@ -101,11 +102,97 @@ test("isFeatureEnabled and the idle diplomacy chance read the resolved configura
   assert.equal(idleDiplomacyChancePerMinute(null), 0);
 });
 
+test("legacy scripted-event text migrates to unconditional composable rules without changing its dated beat", () => {
+  const events = normalizeScriptedEvents(`
+    # comment
+    1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.
+  `);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].date, "1914-06-28");
+  assert.equal(events[0].text, "Archduke Franz Ferdinand is assassinated in Sarajevo.");
+  assert.deepEqual(events[0].trigger, { mode: "rules", operator: "all", conditions: [], percent: 100 });
+  assert.match(events[0].id, /^scripted-/);
+});
+
+test("CSE-v1 modes migrate into composable condition + chance rules", () => {
+  const events = normalizeScriptedEvents([
+    {
+      id: "curragh-incident",
+      date: "1914-03-21",
+      text: "Curragh officers refuse orders.",
+      trigger: {
+        mode: "conditional",
+        operator: "any",
+        conditions: [{ type: "polity_exists", polityId: "GBR" }],
+      },
+    },
+    {
+      id: "chance-event",
+      date: "1914-03-22",
+      text: "A chance event happens.",
+      trigger: { mode: "chance", percent: 40 },
+    },
+  ]);
+  assert.deepEqual(events[0].trigger, {
+    mode: "rules",
+    operator: "any",
+    conditions: [{ type: "polity_exists", polityId: "GBR" }],
+    percent: 100,
+  });
+  assert.deepEqual(events[1].trigger, {
+    mode: "rules",
+    operator: "all",
+    conditions: [],
+    percent: 40,
+  });
+});
+
+test("structured rules preserve threshold groups, chance and safe predicate fields", () => {
+  const [event] = normalizeScriptedEvents([{
+    id: "two-of-three",
+    date: "1914-03-21",
+    text: "Two of three prerequisites are enough.",
+    trigger: {
+      mode: "rules",
+      operator: "at_least",
+      requiredCount: 2,
+      percent: 50,
+      conditions: [
+        { type: "institution_member_status", institutionId: "triple-entente", polityId: "GBR", status: "observer" },
+        { type: "polity_subordinate_to", polityId: "SER", overlordId: "RUS", kind: "client" },
+        { type: "political_actor_exists", polityId: "GER" },
+      ],
+    },
+  }]);
+  assert.equal(event.id, "two-of-three");
+  assert.deepEqual(event.trigger, {
+    mode: "rules",
+    operator: "at_least",
+    requiredCount: 2,
+    conditions: [
+      { type: "institution_member_status", polityId: "GBR", institutionId: "triple-entente", status: "observer" },
+      { type: "polity_subordinate_to", polityId: "SER", overlordId: "RUS", kind: "client" },
+      { type: "political_actor_exists", polityId: "GER" },
+    ],
+    percent: 50,
+  });
+});
+
+test("a malformed old Conditional with no conditions remains fail-closed", () => {
+  const [event] = normalizeScriptedEvents([{
+    id: "broken-old-condition",
+    date: "1914-03-21",
+    text: "This must not become unconditional.",
+    trigger: { mode: "conditional", conditions: [] },
+  }]);
+  assert.deepEqual(event.trigger, { mode: "invalid" });
+});
+
 // ---- World direction: the director's settings ----
 
 test("world direction ships on, at the built-in pace, with the one-third floor checked and no priority rules", () => {
-  assert.deepEqual(featureDefaults().worldDirection, { enabled: true, eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: "", territoryTempo: 0 });
-  assert.deepEqual(worldDirectionOf(featureDefaults()), { eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: "", territoryTempo: 0 });
+  assert.deepEqual(featureDefaults().worldDirection, { enabled: true, eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: [], territoryTempo: 0 });
+  assert.deepEqual(worldDirectionOf(featureDefaults()), { eventPace: 100, worldShare: 35, priorityRules: "", scriptedEvents: [], territoryTempo: 0 });
 });
 
 test("its numbers are clamped to their range and rounded to whole percents", () => {
@@ -128,7 +215,7 @@ test("a game overrides the director field by field, and a blank rule follows the
   const scenario = { worldDirection: { eventPace: 60, worldShare: 50, priorityRules: "The Tsar survives." } };
   assert.deepEqual(normalizeFeatureOverrides({ worldDirection: { eventPace: 150, priorityRules: "" } }), { worldDirection: { eventPace: 150 } });
   const resolved = resolveFeatures(scenario, { worldDirection: { eventPace: 150, priorityRules: "  " } });
-  assert.deepEqual(worldDirectionOf(resolved), { eventPace: 150, worldShare: 50, priorityRules: "The Tsar survives.", scriptedEvents: "", territoryTempo: 0 });
+  assert.deepEqual(worldDirectionOf(resolved), { eventPace: 150, worldShare: 50, priorityRules: "The Tsar survives.", scriptedEvents: [], territoryTempo: 0 });
   const own = resolveFeatures(scenario, { worldDirection: { priorityRules: "The Tsar may fall." } });
   assert.equal(worldDirectionOf(own).priorityRules, "The Tsar may fall.");
 });

@@ -44,6 +44,7 @@ import FactionCreator from "./FactionCreator.jsx";
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+const PoliticalWorldAuthoringPanel = lazy(() => import("./PoliticalWorldAuthoringPanel.jsx"));
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
@@ -1591,6 +1592,18 @@ const EditorDrawer = ({
               onDetailsChange={onDetailsChange}
             />
           </Suspense>
+          <Suspense
+            fallback={
+              <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem", color: "rgba(255,255,255,0.6)", fontSize: "0.8rem" }}>
+                Loading manual Political World editor...
+              </div>
+            }
+          >
+            <PoliticalWorldAuthoringPanel
+              details={details}
+              onDetailsChange={onDetailsChange}
+            />
+          </Suspense>
           <InstitutionAuthoringPanel
             details={details}
             onDetailsChange={onDetailsChange}
@@ -1613,6 +1626,7 @@ const EditorDrawer = ({
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
+          world={details?.data?.world ?? {}}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle, fieldLabelStyle, inputStyle }}
         />

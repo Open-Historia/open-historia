@@ -86,12 +86,10 @@ export const FEATURE_DEFINITIONS = Object.freeze([
       }),
       Object.freeze({
         key: "scriptedEvents",
-        type: "text",
+        type: "scripted-events",
         label: "Scripted events",
-        maxLength: 8000,
-        rows: 8,
-        defaultValue: "",
-        description: "History that happens on its date whatever else the players do: one event per line, the date first (YYYY-MM-DD, a year before AD 1 with a leading minus), then what happens in your own words. The time skip that covers the date is asked to write it; if it does not, the engine writes it for you. \"1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.\"",
+        defaultValue: Object.freeze([]),
+        description: "Dated scenario-authored historical beats. Conditions are checked natively once on the event date, then an optional chance is rolled once. Match all, any, or at least N conditions; resolved outcomes never reroll. Eligible events are still guaranteed by the engine if the model omits them.",
       }),
       Object.freeze({
         key: "territoryTempo",
@@ -152,13 +150,188 @@ const readBoolean = (value) => {
   return null;
 };
 
-// A setting is a number unless it says `type: "text"`. Blank text is "not set":
+export const SCRIPTED_EVENT_TRIGGER_MODES = Object.freeze(["rules", "always", "chance", "conditional"]);
+export const SCRIPTED_EVENT_CONDITION_OPERATORS = Object.freeze(["all", "any", "at_least"]);
+// These are the predicates the authoring UI exposes today because their native
+// ledgers are already dependable enough to be scenario-writing contracts.
+// Legacy war predicates remain readable by the runtime for existing CSE-v1
+// content, but are intentionally not advertised until the war ledger is hardened.
+export const SCRIPTED_EVENT_CONDITION_TYPES = Object.freeze([
+  "polity_exists",
+  "polity_not_exists",
+  "political_actor_exists",
+  "political_actor_not_exists",
+  "institution_exists",
+  "institution_not_exists",
+  "institution_has_polity",
+  "institution_lacks_polity",
+  "institution_member_status",
+  "polity_subordinate_to",
+  "polity_not_subordinate_to",
+]);
+
+const scriptedEventDateKey = (iso) => {
+  const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(String(iso ?? "").trim());
+  if (!match) return null;
+  const value = Number(match[2]) * 10000 + Number(match[3]) * 100 + Number(match[4]);
+  return match[1] ? -value : value;
+};
+
+const scriptedEventHash = (value) => {
+  let hash = 2166136261;
+  const source = String(value ?? "");
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+};
+
+const scriptedEventId = (value, fallbackSeed) => {
+  const explicit = String(value ?? "").trim().toLowerCase()
+    .replace(/[^a-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return explicit || `scripted-${scriptedEventHash(fallbackSeed)}`;
+};
+
+const scriptedEventTitle = (body) => {
+  const text = String(body ?? "").replace(/\s+/g, " ").trim();
+  const sentence = /^(.{12,140}?[.!?])\s/.exec(`${text} `);
+  return (sentence ? sentence[1] : text).slice(0, 140).replace(/[.!?]$/, "");
+};
+
+const normalizeScriptedCondition = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const type = String(value.type ?? "").trim().toLowerCase();
+  if (!type) return null;
+  const out = { type: type.slice(0, 80) };
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "status", "kind"]) {
+    const token = String(value[key] ?? "").trim().slice(0, 160);
+    if (token) out[key] = token;
+  }
+  return out;
+};
+
+const scriptedEventPercent = (value, fallback = 100) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : fallback;
+};
+
+const normalizeScriptedRuleGroup = (source) => {
+  const conditions = (Array.isArray(source.conditions) ? source.conditions : [])
+    .map(normalizeScriptedCondition)
+    .filter(Boolean)
+    .slice(0, 24);
+  const rawOperator = String(source.operator ?? "all").trim().toLowerCase().replace(/-/g, "_");
+  const operator = SCRIPTED_EVENT_CONDITION_OPERATORS.includes(rawOperator) ? rawOperator : "all";
+  const requested = Number(source.requiredCount ?? source.minimum ?? 1);
+  const requiredCount = conditions.length
+    ? Math.max(1, Math.min(conditions.length, Number.isFinite(requested) ? Math.trunc(requested) : 1))
+    : 0;
+  return {
+    operator,
+    ...(operator === "at_least" ? { requiredCount } : {}),
+    conditions,
+  };
+};
+
+const normalizeScriptedTrigger = (value) => {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const mode = String(source.mode ?? "always").trim().toLowerCase();
+
+  if (mode === "rules") {
+    return {
+      mode: "rules",
+      ...normalizeScriptedRuleGroup(source),
+      percent: scriptedEventPercent(source.percent ?? source.chancePercent, 100),
+    };
+  }
+
+  // CSE v1 compatibility. Old modes are normalized into the composable rules
+  // contract on read/save, so existing scenarios keep their behavior while the
+  // authoring model no longer needs mutually-exclusive Always/Chance/Conditional.
+  if (mode === "chance") {
+    return {
+      mode: "rules",
+      operator: "all",
+      conditions: [],
+      percent: scriptedEventPercent(source.percent, 50),
+    };
+  }
+  if (mode === "conditional") {
+    const group = normalizeScriptedRuleGroup(source);
+    // A malformed old Conditional with no conditions used to fail closed.
+    // Preserve that rather than silently turning it into an unconditional event.
+    if (!group.conditions.length) return { mode: "invalid" };
+    return { mode: "rules", ...group, percent: 100 };
+  }
+  if (mode === "always" || !source.mode) {
+    return { mode: "rules", operator: "all", conditions: [], percent: 100 };
+  }
+
+  // Unknown trigger modes survive normalization as invalid rather than falling
+  // through to an unconditional event. The runtime fails closed.
+  return { mode: mode.slice(0, 32) || "invalid" };
+};
+
+export const normalizeScriptedEvents = (value) => {
+  let source = value;
+  if (typeof source === "string") {
+    source = source.split(/\r?\n/).map((rawLine, index) => {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) return null;
+      const match = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/.exec(line);
+      if (!match || scriptedEventDateKey(match[1]) === null) return null;
+      const body = String(match[2] ?? "").trim();
+      if (!body) return null;
+      return {
+        id: scriptedEventId("", `${match[1]}|${body}|${index}`),
+        date: match[1],
+        title: scriptedEventTitle(body),
+        text: body,
+        trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
+      };
+    }).filter(Boolean);
+  }
+  if (!Array.isArray(source)) return [];
+
+  const ids = new Map();
+  const events = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const entry = source[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const date = String(entry.date ?? "").trim();
+    const body = String(entry.text ?? entry.description ?? "").replace(/\r\n/g, "\n").trim().slice(0, 4000);
+    if (scriptedEventDateKey(date) === null || !body) continue;
+    const baseId = scriptedEventId(entry.id, `${date}|${body}|${index}`);
+    const seen = ids.get(baseId) || 0;
+    ids.set(baseId, seen + 1);
+    const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
+    const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
+    events.push({
+      id,
+      date,
+      title,
+      text: body,
+      trigger: normalizeScriptedTrigger(entry.trigger),
+    });
+  }
+  return events.sort((left, right) => scriptedEventDateKey(left.date) - scriptedEventDateKey(right.date));
+};
+
+// A setting is a number unless it says otherwise. Blank text is "not set":
 // a scenario's blank is its default, and a game's blank follows the scenario.
 const readSetting = (value, setting) => {
   // A choice is one of the values the setting lists. Anything else — a value
   // from an older build, a typo in an imported scenario — is "not set", so the
   // scenario's default (or the built-in one) stands rather than a level the
   // engine cannot read.
+  if (setting.type === "scripted-events") {
+    if (typeof value === "string" && !value.trim()) return null;
+    if (!Array.isArray(value) && typeof value !== "string") return null;
+    return normalizeScriptedEvents(value);
+  }
   if (setting.type === "choice") {
     const text = String(value ?? "").trim().toLowerCase();
     return setting.options.some((option) => option.value === text) ? text : null;
@@ -242,7 +415,7 @@ export const worldDirectionOf = (features) => {
     eventPace: percent(direction.eventPace, 100),
     worldShare: percent(direction.worldShare, 35),
     priorityRules: typeof direction.priorityRules === "string" ? direction.priorityRules.trim() : "",
-    scriptedEvents: typeof direction.scriptedEvents === "string" ? direction.scriptedEvents.trim() : "",
+    scriptedEvents: normalizeScriptedEvents(direction.scriptedEvents),
     territoryTempo: percent(direction.territoryTempo, 0),
   };
 };

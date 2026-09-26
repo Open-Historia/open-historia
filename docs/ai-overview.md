@@ -697,3 +697,9 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 | `appendLookupRound`, `geminiContentsFromHistory`, `openAiMessagesFromHistory`, `anthropicMessagesFromHistory`, `lookupCallsFrom*` | `toolTurns.js` | A lookup round stored once, rendered and read per provider. |
 | `simulateTimelineJump`, `applyGameMasterCommand`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |
 | `getGameplayTool`, `validateGameplayPayload` | `gameplaySchemas.js` | taskKey → tool, payload schema check. See [AI schemas](ai-schemas.md). |
+
+### Composable scripted-event rules
+
+Scripted-event authoring separates eligibility from probability. Each dated event may have no conditions or a shallow condition group using `all`, `any`, or `at_least` (with `requiredCount`), plus a `percent` chance. No conditions means unconditional eligibility. Conditions are evaluated from canonical state once when the date is due; only if they pass is the chance rolled. The accepted outcome is persisted exactly once. Existing CSE-v1 `always`, `chance`, and `conditional` triggers normalize into this `rules` contract without changing valid behavior.
+
+The authoring UI currently exposes only predicates backed by canonical state we trust enough for scenario contracts: polity existence, Political World actor existence, institution existence/membership/status, and puppet/subordination relationships. Legacy war predicates remain readable for compatibility but are deliberately hidden from authoring until the war ledger is hardened. Human-facing pickers store canonical IDs underneath and allow an explicit unresolved/custom token only for advanced future-entity authoring.
