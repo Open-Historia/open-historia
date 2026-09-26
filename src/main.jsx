@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { configureMapRuntime } from "./runtime/assets.js";
 import { installAppHeight } from "./runtime/mobileUi.js";
+import { installNativeBackgroundPause } from "./runtime/native/backgroundPause.js";
+import { isGenerating } from "./Game/AI/simulationStatus.js";
 import { startTranslator } from "./runtime/translator.js";
 import {
     installDebugLogCapture,
@@ -41,6 +43,9 @@ const mount = () => {
     // Live-translates the UI when a non-English language is set in Settings.
     startTranslator();
     registerServiceWorker();
+    // The Android app rests in the background once nothing is being generated
+    // (runtime/native/backgroundPause.js).
+    if (import.meta.env.VITE_OH_NATIVE) installNativeBackgroundPause(isGenerating);
 };
 
 // Before anything else runs, so the diagnostics log in Settings covers the whole
