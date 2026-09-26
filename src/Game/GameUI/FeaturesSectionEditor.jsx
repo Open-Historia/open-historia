@@ -14,7 +14,7 @@ import {
 // default" state that keeps following the scenario, including changes made to
 // the scenario later. `features` is therefore the complete object for a
 // scenario and the sparse override object for a game.
-const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, styles }) => {
+const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChange, styles }) => {
   const isGame = kind === "game";
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
@@ -110,6 +110,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                             scenarioValue={scenarioEvents}
                             isGame={isGame}
                             overridden={!isGame || overridden}
+                            world={world}
                             styles={styles}
                             onChange={(next) => setFeature(definition.key, { [setting.key]: next })}
                             onUseScenarioDefault={() => setFeature(definition.key, { [setting.key]: undefined })}

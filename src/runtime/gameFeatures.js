@@ -17,6 +17,7 @@ export {
   normalizeFeatureOverrides,
   normalizeFeatureSettings,
   normalizeScriptedEvents,
+  SCRIPTED_EVENT_CONDITION_OPERATORS,
   SCRIPTED_EVENT_CONDITION_TYPES,
   SCRIPTED_EVENT_TRIGGER_MODES,
   resolveFeatures,

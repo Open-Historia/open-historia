@@ -698,16 +698,8 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 | `simulateTimelineJump`, `applyGameMasterCommand`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |
 | `getGameplayTool`, `validateGameplayPayload` | `gameplaySchemas.js` | taskKey → tool, payload schema check. See [AI schemas](ai-schemas.md). |
 
-## Conditional scripted events
+### Composable scripted-event rules
 
-`worldDirection.scriptedEvents` is a structured list. Legacy one-line-per-date text is normalized into `Always` entries on read, preserving the old behavior. Each entry has a stable `id`, `date`, author text, and a trigger:
+Scripted-event authoring separates eligibility from probability. Each dated event may have no conditions or a shallow condition group using `all`, `any`, or `at_least` (with `requiredCount`), plus a `percent` chance. No conditions means unconditional eligibility. Conditions are evaluated from canonical state once when the date is due; only if they pass is the chance rolled. The accepted outcome is persisted exactly once. Existing CSE-v1 `always`, `chance`, and `conditional` triggers normalize into this `rules` contract without changing valid behavior.
 
-- `always`: due on its date exactly as the original scripted-event system.
-- `chance`: one percentage roll when the dated event becomes due.
-- `conditional`: a shallow `all`/`any` group of native predicates evaluated against canonical state.
-
-The time-skip path plans trigger outcomes before the model call, but does not persist them until that segment is accepted. A held segment keeps its pending plan so Retry cannot reroll Chance. An auto jump that stops before the event date commits nothing for that event. Accepted outcomes live in `game.scriptedEventState`, so reloads and later skips never reroll or re-evaluate a resolved event.
-
-Predicates are native and fail closed. The first registry covers exact canonical polity existence, active-war ids, institution ids, and institution membership rows. Political-person identity/office and region-control predicates are deliberately not inferred from prose or names; they should be added only when their canonical identity semantics are explicit.
-
-Only eligible events reach `buildScriptedEventsInstruction`. `ensureScriptedEvents` retains its old guarantee: if the model omits an eligible scripted event, the engine writes it in the author's words.
+The authoring UI currently exposes only predicates backed by canonical state we trust enough for scenario contracts: polity existence, Political World actor existence, institution existence/membership/status, and puppet/subordination relationships. Legacy war predicates remain readable for compatibility but are deliberately hidden from authoring until the war ledger is hardened. Human-facing pickers store canonical IDs underneath and allow an explicit unresolved/custom token only for advanced future-entity authoring.

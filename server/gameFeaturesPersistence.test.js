@@ -137,3 +137,44 @@ test("bundles carry the configuration, and a game cloned from a game keeps its o
   assert.deepEqual(result.cloned, { espionage: { enabled: false } });
   assert.deepEqual(result.fromScenario, {});
 });
+
+test("composable scripted-event rules survive scenario persistence with canonical ids intact", () => {
+  const root = buildDataDir();
+  const result = runStore(root, `
+    store.updateScenario("hand-drawn", {
+      features: {
+        worldDirection: {
+          scriptedEvents: [{
+            id: "two-of-three",
+            date: "2030-03-01",
+            text: "A conditional event.",
+            trigger: {
+              mode: "rules",
+              operator: "at_least",
+              requiredCount: 2,
+              percent: 50,
+              conditions: [
+                { type: "polity_exists", polityId: "Testland" },
+                { type: "institution_member_status", institutionId: "league", polityId: "Testland", status: "observer" },
+                { type: "polity_subordinate_to", polityId: "Testland", overlordId: "Overlord", kind: "client" },
+              ],
+            },
+          }],
+        },
+      },
+    });
+    ${report(`store.getScenarioDetails("hand-drawn").scenario.features.worldDirection.scriptedEvents`)}
+  `);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].trigger, {
+    mode: "rules",
+    operator: "at_least",
+    requiredCount: 2,
+    conditions: [
+      { type: "polity_exists", polityId: "Testland" },
+      { type: "institution_member_status", polityId: "Testland", institutionId: "league", status: "observer" },
+      { type: "polity_subordinate_to", polityId: "Testland", overlordId: "Overlord", kind: "client" },
+    ],
+    percent: 50,
+  });
+});

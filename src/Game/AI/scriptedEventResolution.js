@@ -19,12 +19,21 @@ const activePolityExists = (world, id) => {
   if (Object.prototype.hasOwnProperty.call(overrides, key)) {
     return lower(overrides[key]?.status) !== "dissolved";
   }
+  if (array(world?.ownerCodes).some((entry) => text(entry) === key)) return true;
   if (Object.prototype.hasOwnProperty.call(record(world?.politicalActors?.byPolity), key)) return true;
   if (Object.prototype.hasOwnProperty.call(record(world?.countryStats), key)) return true;
   if (Object.prototype.hasOwnProperty.call(record(world?.powerStatus?.byPolity), key)) return true;
   return false;
 };
 
+const politicalActorExists = (world, id) => {
+  const key = text(id);
+  if (!key) return false;
+  return Object.prototype.hasOwnProperty.call(record(world?.politicalActors?.byPolity), key);
+};
+
+// Legacy CSE-v1 compatibility only. New authoring deliberately hides war
+// predicates until the canonical war ledger is hardened.
 const warIsActive = (world, id) => {
   const key = text(id);
   if (!key) return false;
@@ -47,11 +56,35 @@ const institutionExists = (world, id) => {
   return Boolean(institution) && lower(institution?.status || "active") !== "dissolved";
 };
 
-const institutionHasPolity = (world, institutionId, polityId) => {
+const institutionMember = (world, institutionId, polityId) => {
   const institution = institutionById(world, institutionId);
   const polity = text(polityId);
-  if (!institution || lower(institution?.status || "active") === "dissolved" || !polity) return false;
-  return array(institution.members).some((member) => text(member?.polity) === polity);
+  if (!institution || lower(institution?.status || "active") === "dissolved" || !polity) return null;
+  return array(institution.members).find((member) => text(member?.polity) === polity) || null;
+};
+
+const institutionHasPolity = (world, institutionId, polityId) => Boolean(
+  institutionMember(world, institutionId, polityId),
+);
+
+const institutionMemberHasStatus = (world, institutionId, polityId, expectedStatus) => {
+  const member = institutionMember(world, institutionId, polityId);
+  const status = lower(expectedStatus);
+  if (!member || !status) return false;
+  return lower(member?.status || "member") === status;
+};
+
+const subordinationExists = (world, polityId, overlordId, expectedKind = "") => {
+  const polity = text(polityId);
+  const overlord = text(overlordId);
+  const kind = lower(expectedKind);
+  if (!polity || !overlord) return false;
+  return array(world?.puppets).some((row) => (
+    text(row?.puppet) === polity
+    && text(row?.overlord) === overlord
+    && lower(row?.status || "active") === "active"
+    && (!kind || lower(row?.kind || "client") === kind)
+  ));
 };
 
 export const normalizeScriptedEventState = (value) => {
@@ -88,6 +121,15 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}) => {
     if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
     return { matched: !activePolityExists(world, condition.polityId), reason: "" };
   }
+  case "political_actor_exists": {
+    if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
+    return { matched: politicalActorExists(world, condition.polityId), reason: "" };
+  }
+  case "political_actor_not_exists": {
+    if (!text(condition.polityId)) return { matched: false, reason: "missing polity id" };
+    if (!activePolityExists(world, condition.polityId)) return { matched: false, reason: "polity does not exist" };
+    return { matched: !politicalActorExists(world, condition.polityId), reason: "" };
+  }
   case "war_active": {
     if (!text(condition.warId)) return { matched: false, reason: "missing war id" };
     return { matched: warIsActive(world, condition.warId), reason: "" };
@@ -117,7 +159,40 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}) => {
     if (!institutionExists(world, condition.institutionId)) {
       return { matched: false, reason: "institution does not exist" };
     }
+    if (!activePolityExists(world, condition.polityId)) {
+      return { matched: false, reason: "polity does not exist" };
+    }
     return { matched: !institutionHasPolity(world, condition.institutionId, condition.polityId), reason: "" };
+  }
+  case "institution_member_status": {
+    if (!text(condition.institutionId) || !text(condition.polityId) || !text(condition.status)) {
+      return { matched: false, reason: "missing institution, polity or status" };
+    }
+    return {
+      matched: institutionMemberHasStatus(world, condition.institutionId, condition.polityId, condition.status),
+      reason: "",
+    };
+  }
+  case "polity_subordinate_to": {
+    if (!text(condition.polityId) || !text(condition.overlordId)) {
+      return { matched: false, reason: "missing subordinate or overlord polity id" };
+    }
+    return {
+      matched: subordinationExists(world, condition.polityId, condition.overlordId, condition.kind),
+      reason: "",
+    };
+  }
+  case "polity_not_subordinate_to": {
+    if (!text(condition.polityId) || !text(condition.overlordId)) {
+      return { matched: false, reason: "missing subordinate or overlord polity id" };
+    }
+    if (!activePolityExists(world, condition.polityId) || !activePolityExists(world, condition.overlordId)) {
+      return { matched: false, reason: "subordinate or overlord polity does not exist" };
+    }
+    return {
+      matched: !subordinationExists(world, condition.polityId, condition.overlordId, condition.kind),
+      reason: "",
+    };
   }
   default:
     return { matched: false, reason: type ? `unsupported condition ${type}` : "missing condition type" };
@@ -127,11 +202,21 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}) => {
 export const evaluateScriptedEventConditions = (triggerInput, world = {}) => {
   const trigger = record(triggerInput);
   const conditions = array(trigger.conditions);
-  if (!conditions.length) return { matched: false, results: [], reason: "no conditions" };
+  if (!conditions.length) return { matched: false, matchedCount: 0, requiredCount: 0, results: [], reason: "no conditions" };
   const results = conditions.map((condition) => evaluateScriptedEventCondition(condition, world));
-  const operator = lower(trigger.operator) === "any" ? "any" : "all";
+  const matchedCount = results.filter((entry) => entry.matched).length;
+  const rawOperator = lower(trigger.operator).replace(/-/g, "_");
+  const operator = ["all", "any", "at_least"].includes(rawOperator) ? rawOperator : "all";
+  const requested = Number(trigger.requiredCount ?? trigger.minimum ?? 1);
+  const requiredCount = operator === "all"
+    ? results.length
+    : operator === "any"
+      ? 1
+      : Math.max(1, Math.min(results.length, Number.isFinite(requested) ? Math.trunc(requested) : 1));
   return {
-    matched: operator === "any" ? results.some((entry) => entry.matched) : results.every((entry) => entry.matched),
+    matched: matchedCount >= requiredCount,
+    matchedCount,
+    requiredCount,
     results,
     reason: "",
   };
@@ -140,6 +225,36 @@ export const evaluateScriptedEventConditions = (triggerInput, world = {}) => {
 const resolutionFor = (event, world, random) => {
   const trigger = record(event?.trigger);
   const mode = lower(trigger.mode || "always");
+
+  if (mode === "rules") {
+    const conditions = array(trigger.conditions);
+    const evaluation = conditions.length
+      ? evaluateScriptedEventConditions(trigger, world)
+      : { matched: true, matchedCount: 0, requiredCount: 0, results: [], reason: "" };
+    const percent = Math.max(0, Math.min(100, Number.isFinite(Number(trigger.percent)) ? Number(trigger.percent) : 100));
+    if (!evaluation.matched) {
+      return {
+        outcome: "skipped",
+        mode,
+        date: text(event?.date),
+        percent,
+        reason: "conditions not met",
+        event,
+      };
+    }
+    if (percent >= 100) return { outcome: "fired", mode, date: text(event?.date), percent, event };
+    if (percent <= 0) return { outcome: "skipped", mode, date: text(event?.date), percent, event };
+    const sample = Number(random?.());
+    const roll = Number.isFinite(sample) ? Math.max(0, Math.min(0.999999999999, sample)) : 0.5;
+    return {
+      outcome: roll * 100 < percent ? "fired" : "skipped",
+      mode,
+      date: text(event?.date),
+      roll,
+      percent,
+      event,
+    };
+  }
 
   if (mode === "always") {
     return { outcome: "fired", mode, date: text(event?.date), event };

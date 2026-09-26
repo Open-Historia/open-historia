@@ -1,31 +1,39 @@
 /*! Open Historia — structured scenario scripted-event authoring © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React from "react";
+import React, { useMemo } from "react";
+import { INSTITUTION_MEMBER_STATUSES } from "../../runtime/institutions.js";
+import { PUPPET_KINDS, puppetKindLabel } from "../../runtime/puppets.js";
+import {
+  scriptedEventInstitutionOptions,
+  scriptedEventPickerLabel,
+  scriptedEventPickerValue,
+  scriptedEventPolityOptions,
+} from "./scriptedEventAuthoring.js";
 
 const clean = (value) => String(value ?? "").trim();
 const array = (value) => Array.isArray(value) ? value : [];
 
-const CONDITION_TYPES = [
-  "polity_exists",
-  "polity_not_exists",
-  "war_active",
-  "war_not_active",
-  "institution_exists",
-  "institution_not_exists",
-  "institution_has_polity",
-  "institution_lacks_polity",
+const CONDITION_DEFINITIONS = [
+  { type: "polity_exists", label: "Polity exists", fields: ["polityId"] },
+  { type: "polity_not_exists", label: "Polity does not exist", fields: ["polityId"] },
+  { type: "political_actor_exists", label: "Political World exists for polity", fields: ["polityId"] },
+  { type: "political_actor_not_exists", label: "Political World does not exist for polity", fields: ["polityId"] },
+  { type: "institution_exists", label: "Institution exists", fields: ["institutionId"] },
+  { type: "institution_not_exists", label: "Institution does not exist", fields: ["institutionId"] },
+  { type: "institution_has_polity", label: "Polity is in institution", fields: ["institutionId", "polityId"] },
+  { type: "institution_lacks_polity", label: "Polity is not in institution", fields: ["institutionId", "polityId"] },
+  { type: "institution_member_status", label: "Polity has institution status", fields: ["institutionId", "polityId", "status"] },
+  { type: "polity_subordinate_to", label: "Polity is subordinate to polity", fields: ["polityId", "overlordId", "kind"] },
+  { type: "polity_not_subordinate_to", label: "Polity is not subordinate to polity", fields: ["polityId", "overlordId", "kind"] },
 ];
 
-const conditionLabel = (value) => {
-  const words = String(value ?? "").replace(/_/g, " ").trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : "";
-};
+const CONDITION_BY_TYPE = Object.fromEntries(CONDITION_DEFINITIONS.map((entry) => [entry.type, entry]));
 
 const makeId = () => `scripted-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const makeEvent = () => ({
   id: makeId(),
   date: "",
   text: "",
-  trigger: { mode: "always" },
+  trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
 });
 const makeCondition = () => ({ type: "polity_exists", polityId: "" });
 
@@ -36,30 +44,86 @@ const buttonStyle = (styles, extra = {}) => ({
   ...extra,
 });
 
-const optionStyle = {
-  backgroundColor: "#ffffff",
-  color: "#111827",
-};
-
-const fieldStyle = (styles, extra = {}) => ({
+const selectStyle = (styles, extra = {}) => ({
   ...styles.inputStyle,
   boxSizing: "border-box",
+  colorScheme: "dark",
   minWidth: 0,
-  width: "100%",
   ...extra,
 });
+
+const optionStyle = {
+  backgroundColor: "#1a1b1f",
+  color: "#f8fafc",
+};
+
+const flexibleInputStyle = (styles, extra = {}) => ({
+  ...styles.inputStyle,
+  boxSizing: "border-box",
+  flex: "1 1 11rem",
+  minWidth: 0,
+  ...extra,
+});
+
+const titleCase = (value) => clean(value).replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+
+const rulesFromTrigger = (triggerInput) => {
+  const trigger = triggerInput && typeof triggerInput === "object" && !Array.isArray(triggerInput) ? triggerInput : {};
+  const mode = clean(trigger.mode).toLowerCase() || "always";
+  if (mode === "rules") {
+    return {
+      mode: "rules",
+      operator: ["all", "any", "at_least"].includes(trigger.operator) ? trigger.operator : "all",
+      requiredCount: Number.isFinite(Number(trigger.requiredCount)) ? Math.trunc(Number(trigger.requiredCount)) : 1,
+      conditions: array(trigger.conditions),
+      percent: Number.isFinite(Number(trigger.percent)) ? Math.max(0, Math.min(100, Number(trigger.percent))) : 100,
+    };
+  }
+  if (mode === "chance") return { mode: "rules", operator: "all", requiredCount: 0, conditions: [], percent: Number.isFinite(Number(trigger.percent)) ? Math.max(0, Math.min(100, Number(trigger.percent))) : 50 };
+  if (mode === "conditional") return { mode: "rules", operator: trigger.operator === "any" ? "any" : "all", requiredCount: 1, conditions: array(trigger.conditions), percent: 100 };
+  return { mode: "rules", operator: "all", requiredCount: 0, conditions: [], percent: 100 };
+};
+
+const EntityField = ({ ariaLabel, id, options, placeholder, styles, value, onChange }) => {
+  const shown = scriptedEventPickerLabel(value, options);
+  const unresolved = Boolean(clean(value)) && !options.some((option) => option.id === value);
+  return (
+    <div style={{ flex: "1 1 10rem", minWidth: 0 }}>
+      <input
+        aria-label={ariaLabel}
+        list={id}
+        placeholder={placeholder}
+        style={{ ...flexibleInputStyle(styles), width: "100%" }}
+        title="Type to search by name. An exact canonical ID may also be entered for an advanced/future reference."
+        value={shown}
+        onChange={(event) => onChange(scriptedEventPickerValue(event.target.value, options))}
+      />
+      <datalist id={id}>
+        {options.map((option) => <option key={option.id} label={option.id} value={option.label} />)}
+      </datalist>
+      {unresolved && (
+        <div style={{ color: "rgba(251,191,36,0.78)", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.18rem" }}>
+          Custom/unresolved canonical ID: {value}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const ScriptedEventsEditor = ({
   value,
   scenarioValue = [],
   isGame = false,
   overridden = true,
+  world = {},
   onChange,
   onUseScenarioDefault,
   onStartOverride,
   styles,
 }) => {
   const events = array(value);
+  const polityOptions = useMemo(() => scriptedEventPolityOptions(world), [world]);
+  const institutionOptions = useMemo(() => scriptedEventInstitutionOptions(world), [world]);
 
   if (isGame && !overridden) {
     return (
@@ -80,27 +144,36 @@ const ScriptedEventsEditor = ({
     onChange(copy);
   };
   const patchEvent = (index, patch) => replaceAt(index, { ...events[index], ...patch });
-  const patchTrigger = (index, patch) => {
-    const current = events[index] || {};
-    patchEvent(index, { trigger: { ...(current.trigger || { mode: "always" }), ...patch } });
-  };
-  const setMode = (index, mode) => {
-    if (mode === "chance") patchEvent(index, { trigger: { mode, percent: 50 } });
-    else if (mode === "conditional") patchEvent(index, { trigger: { mode, operator: "all", conditions: [] } });
-    else patchEvent(index, { trigger: { mode: "always" } });
+  const patchRules = (index, patch) => {
+    const rules = rulesFromTrigger(events[index]?.trigger);
+    patchEvent(index, { trigger: { ...rules, ...patch, mode: "rules" } });
   };
   const patchCondition = (eventIndex, conditionIndex, patch) => {
-    const trigger = events[eventIndex]?.trigger || {};
-    const conditions = [...array(trigger.conditions)];
+    const rules = rulesFromTrigger(events[eventIndex]?.trigger);
+    const conditions = [...array(rules.conditions)];
     conditions[conditionIndex] = { ...(conditions[conditionIndex] || {}), ...patch };
-    patchTrigger(eventIndex, { conditions });
+    patchRules(eventIndex, { conditions });
+  };
+  const setConditionType = (eventIndex, conditionIndex, type) => {
+    const rules = rulesFromTrigger(events[eventIndex]?.trigger);
+    const current = array(rules.conditions)[conditionIndex] || {};
+    const definition = CONDITION_BY_TYPE[type] || CONDITION_BY_TYPE.polity_exists;
+    const next = { type };
+    for (const field of definition.fields) {
+      if (field === "status") next.status = clean(current.status) || "member";
+      else if (field === "kind") next.kind = clean(current.kind);
+      else next[field] = clean(current[field]);
+    }
+    const conditions = [...array(rules.conditions)];
+    conditions[conditionIndex] = next;
+    patchRules(eventIndex, { conditions });
   };
 
   return (
     <div data-no-translate style={{ minWidth: 0 }}>
       <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", justifyContent: "space-between", minWidth: 0 }}>
-        <div style={{ color: "rgba(255,255,255,0.55)", flex: "1 1 18rem", fontSize: "0.74rem", lineHeight: 1.45, minWidth: 0 }}>
-          Dated historical beats. Always events preserve the old behavior; Chance and Conditional events resolve once when their date is reached.
+        <div style={{ color: "rgba(255,255,255,0.55)", flex: "1 1 16rem", fontSize: "0.74rem", lineHeight: 1.45, minWidth: 0 }}>
+          Dated historical beats. Conditions are checked once when due; if they pass, the chance is rolled once. No conditions with 100% chance is the old Always behavior.
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
           {isGame && overridden && (
@@ -121,27 +194,25 @@ const ScriptedEventsEditor = ({
           </div>
         )}
         {events.map((event, index) => {
-          const trigger = event?.trigger || { mode: "always" };
-          const mode = ["always", "chance", "conditional"].includes(trigger.mode) ? trigger.mode : "always";
+          const rules = rulesFromTrigger(event?.trigger);
+          const conditions = array(rules.conditions);
+          const requiredCount = conditions.length
+            ? Math.max(1, Math.min(conditions.length, Number.isFinite(Number(rules.requiredCount)) ? Math.trunc(Number(rules.requiredCount)) : 1))
+            : 0;
           return (
             <div key={event?.id || index} style={{ background: "rgba(0,0,0,0.16)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "12px", minWidth: 0, padding: "0.65rem" }}>
-              <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", minWidth: 0 }}>
+              <div style={{ alignItems: "stretch", display: "flex", flexWrap: "wrap", gap: "0.45rem", minWidth: 0 }}>
                 <input
                   aria-label="Event date"
                   placeholder="YYYY-MM-DD"
-                  style={{ ...fieldStyle(styles), flex: "1 1 11rem" }}
+                  style={{ ...flexibleInputStyle(styles), maxWidth: "15rem" }}
                   value={event?.date || ""}
                   onChange={(e) => patchEvent(index, { date: e.target.value })}
                 />
-                <select aria-label="Trigger" style={{ ...fieldStyle(styles, { flex: "1 1 11rem" }) }} value={mode} onChange={(e) => setMode(index, e.target.value)}>
-                  <option value="always" style={optionStyle}>Always</option>
-                  <option value="chance" style={optionStyle}>Chance</option>
-                  <option value="conditional" style={optionStyle}>Conditional</option>
-                </select>
                 <button
                   type="button"
                   className="oh-tap-row"
-                  style={buttonStyle(styles, { color: "#fecaca", flexShrink: 0, whiteSpace: "nowrap" })}
+                  style={buttonStyle(styles, { color: "#fecaca", flex: "0 0 auto", marginLeft: "auto" })}
                   onClick={() => onChange(events.filter((_, row) => row !== index))}
                 >
                   Remove
@@ -154,107 +225,154 @@ const ScriptedEventsEditor = ({
                 rows={3}
                 maxLength={4000}
                 placeholder="What happens on this date?"
-                style={{ ...fieldStyle(styles, { fontFamily: "inherit", lineHeight: 1.45, marginTop: "0.45rem", minHeight: "4.5rem", resize: "vertical" }) }}
+                style={{ ...styles.inputStyle, boxSizing: "border-box", fontFamily: "inherit", lineHeight: 1.45, marginTop: "0.45rem", minHeight: "4.5rem", minWidth: 0, resize: "vertical", width: "100%" }}
                 value={event?.text || ""}
                 onChange={(e) => patchEvent(index, { text: e.target.value })}
               />
 
-              {mode === "chance" && (
-                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.45rem", minWidth: 0 }}>
-                  <span style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.76rem" }}>Chance</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
-                    style={{ ...fieldStyle(styles, { width: "6rem", flex: "0 0 6rem" }) }}
-                    value={Number.isFinite(Number(trigger.percent)) ? trigger.percent : 50}
-                    onChange={(e) => patchTrigger(index, { percent: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })}
-                  />
-                  <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem" }}>% - rolled once when due</span>
+              <div style={{ background: "rgba(255,255,255,0.025)", borderRadius: "9px", marginTop: "0.5rem", minWidth: 0, padding: "0.5rem" }}>
+                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", minWidth: 0 }}>
+                  <span style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.76rem", fontWeight: 700 }}>Conditions</span>
+                  <select
+                    aria-label="Condition match rule"
+                    style={selectStyle(styles, { flex: "0 1 auto", minWidth: "9rem", width: "auto" })}
+                    value={rules.operator}
+                    onChange={(e) => patchRules(index, { operator: e.target.value })}
+                  >
+                    <option style={optionStyle} value="all">All conditions</option>
+                    <option style={optionStyle} value="any">Any condition</option>
+                    <option style={optionStyle} value="at_least">At least</option>
+                  </select>
+                  {rules.operator === "at_least" && conditions.length > 0 && (
+                    <>
+                      <input
+                        aria-label="Required condition count"
+                        type="number"
+                        min="1"
+                        max={conditions.length}
+                        step="1"
+                        style={{ ...styles.inputStyle, boxSizing: "border-box", minWidth: 0, width: "4.5rem" }}
+                        value={requiredCount}
+                        onChange={(e) => patchRules(index, { requiredCount: Math.max(1, Math.min(conditions.length, Number(e.target.value) || 1)) })}
+                      />
+                      <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem" }}>of {conditions.length}</span>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="oh-tap-row"
+                    style={buttonStyle(styles)}
+                    onClick={() => patchRules(index, { conditions: [...conditions, makeCondition()] })}
+                  >
+                    + Add condition
+                  </button>
                 </div>
-              )}
 
-              {mode === "conditional" && (
-                <div style={{ background: "rgba(255,255,255,0.025)", borderRadius: "9px", marginTop: "0.5rem", minWidth: 0, padding: "0.5rem" }}>
-                  <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.4rem", minWidth: 0 }}>
-                    <span style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.76rem" }}>Match</span>
-                    <select
-                      style={{ ...fieldStyle(styles, { flex: "0 1 auto", width: "auto" }) }}
-                      value={trigger.operator === "any" ? "any" : "all"}
-                      onChange={(e) => patchTrigger(index, { operator: e.target.value })}
-                    >
-                      <option value="all" style={optionStyle}>All conditions</option>
-                      <option value="any" style={optionStyle}>Any condition</option>
-                    </select>
-                    <button
-                      type="button"
-                      className="oh-tap-row"
-                      style={buttonStyle(styles)}
-                      onClick={() => patchTrigger(index, { conditions: [...array(trigger.conditions), makeCondition()] })}
-                    >
-                      + Add condition
-                    </button>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.45rem", minWidth: 0 }}>
-                    {array(trigger.conditions).map((condition, conditionIndex) => {
-                      const type = clean(condition?.type) || "polity_exists";
-                      const needsPolity = ["polity_exists", "polity_not_exists", "institution_has_polity", "institution_lacks_polity"].includes(type);
-                      const needsWar = ["war_active", "war_not_active"].includes(type);
-                      const needsInstitution = ["institution_exists", "institution_not_exists", "institution_has_polity", "institution_lacks_polity"].includes(type);
-                      return (
-                        <div key={`${event?.id || index}-condition-${conditionIndex}`} style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.35rem", minWidth: 0 }}>
-                          <select style={{ ...fieldStyle(styles, { flex: "1.3 1 12rem" }) }} value={type} onChange={(e) => {
-                            const nextType = e.target.value;
-                            patchCondition(index, conditionIndex, {
-                              type: nextType,
-                              polityId: nextType.includes("polity") ? condition?.polityId || "" : "",
-                              warId: nextType.includes("war") ? condition?.warId || "" : "",
-                              institutionId: nextType.includes("institution") ? condition?.institutionId || "" : "",
-                            });
-                          }}>
-                            {CONDITION_TYPES.map((value) => <option key={value} value={value} style={optionStyle}>{conditionLabel(value)}</option>)}
+                <div style={{ display: "grid", gap: "0.4rem", marginTop: "0.45rem", minWidth: 0 }}>
+                  {conditions.map((condition, conditionIndex) => {
+                    const type = clean(condition?.type) || "polity_exists";
+                    const definition = CONDITION_BY_TYPE[type] || CONDITION_BY_TYPE.polity_exists;
+                    const prefix = `scripted-${event?.id || index}-${conditionIndex}`;
+                    return (
+                      <div key={`${event?.id || index}-condition-${conditionIndex}`} style={{ background: "rgba(0,0,0,0.12)", border: "1px solid rgba(255,255,255,0.055)", borderRadius: "8px", minWidth: 0, padding: "0.42rem" }}>
+                        <div style={{ alignItems: "stretch", display: "flex", flexWrap: "wrap", gap: "0.35rem", minWidth: 0 }}>
+                          <select
+                            aria-label="Condition type"
+                            style={selectStyle(styles, { flex: "1.2 1 13rem", width: "auto" })}
+                            value={definition.type}
+                            onChange={(e) => setConditionType(index, conditionIndex, e.target.value)}
+                          >
+                            {CONDITION_DEFINITIONS.map((entry) => <option key={entry.type} style={optionStyle} value={entry.type}>{entry.label}</option>)}
                           </select>
-                          <input
-                            aria-label="Primary condition id"
-                            placeholder={needsWar ? "War ID" : needsInstitution ? "Institution ID" : "Polity ID"}
-                            style={{ ...fieldStyle(styles, { flex: "1 1 9rem" }) }}
-                            value={needsWar ? condition?.warId || "" : needsInstitution ? condition?.institutionId || "" : condition?.polityId || ""}
-                            onChange={(e) => patchCondition(index, conditionIndex, needsWar
-                              ? { warId: e.target.value }
-                              : needsInstitution
-                                ? { institutionId: e.target.value }
-                                : { polityId: e.target.value })}
-                          />
-                          {needsInstitution && needsPolity && (
-                            <input
-                              aria-label="Polity ID"
-                              placeholder="Polity ID"
-                              style={{ ...fieldStyle(styles, { flex: "1 1 9rem" }) }}
-                              value={condition?.polityId || ""}
-                              onChange={(e) => patchCondition(index, conditionIndex, { polityId: e.target.value })}
+
+                          {definition.fields.includes("institutionId") && (
+                            <EntityField
+                              ariaLabel="Institution"
+                              id={`${prefix}-institution`}
+                              options={institutionOptions}
+                              placeholder="Search institution"
+                              styles={styles}
+                              value={condition?.institutionId || ""}
+                              onChange={(institutionId) => patchCondition(index, conditionIndex, { institutionId })}
                             />
+                          )}
+                          {definition.fields.includes("polityId") && (
+                            <EntityField
+                              ariaLabel={definition.type.includes("subordinate") ? "Subordinate polity" : "Polity"}
+                              id={`${prefix}-polity`}
+                              options={polityOptions}
+                              placeholder={definition.type.includes("subordinate") ? "Search subordinate polity" : "Search polity"}
+                              styles={styles}
+                              value={condition?.polityId || ""}
+                              onChange={(polityId) => patchCondition(index, conditionIndex, { polityId })}
+                            />
+                          )}
+                          {definition.fields.includes("overlordId") && (
+                            <EntityField
+                              ariaLabel="Overlord polity"
+                              id={`${prefix}-overlord`}
+                              options={polityOptions}
+                              placeholder="Search overlord"
+                              styles={styles}
+                              value={condition?.overlordId || ""}
+                              onChange={(overlordId) => patchCondition(index, conditionIndex, { overlordId })}
+                            />
+                          )}
+                          {definition.fields.includes("status") && (
+                            <select
+                              aria-label="Institution membership status"
+                              style={selectStyle(styles, { flex: "0.8 1 9rem", width: "auto" })}
+                              value={clean(condition?.status) || "member"}
+                              onChange={(e) => patchCondition(index, conditionIndex, { status: e.target.value })}
+                            >
+                              {INSTITUTION_MEMBER_STATUSES.map((status) => <option key={status} style={optionStyle} value={status}>{titleCase(status)}</option>)}
+                            </select>
+                          )}
+                          {definition.fields.includes("kind") && (
+                            <select
+                              aria-label="Subordination kind"
+                              style={selectStyle(styles, { flex: "0.8 1 9rem", width: "auto" })}
+                              value={clean(condition?.kind)}
+                              onChange={(e) => patchCondition(index, conditionIndex, { kind: e.target.value })}
+                            >
+                              <option style={optionStyle} value="">Any relationship</option>
+                              {PUPPET_KINDS.map((kind) => <option key={kind} style={optionStyle} value={kind}>{titleCase(puppetKindLabel(kind))}</option>)}
+                            </select>
                           )}
                           <button
                             type="button"
                             className="oh-tap-row"
-                            style={buttonStyle(styles, { color: "#fecaca", flexShrink: 0, whiteSpace: "nowrap" })}
-                            onClick={() => patchTrigger(index, { conditions: array(trigger.conditions).filter((_, row) => row !== conditionIndex) })}
+                            style={buttonStyle(styles, { color: "#fecaca", flex: "0 0 auto" })}
+                            onClick={() => patchRules(index, { conditions: conditions.filter((_, row) => row !== conditionIndex) })}
                           >
                             Remove
                           </button>
                         </div>
-                      );
-                    })}
-                    {array(trigger.conditions).length === 0 && (
-                      <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.74rem" }}>
-                        No conditions means this event will fail closed and be skipped.
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
+                  {conditions.length === 0 && (
+                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.74rem" }}>
+                      No conditions - this event is eligible whenever its date is reached.
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
+
+              <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
+                <span style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.76rem", fontWeight: 700 }}>Chance after conditions pass</span>
+                <input
+                  aria-label="Event chance percent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  style={{ ...styles.inputStyle, boxSizing: "border-box", minWidth: 0, width: "6rem" }}
+                  value={rules.percent}
+                  onChange={(e) => patchRules(index, { percent: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })}
+                />
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem" }}>% - rolled once, then persisted</span>
+              </div>
             </div>
           );
         })}

@@ -89,7 +89,7 @@ export const FEATURE_DEFINITIONS = Object.freeze([
         type: "scripted-events",
         label: "Scripted events",
         defaultValue: Object.freeze([]),
-        description: "Dated scenario-authored historical beats. Always preserves the old scripted-event behavior; Chance rolls once when its date is reached; Conditional checks native canonical state once on that date. Eligible events are still guaranteed by the engine if the model omits them.",
+        description: "Dated scenario-authored historical beats. Conditions are checked natively once on the event date, then an optional chance is rolled once. Match all, any, or at least N conditions; resolved outcomes never reroll. Eligible events are still guaranteed by the engine if the model omits them.",
       }),
       Object.freeze({
         key: "territoryTempo",
@@ -150,16 +150,24 @@ const readBoolean = (value) => {
   return null;
 };
 
-export const SCRIPTED_EVENT_TRIGGER_MODES = Object.freeze(["always", "chance", "conditional"]);
+export const SCRIPTED_EVENT_TRIGGER_MODES = Object.freeze(["rules", "always", "chance", "conditional"]);
+export const SCRIPTED_EVENT_CONDITION_OPERATORS = Object.freeze(["all", "any", "at_least"]);
+// These are the predicates the authoring UI exposes today because their native
+// ledgers are already dependable enough to be scenario-writing contracts.
+// Legacy war predicates remain readable by the runtime for existing CSE-v1
+// content, but are intentionally not advertised until the war ledger is hardened.
 export const SCRIPTED_EVENT_CONDITION_TYPES = Object.freeze([
   "polity_exists",
   "polity_not_exists",
-  "war_active",
-  "war_not_active",
+  "political_actor_exists",
+  "political_actor_not_exists",
   "institution_exists",
   "institution_not_exists",
   "institution_has_polity",
   "institution_lacks_polity",
+  "institution_member_status",
+  "polity_subordinate_to",
+  "polity_not_subordinate_to",
 ]);
 
 const scriptedEventDateKey = (iso) => {
@@ -198,33 +206,72 @@ const normalizeScriptedCondition = (value) => {
   const type = String(value.type ?? "").trim().toLowerCase();
   if (!type) return null;
   const out = { type: type.slice(0, 80) };
-  for (const key of ["polityId", "warId", "institutionId"]) {
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "status", "kind"]) {
     const token = String(value[key] ?? "").trim().slice(0, 160);
     if (token) out[key] = token;
   }
   return out;
 };
 
+const scriptedEventPercent = (value, fallback = 100) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : fallback;
+};
+
+const normalizeScriptedRuleGroup = (source) => {
+  const conditions = (Array.isArray(source.conditions) ? source.conditions : [])
+    .map(normalizeScriptedCondition)
+    .filter(Boolean)
+    .slice(0, 24);
+  const rawOperator = String(source.operator ?? "all").trim().toLowerCase().replace(/-/g, "_");
+  const operator = SCRIPTED_EVENT_CONDITION_OPERATORS.includes(rawOperator) ? rawOperator : "all";
+  const requested = Number(source.requiredCount ?? source.minimum ?? 1);
+  const requiredCount = conditions.length
+    ? Math.max(1, Math.min(conditions.length, Number.isFinite(requested) ? Math.trunc(requested) : 1))
+    : 0;
+  return {
+    operator,
+    ...(operator === "at_least" ? { requiredCount } : {}),
+    conditions,
+  };
+};
+
 const normalizeScriptedTrigger = (value) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const mode = String(source.mode ?? "always").trim().toLowerCase();
-  if (mode === "chance") {
-    const number = Number(source.percent);
-    return { mode, percent: Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 50 };
-  }
-  if (mode === "conditional") {
+
+  if (mode === "rules") {
     return {
-      mode,
-      operator: String(source.operator ?? "").trim().toLowerCase() === "any" ? "any" : "all",
-      conditions: (Array.isArray(source.conditions) ? source.conditions : [])
-        .map(normalizeScriptedCondition)
-        .filter(Boolean)
-        .slice(0, 24),
+      mode: "rules",
+      ...normalizeScriptedRuleGroup(source),
+      percent: scriptedEventPercent(source.percent ?? source.chancePercent, 100),
     };
   }
-  if (mode === "always" || !source.mode) return { mode: "always" };
+
+  // CSE v1 compatibility. Old modes are normalized into the composable rules
+  // contract on read/save, so existing scenarios keep their behavior while the
+  // authoring model no longer needs mutually-exclusive Always/Chance/Conditional.
+  if (mode === "chance") {
+    return {
+      mode: "rules",
+      operator: "all",
+      conditions: [],
+      percent: scriptedEventPercent(source.percent, 50),
+    };
+  }
+  if (mode === "conditional") {
+    const group = normalizeScriptedRuleGroup(source);
+    // A malformed old Conditional with no conditions used to fail closed.
+    // Preserve that rather than silently turning it into an unconditional event.
+    if (!group.conditions.length) return { mode: "invalid" };
+    return { mode: "rules", ...group, percent: 100 };
+  }
+  if (mode === "always" || !source.mode) {
+    return { mode: "rules", operator: "all", conditions: [], percent: 100 };
+  }
+
   // Unknown trigger modes survive normalization as invalid rather than falling
-  // through to Always. The runtime fails closed instead of firing malformed canon.
+  // through to an unconditional event. The runtime fails closed.
   return { mode: mode.slice(0, 32) || "invalid" };
 };
 
@@ -234,7 +281,7 @@ export const normalizeScriptedEvents = (value) => {
     source = source.split(/\r?\n/).map((rawLine, index) => {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) return null;
-      const match = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[â€”â€“\-:|]+\s*)?(.*)$/.exec(line);
+      const match = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/.exec(line);
       if (!match || scriptedEventDateKey(match[1]) === null) return null;
       const body = String(match[2] ?? "").trim();
       if (!body) return null;
@@ -243,7 +290,7 @@ export const normalizeScriptedEvents = (value) => {
         date: match[1],
         title: scriptedEventTitle(body),
         text: body,
-        trigger: { mode: "always" },
+        trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
       };
     }).filter(Boolean);
   }

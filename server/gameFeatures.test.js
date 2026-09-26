@@ -102,7 +102,7 @@ test("isFeatureEnabled and the idle diplomacy chance read the resolved configura
   assert.equal(idleDiplomacyChancePerMinute(null), 0);
 });
 
-test("legacy scripted-event text migrates to structured Always events without changing its dated beat", () => {
+test("legacy scripted-event text migrates to unconditional composable rules without changing its dated beat", () => {
   const events = normalizeScriptedEvents(`
     # comment
     1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.
@@ -110,27 +110,82 @@ test("legacy scripted-event text migrates to structured Always events without ch
   assert.equal(events.length, 1);
   assert.equal(events[0].date, "1914-06-28");
   assert.equal(events[0].text, "Archduke Franz Ferdinand is assassinated in Sarajevo.");
-  assert.equal(events[0].trigger.mode, "always");
+  assert.deepEqual(events[0].trigger, { mode: "rules", operator: "all", conditions: [], percent: 100 });
   assert.match(events[0].id, /^scripted-/);
 });
 
-test("structured scripted events keep stable ids and fail-closed trigger data", () => {
-  const events = normalizeScriptedEvents([{
-    id: "curragh-incident",
+test("CSE-v1 modes migrate into composable condition + chance rules", () => {
+  const events = normalizeScriptedEvents([
+    {
+      id: "curragh-incident",
+      date: "1914-03-21",
+      text: "Curragh officers refuse orders.",
+      trigger: {
+        mode: "conditional",
+        operator: "any",
+        conditions: [{ type: "polity_exists", polityId: "GBR" }],
+      },
+    },
+    {
+      id: "chance-event",
+      date: "1914-03-22",
+      text: "A chance event happens.",
+      trigger: { mode: "chance", percent: 40 },
+    },
+  ]);
+  assert.deepEqual(events[0].trigger, {
+    mode: "rules",
+    operator: "any",
+    conditions: [{ type: "polity_exists", polityId: "GBR" }],
+    percent: 100,
+  });
+  assert.deepEqual(events[1].trigger, {
+    mode: "rules",
+    operator: "all",
+    conditions: [],
+    percent: 40,
+  });
+});
+
+test("structured rules preserve threshold groups, chance and safe predicate fields", () => {
+  const [event] = normalizeScriptedEvents([{
+    id: "two-of-three",
     date: "1914-03-21",
-    text: "Curragh officers refuse orders.",
+    text: "Two of three prerequisites are enough.",
     trigger: {
-      mode: "conditional",
-      operator: "all",
-      conditions: [{ type: "polity_exists", polityId: "GBR" }],
+      mode: "rules",
+      operator: "at_least",
+      requiredCount: 2,
+      percent: 50,
+      conditions: [
+        { type: "institution_member_status", institutionId: "triple-entente", polityId: "GBR", status: "observer" },
+        { type: "polity_subordinate_to", polityId: "SER", overlordId: "RUS", kind: "client" },
+        { type: "political_actor_exists", polityId: "GER" },
+      ],
     },
   }]);
-  assert.equal(events[0].id, "curragh-incident");
-  assert.deepEqual(events[0].trigger, {
-    mode: "conditional",
-    operator: "all",
-    conditions: [{ type: "polity_exists", polityId: "GBR" }],
+  assert.equal(event.id, "two-of-three");
+  assert.deepEqual(event.trigger, {
+    mode: "rules",
+    operator: "at_least",
+    requiredCount: 2,
+    conditions: [
+      { type: "institution_member_status", polityId: "GBR", institutionId: "triple-entente", status: "observer" },
+      { type: "polity_subordinate_to", polityId: "SER", overlordId: "RUS", kind: "client" },
+      { type: "political_actor_exists", polityId: "GER" },
+    ],
+    percent: 50,
   });
+});
+
+test("a malformed old Conditional with no conditions remains fail-closed", () => {
+  const [event] = normalizeScriptedEvents([{
+    id: "broken-old-condition",
+    date: "1914-03-21",
+    text: "This must not become unconditional.",
+    trigger: { mode: "conditional", conditions: [] },
+  }]);
+  assert.deepEqual(event.trigger, { mode: "invalid" });
 });
 
 // ---- World direction: the director's settings ----

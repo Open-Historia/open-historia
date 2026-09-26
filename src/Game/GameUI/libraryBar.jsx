@@ -1613,6 +1613,7 @@ const EditorDrawer = ({
           kind={kind}
           features={formState.features}
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
+          world={details?.data?.world ?? {}}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle, fieldLabelStyle, inputStyle }}
         />

@@ -43,6 +43,11 @@ const inputStyle = {
   width: "100%",
 };
 
+const optionStyle = {
+  backgroundColor: "#1a1b1f",
+  color: "#f8fafc",
+};
+
 const labelStyle = {
   color: "rgba(255,255,255,0.62)",
   display: "block",
@@ -298,7 +303,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               <div>
                 <label style={labelStyle}>Type</label>
                 <select onChange={(event) => edit("kind", event.target.value)} style={{ ...inputStyle, colorScheme: "dark" }} value={draft.kind}>
-                  {INSTITUTION_KINDS.map((kind) => <option key={kind} value={kind}>{kindLabel(kind)}</option>)}
+                  {INSTITUTION_KINDS.map((kind) => <option key={kind} style={optionStyle} value={kind}>{kindLabel(kind)}</option>)}
                 </select>
               </div>
               <div>
@@ -365,8 +370,8 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
                   style={{ ...inputStyle, colorScheme: "dark" }}
                   value={draft.logoUrl || draft.logoAsset ? "" : draft.badgeKey}
                 >
-                  <option value="">None / custom logo</option>
-                  {Object.keys(BUILTIN_INSTITUTION_LOGOS).map((badgeKey) => <option key={badgeKey} value={badgeKey}>{badgeKey.toUpperCase()}</option>)}
+                  <option style={optionStyle} value="">None / custom logo</option>
+                  {Object.keys(BUILTIN_INSTITUTION_LOGOS).map((badgeKey) => <option key={badgeKey} style={optionStyle} value={badgeKey}>{badgeKey.toUpperCase()}</option>)}
                 </select>
               </div>
               <div>
