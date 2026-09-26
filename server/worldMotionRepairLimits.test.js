@@ -321,8 +321,8 @@ const mainPassText = () => buildWorldInitiativeContext(directorBundle(), { targe
 const attentionEntry = (text, id) => {
   const lines = String(text).split("\n");
   const list = lines.slice(
-    lines.indexOf("PERSISTENT STORYLINE ATTENTION"),
-    lines.indexOf("DEFERRED PERSISTED STORYLINES — LOW ATTENTION, NOT FROZEN"),
+    lines.findIndex((line) => line.startsWith("Storylines are this world's ongoing processes")),
+    lines.indexOf("Other open storylines (a record only when something material happens in one):"),
   );
   const start = list.findIndex((line) => /^\d+\. \[/.test(line) && line.includes(`[${id} |`));
   if (start < 0) return "";
@@ -347,19 +347,16 @@ test("the main pass warns every storyline the backstop holds, active wars below 
   assert.equal(storylineAtAntiStasisBackstop(westernFront, STOP, world), true, "at the backstop because it is an active war");
 
   const text = mainPassText();
-  for (const [storyline, subject] of [
-    [westernFront, "active war"],
-    [balkanCrisis, "active high-pressure process"],
-  ]) {
+  for (const storyline of [westernFront, balkanCrisis]) {
     const entry = attentionEntry(text, storyline.id);
     assert.ok(entry, `${storyline.id} is not in the attention list`);
-    assert.match(entry, new RegExp(`ANTI-STASIS BACKSTOP: this ${subject} reaches`));
+    assert.match(entry, /MUST MOVE THIS PERIOD: \d+ days with no visible development/);
     assert.ok(entry.includes(describeAntiStasisObjectiveRule()), `${storyline.id} is not told the numbers:\n${entry}`);
   }
 });
 
 test("the main pass's general rule states the numbers and offers no way out the validator rejects", () => {
-  const general = mainPassText().split("\n").find((line) => line.includes("anti-stasis rule, NOT an event quota")) ?? "";
+  const general = mainPassText().split("\n").find((line) => line.includes("may not stand still")) ?? "";
   assert.ok(general.includes(describeAntiStasisObjectiveRule()), general);
   // A "genuinely different hidden state" in prose alone is exactly what the
   // validator rejects; it may only count through the numbers.

@@ -1048,8 +1048,8 @@ const eventSchema = {
   properties: {
     id: textSchema("Optional stable event identifier."),
     date: textSchema("In-game date on which the event occurs."),
-    title: textSchema("Concise event headline."),
-    description: textSchema("Specific narrative description and consequences."),
+    title: textSchema("The headline: one sentence saying what happened."),
+    description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,

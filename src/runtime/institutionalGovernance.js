@@ -791,19 +791,24 @@ const publicBallotHighlights = (proposal = {}, outcome = {}, limit = 3) => {
   return picked;
 };
 
+// An outcome's headline and line, whole sentences, so a language pack can
+// translate each (the game's own English; the shipped packs carry it).
+const outcomeEventTitle = (status, name, title) => {
+  if (status === "passed") return `${name} Approves ${title}`;
+  if (status === "vetoed") return `${name} Vote on ${title} Is Vetoed`;
+  return `${name} Rejects ${title}`;
+};
+
+const outcomeEventDescription = (status, { name, title, yes, no, abstain, veto, participating, eligible, rest }) => {
+  if (status === "passed") return `${name} formally approved ${title}. Recorded ballot: ${yes} yes, ${no} no, ${abstain} abstain${veto ? `, ${veto} veto` : ""}; ${participating}/${eligible} eligible members participated.${rest ? ` ${rest}` : ""}`;
+  if (status === "vetoed") return `${name} formally vetoed ${title}. Recorded ballot: ${yes} yes, ${no} no, ${abstain} abstain${veto ? `, ${veto} veto` : ""}; ${participating}/${eligible} eligible members participated.${rest ? ` ${rest}` : ""}`;
+  return `${name} formally rejected ${title}. Recorded ballot: ${yes} yes, ${no} no, ${abstain} abstain${veto ? `, ${veto} veto` : ""}; ${participating}/${eligible} eligible members participated.${rest ? ` ${rest}` : ""}`;
+};
+
 const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playerCountry = "" } = {}) => {
   if (!institution || !proposal || !outcome) return null;
   const status = lower(outcome.status || proposal.status);
-  const verb = status === "passed" ? "Approves" : status === "vetoed" ? "Vote on" : "Rejects";
-  const title = status === "vetoed"
-    ? `${institution.name} Vote on ${proposal.title} Is Vetoed`
-    : `${institution.name} ${verb} ${proposal.title}`;
-  const voteBits = [
-    `${Number(outcome.yes) || 0} yes`,
-    `${Number(outcome.no) || 0} no`,
-    `${Number(outcome.abstain) || 0} abstain`,
-    ...(Number(outcome.veto) ? [`${Number(outcome.veto)} veto`] : []),
-  ];
+  const title = outcomeEventTitle(status, institution.name, proposal.title);
   const acceptedClauses = acceptedAmendments(proposal)
     .map((entry) => clean(entry?.text).slice(0, 320))
     .filter(Boolean)
@@ -816,9 +821,17 @@ const proposalOutcomeEvent = ({ institution, proposal, outcome, date = "", playe
   const publicPositions = highlights.length
     ? ` Public positions: ${highlights.map((ballot) => `${ballot.polity} (${ballot.choice}) — ${ballot.reason}`).join("; ")}.`
     : "";
-  const description = `${institution.name} formally ${status === "passed" ? "approved" : status === "vetoed" ? "vetoed" : "rejected"} ${proposal.title}. `
-    + `Recorded ballot: ${voteBits.join(", ")}; ${Number(outcome.participating) || 0}/${Number(outcome.eligible) || 0} eligible members participated. `
-    + `${summary}${publicPositions}`;
+  const description = outcomeEventDescription(status, {
+    name: institution.name,
+    title: proposal.title,
+    yes: Number(outcome.yes) || 0,
+    no: Number(outcome.no) || 0,
+    abstain: Number(outcome.abstain) || 0,
+    veto: Number(outcome.veto) || 0,
+    participating: Number(outcome.participating) || 0,
+    eligible: Number(outcome.eligible) || 0,
+    rest: `${summary}${publicPositions}`.trim(),
+  });
   const typeText = `${proposal.type} ${proposal.title} ${proposal.summary}`.toLocaleLowerCase();
   const military = /military|defen[cs]e|deploy|war|security|force|troop|weapon|sanction/.test(typeText);
   const playerBallot = Object.values(proposal?.voting?.ballots || {}).some((ballot) => lower(ballot?.polity) === lower(playerCountry));
