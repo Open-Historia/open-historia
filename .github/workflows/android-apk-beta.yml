@@ -1,0 +1,137 @@
+# Open Historia — Android APK beta build & release workflow © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
+name: Build Android APK (Beta)
+
+# Builds the Android app from the `beta` integration branch as a SECOND app,
+# "Open Historia Beta", and publishes it to the `android-beta` pre-release.
+#
+# It is android-apk.yml with the channel set to beta, and the channel is what
+# makes the beta a separate app, as the desktop beta is (desktop-beta.yml):
+#   * mobile/android/app/build.gradle, OH_ANDROID_CHANNEL=beta: its own
+#     application id (io.github.arkniem.paxhistoria.beta), so it installs BESIDE
+#     the stable app rather than over it and keeps its own saves; its own name
+#     and BETA icon.
+#   * VITE_APP_TRACK=beta: its update banner reads android-beta/latest.json
+#     (src/runtime/web/router.js), so it never offers a tester the stable build.
+# Nothing here touches the stable `android` release.
+# server/androidBetaPackaging.test.js holds these pieces together.
+#
+# Two ways to start it, the same two the desktop beta offers:
+#
+#   * Actions → Build Android APK (Beta) → Run workflow → `beta`. GitHub only
+#     lists a workflow_dispatch entry if the file is on the DEFAULT branch, so a
+#     copy of this file is kept on `main` to make the entry appear — the copy on
+#     the branch you select is the one that actually runs.
+#   * push a tag matching `android-beta-v*` at a commit on `beta`. A tag push runs
+#     the workflow file from the tagged tree.
+#
+# The tag pattern does not match the stable `android-v*` trigger in
+# android-apk.yml, and `android-beta` — the release tag itself — matches
+# neither, so creating it below cannot start another run.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["android-beta-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      # A dispatch run picks its own branch from a dropdown, and `main` is in that
+      # dropdown too — a run from there would package the released code, call it
+      # the beta and publish it. A tag run is exempt: its ref is the tag, and the
+      # tag pattern is what says which line it came from.
+      - name: Refuse to dispatch this from anything but beta
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'Open-Historia/open-historia' && github.ref_name != 'beta'
+        run: |
+          echo "::error::Run this with 'Use workflow from: beta'. The stable app is Build Android APK, from main."
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # VITE_APP_BUILD is the number the update banner compares against
+      # latest.json; VITE_APP_TRACK=beta points the banner at the beta's own feed.
+      - name: Build the Android bundle
+        env:
+          VITE_APP_BUILD: ${{ github.run_number }}
+          VITE_APP_TRACK: beta
+        run: |
+          npm ci
+          npm run build:android
+
+      - name: Restore the map data
+        uses: actions/cache@v4
+        with:
+          path: mobile/map-cache
+          key: android-map-data-${{ hashFiles('mobile/map-assets.android.json') }}
+
+      - name: Build the APK
+        env:
+          # This workflow's own run numbers: the beta is its own app, and its
+          # versionCode only has to rise from one beta build to the next.
+          OH_ANDROID_BUILD: ${{ github.run_number }}
+          OH_ANDROID_CHANNEL: beta
+          # The same key as the stable app. A different package, so nothing is
+          # shared by it; one key is one thing to keep safe.
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd mobile
+          npm ci
+          npm run map
+          npm run www
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > app/release.keystore
+            export OH_ANDROID_KEYSTORE="$PWD/app/release.keystore"
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../../open-historia-beta.apk
+          else
+            echo "No ANDROID_KEYSTORE_B64 secret: debug-signed build (cannot upgrade in place over a build signed with another key)."
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../../open-historia-beta.apk
+          fi
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: open-historia-beta.apk
+          path: open-historia-beta.apk
+
+      # latest.json is what the beta's update banner reads. The asset name
+      # open-historia-beta.apk is contractual: latest.json and the release notes
+      # link it by name.
+      - name: Publish to the "android-beta" pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > latest.json <<EOF
+          {
+            "build": ${{ github.run_number }},
+            "apk": "https://github.com/${{ github.repository }}/releases/download/android-beta/open-historia-beta.apk",
+            "notes": "Beta build ${{ github.run_number }}: what is on the beta branch now, ahead of the stable app."
+          }
+          EOF
+          NOTES="Open Historia Beta for Android: the game as it is on the beta branch, ahead of the stable app and less tested. Download open-historia-beta.apk below and open it to install (allow installs from your browser when Android asks).
+
+          It is a separate app. It installs beside Open Historia rather than over it, with its own icon (the compass with a BETA banner) and its own saves: a game started in one does not appear in the other, though Export and Import carry games and scenarios across. It updates itself from this release and never offers you the stable build. Like the stable app, everything is on the device, and the community hub and your own AI provider are the only network use.
+
+          Build: ${{ github.run_number }}"
+          gh release create android-beta --title "Android app — Beta" --prerelease --notes "$NOTES" 2>/dev/null \
+            || gh release edit android-beta --prerelease --notes "$NOTES"
+          gh release upload android-beta open-historia-beta.apk latest.json --clobber
