@@ -2356,6 +2356,39 @@ const stampCompletionLatch = (project, completing, when) => (
 //
 // `ctx` carries the event that caused the change ({date, eventId, round}), which
 // is what builds the activity feed without the model having to maintain it.
+// See applyProjectOps. `before` is the board the ops were applied to, so only a
+// date this call wrote is judged; `date` is the game date the ops land on.
+const withoutPastDeadlines = (projects, before, date) => {
+  const today = normalizeGameDate(date);
+  if (!today) return projects;
+  const inThePast = (value) => {
+    const day = normalizeGameDate(value);
+    return Boolean(day) && compareGameDates(day, today) < 0;
+  };
+  const outstanding = (milestone) => ["pending", "slipped"].includes(milestone?.status || "pending");
+  const priorById = new Map(normalizeProjects(before).map((project) => [project.id, project]));
+  return projects.map((project, index) => {
+    const prior = priorById.get(project.id);
+    let changed = false;
+    let targetDate = project.targetDate;
+    if (targetDate && targetDate !== prior?.targetDate && inThePast(targetDate)) {
+      targetDate = prior?.targetDate || "";
+      changed = true;
+    }
+    const priorMilestones = new Map(normalizeArray(prior?.milestones).map((milestone) => [milestone.id, milestone]));
+    const milestones = normalizeArray(project.milestones).map((milestone) => {
+      if (!outstanding(milestone) || !milestone.date || !inThePast(milestone.date)) return milestone;
+      const was = priorMilestones.get(milestone.id);
+      if (was && was.date === milestone.date) return milestone;
+      changed = true;
+      return { ...milestone, date: was?.date || "" };
+    });
+    if (!changed) return project;
+    const normalized = normalizeProjectEntry({ ...project, targetDate, milestones, nextMilestone: null }, index);
+    return normalized ? { ...project, ...normalized } : project;
+  });
+};
+
 export const applyProjectOps = (projects, ops, ctx = {}) => {
   const { date = "", eventId = "", round = 0 } = ctx;
   const stamp = new Date().toISOString();
@@ -2570,7 +2603,12 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
     }
   }
 
-  return next;
+
+  // No deadline in the past. A target date or an outstanding milestone that this
+  // call set earlier than the date it applies on is not kept (2026-09-26): the
+  // entry keeps the date it had, or none. Dates already on the board stay — an
+  // effort that has since run late is overdue, and saying so is the board's job.
+  return withoutPastDeadlines(next, projects, date);
 };
 
 // One AI-authored mutation to the unit list: spawn | move | strength | remove.
