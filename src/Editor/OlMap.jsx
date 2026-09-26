@@ -47,6 +47,9 @@ import { fromLonLat, toLonLat } from "ol/proj";
 import { vectorLayerToGeoJSON } from "./customBackground.js";
 import { defaults as defaultControls } from "ol/control/defaults";
 import { makeRegionStyle } from "./olStyle.js";
+import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBoundaryTopology.js";
+import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
+import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
 import {
@@ -324,6 +327,59 @@ const selectedCityStyle = (size, name) => {
   return style;
 };
 
+// A group's outline (runtime/groups.js): its colour over a dark casing, the way
+// the game draws it.
+const groupOutlineStyleCache = new globalThis.Map();
+const groupOutlineStyle = (color) => {
+  const key = String(color || "#e11d48");
+  let hit = groupOutlineStyleCache.get(key);
+  if (!hit) {
+    hit = [
+      new Style({ stroke: new Stroke({ color: "rgba(5, 8, 13, 0.55)", width: 5, lineCap: "round", lineJoin: "round" }) }),
+      new Style({ stroke: new Stroke({ color: key, width: 2.6, lineCap: "round", lineJoin: "round" }) }),
+    ];
+    groupOutlineStyleCache.set(key, hit);
+  }
+  return hit;
+};
+
+// A map feature that is not a city (mapFeatures.js): the game's glyph for its
+// kind (presentationPolicy.js), in its holder's colour, faded when it is not in
+// use, and named once close enough.
+const mapFeatureStyleCache = new globalThis.Map();
+const mapFeatureStyle = (feature, zoom, rgb, selected) => {
+  const { glyph } = getMarkerPresentation({ kind: feature.get("kind"), name: feature.get("name"), status: feature.get("status") });
+  const status = String(feature.get("status") || "active");
+  const faded = ["destroyed", "abandoned", "inactive", "planned"].includes(status);
+  const color = Array.isArray(rgb) ? `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${faded ? 0.55 : 1})` : `rgba(226, 222, 205, ${faded ? 0.55 : 1})`;
+  const name = selected || zoom >= 4.5 ? String(feature.get("name") || "") : "";
+  const key = `${glyph}|${color}|${name}|${selected ? 1 : 0}`;
+  let style = mapFeatureStyleCache.get(key);
+  if (!style) {
+    style = [
+      new Style({
+        text: new Text({
+          text: glyph,
+          font: `700 ${selected ? 17 : 15}px sans-serif`,
+          fill: new Fill({ color: selected ? "#facc15" : color }),
+          stroke: new Stroke({ color: "rgba(0,0,0,0.9)", width: 3 }),
+        }),
+      }),
+      ...(name ? [new Style({
+        text: new Text({
+          text: name,
+          font: "600 11px sans-serif",
+          offsetY: -14,
+          fill: new Fill({ color: selected ? "#fef3c7" : "#fff" }),
+          stroke: new Stroke({ color: "rgba(0,0,0,0.85)", width: 3 }),
+        }),
+      })] : []),
+    ];
+    mapFeatureStyleCache.set(key, style);
+  }
+  return style;
+};
+
 // A starting unit placed in the Workshop: a diamond in its owner's colour with
 // the type's initial; the name replaces the initial at closer zooms.
 const UNIT_GLYPH = { infantry: "I", armor: "A", air: "✈", naval: "N", artillery: "R", garrison: "G" };
@@ -409,6 +465,8 @@ const OlMap = ({
   paintOnlyOwner = "*",
   features = [],
   units = [],
+  // group name -> "#rrggbb", from the document's groups (runtime/groups.js).
+  groupColors = null,
   featureSelectionIds = [],
   onFeatureSelectionChange,
   onUnitCreate,
@@ -486,6 +544,9 @@ const OlMap = ({
 
   const typesByIdRef = useRef(toTypesById(types));
   const colorsRef = useRef(colors || {});
+  const groupColorsRef = useRef(groupColors || {});
+  const groupOutlineTimerRef = useRef(0);
+  const rebuildGroupOutlinesRef = useRef(null);
   const selectedIdsRef = useRef(new Set(selectionIds || []));
   const activeToolRef = useRef(activeTool);
   const defaultTypeIdRef = useRef(defaultTypeId);
@@ -504,9 +565,18 @@ const OlMap = ({
   onSelectionRef.current = onSelectionChange;
   onRegionsChangedRef.current = onRegionsChanged;
 
+  // Groups' outlines follow every change to the regions, a beat later: they are
+  // rebuilt from the member regions alone (rebuildGroupOutlines below).
+  const scheduleGroupOutlines = () => {
+    if (typeof window === "undefined") return;
+    window.clearTimeout(groupOutlineTimerRef.current);
+    groupOutlineTimerRef.current = window.setTimeout(() => rebuildGroupOutlinesRef.current?.(), 350);
+  };
+
   const notifyRegions = () => {
     const n = regionSourceRef.current?.getFeatures().length ?? 0;
     onRegionsChangedRef.current?.(n);
+    scheduleGroupOutlines();
   };
 
   // ---- undo/redo command stack (discrete region operations) ---------------
@@ -567,6 +637,7 @@ const OlMap = ({
         getColors: () => colorsRef.current,
         getSelectedIds: () => selectedIdsRef.current,
         getZoom,
+        getGroupColors: () => groupColorsRef.current,
       }),
       renderBuffer: 128,
       updateWhileInteracting: false,
@@ -609,6 +680,11 @@ const OlMap = ({
       updateWhileAnimating: false,
       style: (feature, resolution) => {
         const zoom = getZoom(resolution);
+        if (feature.get("kind") && !(feature.get("tags") || []).some((tag) => tag === "city" || tag === "capital")) {
+          const selected = featureSelectionRef.current.has(String(feature.getId()));
+          if (!selected && zoom < 3) return null;
+          return mapFeatureStyle(feature, zoom, colorsRef.current?.[feature.get("owner")], selected);
+        }
         const pop = feature.get("population") || 0;
         const tags = feature.get("tags") || [];
         const large = tags.includes("capital") || pop >= 1000000;
@@ -633,6 +709,63 @@ const OlMap = ({
       style: (feature, resolution) => unitStyle(feature, getZoom(resolution), colorsRef.current?.[feature.get("ownerCode")]),
     });
     unitLayer.setZIndex(31);
+
+    // Each group's area outlined in its colour, as the game draws it. The outline
+    // is cut from the member regions' own edges by the game's code
+    // (Game/Map/vnext/groupAreas.js) over a topology of the members alone: an
+    // edge a member shares with another member is inside the area, and every
+    // other edge — a frontier or a coast — is on its outline.
+    const groupOutlineSource = new VectorSource({ wrapX: false });
+    const groupOutlineLayer = new VectorLayer({
+      source: groupOutlineSource,
+      wrapX: false,
+      updateWhileInteracting: false,
+      updateWhileAnimating: false,
+      style: (feature) => groupOutlineStyle(feature.get("color")),
+    });
+    groupOutlineLayer.setZIndex(12);
+    const groupWriter = new GeoJSON();
+    const rebuildGroupOutlines = () => {
+      groupOutlineSource.clear();
+      const colors = groupColorsRef.current || {};
+      const members = new globalThis.Map();
+      for (const f of regionSource.getFeatures()) {
+        const group = f.get("group");
+        if (!group || !colors[group]) continue;
+        if (!members.has(group)) members.set(group, []);
+        members.get(group).push(f);
+      }
+      const outlines = [];
+      for (const [group, feats] of members) {
+        try {
+          const regions = {
+            type: "FeatureCollection",
+            features: feats.map((f) => ({
+              ...groupWriter.writeFeatureObject(f, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" }),
+              properties: { id: String(f.getId()) },
+            })),
+          };
+          const topology = buildPoliticalBoundaryTopology(regions);
+          const derived = deriveGroupAreas({
+            topology,
+            index: buildGroupAreaIndex(topology),
+            regions,
+            groupAreas: Object.fromEntries(feats.map((f) => [String(f.getId()), group])),
+            groups: { [group]: { color: colors[group] } },
+          });
+          outlines.push(...derived.outlines.features);
+        } catch (error) {
+          console.warn("[editor] a group's outline could not be drawn:", group, error);
+        }
+      }
+      if (outlines.length) {
+        groupOutlineSource.addFeatures(groupWriter.readFeatures(
+          { type: "FeatureCollection", features: outlines },
+          { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" },
+        ));
+      }
+    };
+    rebuildGroupOutlinesRef.current = rebuildGroupOutlines;
 
     // Province-raster alignment preview. It is display-only and never becomes
     // part of the document. The importer swaps the source as the geographic
@@ -677,7 +810,7 @@ const OlMap = ({
     const map = new Map({
       target: containerRef.current,
       controls: defaultControls({ rotate: false }),
-      layers: [regionLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
+      layers: [regionLayer, groupOutlineLayer, labelLayer, pointLayer, unitLayer, importPreviewLayer, paintPreviewLayer, topologyLayer, borderAssistLayer],
       view: new View({ center: fromLonLat([0, 20]), zoom: 2.1, minZoom: 1, maxZoom: 20 }),
     });
 
@@ -744,7 +877,7 @@ const OlMap = ({
 
     map.on("singleclick", (evt) => {
       const tool = activeToolRef.current;
-      if (tool !== "select" && tool !== "delete" && tool !== "paint" && tool !== "feature" && tool !== "dissolve" && tool !== "unit") return;
+      if (tool !== "select" && tool !== "delete" && tool !== "paint" && tool !== "feature" && tool !== "marker" && tool !== "dissolve" && tool !== "unit") return;
       let hit = null;
       map.forEachFeatureAtPixel(
         evt.pixel,
@@ -792,9 +925,10 @@ const OlMap = ({
         });
         return;
       }
-      if (tool === "feature") {
-        // Clicking an existing city edits it (rename/resize/delete popup);
-        // clicking empty map adds a new one right there.
+      if (tool === "feature" || tool === "marker") {
+        // Clicking an existing city or map feature edits it (its popup);
+        // clicking empty map adds a new one right there — a city with the City
+        // tool, a map feature (mapFeatures.js) with the Map feature tool.
         const point = pointAtPixel(evt.pixel);
         if (point) {
           onFeatureEditRef.current?.({ id: point.getId(), pixel: [...evt.pixel] });
@@ -807,6 +941,7 @@ const OlMap = ({
           owner: hit ? hit.get("owner") || null : null,
           country: hit ? hit.get("country") || "" : "",
           pixel: [...evt.pixel],
+          ...(tool === "marker" ? { mapFeature: true } : {}),
         });
         return;
       }
@@ -892,14 +1027,14 @@ const OlMap = ({
       const tool = activeToolRef.current;
       if (tool === "lasso" || tool === "draw" || tool === "modify" || tool === "paint" || tool === "feature-box") {
         map.getTargetElement().style.cursor = "crosshair";
-      } else if (tool === "feature" || tool === "delete" || tool === "unit") {
+      } else if (tool === "feature" || tool === "marker" || tool === "delete" || tool === "unit") {
         // City-aware tools: pointer over an existing city (edit/remove target).
         const pointHit = map.hasFeatureAtPixel(evt.pixel, {
           layerFilter: (l) => l === pointLayerRef.current || l === unitLayerRef.current,
           hitTolerance: 8,
         });
         map.getTargetElement().style.cursor =
-          pointHit || (hit && tool === "delete") ? "pointer" : tool === "feature" || tool === "unit" ? "crosshair" : "";
+          pointHit || (hit && tool === "delete") ? "pointer" : tool === "feature" || tool === "marker" || tool === "unit" ? "crosshair" : "";
       } else {
         map.getTargetElement().style.cursor =
           hit && (tool === "select" || tool === "paint" || tool === "dissolve") ? "pointer" : "";
@@ -1560,6 +1695,7 @@ const OlMap = ({
       typeId: f.get("typeId") || "land",
       country: f.get("country") || "",
       claimants: f.get("claimants") || [],
+      group: f.get("group") || "",
     });
     onReady?.({
       map,
@@ -1596,6 +1732,7 @@ const OlMap = ({
           if ("typeId" in patch) { before.typeId = f.get("typeId"); f.set("typeId", patch.typeId); }
           if ("name" in patch) { before.name = f.get("name"); f.set("name", patch.name); }
           if ("claimants" in patch) { before.claimants = f.get("claimants") || null; f.set("claimants", patch.claimants?.length ? patch.claimants : null); }
+          if ("group" in patch) { before.group = f.get("group") || null; f.set("group", patch.group || null); }
           undos.push([f, before]);
         }
         regionLayer.changed();
@@ -1610,6 +1747,7 @@ const OlMap = ({
               if ("typeId" in after) f.set("typeId", after.typeId);
               if ("name" in after) f.set("name", after.name);
               if ("claimants" in after) f.set("claimants", after.claimants?.length ? after.claimants : null);
+              if ("group" in after) f.set("group", after.group || null);
             }),
           });
         }
@@ -1747,6 +1885,7 @@ const OlMap = ({
             gid0: f.get("gid0") || "",
             country: f.get("country") || "",
             claimants: f.get("claimants") || null,
+            group: f.get("group") || null,
           });
           regionSource.addFeature(nf);
           createdFeats.push(nf);
@@ -1933,6 +2072,48 @@ const OlMap = ({
         }
         return [...rows.values()].sort((a, b) => a.key.localeCompare(b.key));
       },
+      // Groups (runtime/groups.js): a region in a group's area carries the
+      // group's name as `group`. How many regions each group holds.
+      listGroupUsage: () => {
+        const counts = {};
+        for (const f of regionSource.getFeatures()) {
+          const group = String(f.get("group") || "").trim();
+          if (group) counts[group] = (counts[group] ?? 0) + 1;
+        }
+        return counts;
+      },
+      selectGroup: (name, { zoom = false } = {}) => {
+        const key = String(name || "").trim();
+        if (!key) return [];
+        const feats = regionSource.getFeatures().filter((f) => String(f.get("group") || "").trim() === key);
+        const ids = feats.map((f) => f.getId());
+        onSelectionRef.current?.(ids);
+        if (zoom && feats.length) {
+          let ext = feats[0].getGeometry().getExtent().slice();
+          for (const f of feats.slice(1)) {
+            const e = f.getGeometry().getExtent();
+            ext = [Math.min(ext[0], e[0]), Math.min(ext[1], e[1]), Math.max(ext[2], e[2]), Math.max(ext[3], e[3])];
+          }
+          map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 300, maxZoom: 7 });
+        }
+        return ids;
+      },
+      // A group renamed (to a name) or erased (to null) across the whole map, as
+      // ONE undo step. Returns how many regions it touched.
+      retagGroup: (from, to = null) => {
+        const key = String(from || "").trim();
+        if (!key) return 0;
+        const touched = regionSource.getFeatures().filter((f) => String(f.get("group") || "").trim() === key);
+        if (!touched.length) return 0;
+        const apply = (value) => {
+          touched.forEach((f) => f.set("group", value || null));
+          regionLayer.changed();
+          notifyRegions();
+        };
+        apply(to);
+        pushCmd({ undo: () => apply(key), redo: () => apply(to) });
+        return touched.length;
+      },
       selectOwner: (ownerKey, { zoom = false } = {}) => {
         const key = String(ownerKey || "").trim();
         if (!key) return [];
@@ -2085,6 +2266,8 @@ const OlMap = ({
                 }
                 const claimants = hit.get("claimants");
                 if (Array.isArray(claimants) && claimants.length) f.set("claimants", claimants.slice());
+                const group = hit.get("group");
+                if (group) f.set("group", group);
               }
             }
           }
@@ -2242,6 +2425,8 @@ const OlMap = ({
 
     return () => {
       alive = false;
+      window.clearTimeout(groupOutlineTimerRef.current);
+      rebuildGroupOutlinesRef.current = null;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       map.setTarget(null);
@@ -2783,6 +2968,13 @@ const OlMap = ({
     labelLayerRef.current?.changed();
   }, [types, colors]);
 
+  // A group created, recoloured or erased restyles its tint and redraws outlines.
+  useEffect(() => {
+    groupColorsRef.current = groupColors || {};
+    regionLayerRef.current?.changed();
+    rebuildGroupOutlinesRef.current?.();
+  }, [groupColors]);
+
   // Rebuild the point/feature layer whenever the features list changes.
   useEffect(() => {
     const src = pointSourceRef.current;
@@ -2792,7 +2984,7 @@ const OlMap = ({
       if (!Array.isArray(f.coord)) continue;
       const feat = new Feature({ geometry: new Point(fromLonLat(f.coord)) });
       feat.setId(f.id);
-      feat.setProperties({ name: f.name, symbol: f.symbol, type: f.type, owner: f.owner, tags: f.tags, population: f.population || 0 });
+      feat.setProperties({ name: f.name, symbol: f.symbol, type: f.type, owner: f.owner, tags: f.tags, population: f.population || 0, kind: f.kind || "", status: f.status || "" });
       src.addFeature(feat);
     }
   }, [features]);

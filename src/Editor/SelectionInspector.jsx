@@ -23,7 +23,7 @@ import { pillButton } from "./editorStyles.js";
 import { Row, TextField, SelectField, ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { rgbToHex } from "./fields.jsx";
-import { POLITY_ROLE_PLACEHOLDER } from "../../server/polityRole.js";
+import { normalizeGroups } from "../runtime/groups.js";
 
 const commonOr = (arr, blank = "") => {
   if (!arr.length) return blank;
@@ -33,52 +33,12 @@ const commonOr = (arr, blank = "") => {
 
 const foldPolityName = (value) => String(value ?? "").trim().toLowerCase();
 
-// What each claimant IS, typed freely: "a country claiming this land as its
-// own", "a terrorist organisation", "a gang", "one side of the civil war". It
-// is the claimant's own `role` (server/polityRole.js) — one line per claimant,
-// wherever it claims — so it is written onto its record in the polity
-// registry, which a claimant typed only into "Disputed by" gets here. The
-// game's AI reads it wherever that claimant appears.
-const ClaimantRoles = ({ claimants, polities, upsertPolity, label }) => (
-  <div style={{ display: "grid", gap: 6, margin: "-2px 0 4px" }}>
-    <div style={{ fontSize: 11, lineHeight: 1.4, color: "rgba(255,255,255,0.55)" }}>
-      What is each claimant? Type anything — a country claiming this land as its own, a terrorist organisation, a gang, one side of a civil war. The AI reads it wherever that claimant appears.
-    </div>
-    {claimants.map((key) => {
-      const record = polities?.[key];
-      return (
-        <label key={key} style={{ display: "grid", gap: 3 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.8)" }}>{label(key)}</span>
-          <input
-            value={record?.role || ""}
-            placeholder={POLITY_ROLE_PLACEHOLDER}
-            aria-label={`What ${label(key)} is`}
-            onChange={(e) => upsertPolity(key, record
-              ? { role: e.target.value }
-              : { name: key, code: key, aliases: [key], status: "active", note: "", role: e.target.value })}
-            style={{
-              width: "100%",
-              boxSizing: "border-box",
-              padding: "0.4rem 0.5rem",
-              borderRadius: 8,
-              border: "1px solid rgba(255,255,255,0.16)",
-              background: "rgba(0,0,0,0.28)",
-              color: "white",
-              fontSize: 12,
-            }}
-          />
-        </label>
-      );
-    })}
-  </div>
-);
-
-const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, regionEpoch = 0, onOpenPolities, onCopyToClipboard = null }) => {
+const SelectionInspector = ({ api, selection, types, colors, colorOverrides, setColorOverride, flags, setFlag, onOpenFlagPicker, tags, setTags, setSelection, polities = {}, upsertPolity, regionEpoch = 0, onOpenPolities, groups = {}, onOpenGroups, onCopyToClipboard = null }) => {
   const summaries = useMemo(
     () => (api ? selection.map((id) => api.getRegionSummary(id)).filter(Boolean) : []),
     [api, selection, regionEpoch],
   );
-  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [] });
+  const [form, setForm] = useState({ name: "", typeId: "", owner: "", claimants: [], group: "" });
   // What the Polity field shows while it is being typed in; null when it is
   // not, so the field follows the owner (and a rename in the Polities panel).
   const [ownerDraft, setOwnerDraft] = useState(null);
@@ -105,12 +65,14 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
       typeId: commonOr(summaries.map((s) => s.typeId)),
       owner: commonOr(summaries.map((s) => s.owner || "")),
       claimants: JSON.parse(commonOr(claimantKeys, "[]") || "[]"),
+      group: commonOr(summaries.map((s) => s.group || "")),
     });
     setOwnerDraft(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection.join(","), regionEpoch]);
 
   if (!selection.length) return null;
+  const groupRegistry = normalizeGroups(groups);
   const single = selection.length === 1;
   const apply = (patch) => api?.setRegionAttrs(selection, patch);
   const ownerRgb = form.owner && colors[form.owner];
@@ -259,7 +221,7 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
       </Row>
       <Row
         label="Disputed by"
-        title="Whoever claims this region — a country, a movement, a gang, one side of a civil war. With any claimant set, the region renders STRIPED — the current owner's colour plus each claimant's — here and in the game."
+        title="Countries that claim this region. With any claimant set, the region renders STRIPED — the current owner's colour plus each claimant's — here and in the game."
       >
         <TagField
           value={form.claimants}
@@ -271,9 +233,33 @@ const SelectionInspector = ({ api, selection, types, colors, colorOverrides, set
           }}
         />
       </Row>
-      {form.claimants.length > 0 && upsertPolity && (
-        <ClaimantRoles claimants={form.claimants} polities={polities} upsertPolity={upsertPolity} label={polityLabel} />
-      )}
+      <Row
+        label="Controlled by group"
+        title="A group — a cartel, a militia, a zombie outbreak — that controls these regions without owning them. The game outlines the group's whole area and tints it in the group's colour; the AI is told what the group is. Create and describe groups in the Groups panel."
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+          {form.group && groupRegistry[form.group] && (
+            <span style={{ width: 14, height: 14, borderRadius: 3, flexShrink: 0, background: groupRegistry[form.group].color, boxShadow: "0 0 0 1px rgba(0,0,0,0.5)" }} />
+          )}
+          <SelectField
+            value={form.group}
+            onChange={(value) => {
+              setForm((f) => ({ ...f, group: value }));
+              apply({ group: value || null });
+            }}
+            options={[
+              { value: "", label: selection.length > 1 && !form.group ? "— none / mixed —" : "— none —" },
+              ...[...new Set([...Object.keys(groupRegistry), ...(form.group ? [form.group] : [])])]
+                .sort((a, b) => a.localeCompare(b))
+                .map((name) => ({ value: name, label: name })),
+            ]}
+            width={130}
+          />
+          <button type="button" onClick={onOpenGroups} style={pillButton(false)} title="Create, describe and colour groups">
+            Groups…
+          </button>
+        </span>
+      </Row>
       {form.owner && setColorOverride && (
         <Row label="Colour" title="The colour this country is painted, here and in the game">
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>

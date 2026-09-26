@@ -26,6 +26,7 @@ const TOOLS = [
   { id: "dissolve", icon: "eraser", label: "Delete border (merge two regions)", enabled: true },
   { id: "paint", icon: "paint", label: "Paint polity (click or drag across regions; one stroke = one undo)", enabled: true },
   { id: "feature", icon: "feature", label: "City tool (click map to add a city, click a city to edit it)", enabled: true },
+  { id: "marker", icon: "pin", label: "Map feature tool (click the map to place a base, port, landmark or other feature; click one to edit it)", enabled: true },
   { id: "unit", icon: "unit", label: "Unit tool (click the map to place a starting unit, click a unit to edit it)", enabled: true },
   { id: "feature-box", icon: "pin", label: "Box-select features (drag a rectangle over cities and features to select them all)", enabled: true },
 ];

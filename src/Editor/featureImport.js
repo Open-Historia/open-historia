@@ -13,6 +13,8 @@
 
 // Ids in the document's own shape (useMapDocument newId), minted here so the
 // parser stays free of React and testable under node.
+import { populationByYearField } from "../runtime/cityPopulation.js";
+
 let sequence = 0;
 const newId = (prefix) => `${prefix}_${Date.now().toString(36)}${(sequence++).toString(36)}`;
 
@@ -57,6 +59,8 @@ const toFeature = (props, coord, index) => {
     regionId: null,
     population: number(props.population) ?? 0,
     tags: readTags(props),
+    // A population by year, in any of the shapes the game reads.
+    ...populationByYearField(props),
   };
 };
 

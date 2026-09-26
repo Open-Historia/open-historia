@@ -7,8 +7,6 @@
  * finally stops treating every muddy wartime occupation like a peace treaty.
  */
 
-import { polityRoleOf } from "../../../server/polityRole.js";
-
 const VERSION = "0.1.2";
 
 const normalizeString = (value) => String(value ?? "").trim();
@@ -415,24 +413,8 @@ export const summarizeTerritorialState = (world, candidates = [], { placesNamed 
     regionOwnershipOverrides: pick(control),
     regionSovereigntyOverrides: pick(sovereignty),
     regionClaimants: pick(claimants),
-    ...claimantRolesIn(world, kept.flatMap((regionId) => normalizeArray(claimants[regionId]))),
     ...(ordered.length > kept.length ? { omittedRegions: ordered.length - kept.length } : {}),
   };
-};
-
-// What the claimants in these rows are, when their records say
-// (server/polityRole.js) — "a terrorist organisation", "the rebel side of the
-// civil war" — so a contest by a gang is not read as one by an army. Beside
-// the rows, never inside them: a name stays one to copy exactly.
-const claimantRolesIn = (world, names) => {
-  const roles = {};
-  for (const name of names) {
-    const key = normalizeString(name);
-    if (!key || roles[key]) continue;
-    const role = polityRoleOf(world?.polityOverrides, key);
-    if (role) roles[key] = role;
-  }
-  return Object.keys(roles).length ? { claimantRoles: roles } : {};
 };
 
 // Which events the director would be asked about and what it would be shown of

@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
-import { polityRoleOf } from "../../../server/polityRole.js";
+import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
@@ -277,6 +277,13 @@ const SIDEWAYS_SHEET_PLACEMENT = {
 };
 const SIDEWAYS_SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 4.5rem - ${SAFE_TOP} - 7.75rem - ${SAFE_BOTTOM})`;
 
+// The groups (runtime/groups.js) and which regions each controls, as the card
+// reads them.
+const groupsOf = (world) => {
+    const groups = normalizeGroups(world?.groups);
+    return { groups, groupAreas: normalizeGroupAreas(world?.groupAreas, groups) };
+};
+
 const RegionPopup = () => {
     const isMobile = useIsMobile();
     // A sheet on a phone, and on a phone held sideways (runtime/mobileUi.js).
@@ -313,6 +320,8 @@ const RegionPopup = () => {
         regionClaimants: {},
         regionOwnershipOverrides: {},
         regionSovereigntyOverrides: {},
+        groups: {},
+        groupAreas: {},
     });
     // Author-set flags from the scenario's flags.json (owner code -> data URL).
     // Memoized in assets.js, so this is one fetch per scenario, not per selection.
@@ -335,6 +344,7 @@ const RegionPopup = () => {
                 regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                ...groupsOf(world),
             });
         };
 
@@ -371,6 +381,7 @@ const RegionPopup = () => {
                 regionClaimants: withMapClaims(world, getPrimedScenarioRegionCatalog())?.regionClaimants ?? {},
                 regionOwnershipOverrides: world?.regionOwnershipOverrides ?? {},
                 regionSovereigntyOverrides: world?.regionSovereigntyOverrides ?? {},
+                ...groupsOf(world),
             });
         };
         window.addEventListener("oh:world-updated", onWorldUpdated);
@@ -579,6 +590,7 @@ const RegionPopup = () => {
             .filter((value) => value && value !== controllerCode),
     )];
     const isUnclaimed = controllerCode === "";
+    const controllingGroup = regionId ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null : null;
     const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
     const isContested = claimants.length > 0;
     const controlStatus = isOccupied && isContested
@@ -779,21 +791,28 @@ const RegionPopup = () => {
             {claimants.length > 0 && (
                 <>
                 <span style={{ color: "rgba(255,255,255,0.42)" }}>Claimants</span>
-                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word", display: "grid", gap: 2 }}>
-                {claimants.map((code) => {
-                    // What the claimant is, in the map author's or the AI's words.
-                    const role = polityRoleOf(worldState?.polityOverrides, code);
-                    return (
-                        <span key={code}>
-                        {displayPolity(code)}
-                        {role ? <span style={{ color: "rgba(255,255,255,0.55)" }}>{` — ${role}`}</span> : null}
-                        </span>
-                    );
-                })}
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                {claimants.map(displayPolity).join(", ")}
                 </span>
                 </>
             )}
             </div>
+            </>
+        )}
+
+        {controllingGroup && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", lineHeight: 1.35, minWidth: 0 }}>
+            <span aria-hidden="true" style={{ width: "10px", height: "10px", borderRadius: "2px", flexShrink: 0, background: controllingGroup.color, boxShadow: "0 0 0 1px rgba(0,0,0,0.55)" }} />
+            <span style={{ color: "rgba(255,255,255,0.42)", flexShrink: 0 }}>Group control</span>
+            <span style={{ color: controllingGroup.color, fontWeight: 700, minWidth: 0, wordBreak: "break-word" }}>{controllingGroup.name}</span>
+            </div>
+            {controllingGroup.description && (
+                <div style={{ marginTop: "3px", fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.72)", maxHeight: "88px", overflowY: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {controllingGroup.description}
+                </div>
+            )}
             </>
         )}
 

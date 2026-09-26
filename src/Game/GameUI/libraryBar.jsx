@@ -2721,6 +2721,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         basemap: seed.world?.basemap ?? null,
         // The starting units placed in the Workshop (world.units, source "scenario").
         units: seed.world?.units ?? [],
+        // The groups and their areas: the Workshop opened with the world's, so
+        // what it saves is the whole of them.
+        ...(seed.world?.groups ? { groups: seed.world.groups, groupAreas: seed.world.groupAreas ?? {} } : {}),
+        // The structures (world.markers): the Workshop opened with the scenario's
+        // and edits them as map features, so it hands back the whole list.
+        ...(Array.isArray(seed.world?.markers) ? { markers: seed.world.markers } : {}),
+        // The puppet states, likewise opened with the scenario's own rows.
+        ...(Array.isArray(seed.world?.puppets) ? { puppets: seed.world.puppets } : {}),
       },
       game: {
         ...currentGame,
@@ -3613,7 +3621,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                     ? world.regionClaimants
                     : {},
                   settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
+                  // Which group's area each region is in; stamped with the disputes.
+                  groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
+                    ? world.groupAreas
+                    : {},
                 },
+                groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
                 regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
                 cities: cities && Array.isArray(cities.features) ? cities : null,
                 colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
@@ -3628,6 +3641,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 customCities: Boolean(world.customCities),
                 // The scenario's starting units, so the Units panel edits what the game starts with.
                 units: Array.isArray(world.units) ? world.units : [],
+                // Its structures, edited as map features that are not cities.
+                markers: Array.isArray(world.markers) ? world.markers : [],
+                // Its puppet states, for the Countries panel.
+                puppets: Array.isArray(world.puppets) ? world.puppets : [],
               });
             });
           }

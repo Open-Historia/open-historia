@@ -13,7 +13,6 @@ import {
     updateEntry,
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { polityRoleOf } from "../../../server/polityRole.js";
 import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger } from "./requestBudget.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
@@ -3081,15 +3080,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
             speakingAs: speaker,
             worldData,
         })),
-        // Each participant with what it is, when its record says
-        // (server/polityRole.js): a leader speaking for "a terrorist
-        // organisation" or "the rebel side of the civil war" speaks as one.
-        chatParticipants: countries
-          .map((country) => {
-            const role = polityRoleOf(worldData?.polityOverrides, country);
-            return `- ${country}${role ? ` — what it is: ${role}` : ""}`;
-          })
-          .join("\n") || participantList || "",
+        chatParticipants: participantList || "",
         // The thread itself rides as the turns (see CONVERSATION_IN_TURNS). It
         // also stops this prompt naming the WRONG thread: the variable took the
         // speaker's most recently active chat, which need not be this one.
