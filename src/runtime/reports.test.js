@@ -8,7 +8,6 @@ import assert from "node:assert/strict";
 
 import {
     REPORTS_LIMIT,
-    REPORT_VOICE_DIRECTIVE,
     applyReportOps,
     describeReportsForPrompt,
     normalizeReportEntry,
@@ -113,11 +112,18 @@ test("the prompt is shown one bounded line per report, holders named, and nothin
     assert.equal(describeReportsForPrompt(list, { sees: (visibleTo) => visibleTo === null }).split("\n").length, 2, "scoped to the audience");
 });
 
-test("the directive says what a report is, who holds it, and the boundary with the map", () => {
-    assert.match(REPORT_VOICE_DIRECTIVE, /^\[Reports — documents, not summaries\]/);
-    assert.match(REPORT_VOICE_DIRECTIVE, /impacts\.reports/);
-    assert.match(REPORT_VOICE_DIRECTIVE, /visibleTo/);
-    assert.match(REPORT_VOICE_DIRECTIVE, /anything that moved the map/);
+// The jump template carries the rule (it was a directive appended at call time
+// until 2026-09-26).
+test("the jump is told what a report is, who holds it, and the boundary with the map", async () => {
+    const { default: prompts } = await import("../Game/AI/defaultPrompts.json", { with: { type: "json" } });
+    for (const task of ["jumpForward", "autoJumpForward"]) {
+        const text = prompts.tasks[task];
+        const rule = text.slice(text.indexOf("[Reports — documents, not summaries]"));
+        assert.match(rule, /^\[Reports — documents, not summaries\]/);
+        assert.match(rule, /impacts\.reports/);
+        assert.match(rule, /visibleTo/);
+        assert.match(rule, /never moves the map/);
+    }
 });
 
 test("a document keeps who sent it, and a copy passed on keeps who passed it", () => {

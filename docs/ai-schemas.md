@@ -407,8 +407,8 @@ Every AI gameplay call goes through this one function. It owns prompt assembly, 
 
 1. `loadPromptCatalog` + `renderTemplate` build the system prompt from the current templates plus the campaign's guidance edits (ai-prompts.md §2).
 2. Append the **difficulty directive** from `readGameData().difficulty` (`:400`).
-3. For `jumpForward`/`autoJumpForward`: append **[Player Agency]** and **[Map Truth]** blocks at call time (`:411-421`) — a leftover of the frozen-prompt era; the templates now reach every campaign (ai-prompts.md §2), and `promptDedupe.js` skips a directive the template already carries.
-4. For `actions`/jumps/interactive events: append **[International Reputation]** context (`:425`).
+3. For `jumpForward`/`autoJumpForward`: nothing is appended; the live records are rendered into the template at `${JUMP_LIVE_STATE}` before it renders (ai-prompts.md §6a).
+4. For `actions` and the interactive event tasks: append **[International Reputation]** context.
 
 ### 8.3 The two-attempt loop (`:447-502`)
 

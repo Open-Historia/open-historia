@@ -3,7 +3,7 @@ import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOn
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { TERRITORY_BASIS_DIRECTIVE, describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -27,6 +27,7 @@ import {
   bindSelectedStorylineEvents,
   buildWorldInitiativeContext,
   createMotionRepairBudget,
+  DIPLOMATIC_STATE_HEADING,
   decodeWorldStorylineUpdates,
   describeAntiStasisObjectiveRule,
   findSkipStorylineMotionIssues,
@@ -50,6 +51,7 @@ import {
 import { buildPromptFingerprint, isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
+  WRITING_REMINDER,
   buildSegmentInstruction,
   eventCountRangeForDays,
   formatDurationLabel,
@@ -57,7 +59,7 @@ import {
   planJumpSegments,
   segmentEventRange,
 } from "./jumpSegments.js";
-import { UNIT_CONTRACT_MARKER, collapseRepeatedWorldContext, templateAlreadySays } from "./promptDedupe.js";
+import { collapseRepeatedWorldContext, templateAlreadySays } from "./promptDedupe.js";
 import {
   HIGH_PRIORITY_ASSESSMENT_MARKER,
   HIGH_PRIORITY_ASSESSMENT_RULE,
@@ -242,7 +244,8 @@ import {
   statSheetKeys,
 } from "../../runtime/statsSheet.js";
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
-import { difficultyDirective } from "../../runtime/difficulty.js";
+import { difficultyDirective, difficultyMeta } from "../../runtime/difficulty.js";
+import { buildRealHistoryDirective } from "./futureHistoryBoundary.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
@@ -268,7 +271,7 @@ import {
   projectChatThread,
   threadAsSeenBy,
 } from "../../runtime/chatThreads.js";
-import { REPORT_VOICE_DIRECTIVE, describeReportsForPrompt, normalizeReportOp } from "../../runtime/reports.js";
+import { describeReportsForPrompt, normalizeReportOp } from "../../runtime/reports.js";
 import {
   applyTerritoryTempo,
   buildScriptedEventsInstruction,
@@ -545,57 +548,27 @@ const relationStatusForScore = (value) => {
 const buildWarLedgerDirective = (variables) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   const canonicalWarContext = normalizeString(variables?.canonicalWarContext);
-  return `[Canonical War-State Ledger]
-world.wars is the AUTHORITATIVE source of belligerency. A tense relationship, an alliance, a mobilisation or real-world history does NOT make two polities belligerents; only this ledger does.
-
-CURRENT CANONICAL CONFLICTS:
-${canonicalWarContext || "No active or ceasefire canonical wars are recorded."}
-
-Hard rules:
-- Actual battlefield combat requires an ACTIVE canonical war.
-- Battle/offensive/invasion/bombardment/raid/siege/front-combat events MUST carry event.warId and event.combatants.
-- event.combatants must name real belligerent polities from BOTH opposing sides of that war.
-- A declaration of war, entry into an existing war, departure, ceasefire, resumption, or peace/end MUST emit a matching top-level warUpdates record AND a real event carrying the same warId. The engine binds the record to that event; do not spend effort counting event positions.
-- An alliance does not silently activate. Mobilization does not silently activate. A historical war does not silently activate.
-- If a historically expected belligerent has not actually joined in THIS campaign, it has no battlefield front.
-- WAR-DEPENDENT DOMESTIC / ECONOMIC FRAMING is ledger-bound too. A polity that is NOT a belligerent must not be described as operating under its own wartime economy, rationing, mobilisation, war taxes, blockade conditions or comparable home-front conditions merely because the calendar matches real history or because OTHER countries are fighting. Spillover into a neutral is allowed only with a concrete causal bridge (disrupted imports, refugee pressure, sanctions) and must be described as spillover from the named foreign conflict.
-- Real-world chronology is never evidence that an absent war, blockade, mobilisation or home-front regime exists in THIS campaign.
-- IF YOU WRITE FIGHTING, OPEN THE WAR IN THE SAME ANSWER. An event that narrates a battle, an offensive, an incursion, a bombardment, a siege or a front must name both sides in event.combatants and carry the warId of a war this ledger already holds, or of one your own warUpdates record starts in this same payload. A fight with no war behind it is not kept as a war: the engine strips its warId and its combatants, the belligerency never happens, and the campaign ends up reading like a war while recording peace - no fronts, no captures, nobody losing anything. If two sides are genuinely trading blows, that IS a war and it is yours to declare; if you cannot name who is fighting whom, then what you are describing is unrest, a raid or a deployment, so write it as that instead.
-- ${playerName} may not be JOINED to a war on their behalf merely because history or alliance logic suggests it: entering a war is the player's own commitment, and the player-agency rules control it. Another power DECLARING war on ${playerName} is the opposite case and is entirely yours to write - it is that power's decision, not the player's - provided the causal event narrates it the way this ledger requires of anyone.
-- warUpdates is compact text, one record per line, fields separated by ~ (never use ~ inside a field):
-  warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note
-  ops: start | join-a | join-b | leave | ceasefire | resume | end
-  For start, actorsCSV is side A and opponentsCSV is side B; for join-a/join-b/leave, actorsCSV names the polities joining or leaving. eventNumbersCSV is the 1-based number of the event that establishes the transition and may be blank: the engine binds from warId and the transition's own wording. Use a stable, descriptive warId (e.g. war-france-germany-1914) and reuse it for later lifecycle records.
-- Return warUpdates:"" when belligerency does not change in this pass.`;
+  return `[Wars]
+${canonicalWarContext || "No wars are recorded."}
+Only this ledger makes polities belligerents — tension, an alliance or a mobilisation does not — and a war real history holds begins here only when you open it, with a warUpdates record and the event that starts it. Every battle, offensive, invasion, bombardment, siege or front carries event.warId and event.combatants naming both sides. If you write fighting, open the war in the same answer: a declaration, an entry, an exit, a ceasefire, a resumption or a peace each needs a warUpdates record and an event carrying the same warId, or the engine strips the war from the fighting and records peace. Two sides genuinely trading blows are at war; if you cannot say who is fighting whom, it is unrest, a raid or a deployment, so write it as that. A polity at peace does not live under war conditions — rationing, war taxes, mobilisation — because others are fighting, unless the war reaches it through something concrete (lost imports, refugees, sanctions). Nobody may join a war on ${playerName}'s behalf; another power declaring war on ${playerName} is that power's decision, and yours to write.
+warUpdates is one string, one record per line, fields separated by ~ (never inside a field): warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note. op is start, join-a, join-b, leave, ceasefire, resume or end; for start the actors are side A and the opponents side B; for join and leave the actors are the polities joining or leaving; eventNumbersCSV may be blank. Give a war a stable id (war-france-germany-1914) and reuse it. An empty string when nothing changes.`;
 };
 
 const buildDiplomaticLedgerDirective = (variables) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
-  // The Native World Director context (jump tasks) already carries this slice —
-  // its CANONICAL DIPLOMATIC STATE section, built from the same ledger for the
-  // same segment, with the attention storylines' participants added. Rendering
-  // it here too sent every jump request the same relations twice, about five
-  // thousand characters; point at that copy instead. Prompts without the
-  // director (idle diplomacy, the pregame bootstrap) keep their own.
-  const sliceInDirector = normalizeString(variables?.worldInitiativeContext).includes("CANONICAL DIPLOMATIC STATE");
+  // The world director's context (jump tasks) already carries this slice, built
+  // from the same ledger for the same segment; printing it here too sent every
+  // jump the same relations twice.
+  const sliceInDirector = normalizeString(variables?.worldInitiativeContext).includes(DIPLOMATIC_STATE_HEADING);
   const state = sliceInDirector
-    ? "The bounded relevant slice of this ledger — attention actors, bilateral relations, formal agreements — is the CANONICAL DIPLOMATIC STATE section of the Native World Director context above; it is not repeated here."
-    : (canonicalDiplomacy || "No canonical bilateral relations or formal agreements are recorded yet.");
-  return `[Canonical Diplomatic Ledger]
+    ? "The relevant slice of the ledger is under What Is in Motion above."
+    : (canonicalDiplomacy || "No bilateral relations or formal agreements are recorded yet.");
+  return `[Relations and Agreements]
 ${state}
-
-Lasting bilateral political shifts use top-level relationUpdates; signed, ratified or concluded formal treaties, alliances, guarantees and pacts use top-level agreementUpdates. polityChanges remains for polity metadata and reputation, regionTransfers for legal territorial settlements, and unitOps for concrete military coordination. A.I.-controlled polities have their own diplomacy and may negotiate, threaten, align, mediate, trade or make agreements among themselves without waiting for ${playerName}; private A.I.-to-A.I. diplomacy belongs in the TIMELINE as events, never in a chat the player is not part of.
-
-Relation decision model: a canonical bilateral relation score/status is persistent political climate, not decoration. Use it as a strong prior for A.I. trust, threat interpretation, bargaining posture, willingness to cooperate or compromise, tolerance of strategic risk and severity of reaction. It is NOT a hard acceptance probability or veto: national interest, formal obligations, geography, relative power, domestic constraints, reputation and the concrete proposal remain independent causes, so a friendly government may reject a dangerous demand and a hostile one may cooperate under necessity. Formal agreements, bilateral warmth and actual war are separate facts: a strained ally may still owe treaty duties; friendly states without a treaty have promised nothing; hostility alone does not create belligerency. When a NEW event materially changes a bilateral climate, emit a relationUpdates record with the new ABSOLUTE score bound to that event; never drift scores merely because time passed, and let the same foreign action provoke different responses from a trusted partner than from a distrusted rival.
-
-- relationUpdates is compact text, one record per line, fields separated by ~ (never use ~ inside a field):
-  A~B~score~status~eventNumbersCSV~summary
-  score is the new absolute score from -100 to 100; status is one of friendly | cordial | neutral | cautious | strained | hostile | rival (blank derives it from the score); eventNumbersCSV is the 1-based number of the causal event and may be blank (the engine binds the one event that matches).
-- agreementUpdates is compact text, one record per line:
-  agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms
-  ops: start | update | suspend | resume | end | expire. type is one of alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other. Use a stable, descriptive agreementId (e.g. franco-russian-alliance-1894) and reuse it for later lifecycle records; every record needs a real causal event in this response, and only start needs the full type/parties/title.
-- Return relationUpdates:"" and agreementUpdates:"" when nothing material changes.`;
+A relation is the lasting political climate between two polities — friendly, cordial, neutral, cautious, strained, hostile or rival. It is a strong prior for how they deal with each other, never a veto: a friendly government can refuse a dangerous demand and a hostile one can cooperate under necessity. Formal agreements, warmth and war are separate facts. Other powers make their own diplomacy with each other, without waiting for ${playerName}, and it goes on the timeline as events.
+relationUpdates is one string, one record per line: A~B~score~status~eventNumbersCSV~summary — the new absolute score from -100 to 100, status blank to derive it from the score — only when an event changes the climate, never because time passed. agreementUpdates is one string, one record per line: agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms, where op is start, update, suspend, resume, end or expire, and type is alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement or other; give it a stable id (franco-russian-alliance-1894) and reuse it; only start needs the type, parties and title. Every record needs an event that causes it; eventNumbersCSV may be blank.
+Empty strings when nothing changes.`;
 };
 
 const IDLE_RELATION_DECISION_MODEL = `[Diplomatic Relation Decision Model]
@@ -1598,11 +1571,18 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 // need well over a minute per turn. The old 12s default silently discarded
 // their answers and served the canned fallback instead — turns "completed"
 // with nothing to show. The UI has spinners; waiting beats silently wrong.
-// Capability reference appended to every timeline jump (see runJsonTask below): the
-// full menu of world-changing levers the tool schema exposes, so the model always ends
-// its system prompt with an explicit list of what it can do and how. Injected at call
-// time so it reaches existing frozen-prompt games too.
-const ACTIONS_REFERENCE = "[Actions You Can Take]\nThis is the full menu of levers you have to change the world. Everything you change rides on an event's \"impacts\" object, except the two whole-jump levers noted at the end. Reach for the RIGHT lever, and NEVER narrate a change in an event's text without also emitting the impact that makes it real — narration and world state must always agree.\n\n• regionTransfers — Move a region to a new owner. This is the most important lever and the one most often forgotten: use it for every conquest, cession, sale, liberation, annexation, or hand-over, one entry per region. Shape: {\"regionId\":\"<exact id, or the plain region name if you don't know the id>\",\"regionName\":\"\",\"fromCode\":\"\",\"toCode\":\"<new owner code>\"}. toCode may name a polity that does not exist yet: the exact name you write founds it (a new state, a breakaway, a successor), so spell a new polity as it should appear on the map and an existing polity exactly as the map does, since a short form or translation of an existing country founds a second country beside it; add a polityChanges entry in the same event only to give the new polity a colour, aliases or a note. An event whose text says land changed hands but that carries no regionTransfers is invalid output and silently breaks the map. Transfer in order of proximity to the attacker's territory; never hand over an isolated region ringed by enemy land without a naval or airborne reason. A transfer is enacted IMMEDIATELY when the other side has agreed (a treaty, a negotiated cession, an event where they conceded) or when the ground has already been taken and held - a hand-over both sides accept needs no programme and no project. Where neither is true the land has NOT changed hands: record the claim with regionClaims instead and leave the border exactly where it is.\n\n• polityChanges — Create, rename, recolor, or re-describe a polity. One entry can do any combination: {\"code\":\"<polity code>\",\"name\":\"<new name, only if it changed>\",\"color\":\"#RRGGBB (only if it changed)\",\"aliases\":[\"...\"],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"...\"],\"stats\":{...},\"note\":\"<why>\"}. Create a polity by giving a new code with a name and color, or simply by handing it territory in regionTransfers or regionControlOps (it is founded under that exact name; an entry here then sets its colour, aliases and note). Change name/color when the polity's identity actually changes - a regime change, a revolution, a unification or partition, a proclaimed republic or a restored monarchy - and ALWAYS when the player has ordered it for their own polity. A mere new leader is not a rename. But a rename or recolour the player has ordered for THEIR OWN country is an administrative act of their own government: it needs no other power's consent, it cannot be refused, and it must be enacted in this jump by an event carrying polityChanges with the new name and that action's id in actionIds. Keep \"code\" as the polity's CURRENT name - the engine matches on it and then re-keys the country to the new one, so from then on the country IS the new name everywhere and the old one survives only as a former name; a change addressed to the name you are introducing lands on nothing and mints a second country beside the real one. On an ideological or alignment shift, rewrite the COMPLETE tags list (it is a full replacement, not a delta). Set reputation (0 = pariah, 100 = universally trusted) only when this turn's events actually moved a polity's standing. Set intelligence (0 = no service to speak of, 100 = the best in the world) only when something changed it: a purge or defection, a new bureau or budget, a foreign spy ring exposed, a player action that built the service up or ran it down. A SUDDEN shock — a purge, a defector, a ring rolled up — is a direct change here and takes effect at once. Building a service UP is not sudden and does not belong here: open it on the Projects board as a programme and put the new rating in that project's onComplete.polityChanges, so it arrives when the work actually finishes and the player can watch it coming, fund it, or have a rival wreck it first. Deciding to have a better service is not the same as having one. A country's national statistics move ONLY through \"stats\" here — send just the fields that changed; everything omitted keeps its prior value. That includes WHO LEADS: when a leader is overthrown, assassinated, dies, resigns or is voted out, put the successor's name in stats.leader (together with stats.government and stats.stability when those moved too). An event that narrates a leader falling but leaves stats.leader untouched leaves the OLD name standing on that country's stat sheet, so the story and the sheet disagree.\n\n• regionClaims — Mark territory CLAIMED but not held, so the map can show a dispute instead of pretending nothing happened. Use it when a polity asserts a right to land it does not control and has not been given: an irredentist declaration, a proclaimed union, a contested border, a government-in-exile's title, a player declaring a neighbour's province theirs. Shape: {\"regionId\":\"<exact id, or the plain region name>\",\"claimantCode\":\"<claiming polity's full name>\",\"note\":\"<why>\"}; add \"drop\":true to withdraw a claim that was renounced, traded away, or lost with the claimant's defeat. The region renders striped in every claimant's colour and stays that way until it is settled - by a regionTransfers entry when someone finally wins or concedes it, or by a drop. NEVER move a border for a claim alone, and never leave a claim unrecorded either: a declaration that changes nothing the player can see is a declaration they cannot tell they made.\n\n• unitOps — Move the war on the map with battalions. Four ops:\n    {\"op\":\"spawn\",\"unit\":{\"name\":\"\",\"type\":\"infantry|armor|air|naval|artillery|garrison\",\"ownerCode\":\"\",\"strength\":1-100,\"composition\":\"\",\"at\":\"<where, in words: near Kharkiv / eastern Ukraine / off Sevastopol>\"}}\n    {\"op\":\"move\",\"unitId\":\"<existing id>\",\"at\":\"<where, in words>\",\"posture\":\"\",\"note\":\"\"}\n    {\"op\":\"strength\",\"unitId\":\"<existing id>\",\"strength\":0-100,\"note\":\"\"}\n    {\"op\":\"remove\",\"unitId\":\"<existing id>\",\"note\":\"\"}\n  Spawn units for mobilizations and reinforcements, move them to reflect offensives, lower their strength as they take losses, and remove them only when destroyed or disbanded. Only reference unit ids that appear in the current-units list. Say WHERE with at, in words (see [Placing Things]); the engine finds the point and keeps counters off each other. Give lng/lat only for a spot no name describes. When a front is decisively won, pair the advance with a regionTransfers entry so the border follows the troops.\n\n• markerOps — Place, remove, rename or resize a named structure or city. Four ops:\n    {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"<lowercase, e.g. military base / port / embassy / airfield / city>\",\"ownerCode\":\"\",\"at\":\"<where, in words: near Odesa / coast of Crimea>\",\"note\":\"\",\"foundedAt\":\"\"}}\n    {\"op\":\"remove\",\"name\":\"<exact existing name>\",\"note\":\"\"}\n    {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"<new name>\",\"note\":\"<why>\"}\n    {\"op\":\"population\",\"name\":\"<city>\",\"population\":<whole number of people>,\"note\":\"<why>\"}\n  Emit build whenever an event founds or constructs a place, remove when one is destroyed, and rename when a city or structure is renamed (rename works on existing map cities too — a city renamed after a leader or ideology, a capital re-designated, a conquered city given the conqueror's name). Structures NEVER move borders: a facility one polity builds inside another's land does not transfer the region, and ownerCode is who runs the facility, not who owns the ground. Emit population whenever an event plausibly moves how many people live somewhere - a siege, famine, epidemic, bombing or evacuation shrinking a city; an industrial boom, resettlement or refugee influx growing one - giving the new TOTAL, not the change. It works on any city on the map, whether the scenario authored it or it came with the world.\n\n• createdChats — Have another polity open a diplomatic chat with the player BECAUSE of this event (a war scare prompting mediation, a border incident prompting an ultimatum, a windfall prompting a trade delegation). Shape: {\"countries\":[\"...\"],\"title\":\"<names the purpose>\",\"speaker\":\"<the initiating polity — never the player>\",\"openingMessage\":\"<that leader's first message, in their voice>\"}. The other side always speaks first; a blank or untitled chat is invalid.\n\n• actionIds — List the ids of the player's queued actions that this event resolves, so the game can clear them from the queue.\n\nWhole-jump levers (top level of your output, NOT inside an event):\n• diplomaticOutreach — Polities reaching out to the player on their OWN initiative this period — treaty feelers, trade proposals, non-aggression pacts, mediation offers, warnings, summit invitations — not tied to any single event. Same shape as createdChats. Open one whenever a polity plausibly would, rather than defaulting to none.\n\nKeep the total across createdChats and diplomaticOutreach to at most 3 per jump, and only when the approach genuinely serves the sender's interests.";
+// The levers a time skip pulls that need more than their field notes in the
+// output function. Everything the function's own schema already says, and every
+// rule the jump template states (the map, units, diplomacy, orders), is left to
+// those; this is shapes and the few semantics nothing else carries.
+const JUMP_LEVERS = [
+  "[Levers]",
+  "Everything you change rides on an event's impacts, and no event's text may claim a change its impacts do not make. The output function describes each field; these need a word more:",
+  "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"stats\":{\"leader\":\"\",\"government\":\"\",\"stability\":0-100,\"<any other field that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A country's figures move only through stats — just the fields that changed — and that includes who leads: when a leader falls, dies, resigns or is voted out, the successor goes in stats.leader (with government and stability when those moved too), or the stat sheet keeps the old name. A better intelligence service is built over time: open it as a project, never as an instant rating.",
+  "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
+  "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
+  "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
+].join("\n");
 
 // Written into a fallback's rawResponse when there is no model output to show.
 // Exported so the debug report (time.jsx) can tell this apart from real model
@@ -2043,6 +2023,159 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 //
 // `reminders: false` leaves out the Game Master's reminders; the turn review
 // adds them once to the whole request instead of once per job.
+// A scenario's own stats sheet, or its own strategic indices, as every task that
+// authors stats is told them.
+const scenarioStatSheetDirective = (statSheetDefinition) => `[Scenario National Stats Sheet — LIVE]
+This scenario REPLACES Open Historia's standard modern National Stats sheet with a scenario-defined sheet. Do not invent or maintain hidden modern GDP, unemployment, debt, population, stability, or strategic-index fields unless they are explicitly defined below. Every listed value is persistent campaign canon and uses its exact machine key. Values are ABSOLUTE, never deltas. On ordinary turns update only values that genuinely changed; for the countryStatSheet task return every defined value.
+
+${describeStatSheetDefinition(statSheetDefinition)}
+
+Formatting prefixes/suffixes are display metadata only; return plain JSON numbers. Respect each value's declared min/max range and meaning.`;
+
+const scenarioStatIndicesDirective = (statIndexRows) => `[Scenario Strategic Indices — LIVE]
+This scenario replaces the standard strategic indices with EXACTLY these indices, each as an integer from 0 to 100:
+${describeStatIndexRows(statIndexRows)}
+Use these exact machine keys whenever you author stats.indices. Do not invent default modern indices that are not listed here, and do not invent extra keys.`;
+
+// ---- The time skip's live records -------------------------------------------------
+// Everything a jump is told that only this turn knows — the records, the ledgers'
+// line formats, the levers, the player's orders, the scenario author's direction —
+// built here and rendered into the jump template at ${JUMP_LIVE_STATE}. The
+// template's rules come before it and its writing brief after it, so the prompt
+// ends on how an event is written (defaultPrompts.json, [How to Write an Event]).
+const JUMP_TASK_KEYS = new Set(["jumpForward", "autoJumpForward"]);
+
+const JUMP_LIVE_STATE_BANNER = [
+  "============================================================",
+  "THE WORLD RIGHT NOW — the live records",
+  "============================================================",
+].join("\n");
+
+// The chosen difficulty as the simulation reads it (runtime/difficulty.js).
+const jumpDifficultyDirective = (difficulty) => {
+  const meta = difficultyMeta(difficulty);
+  return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
+};
+
+const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {} } = {}) => {
+  const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
+  let world = {};
+  let game = {};
+  try {
+    const [rawWorld, rawGame] = await Promise.all([readWorldState({ force: false }), readGameData()]);
+    world = normalizeWorldState(rawWorld);
+    game = rawGame || {};
+  } catch {
+    // Without the save the records the variables carry still go out.
+  }
+  const blocks = [JUMP_LIVE_STATE_BANNER];
+
+  // How this world relates to real history (futureHistoryBoundary.js).
+  try {
+    blocks.push(buildRealHistoryDirective({ world, game, originDate: normalizeString(game?.gameDate) }));
+  } catch {
+    // The template's own [Real History Is the Default] still stands.
+  }
+  if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
+
+  blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+
+  // What is in motion: storylines, pressures, economies and the diplomatic
+  // slice (nativeWorldDirector.js), built per segment.
+  const director = normalizeString(variables.worldInitiativeContext);
+  if (director) blocks.push(director);
+  blocks.push(buildWarLedgerDirective(variables));
+  blocks.push(buildDiplomaticLedgerDirective(variables));
+
+  // What earlier chats agreed, promised, threatened or declared.
+  const continuity = normalizeString(variables.diplomaticContinuity);
+  if (continuity) {
+    blocks.push(`[Diplomatic Memory]
+What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.
+${continuity}`);
+  }
+
+  const reputation = normalizeString(variables.playerPolityReputationContext);
+  const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
+  if (reputation || intelligence) {
+    blocks.push([
+      "[Standing and Intelligence]",
+      reputation,
+      intelligence,
+      "Reputation decides how far others trust, trade with and stand by a polity: aggression, atrocities and broken treaties lower it; aid and kept promises raise it. An intelligence rating is how much of others' private diplomacy a service reads and how well it guards its own: a purge, a defection or a network rolled up lowers it at once; investment that actually delivers raises it a few points at a time. Set either (reputation / intelligence on polityChanges, the new absolute value 0-100) only when this period's events change it.",
+    ].filter(Boolean).join("\n"));
+  }
+
+  const pending = normalizeString(variables.pendingUnitOrders);
+  if (pending && !pending.startsWith("No units")) {
+    blocks.push(`[Standing Unit Orders]
+The engine carries these orders out every turn — a move continues toward its destination, a patrol keeps its station. Do not move these units again; give one a unit op only when an event redirects it or ends its order, and say why.
+${pending}`);
+  }
+
+  const board = buildJumpProjectsDirective(variables.projectsSummary);
+  if (board) blocks.push(board);
+
+  if (isActiveFeatureEnabled("espionage")) {
+    try {
+      const brief = espionageBrief(world, await readOpenedIntercepts(), { playerPolity: normalizeString(game?.country) });
+      if (brief) {
+        blocks.push(`[Espionage]
+Known to you, not to the player, whose service sees only what it can decode. Let it shape events: a polity with an agent inside another acts on what it stole, a polity fed a planted story believes it, an expulsion sours relations. Never reveal in an event that an agent has been turned until it is discovered.
+${brief}`);
+      }
+    } catch {
+      /* no espionage context this turn */
+    }
+  }
+
+  try {
+    const reportsOnFile = describeReportsForPrompt(world.reports);
+    if (reportsOnFile) blocks.push(reportsOnFile);
+  } catch {
+    /* no documents this turn */
+  }
+
+  if (stats.customFullStatSheet) blocks.push(scenarioStatSheetDirective(stats.statSheetDefinition));
+  else if (stats.customStatIndices) blocks.push(scenarioStatIndicesDirective(stats.statIndexRows));
+
+  blocks.push(JUMP_LEVERS);
+  if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
+
+  // The player's standing goal (runtime/playerGoal.js), then their focus and
+  // orders (playerFocus.js): each order's id is what an event cites in actionIds.
+  const goal = await playerGoalBlock(normalizeString(variables?.playerPolity));
+  if (goal) blocks.push(goal);
+  const focusDirective = normalizeString(variables?.playerFocusDirective);
+  if (focusDirective) blocks.push(focusDirective);
+
+  // The scenario author's direction (worldDirection.js). Where the player's focus
+  // and the world's share together ask for more than the whole period, the world's
+  // share gives way (docs/adr/0003).
+  const direction = getActiveWorldDirection();
+  const worldShare = Number.isFinite(Number(variables?.playerFocusWorldShare))
+    ? Number(variables.playerFocusWorldShare)
+    : direction?.worldShare;
+  const directionDirective = buildWorldDirectionDirective(
+    direction ? { ...direction, worldShare } : direction,
+    {
+      playerPolity: normalizeString(variables?.playerPolity),
+      spanDays: computeSimulatedDays(variables) || 30,
+    },
+  );
+  if (directionDirective) blocks.push(directionDirective);
+
+  // The Game Master's standing reminders (runtime/gmChanges.js).
+  if (reminders) {
+    const gmBlock = await gmRemindersBlock();
+    if (gmBlock) blocks.push(gmBlock);
+  }
+
+  if (Array.isArray(lookups?.tools) && lookups.tools.length) blocks.push(LOOKUP_DIRECTIVE);
+
+  return blocks.filter(Boolean).join("\n\n");
+};
+
 const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true } = {}) => {
   const prompts = await loadPromptCatalog();
   const statSheetDefinition = STAT_INDEX_CONTEXT_TASKS.has(taskKey)
@@ -2064,6 +2197,19 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   // The GM operational contract is native behaviour: a campaign's frozen
   // gameMaster prompt would silently roll the transaction semantics back.
   const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
+  // A time skip's live records go INTO its template, at ${JUMP_LIVE_STATE}.
+  const jumpTask = JUMP_TASK_KEYS.has(taskKey);
+  if (jumpTask) {
+    variables = {
+      ...variables,
+      jumpLiveState: await buildJumpLiveState({
+        variables,
+        lookups,
+        reminders,
+        stats: { customFullStatSheet, statSheetDefinition, customStatIndices, statIndexRows },
+      }),
+    };
+  }
   const liveDemand = resolveTemplateVariableDemand({
     helperTemplates: prompts.helpers,
     promptTemplate,
@@ -2084,72 +2230,25 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
   let systemPrompt = rendered.text;
   const staticPromptPrefix = rendered.text.slice(0, rendered.staticPrefixEnd);
 
-  // The chosen difficulty steers every simulation task (see runtime/difficulty.js).
-  try {
-    const game = await readGameData();
-    systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScopeForTask(taskKey))}`;
-  } catch {
-    // Without game data the task still runs at its default temperament.
-  }
-
-  // Player agency: jumps must never sign the player up for landmark decisions.
-  // Appended here (not only in defaultPrompts.json) because every game carries
-  // its own frozen copy of the task prompts — a directive added at call time is
-  // the only way the rule reaches campaigns that already exist. Field report:
-  // "the AI just makes events saying that you form a treaty with another
-  // country ... it just doesn't give you a choice and makes it an event."
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
-    systemPrompt = `${systemPrompt}\n\n[Player Agency]\n${playerName} is controlled by a human player. Never commit ${playerName} to a major decision the player did not actually make: do not sign treaties, alliances, ceasefires, surrenders, trade pacts, unions, or other binding agreements on the player's behalf, do not accept or reject offers for them, and do not have ${playerName} take landmark unilateral action (declaring war, ceding territory, changing government) unless it directly executes one of the player's planned actions, chat replies, or explicit requests. When another polity seeks such an agreement or decision from the player, present it as something the player can answer: a diplomaticOutreach entry or an impacts.createdChats chat where the counterpart speaks first and makes the proposal, or an event describing the offer as OPEN and awaiting the player's response. Events remain free to narrate what other polities do among themselves and to resolve the player's own queued actions exactly as ordered.`;
-    // Map truth: the recurring field report is the OPPOSITE failure — invasions
-    // narrated turn after turn with zero regionTransfers, so the map never moves.
-    // Appended at call time for the same reason as [Player Agency]: existing
-    // campaigns carry frozen prompts, so a defaultPrompts.json rule never
-    // reaches them. This also disarms an over-cautious reading of the agency
-    // rule above ("don't act for the player") as "don't move the map".
-    systemPrompt = `${systemPrompt}\n\n[Map Truth — Control is not Sovereignty]\nTerritorial narration and the map must never disagree, but wartime control and legal sovereignty are DIFFERENT things. A battle capture, occupation, liberation or retaking uses impacts.regionControlOps (usually op=control; op=contest while the region is actively disputed). A treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement uses impacts.regionTransfers because legal sovereignty changed. Do NOT turn every front-line advance into a permanent legal border. When you do not know the exact region id, preserve the grounded place wording in regionId and set fromCode so the native geography resolver can map it conservatively. Resolving ${playerName}'s own ordered military operations into their real control consequences is REQUIRED and is never a player-agency violation. If nothing actually changed control or sovereignty this period, keep capture/cession language out of the event text.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
-    // The prose rule above, as a field the model has to fill in and the engine
-    // reads (runtime/territoryBasis.js): a transfer that admits it is only a claim
-    // becomes a claim instead of a border.
-    systemPrompt = `${systemPrompt}\n\n${TERRITORY_BASIS_DIRECTIVE}`;
-    // No restating: the model is shown the recent timeline as context and, left
-    // unchecked, re-narrates events it already reported — each restatement gets a
-    // fresh id, so the same event stacks up and shows turn after turn. A content-key
-    // de-dup on the write path (dedupeGeneratedEvents) drops exact/same-date
-    // restatements; this directive stops the "rolling-date" ones (the same situation
-    // re-narrated under each new turn's date) that a de-dup can't catch. Appended at
-    // call time so existing frozen-prompt campaigns get it too.
-    systemPrompt = `${systemPrompt}\n\n[New Developments Only]\nThe events shown to you above have ALREADY happened and appear only as context. Do NOT restate, rephrase, re-report, or re-narrate them. Emit ONLY genuinely NEW developments that occur during THIS period. If an ongoing situation (a war, a crisis, an occupation) has no new development this period, do not emit an event for it.`;
-    // Where a unit or a structure goes, in words (placement.js). Appended at call
-    // time for the same reason as the rest; the field itself ships in the live schema.
-    systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
-    // Documents, and what is on file already (runtime/reports.js). The narrator
-    // is shown every report — it wrote them — so the list is unscoped here; the
-    // audience rule applies where a VIEWER reads them. Read the same way the
-    // espionage brief below is, so a frozen-prompt campaign gets it too.
-    systemPrompt = `${systemPrompt}\n\n${REPORT_VOICE_DIRECTIVE}`;
+  // The chosen difficulty steers every simulation task (see runtime/difficulty.js);
+  // a time skip has it in its live records.
+  if (!jumpTask) {
     try {
-      const reportsOnFile = describeReportsForPrompt(normalizeWorldState(await readWorldState({ force: false })).reports);
-      if (reportsOnFile) systemPrompt = `${systemPrompt}\n\n${reportsOnFile}`;
+      const game = await readGameData();
+      systemPrompt = `${systemPrompt}\n\n${difficultyDirective(game.difficulty, difficultyScopeForTask(taskKey))}`;
     } catch {
-      /* no documents this turn */
+      // Without game data the task still runs at its default temperament.
     }
-    // Place renaming: appended at call time so existing frozen-prompt campaigns get it
-    // too; the markerOps rename op ships via the LIVE tool schema either way.
-    systemPrompt = `${systemPrompt}\n\n[Place Renaming]\nYou may rename places when the story warrants it (a city renamed after a leader or ideology, a capital re-designated, a colonial name replaced, a conquered city given the conqueror's name). Emit an impacts.markerOps entry {"op":"rename","name":"<current name>","newName":"<new name>","note":"<why>"}. This works on structures you built AND on existing map cities. Do it sparingly and only when a real event motivates it.`;
   }
 
-  // Two tasks get the espionage picture, framed differently because they do
-  // different jobs with it: the simulator turns it into events, the board turns
-  // it into entries. Both see the same uncensored brief.
-  if (isActiveFeatureEnabled("espionage") && ["jumpForward", "autoJumpForward", "projects"].includes(taskKey)) {
+  // The board pass gets the espionage picture (a time skip has it in its live
+  // records): the one source that can put another power's programme on the board.
+  if (isActiveFeatureEnabled("espionage") && taskKey === "projects") {
     try {
       const [world, game] = await Promise.all([readWorldState({ force: false }), readGameData()]);
       const brief = espionageBrief(normalizeWorldState(world), await readOpenedIntercepts(), { playerPolity: normalizeString(game.country) });
       if (brief) {
-        const framing = taskKey === "projects"
-          ? "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n"
-          : "\n\n[Espionage]\nThe following is known to you as the simulator and NOT to the player, who sees only what their service can decode. Let it shape events: a polity with a live agent in the player acts on what it stole; a polity fed a planted story believes it; a public expulsion sours relations; a rival that suspects its agent grows cautious. Never reveal in event text that an agent has been turned unless it is discovered.\n";
+        const framing = "\n\n[Espionage]\nWhat the player's service has read, uncensored — the player sees only what it could decode. This is the ONE source that can put another power's long-term work on the board: when an intercept reveals a programme a rival is running (a weapon, a canal, a mobilisation, a covert operation of their own), open it as a FOREIGN entry with ownerCode set to that polity's full name, and move it as later intercepts say it moved. Reach for this only when the traffic genuinely shows a sustained effort — a rival grumbling about a treaty is not a programme.\nA report from a TURNED agent is marked as planted, and what it describes may be a fabrication. Open it anyway if it reads as a programme: the board records what the player's service believes, and a phantom entry that never delivers is exactly what a successful deception looks like from this side. Never write that an agent has been turned, or that an entry came from a spy at all.\nWhere the brief says the service no longer has an agent somewhere, every foreign entry for that polity is now UNCONFIRMED. Do not advance it, and do not invent a reason it went quiet: mark it stalled with a lastUpdate saying plainly that nothing has been heard since that date. Losing the source IS the blocker, and an honest entry says so.\n[Doubted intelligence]\nAn entry marked doubted was sourced from an agent the service no longer trusts, and may be a fabrication it was fed. Where the board below says a FRESH agent is now inside that polity, settle it from what that new source shows: set verification \"confirmed\" and let the entry run on if the programme is real, or \"refuted\" and fail it if the new material shows there was never anything there. Settle it only when the new source actually bears on it — leave it doubted otherwise, because guessing is what put the phantom on the board to begin with. Never write that any of this came from a spy, or that an agent was turned.\n";
         systemPrompt = systemPrompt + framing + brief;
       }
     } catch {
@@ -2173,86 +2272,18 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     }
   }
 
-  // Reputation context: how the world currently regards the player, and how the
-  // model should let it bias behaviour and evolve it via polityChanges.
-  // Territory is owned by REGIONS, but the model kept naming CITIES in regionTransfers
-  // (e.g. "Toulouse"), which match no region and are silently dropped — the map never
-  // moves though the event narrates a capture. Force region names, and teach the
-  // take-the-whole-region (default) vs capture-only-the-city (markerOps) distinction.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n[Region and City Capture]\nTerritory is stored by MAP REGIONS. Prefer an exact region id/name from [Game Map Description]. If an event is grounded in a city, fortress, port, translated name, exonym, or historical area and you genuinely do not know the map region name, DO NOT invent one: put that exact grounded place/area wording in regionId (and regionName if useful) and ALWAYS set fromCode to the current controller/losing polity. The native geography resolver can conservatively map that wording only against that side's real regions; if it cannot do so safely, the operation is rejected instead of moving the wrong province.\nA regionControlOps control changes the WHOLE resolved map region's de-facto controller but leaves legal sovereignty intact. A regionTransfers entry changes the WHOLE resolved map region's LEGAL sovereign and normally hands administration over too unless a third-party occupier still physically controls it. If only a city changes hands while the surrounding region does not (a holdout, occupied port, enclave), do not change the region; use the point/marker representation instead.\nFor a total wartime occupation/collapse, regionControlOps control may use wholeCountry=true. For a total legal annexation/unification/partition settlement, regionTransfers may use wholeCountry=true. Never use either wholeCountry shortcut for a partial campaign.`;
-  }
-
   // Polities are identified by their full country name EVERYWHERE. A model that
   // answers "ESP" gets canonicalised on ingest, but it also then reasons about "ESP"
   // and "Spain" as if they were two powers, so state the rule rather than only
   // repairing the output.
-  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
+  if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n[Polity Names]\nEvery polity is identified ONLY by its full country name, exactly as written in the map description — "Spain", "United States", "Soviet Union". NEVER use a country code or abbreviation such as "ESP", "USA" or "SOV", anywhere, in any field. This applies to every owner field despite their names: toCode, fromCode, ownerCode and a polity's code all take the FULL NAME. A code is not a shorter way of writing a country here; it is a different, non-existent polity, and using one creates a phantom country on the map beside the real one. A renamed polity is listed under its new name with its former names as aliases: use the new name, and expect the old one only in history.`;
   }
 
   // Units kept landing at 0,0 (null island) because the model copied the lng:0,lat:0
   // placeholder from the output template; guide it to real coordinates.
-  if (["jumpForward", "autoJumpForward", "idleDiplomacy"].includes(taskKey)) {
+  if (taskKey === "idleDiplomacy") {
     systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nWhenever an event says a force is raised, mobilised, garrisoned, landed, reinforced, redeployed or moved, that event MUST carry the matching impacts.unitOps — a spawn for a force that now exists, a move for one that relocated. An event that describes troops without unitOps produces a story about an army the map never shows.\nWrite every coordinate as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06°E". Every unitOps spawn and move MUST use the real-world longitude and latitude of where the unit actually is or is going. The lng 0 / lat 0 shown in the output template is ONLY a placeholder \u2014 0,0 is open ocean off West Africa, never a valid position, and a unit placed there is discarded. Set lng and lat to the actual coordinates: use the values from [City Coordinates] for a unit at or near one of those cities, or the real coordinates of the region or front where the action happens.`;
-  }
-
-  // Standing orders (world.pendingUnitOrders) survive a jump's single clearActions
-  // flag on purpose - it wipes the actions queue wholesale. The ENGINE advances
-  // them every turn (advanceStandingOrders), so this block exists to tell the model
-  // what is already in motion, NOT to ask it for the legs: a move op for a unit the
-  // engine is already advancing would move that unit twice for the same elapsed time.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const pending = normalizeString(variables.pendingUnitOrders);
-    if (pending && !pending.startsWith("No units")) {
-      systemPrompt = `${systemPrompt}\n\n[Standing Unit Orders]\nEach unit below is already under a standing order and the engine advances it automatically every turn - a move continues toward its destination at that unit's own pace, and a patrol keeps working its station. You do NOT need to emit a move op for any of them, and you should not: doing so would advance the unit twice. Take these as context for what is happening on the map, and write events about them when the story warrants it. Emit a unit op for one of these units only when this jump genuinely REDIRECTS it (a new destination, a change of posture) or ends it (destroyed, recalled, withdrawn) - and say why in an event. An order clears itself once the unit arrives; you never need to remove one yourself.\n${pending}`;
-    }
-  }
-
-  // The unit contract itself. defaultPrompts.json carries the same rules for NEW
-  // games; this is what reaches the campaigns that already exist, whose prompts are
-  // frozen — the same reason [Player Agency] and [Map Truth] are injected here.
-  //
-  // Skipped when the rendered template ALREADY says it: the bundled template's
-  // units section is a near-verbatim copy of this block, so a new game would pay
-  // for both, and a rule repeated in two slightly different wordings invites the
-  // model to look for a distinction that is not there.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey) && !templateAlreadySays(systemPrompt, UNIT_CONTRACT_MARKER)) {
-    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
-    systemPrompt = `${systemPrompt}\n\n[Units on the Map]\nUnits are EVIDENCE OF YOUR OWN EVENTS. The player cannot move or fight their own formations - the map is there to show them what is happening - so every unit you spawn or move must be something one of this jump's events actually describes. Reach for them readily: a mobilization, a build-up on a border, a fleet sailing, an offensive, a withdrawal all deserve to be visible. But keep the map legible - only formations that matter to the story. A great power at war might show five or six; a country at peace shows one or two, or none.\nstrength is a PERCENTAGE of established strength (100 = fresh and full, 60 = worn down, 20 = a shell), and composition says what the formation actually is ("1 aircraft carrier, 2 frigates", "3 tank regiments"). Write both, plus a one-sentence note on what it is doing and where. A counter that does not say what it is tells the player nothing.\nDo not teleport. A move may only cover what that unit could really travel between the previous event's date and this one's. The engine enforces this: an over-long move becomes a partial advance that continues automatically on later turns, so ordering the full distance is safe and correct.\nThe map is what ${playerName} KNOWS, not omniscience. A force may legitimately appear far from its own territory when it is being DETECTED rather than arriving - a submarine that has shadowed a fleet for weeks, infiltrators already in country, a deployment only now confirmed. Such a unit is drawn as unconfirmed, which is correct and not a penalty. The one thing you cannot conjure is a fixed installation: use markerOps build for a base, and never spawn a far-flung garrison.\nSet posture whenever you place or move a unit - holding, massing, patrol, transit, exercise, blockade, withdrawing, assaulting. It is how the player reads intent off the map. "patrol" is special: the engine keeps a patrolling unit working its station on its own, turn after turn, so state it once and leave it.\n"assaulting" is the other special one: a formation that ARRIVES under it is marked engaged, in contact at the objective, instead of idle. Use it when an event has a force actually storming a province rather than massing near it — including when the player has ordered an assault in words ("Attack Provence"), which is how they commit troops to a province, since they cannot move their own formations. You still own the OUTCOME: resolve the fighting on a later turn with casualties, and a regionTransfer only if the province genuinely falls. An order you judge infeasible is refused in an event that says why, never silently dropped.`;
-  }
-
-  // The map reading as if only the player fields an army: unitOps is fully general
-  // (any owner, not just the player), but a low events-per-jump budget plus
-  // player-centric framing meant other powers rarely got a reason to use it -
-  // their militaries existed only when something dramatic happened TO the player.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n[Other Powers' Militaries]\nThe map should not read as though only ${normalizeString(variables.playerPolity) || "the player's polity"} fields any forces. When a major or currently-relevant power (a scenario-defined actor, a country the player has clashed or negotiated with, a power actively at war or mobilizing) plausibly has forces in the field this period - mobilizing, patrolling a border, escorting a fleet, garrisoning a front, reinforcing an ally - reflect it with impacts.unitOps even when nothing dramatic is happening to the player specifically. A brief, minor event (or a line folded into a larger one) is enough to justify it; it does not need its own headline. Keep this proportionate: a country at peace far from any conflict does not need forces conjured for their own sake. The one thing forbidden here is INVENTING A RIVALRY - giving two polities a hostility the campaign never gave them, so that neighbours are enemies merely for sharing a border, or a friendly or indifferent power turns on someone to give you something to write. That rule covers every pair of polities on the map, and ${normalizeString(variables.playerPolity) || "the player's polity"} is one of the pair like any other - neither more nor less protected than the rest. It is not, and never was, a ban on hostility toward the player. Where the motive is already on the record - a claim, a grievance, a treaty broken, an ally to protect, an opening left by a weak or distracted neighbour - that power acts on it, against ${normalizeString(variables.playerPolity) || "the player's polity"} as readily as against anyone else.`;
-  }
-
-  // What a player's order actually costs them in time, and the single rule that
-  // decides it: does this act need anyone else's consent?
-  //
-  // Field report behind this: a player asked to rename their country. The
-  // advisor opened a Projects board entry for it — the only lever it has — and
-  // the rename sat at 15% for twelve in-game months while the advisor reported
-  // that the seals had been updated. Nothing had. A rename is one signature.
-  //
-  // The other half matters just as much in the opposite direction: a transfer of
-  // somebody else's land is NOT a signature, and must not resolve just because the
-  // player asked. regionClaims is what makes that answerable rather than a refusal.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const playerName = normalizeString(variables.playerPolity) || "the player's polity";
-    systemPrompt = `${systemPrompt}
-
-[Sovereign Acts and What Needs Consent]
-Before you decide how long one of ${playerName}'s orders takes, ask one question: does this act need anyone else's agreement?
-
-NO - IT IS INTERNAL. Their own name, colour, flag, style, title, anthem, official language, capital designation, ministry structure, proclamations, and the administration of territory they already hold. Their own government decides and nobody may refuse. THESE RESOLVE IN THIS JUMP. Enact each with a single event dated inside the covered period, carrying the impact that makes it real - polityChanges for a change of name, colour, style or tags; markerOps rename for a renamed city or capital - and list that action's id in actionIds. They cannot fail for lack of consent, they need no programme, budget or timetable, and they never take multiple rounds. Narrate the reaction if it is interesting - a rival's contempt, a domestic celebration, the old name lingering in foreign newspapers - but the act itself is DONE. Never open a Projects entry for one, and never report one as in progress.
-
-YES - IT TOUCHES ANOTHER POLITY. Region transfers, cessions, annexations, border adjustments: anything that moves land or binds another government. These need one of two things first, and it must actually be in the campaign record: CONSENT (that polity agreed, in a diplomatic exchange, a treaty, or an event where they conceded) or a FAIT ACCOMPLI (the ground has already been taken and held, so they have no say left - the map and the units are the evidence). Where either is already true, enact it THIS JUMP with regionTransfers; a hand-over both sides accept needs no programme either.
-
-Where NEITHER is true yet, the order is not refused and not quietly deferred - it splits in two, and BOTH halves happen now. First, record the claim with regionClaims, so the region shows as disputed on the map immediately and the player can see that their declaration landed. Second, say plainly what is missing - whose agreement, or what has to be taken - and open the project for the campaign that will obtain it, with the transfer itself on that project's onComplete so the border moves the moment the effort actually succeeds. A declaration that changes nothing the player can see is the failure this rule exists to prevent.`;
   }
 
   // The Projects & Operations board. It exists precisely so long-running work
@@ -2278,17 +2309,6 @@ The board above carries a \"Needs a decision this jump\" list. It is worked out 
 - It is over: op complete, cancel or fail, with a note.
 ${HIGH_PRIORITY_ASSESSMENT_RULE} A project marked low priority may be left drifting with a one-line note, and that is a correct answer for it. Everything else is normal: move it when the story plausibly moved it, and say so plainly when it did not. Never raise a progress figure that nothing in this jump's events justifies - a board of quietly inflating percentages is worth less than an honest one full of stalls.`;
   }
-  // The jump's own view of the board — read-only. projectOps left the jump's
-  // OUTPUT contract on purpose (generateProjectOps keeps the board, from the
-  // events), but an effort the model cannot see is one it invents: an order to
-  // "move forward with Project Westbird" narrated a missile test for what the
-  // board describes as an agent-recruitment drive, and the board pass then,
-  // rightly, refused to advance recruitment on a missile test. The summary is
-  // already built for every jump (a live context key); it was just never read.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const projectsDirective = buildJumpProjectsDirective(variables.projectsSummary);
-    if (projectsDirective) systemPrompt = `${systemPrompt}\n\n${projectsDirective}`;
-  }
   // The board pass's rules live in its template, which every campaign keeps a
   // frozen copy of; the HIGH PRIORITY rule changed, so it is appended here to
   // reach games whose copy still demands movement — and skipped for one whose
@@ -2306,25 +2326,6 @@ ${HIGH_PRIORITY_ASSESSMENT_RULE} A project marked low priority may be left drift
 [What the Sender Knows]
 You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
 So use the wider picture to choose the sender and the moment — never to give them knowledge they could not have. A polity must not reference, allude to, or react to something said in a conversation it was not part of, and must not echo another leader's turn of phrase. If a private exchange elsewhere is the only reason a message would make sense, that is a message this polity cannot send: pick a different sender, or return chat as null.`;
-  }
-
-  // The native world director's live analysis for this segment: focused and
-  // deferred storylines, the exploration slate, the era's conflict posture and
-  // the storyline record contract. Built per segment (runJumpSegments) and
-  // appended here so a campaign's frozen prompt pack gets it too.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const worldInitiativeContext = normalizeString(variables?.worldInitiativeContext);
-    systemPrompt = `${systemPrompt}\n\n[Native World Director — authoritative live causal context]\n${worldInitiativeContext || "No native World Director context was available; reason from current campaign state without importing a memorized future calendar."}\n\nThe Native World Director context above is the SINGLE live owner of world-attention, historical-candidate/causal-inertia, causal-timing, branch-recompute, exploration, and persistent-storyline doctrine. It supersedes overlapping or older frozen prompt wording on those topics. Follow the separate Player Agency and Canonical War State rules for human authorization and actual belligerency.`;
-  }
-
-  // Durable diplomatic memory becomes causal pressure on the turn: agreed
-  // follow-throughs, declared intents and threats must be weighed, not just
-  // remembered. Appended only when at least one thread carries such memory.
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const diplomaticContinuity = normalizeString(variables?.diplomaticContinuity);
-    if (diplomaticContinuity) {
-      systemPrompt = `${systemPrompt}\n\n[Diplomatic Consequence Bridge]\nDiplomatic chats are part of the causal world state, not decorative roleplay. Before choosing this period's events, review EVERY durable diplomatic memory below and ask: "Does anything said or agreed here require a new development during the interval from ${normalizeString(variables.dateReadable) || normalizeString(variables.date) || "the origin date"} through ${normalizeString(variables.targetDateReadable) || normalizeString(variables.targetDate) || "the target date"}?"\n\n${diplomaticContinuity}\n\nEvidence rule: the "Standing diplomatic memory" is a compressed continuity aid. The "Recent verbatim diplomatic evidence" is authoritative for the exact words, actor attribution, deadlines, and modal force of recent exchanges. If a summary weakens, strengthens, or otherwise conflicts with the verbatim evidence, FOLLOW THE VERBATIM EVIDENCE. A later acknowledgement, pleasantry, or statement of mutual understanding does NOT cancel an earlier threat, promise, agreement, or declared intent unless it explicitly retracts, supersedes, or modifies it.\n\nApply these rules:\n1. MUTUAL AGREEMENT + DUE DATE: if the player and another polity explicitly agreed that a meeting, consultation, withdrawal, exchange, conference, hand-over, coordinated operation, or other concrete follow-through WILL occur on a date inside this simulated interval, that follow-through is a PRESUMPTIVE TIMELINE EVENT. Generate it unless the supplied canon shows it was already fulfilled, explicitly cancelled/superseded, prevented by a new event, or genuinely too trivial to be newsworthy. If such a commitment is already OVERDUE at the origin date and no fulfillment/cancellation appears in canon, do not forget it either: generate the belated follow-through, cancellation, breach, postponement, or other concrete explanation that best fits the world.\n2. AGREEMENT WITHOUT A FIXED DATE: preserve it as an active commitment and let it shape events; generate implementation when the period/context naturally reaches it.\n3. UNILATERAL DECLARATION: if a polity explicitly said it WILL take an action, treat that declaration as strong evidence of intent, but still simulate whether circumstances permit execution. For the human-controlled ${normalizeString(variables.playerPolity) || "player polity"}, only treat an explicit player chat statement as authorization when it plainly commits to the action; vague discussion is not an order.\n4. THREAT / WARNING / SUSPICIOUS INFORMATION: these do NOT automatically force one scripted reaction. They create DECISION PRESSURE on the affected A.I. polity. You must evaluate that pressure as part of this jump instead of merely remembering the words.\n   - IMMINENT, EXPLICIT THREAT OR ULTIMATUM: a direct credible statement such as "we will invade you in 24 hours", "withdraw by tomorrow or we attack", or an equally immediate military threat is CRITICAL pressure. Unless there is a concrete reason the target believes the threat is impossible, unserious, already withdrawn, or otherwise neutralized, the threatened A.I. polity should normally take at least one timely protective or diplomatic action BEFORE the threatened deadline: mobilize/redeploy forces, raise military readiness, alert allies, issue a protest/ultimatum, seek guarantees, evacuate exposed assets, or another contextually rational response. Do NOT require it to choose a specific response; choose what that government would realistically do.\n   - AMBIGUOUS MILITARY / LOGISTICAL SIGNAL: information such as new depots, rail improvements, exercises, reconnaissance, or logistical hubs near a frontier is NOT proof of hostile intent. Evaluate trust, alliances, recent crises, geography, military balance, prior assurances, and the actor's reputation. A cautious government may increase readiness or investigate; a trusting government may deliberately do nothing extraordinary. Either is valid. Do not manufacture an event merely to prove that the signal was noticed.\n   - POLITICAL / ECONOMIC / DIPLOMATIC SIGNAL: sanctions threats, alliance feelers, guarantees, recognition disputes, trade pressure, or severe diplomatic warnings should likewise alter the affected A.I. polity's choices when consequential, but rhetoric alone need not create a timeline event.\n   - SILENCE IS A DECISION ONLY WHEN PLAUSIBLE: for serious but ambiguous signals, "no extraordinary action" may be the correct outcome and need not be narrated. For an imminent credible invasion threat, silent inaction should be exceptional and supported by the world context, not the default.\n5. REACTIVE CONSEQUENCES ARE OWN ACTIONS: when an A.I. polity reacts, simulate ITS response as a new world event or diplomatic outreach where appropriate. Do not convert the original speaker's words into the target's action. An A.I. protest/contact with the player may use diplomaticOutreach/createdChats; internal cabinet decisions, mobilization, alliance coordination, deployments, investigations, and similar responses belong in timeline events.\n6. PROPOSAL OR REQUEST: a proposal that was never accepted is NOT an agreement. Do not turn it into accomplished fact. The recipient may still react to the proposal itself if accepting, rejecting, countering, preparing, or seeking clarification would be strategically meaningful.\n7. FOLLOW-THROUGH MUST BE NEW: if the commitment's implementation or the reaction already appears in Event History, do not restate it. If a new event makes the commitment impossible, narrate the cancellation/failure/breach instead when that is important.\n8. STRUCTURE REAL CONSEQUENCES: when follow-through or reaction changes persistent state, emit the proper impacts in the SAME event. A meeting or cabinet decision with no mechanical effect may simply be an event. Actual mobilization/redeployment/reinforcement uses unitOps and should reuse existing units where appropriate; spawn only genuinely new mobilized formations. A legal territorial settlement uses regionTransfers; lasting alignment/reputation changes use polityChanges. Do not narrate a concrete military movement that the structured impacts fail to represent.\n9. REACTION TIMING: consequences should occur when a competent government would actually act. An ultimatum expiring in 24 hours may warrant same-day or next-day response; an ambiguous infrastructure signal may take days or weeks to trigger policy. Do not postpone a clearly time-sensitive reaction until after the danger has passed merely because other storylines are active.\n10. REACTION-TARGET INTEGRITY: for every consequential diplomatic memory, identify (a) the polity that originated the signal/request/threat, (b) the polity or polities affected by it, and (c) any explicit response or declared intent already stated by the affected polity. A new event by the ORIGINAL SIGNALING polity does NOT satisfy the affected polity's reaction audit. Example: Germany announces frontier logistics work to Russia; a later German readiness event is not a Russian reaction. Evaluate Russia separately.\n11. RECIPIENT-DECLARED INTENT: inspect the recent verbatim evidence as well as the summary. If the affected A.I. polity itself has already replied with language such as "we must take measures", "we will mobilize", "we intend to reinforce", "we shall consult our allies", or another clear statement of intended action, treat that as a UNILATERAL DECLARATION by that polity, not merely as generic concern. Unless later dialogue/canon EXPLICITLY retracts or supersedes it, the next suitable simulation interval should normally show concrete follow-through or a concrete reason it was delayed/abandoned. Mere acknowledgement or calmer diplomatic language is not a retraction. Preserve proportionality: "take necessary defensive measures" need not mean full mobilization, but it should not silently collapse into no action by default.\n12. INTERNAL DECISION AUDIT: before finalizing the event set, silently review each durable diplomatic memory that contains a threat, warning, declaration, request, or strategically significant disclosure. For EACH affected A.I. polity decide one of: REACT NOW / REACT LATER / NO EXTRAORDINARY REACTION. Check that any output event actually belongs to the affected polity whose reaction you are evaluating. Only output resulting world events/chats that are newsworthy; never output this audit or filler events saying a government "decided to do nothing."\n\nThis bridge does NOT mean every diplomatic sentence deserves an event. It means explicit commitments and consequential signals must participate in normal event selection instead of being disconnected from the simulation.`;
-    }
   }
 
   // Event Editor NPC reaction: a one-shot evaluation of one authored event. The
@@ -2463,7 +2464,7 @@ So use the wider picture to choose the sender and the moment — never to give t
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
   }
 
-  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
+  if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const reputationContext = normalizeString(variables.playerPolityReputationContext);
     if (reputationContext) {
       systemPrompt = `${systemPrompt}\n\n[International Reputation]\n${reputationContext}\nLow international reputation should reduce trade, trust, and coalition support, and should make nearby rivals more likely to sanction, isolate, or form balancing alliances. High reputation should improve access, trust, and coalition-building. When events this turn change how the world regards a polity, record the new value by including a "reputation" field (an integer 0-100) on that polity's impacts.polityChanges entry: aggression, broken treaties, and atrocities lower it; cooperation, aid, and honored commitments raise it. Only include reputation when it actually changes.`;
@@ -2472,29 +2473,18 @@ So use the wider picture to choose the sender and the moment — never to give t
 
   // Espionage's counterpart to the reputation block above. Without it the rating
   // is invisible to the model and therefore frozen for the whole campaign.
-  if (["actions", "jumpForward", "autoJumpForward", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
+  if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
     const intelligenceContext = normalizeString(variables.playerPolityIntelligenceContext);
     if (intelligenceContext) {
       systemPrompt = `${systemPrompt}\n\n[Intelligence Services]\n${intelligenceContext}\nThis rating is how much of other polities' private diplomacy a service can read and how well it protects its own, and it moves the same way international reputation does. When this turn's events actually change what a service is capable of, record the new ABSOLUTE value (an integer 0-100) in an "intelligence" field on that polity's impacts.polityChanges entry. Concrete investment the player has ordered and that this turn actually delivers raises it a few points at a time — a training academy opening its doors, a new bureau or directorate standing up, a funding increase taking effect, a recruitment or codebreaking programme bearing fruit; a purge, a mass defection, a network rolled up by a rival, or deep cuts lower it. An intention is not a capability: do not move it for an order that has only just been given, do not restate it when nothing changed, and do not jump it by tens of points for a single measure.`;
     }
   }
 
-  if (customFullStatSheet) {
-    systemPrompt = `${systemPrompt}
-
-[Scenario National Stats Sheet — LIVE]
-This scenario REPLACES Open Historia's standard modern National Stats sheet with a scenario-defined sheet. Do not invent or maintain hidden modern GDP, unemployment, debt, population, stability, or strategic-index fields unless they are explicitly defined below. Every listed value is persistent campaign canon and uses its exact machine key. Values are ABSOLUTE, never deltas. On ordinary turns update only values that genuinely changed; for the countryStatSheet task return every defined value.
-
-${describeStatSheetDefinition(statSheetDefinition)}
-
-Formatting prefixes/suffixes are display metadata only; return plain JSON numbers. Respect each value's declared min/max range and meaning.`;
-  } else if (customStatIndices) {
-    systemPrompt = `${systemPrompt}
-
-[Scenario Strategic Indices — LIVE]
-This scenario replaces the standard strategic indices with EXACTLY these indices, each as an integer from 0 to 100:
-${describeStatIndexRows(statIndexRows)}
-Use these exact machine keys whenever you author stats.indices. Do not invent default modern indices that are not listed here, and do not invent extra keys.`;
+  // A time skip carries the scenario's own sheet in its live records instead.
+  if (!jumpTask && customFullStatSheet) {
+    systemPrompt = `${systemPrompt}\n\n${scenarioStatSheetDirective(statSheetDefinition)}`;
+  } else if (!jumpTask && customStatIndices) {
+    systemPrompt = `${systemPrompt}\n\n${scenarioStatIndicesDirective(statIndexRows)}`;
   }
 
   if (taskKey === "countryStatSheet" && !customFullStatSheet) {
@@ -2585,11 +2575,6 @@ ${buildStatsComponentSplitContract(variables?.statsComponentSplitBuckets)}- Do n
 This live instruction supersedes older frozen country-stat prompts and all earlier 7A.1/7A.2 territorial wording.`;
   }
 
-  // The canonical war and diplomacy ledgers: current state plus the compact
-  // line formats the payload carries them in (see the helpers above).
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n${buildWarLedgerDirective(variables)}\n\n${buildDiplomaticLedgerDirective(variables)}`;
-  }
   if (["idleDiplomacy", "nextSpeaker"].includes(taskKey)) {
     const canonicalDiplomacy = normalizeString(variables?.canonicalDiplomaticContext);
     if (canonicalDiplomacy) {
@@ -2598,17 +2583,6 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   }
   if (taskKey === "pregameHistory") {
     systemPrompt = `${systemPrompt}\n\n${buildPregameBootstrapDirective(variables)}`;
-  }
-
-  // The actions menu goes last so the system prompt for every jump ends with the full
-  // list of levers the model can pull (reaches existing games too — see ACTIONS_REFERENCE).
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    systemPrompt = `${systemPrompt}\n\n${ACTIONS_REFERENCE}`;
-    // The espionage lever rides after the menu for the same reason: it reaches
-    // campaigns whose prompts were frozen before it existed.
-    if (isActiveFeatureEnabled("espionage")) {
-      systemPrompt = `${systemPrompt}\n\n${buildSpyOrdersDirective(normalizeString(variables?.playerPolity) || "the player")}`;
-    }
   }
 
   // The scenario briefing and simulation rules each arrive twice on most
@@ -2622,7 +2596,7 @@ This live instruction supersedes older frozen country-stat prompts and all earli
 
   // Lookup functions: tell the model they exist and what they are for. Last,
   // so it stands next to the output contract rather than under the campaign.
-  if (Array.isArray(lookups?.tools) && lookups.tools.length) {
+  if (!jumpTask && Array.isArray(lookups?.tools) && lookups.tools.length) {
     systemPrompt = `${systemPrompt}\n\n${LOOKUP_DIRECTIVE}`;
   }
 
@@ -2634,24 +2608,16 @@ This live instruction supersedes older frozen country-stat prompts and all earli
   // The player's standing goal (runtime/playerGoal.js): how the player's own
   // government conducts what their orders did not cover. Before the author's
   // direction, which outranks it like every other default.
-  if (PLAYER_GOAL_TASKS.has(taskKey)) {
+  if (PLAYER_GOAL_TASKS.has(taskKey) && !jumpTask) {
     const block = await playerGoalBlock(normalizeString(variables?.playerPolity));
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
-  }
-
-  if (["jumpForward", "autoJumpForward"].includes(taskKey)) {
-    const directionDirective = buildWorldDirectionDirective(getActiveWorldDirection(), {
-      playerPolity: normalizeString(variables?.playerPolity),
-      spanDays: computeSimulatedDays(variables) || 30,
-    });
-    if (directionDirective) systemPrompt = `${systemPrompt}\n\n${directionDirective}`;
   }
 
   // The Game Master's standing reminders (runtime/gmChanges.js), for every task
   // that writes the world or speaks for a polity. After the author's priority
   // rules: a fact the GM declared mid-game is newer than any rule written before
   // the game began. Nothing at all while there are none.
-  if (reminders && GM_REMINDER_TASKS.has(taskKey)) {
+  if (reminders && GM_REMINDER_TASKS.has(taskKey) && !jumpTask) {
     const block = await gmRemindersBlock();
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
   }
@@ -8285,6 +8251,9 @@ const runWorldBreadthRepair = async ({
     `Do NOT repeat or paraphrase events already generated by the main pass. Do NOT service an existing persistent storyline merely because it exists; selected/deferred processes were handled by the primary simulation and anti-stasis machinery. If a supplied quiet slot independently creates a genuinely NEW unresolved process, you may create a NEW storyline linked to that event. Do not update an existing storyline id.\n\n` +
     `This narrow repair cannot declare/join/end a war, sign/ratify/suspend/end a formal agreement, or mutate bilateral relation ledgers. Those high-consequence ledger transitions belong to the primary whole-world pass. If a quiet-slot search points toward such a development, prefer the preceding concrete pressure/initiative only when it is independently timeline-worthy; otherwise return nothing rather than half-canonizing a treaty or war.\n\n` +
     `PLAYER AGENCY: ${playerPolity} is human-controlled. Autonomous private/social/local actors and limited officials may create circumstances, pressure, proposals, unrest, research, scandals, local actions, or public movements inside it. Do not make a NEW major sovereign/executive choice for ${playerPolity}.\n\n` +
+    `EVENT WRITING: each event is a headline and the story under it. The title says in one sentence what happened; the description tells how it happened — who acted, what they did and in what order, where, with what, and what came of it — never the headline again in more words.
+
+` +
     `OUTPUT CONTRACT: call the normal jump-result tool once. stopDate=${targetDate}. clearActions=false. diplomaticOutreach must be empty. warUpdates, relationUpdates and agreementUpdates must be empty strings. Return at most ${maxEvents} visible event(s), but there is NO minimum and no preferred exact count. Search all supplied lanes first, then return every independently worthwhile, date-valid outcome you found up to the ceiling. storylineUpdates may contain only NEW storyline ids created by a returned event, never an existing storyline.\n`;
 
   try {
@@ -11674,7 +11643,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         includeOrigin: normalizeArray(bundle.world?.simulationHistory).length === 0 && segmentIndex === 0,
       });
       const [pacedMin, pacedMax] = segmentCount > 1
-        ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace })
+        ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
       const minEvents = Math.max(pacedMin, scriptedBeats.length);
       const maxEvents = Math.max(pacedMax, scriptedBeats.length + 1);
@@ -11757,7 +11726,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           targetDate,
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
-        }), buildScriptedEventsInstruction(scriptedBeats)].filter(Boolean).join("\n\n"),
+        }), buildScriptedEventsInstruction(scriptedBeats), WRITING_REMINDER].filter(Boolean).join("\n\n"),
         validatePayload: withReceiptDraft(async (candidate, { finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
           // retry remains — the model gets the exact error and usually fixes its
@@ -11774,9 +11743,10 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           sortTimelineEventsChronologically(candidate);
           const eventCount = normalizeArray(candidate?.events).length;
           if (mode !== "auto" && (eventCount < minEvents || eventCount > maxEvents)) {
-            if (strict) return `$.events must contain between ${minEvents} and ${maxEvents} events; received ${eventCount}.`;
-            // Kept, because sending it back is a whole second request — but the
-            // model is told, at the top of its next turn, what the period asked for.
+            // Never sent back, on any attempt (the owner's call, 2026-09-26): asking
+            // again is a whole second request, and a period with fewer or more events
+            // than it asked for is still a period. The model is told, at the top of
+            // its next turn, what the period asked for.
             noteReceipt(
               draft,
               "short",

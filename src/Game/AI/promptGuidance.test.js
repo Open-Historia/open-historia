@@ -6,15 +6,17 @@
 // and nothing else; a pack in the old whole-prompt shape is ignored.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
 import {
   PROMPT_GUIDANCE,
   PROMPT_MODEL_VERSION,
   buildGuidanceDefaults,
   composePrompt,
+  guidanceFingerprint,
   guidanceSegmentsFor,
   hasGuidance,
+  isShippedGuidanceDefault,
   locateSegment,
   materializePackGuidance,
   normalizePackGuidance,
@@ -205,6 +207,41 @@ test("a materialized transfer folds current defaults back to sparse overrides on
     leader: {},
     tasks: {},
   });
+});
+
+test("a default any version shipped is never an author's edit", () => {
+  // The time skip's [Your Role] as it shipped until 26 September 2026. An
+  // "Export all prompts" file from then carries it, and a scenario that
+  // imported one stored it as if its author had written it.
+  const oldRole = "[Your Role]\nThe player is playing as the polity of ${PLAYER_POLITY}. Every other polity is simulated by YOU. The purpose of the game is for the player to run their polity and take direct actions, to ultimately experience the EFFECTS of those actions and thereby change or simulate history.";
+  const packOf = (text) => ({ promptModel: PROMPT_MODEL_VERSION, guidance: { tasks: { jumpForward: { role: text } } } });
+  assert.deepEqual(normalizePackGuidance(packOf(oldRole), GUIDANCE_DEFAULTS).tasks, {}, "the old default gives way to the current one");
+  assert.deepEqual(normalizePackGuidance(packOf(oldRole.replace(/\n/g, "\r\n")), GUIDANCE_DEFAULTS).tasks, {}, "whatever its line endings");
+  const edited = `${oldRole} Keep the tone of a saga.`;
+  assert.deepEqual(normalizePackGuidance(packOf(edited), GUIDANCE_DEFAULTS).tasks, { jumpForward: { role: edited } }, "an author's change to it is theirs");
+  assert.deepEqual(normalizeSectionGuidance("jumpForward", { role: oldRole }), { role: oldRole }, "composition still takes any passage it is given (the translated defaults)");
+  assert.equal(composePrompt("jumpForward", defaultPrompts.tasks.jumpForward, { role: oldRole }).includes(oldRole), true);
+});
+
+test("every default passage and every shipped translation is recorded as shipped", () => {
+  const unrecorded = [];
+  const walk = (value, where) => {
+    if (typeof value === "string") {
+      if (value.trim() && !isShippedGuidanceDefault(value)) unrecorded.push(where);
+    } else if (value && typeof value === "object") for (const [key, inner] of Object.entries(value)) walk(inner, `${where}.${key}`);
+  };
+  walk(GUIDANCE_DEFAULTS, "defaults");
+  const packs = new URL("../../../public/lang/prompts/", import.meta.url);
+  for (const file of readdirSync(packs).filter((name) => /^[a-z]{2,3}\.json$/.test(name))) {
+    walk(JSON.parse(readFileSync(new URL(file, packs), "utf8")), file);
+  }
+  assert.deepEqual(unrecorded.slice(0, 5), [], `${unrecorded.length} passage(s) not recorded: run node scripts/prompts/record-shipped-guidance.mjs`);
+});
+
+test("a passage's fingerprint ignores its whitespace and nothing else", () => {
+  assert.equal(guidanceFingerprint("Simulate  the\r\nwhole world. "), guidanceFingerprint("Simulate the whole world."));
+  assert.notEqual(guidanceFingerprint("Simulate the whole world."), guidanceFingerprint("Simulate the whole world!"));
+  assert.match(guidanceFingerprint("x"), /^[0-9a-z]+$/);
 });
 
 test("edits stored under a renamed task's old key are the new task's", () => {
