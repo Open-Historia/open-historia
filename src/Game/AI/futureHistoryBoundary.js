@@ -1,29 +1,36 @@
-/*! Open Historia Continuum — counterfactual knowledge boundary
+/*! Open Historia — real history as the default for a time skip
  *
- * The model may know chronology from an external/reference source beyond the
- * scenario's permitted authority boundary. The campaign must not inherit it.
- * This module turns Scenario Canon v2's reference authority into an explicit
- * runtime epistemic boundary for every world-history generating pass.
+ * The jump templates say it in general (defaultPrompts.json, [Real History Is
+ * the Default]): a game set in our history follows real history wherever the
+ * game has not changed things. This block adds what only the save knows — when
+ * this game began, and, from the scenario's canon (Scenario Canon v2,
+ * scenarioHistoryAuthority.js), whether this world's history had already split
+ * from ours before that, and how.
  *
- * Reference knowledge and campaign canon are different things:
- * - reference canon may establish facts only through its configured horizon;
- * - authored/current campaign canon owns everything after that horizon;
- * - remembered post-boundary source outcomes are never evidence.
+ * It replaced the Counterfactual Knowledge Boundary (2026-09-26), which told
+ * the model that nothing it remembered after the game's start was evidence. A
+ * skip through May 2014 could then not hold that month's real elections, coups
+ * or crises unless the campaign had already invented them, and the timeline
+ * filled up with generic news. Real history is now the default, and the game
+ * departs from it only where the game has changed something.
  */
 
 import { resolveScenarioHistoryAuthority } from "../../runtime/scenarioHistoryAuthority.js";
+import { readScenarioCanon } from "../../runtime/scenarioCanon.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
+
+// The scenario's own account of how its world split from ours, as much of it as
+// a prompt can carry.
+const DIVERGENCE_DESCRIPTION_CHARS = 1500;
 
 const resolveStartDate = (game = {}, fallbackDate = "") => clean(
   game?.startDate || game?.startingDate || game?.startingRoundDate || fallbackDate,
 );
 
 /**
- * Resolve the last date on which external/reference chronology may be treated as
- * evidence. This intentionally does NOT move forward with gameDate: once a
- * campaign starts, later source-canon chronology never gains authority merely
- * because the simulated calendar reaches that date.
+ * How this game's world relates to real history: when it began, whether the
+ * scenario's canon declares its own universe or a divergence, and where.
  */
 export const resolveReferenceKnowledgeBoundary = ({ world = {}, game = {}, fallbackDate = "" } = {}) => {
   const startDate = resolveStartDate(game, fallbackDate);
@@ -31,49 +38,67 @@ export const resolveReferenceKnowledgeBoundary = ({ world = {}, game = {}, fallb
     world,
     scenarioDate: startDate,
   });
+  let divergenceDescription = "";
+  try {
+    divergenceDescription = clean(readScenarioCanon(world)?.canonContext?.divergence?.description);
+  } catch {
+    divergenceDescription = "";
+  }
 
   return {
     authority: authority.referenceAuthority,
+    canonInitialized: Boolean(authority.canonInitialized),
+    universeType: clean(authority.universeType) || "custom",
     horizon: authority.cutoffDate,
     inclusive: authority.cutoffInclusive,
     referenceHorizonDate: authority.referenceHorizonDate,
     startDate,
     divergenceDate: authority.divergenceDate,
+    divergenceDescription,
   };
 };
 
-export const buildFutureHistoryBoundaryDirective = ({
+// Which of four worlds this is. A scenario that predates Scenario Canon v2 is a
+// game set in our history, as every built-in scenario is.
+const worldKind = (resolved) => {
+  if (!resolved.canonInitialized) return "historical";
+  if (resolved.universeType === "fictional") return "fictional";
+  if (resolved.authority === "pre-divergence-only" || resolved.universeType === "alternate") return "alternate";
+  if (resolved.universeType === "historical" || resolved.authority === "round-zero-only") return "historical";
+  return "custom";
+};
+
+export const buildRealHistoryDirective = ({
   world = {},
   game = {},
   originDate = "",
   fallbackDate = "",
 } = {}) => {
   const resolved = resolveReferenceKnowledgeBoundary({ world, game, fallbackDate });
-  const origin = clean(originDate || game?.gameDate || resolved.startDate);
-  const horizon = clean(resolved.horizon);
+  const start = clean(resolved.startDate);
+  const origin = clean(originDate || game?.gameDate || start);
+  const began = start
+    ? `This game began on ${start}${origin && origin !== start ? `, and this jump starts on ${origin}` : ""}.`
+    : "";
+  const divergence = clean(resolved.divergenceDate);
+  const account = resolved.divergenceDescription.length > DIVERGENCE_DESCRIPTION_CHARS
+    ? `${resolved.divergenceDescription.slice(0, DIVERGENCE_DESCRIPTION_CHARS).trimEnd()}…`
+    : resolved.divergenceDescription;
 
-  const authorityLine = horizon
-    ? resolved.inclusive
-      ? `External/reference chronology is admissible only through ${horizon}. Everything after ${horizon} from outside/reference canon is OUTSIDE the simulation's knowledge boundary.`
-      : `External/reference chronology is admissible only BEFORE ${horizon}. The date ${horizon} itself and everything after it belong to scenario/campaign canon, not outside/reference chronology.`
-    : "External/reference chronology has NO runtime authority. Only scenario-authored and campaign-generated canon supplied to this task may establish historical facts.";
-
-  const branchLine = resolved.startDate
-    ? `Campaign branch start: ${resolved.startDate}${origin ? `; current simulation origin: ${origin}` : ""}. Reaching a later calendar date does NOT make post-boundary source-canon events canonical.`
-    : origin
-      ? `Current simulation origin: ${origin}. The campaign save, not remembered outside chronology, owns the timeline.`
-      : "The campaign save, not remembered outside chronology, owns the timeline.";
-
-  return [
-    "[Counterfactual Knowledge Boundary — AUTHORITATIVE]",
-    authorityLine,
-    branchLine,
-    "Treat every external/reference-canon outcome beyond the allowed boundary as UNKNOWN COUNTERFACTUAL FUTURE, even when you remember what the source canon says happened.",
-    "MEMORY IS NOT EVIDENCE: never use remembered post-boundary event names, numbered resolutions, exact dates, vote totals, summit/conference names, election winners, officeholder successions, treaty signings, military operations, casualty figures, market outcomes, or other later source-canon specifics unless CURRENT CAMPAIGN CANON supplied to this task already established them.",
-    "CALENDAR COINCIDENCE IS NOT CAUSALITY: a familiar source-canon date falling inside this interval provides zero evidence that its source event should occur.",
-    "REFERENCE-CAUSAL MOMENTUM means surviving pressures may generate a SIMILAR TYPE of outcome. It never authorizes copying the remembered event identity, exact timing, participants, terms, figures, or sequence from post-boundary source canon.",
-    "BRANCH AUDIT: before returning any candidate that resembles a known post-boundary source-canon event, ask whether every distinguishing detail is independently grounded in the supplied current canon and present-tense causal state. If not, discard it or resimulate the consequence from current campaign causes.",
-    "When a similar outcome is genuinely earned, derive its date, participants, terms, scale, and consequences from THIS campaign's actors, politics, perceptions, institutions, relations, capabilities, and prior generated events — not from remembered history.",
-    "Current canonical divergences, including unusual leader/party goals or source-divergent state choices, are positive evidence and must be allowed to redirect attention and outcomes rather than being averaged away toward the familiar source-canon path.",
-  ].join("\n");
+  const lines = ["[This Game and Real History]"];
+  switch (worldKind(resolved)) {
+    case "fictional":
+      lines.push(`${began} This world is not ours: its past is the scenario's briefing and the events of this game, and it moves by the setting's own lore, which plays the part real history plays in a historical game.`.trim());
+      break;
+    case "alternate":
+      lines.push(`${began} This world's history split from ours${divergence ? ` on ${divergence}` : " before the game began"}, as the scenario describes. Real history before the split is its past; after it, simulate from the scenario's premises and from this game, and let real history guide only what the split plainly could not have reached.`.trim());
+      if (account) lines.push(`How it split: ${account}`);
+      break;
+    case "custom":
+      lines.push(`${began} If the scenario's briefing places this world in our history, real history is the default for everything the game has not changed; if it describes a world of its own, follow that world's lore instead.`.trim());
+      break;
+    default:
+      lines.push(`${began} Real history up to that date is this world's past, and from then on it stays the default for everything the game has not changed: the real events of this period happen, with their real people, places, dates and numbers, unless something in this game has changed their causes. What the game has changed so far is in the event history, the records and the map.`.trim());
+  }
+  return lines.join("\n");
 };

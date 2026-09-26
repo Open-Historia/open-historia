@@ -13,13 +13,16 @@ import assert from "node:assert/strict";
 
 import {
   DEDUPE_MIN_BLOCK_CHARS,
-  UNIT_CONTRACT_MARKER,
   SIMULATION_RULES_POINTER,
   collapseRepeatedBlock,
   collapseRepeatedWorldContext,
   templateAlreadySays,
 } from "./promptDedupe.js";
+import { readFileSync } from "node:fs";
 import defaultPrompts from "./defaultPrompts.json" with { type: "json" };
+
+// A marker to test the matcher with: the sentence the jump's unit contract opened with.
+const UNIT_CONTRACT_MARKER = "Units are EVIDENCE OF YOUR OWN EVENTS";
 
 test("a rule already in the prompt is recognised", () => {
   assert.equal(
@@ -53,31 +56,16 @@ test("an empty marker or prompt never claims the rule is present", () => {
   assert.equal(templateAlreadySays(null, UNIT_CONTRACT_MARKER), false);
 });
 
-// The marker is only useful if it actually appears in the bundled template. If
-// someone rewrites that section (Phase 5 does exactly that), this fails and says
-// so, rather than the de-duplication silently going dead and the duplicate
-// quietly returning.
-test("the unit marker still matches the bundled jumpForward template", () => {
-  assert.equal(
-    templateAlreadySays(defaultPrompts.tasks.jumpForward, UNIT_CONTRACT_MARKER),
-    true,
-    "the bundled template no longer contains the unit-contract marker — update UNIT_CONTRACT_MARKER",
-  );
-});
-
-// The other half of the same decision, recorded as a test so it is not "fixed"
-// by someone extending the de-duplication to ACTIONS_REFERENCE. The template's
-// output-contract tail overlaps that block heavily, but predates three levers
-// that ONLY the appended block mentions, so skipping it would take them away.
-test("the bundled template does not carry the newer levers, so ACTIONS_REFERENCE must keep being appended", () => {
-  const template = defaultPrompts.tasks.jumpForward;
-  for (const lever of ["regionClaims", "actionIds", "projectOps"]) {
-    assert.equal(
-      template.includes(lever),
-      false,
-      `${lever} is now in the template — re-check whether ACTIONS_REFERENCE can be de-duplicated too`,
-    );
-  }
+// The jump used to append a unit contract of its own and a 17,000-character
+// actions menu after its template, and these tests guarded when each could be
+// skipped. Since 2026-09-26 the template states the rules once and the levers
+// ride in the live records rendered into it (gameplay.js buildJumpLiveState), so
+// there is nothing left to de-duplicate — only this to hold.
+test("the jump's levers ride in its live records, not after its template", () => {
+  const gameplay = readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
+  assert.match(gameplay, /blocks\.push\(JUMP_LEVERS\)/);
+  assert.doesNotMatch(gameplay, /ACTIONS_REFERENCE/);
+  assert.doesNotMatch(gameplay, /\[Units on the Map\]/);
 });
 
 // ---------------------------------------------------------------------------

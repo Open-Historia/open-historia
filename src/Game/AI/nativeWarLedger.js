@@ -1223,7 +1223,7 @@ export const buildCanonicalWarContext = (world) => {
   if (!current.length) {
     return [
       "No active or ceasefire canonical wars are recorded.",
-      "Therefore no polity is currently authorized to fight a battlefield campaign merely because real history says it did.",
+      "Until a war is opened in this ledger, nobody is fighting a battlefield campaign.",
     ].join("\n");
   }
   // What a side is, when its record says (server/polityRole.js): a war against
