@@ -14,7 +14,9 @@
 
 import COUNTRY_NAMES from "../runtime/generated/countryNames.js";
 import { OWNER_SCHEMA } from "./documentMigration.js";
-import { normalizePolityRole } from "../../server/polityRole.js";
+import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
+import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
+import { buildPuppetsForGame } from "./scenarioPuppets.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -124,10 +126,12 @@ const cityTier = (f) => {
   return pop >= 1000000 ? 3 : pop >= 100000 ? 2 : 1;
 };
 
-// The document's point features (cities) as the game-ready cities.geojson.
+// The document's cities as the game-ready cities.geojson. A map feature that is
+// not a city (a base, a port: mapFeatures.js) goes to world.markers instead.
 const buildCitiesForGame = (features) => ({
   type: "FeatureCollection",
   features: (features || [])
+    .filter((f) => !isMapFeature(f))
     .filter((f) => Array.isArray(f.coord) && f.coord.length === 2 && f.coord[0] != null && f.coord[1] != null)
     .map((f) => ({
       type: "Feature",
@@ -137,6 +141,11 @@ const buildCitiesForGame = (features) => ({
         population: f.population || 0,
         capital: (f.tags || []).includes("capital") ? "primary" : "",
         tier: cityTier(f),
+        // The population by year, which the game reads for its date
+        // (runtime/cityPopulation.js).
+        ...(f.populationByYear && typeof f.populationByYear === "object" && Object.keys(f.populationByYear).length
+          ? { populationByYear: { ...f.populationByYear } }
+          : {}),
       },
     })),
 });
@@ -237,6 +246,23 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     if (Array.isArray(list) && list.length) regionClaimants[feature.properties.id] = [...new Set(list)];
   }
 
+  // Groups (runtime/groups.js): the registry, with any group a region names that
+  // the registry lacks (still a group to the game, in its default colour), and
+  // which group's area each region is in. They live in the world alone: the
+  // regions file carries no `group`.
+  const groupRegistry = { ...(doc.groups && typeof doc.groups === "object" && !Array.isArray(doc.groups) ? doc.groups : {}) };
+  const groupAreaRows = {};
+  for (const feature of regionsFC?.features || []) {
+    const props = feature.properties || {};
+    const id = props.id != null ? String(props.id) : feature.id != null ? String(feature.id) : "";
+    const group = String(props.group || "").trim();
+    if (!id || !group) continue;
+    groupAreaRows[id] = group;
+    if (!findGroupKey(groupRegistry, group)) groupRegistry[group] = { name: group };
+  }
+  const groups = normalizeGroups(groupRegistry);
+  const groupAreas = normalizeGroupAreas(groupAreaRows, groups);
+
   // Scenario Workshop / owner schema 4: region ownership is a stable
   // polity KEY. The visible/current name belongs to the polity registry and may
   // change without re-keying a single region.
@@ -268,19 +294,13 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
         ...(Array.isArray(record.aliases) ? record.aliases : []),
         displayName,
       ].map((v) => String(v || "").trim()).filter(Boolean))];
-      const { role: rawRole, ...rest } = record;
-      // What this power is, in the author's words ("a terrorist organisation",
-      // "the rebel side of the civil war"): the model reads it wherever the
-      // polity appears (server/polityRole.js).
-      const role = normalizePolityRole(rawRole);
       polityOverrides[stableKey] = {
-        ...rest,
+        ...record,
         code: record.code || stableKey,
         name: displayName,
         aliases,
         color: overrides[stableKey] ? rgbToHex(overrides[stableKey]) : (record.color || rgbToHex(rgb)),
         note: String(record.note || ""),
-        ...(role ? { role } : {}),
         status: record.status || "active",
         ...(record.verbatim || COUNTRY_NAMES[stableKey] ? { verbatim: Boolean(record.verbatim || COUNTRY_NAMES[stableKey]) } : {}),
       };
@@ -308,8 +328,16 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
     // it is a dispute that already ended.
     regionClaimants,
     settledRegionClaims: [],
+    // The groups and the areas they control (above).
+    groups,
+    groupAreas,
     // The starting units the author placed (Units panel / Unit tool).
     units: buildUnitsForGame(doc.units),
+    // The structures the author placed with the Map feature tool, and any the
+    // scenario already had (the Workshop opened with them).
+    markers: buildMarkersForGame(doc.features),
+    // The puppet states the scenario starts with (Countries panel).
+    puppets: buildPuppetsForGame(doc.puppets, { startDate: doc.metadata?.startDate || "" }),
     // A custom background replaces Earth, so it must also hide the stock modern
     // political overlay (country fills, borders, "Russia"/"France" labels) — those
     // are gated on customRegions in the game, so force it on whenever there's a

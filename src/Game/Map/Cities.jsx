@@ -9,6 +9,8 @@ import {
 } from "../../runtime/assets.js";
 import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
 import { useWorldState } from "./useWorldState.js";
+import { withPopulationsForYear } from "../../runtime/cityPopulation.js";
+import { gameDateYear } from "../../runtime/gameDates.js";
 import { publishCustomCityIndex } from "../../runtime/placeSearch.js";
 import {
     EMPTY_CITY_FEATURE_COLLECTION,
@@ -398,6 +400,29 @@ const CustomCities = ({ data, label, pop }) => (
     </Source>
 );
 
+// The game's year, kept current, for the cities whose population the scenario
+// gives by year (runtime/cityPopulation.js). The map redraws them once a year.
+const useGameYear = () => {
+    const [year, setYear] = useState(null);
+    useEffect(() => {
+        let cancelled = false;
+        const adopt = (game) => {
+            if (!cancelled && game && typeof game === "object") setYear(gameDateYear(game.gameDate || game.startDate || ""));
+        };
+        const read = () => readJson(JSON_URLS.game, { defaultValue: null }).then(adopt).catch(() => {});
+        read();
+        const onGameUpdated = (event) => adopt(event?.detail?.game);
+        window.addEventListener("oh:game-updated", onGameUpdated);
+        window.addEventListener("oh:active-game-changed", read);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:game-updated", onGameUpdated);
+            window.removeEventListener("oh:active-game-changed", read);
+        };
+    }, []);
+    return year;
+};
+
 const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
     // city set (presets, editor maps). Consumed from the shared world-state hook
@@ -410,6 +435,13 @@ const Cities = () => {
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
     const pop = React.useMemo(() => cityPopulationExpr(cityPopulations), [cityPopulations]);
+    // Each city's population for the year, where the scenario gives it by year;
+    // a population the AI set (cityPopulations, in `pop`) still wins.
+    const gameYear = useGameYear();
+    const datedData = React.useMemo(() => withPopulationsForYear(customData, gameYear), [customData, gameYear]);
+    useEffect(() => {
+        if (datedData && datedData !== customData && customCityFeatureCount(datedData) > 0) publishCustomCityIndex(datedData);
+    }, [datedData, customData]);
 
     // Cheats 2.0 can authoritatively edit the scenario city asset while the game is
     // already open. Listen for that narrow editor signal rather than polling a ~MB
@@ -475,7 +507,7 @@ const Cities = () => {
         readSucceeded: customRead,
     });
     if (source === "loading") return null;
-    if (source === "custom") return <CustomCities data={customData} label={label} pop={pop} />;
+    if (source === "custom") return <CustomCities data={datedData} label={label} pop={pop} />;
     return <StockCities label={label} pop={pop} />;
 };
 
