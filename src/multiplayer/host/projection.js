@@ -285,21 +285,36 @@ export const projectChats = (chats, viewer, { host = "" } = {}) => list(chats).f
     ...(isOwner ? [] : [{ code: owner, name: owner }]),
     ...list(chat.countries).filter((entry) => !same(nameOf(entry), viewer)),
   ];
-  const messages = list(chat.messages).map((message) => {
-    if (!isRecord(message)) return message;
-    const { memorySummary: _memory, ...line } = message;
-    const author = clean(line.speaker || line.code) || (fold(line.role) === "user" ? owner : "");
-    if (same(author, viewer)) return { ...line, role: "user" };
-    if (fold(line.role) === "user") return { ...line, role: "leader", speaker: author, code: author };
-    return line;
-  });
+  // Whose words a line is, from the viewer's side: its own are the player's
+  // ("user"); another person's read as that government's; an AI leader's
+  // private memory of the talks is not sent at all.
+  const asSeen = (line, authorOf) => {
+    const { memorySummary: _memory, ...rest } = line;
+    const author = authorOf(rest);
+    if (same(author, viewer)) return { ...rest, role: "user" };
+    if (fold(rest.role) === "user") return { ...rest, role: "leader", ...authorFields(author, rest) };
+    return rest;
+  };
+  const messages = list(chat.messages).map((message) => (isRecord(message)
+    ? asSeen(message, (line) => clean(line.speaker || line.code) || (fold(line.role) === "user" ? owner : ""))
+    : message));
+  const log = Array.isArray(chat.events) ? (isOwner ? chat.events : logSeenBy(chat.events, viewer)) : null;
   return [{
     ...rest,
     countries,
     messages,
-    ...(Array.isArray(chat.events) ? { events: isOwner ? chat.events : logSeenBy(chat.events, viewer) } : {}),
+    ...(log ? {
+      events: log.map((event) => (isRecord(event) && event.kind === "message"
+        ? asSeen(event, (line) => clean(line.by || line.code) || (fold(line.role) === "user" ? owner : ""))
+        : event)),
+    } : {}),
   }];
 });
+
+// A message names its author as speaker/code; a logged one as by/code.
+const authorFields = (author, line) => ("by" in line || "kind" in line
+  ? { by: author, code: author }
+  : { speaker: author, code: author });
 
 // --- The rest -------------------------------------------------------------------
 

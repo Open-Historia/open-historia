@@ -159,8 +159,13 @@ test("nothing private of the second player reaches the host's view", () => {
     "CANARY-RU-DESTINATION", "CANARY-RU-PROJECT", "CANARY-RU-REPORT", "CANARY-RU-EST-RELATION",
     "CANARY-RU-HISTORY", "CANARY-RU-GOAL", "CANARY-RU-STRATEGY", "CANARY-RU-TO-EST", "CANARY-RU-ORDER",
     "order-ru-1", "order-ru-march", "CANARY-MOVE-NOTE", "CANARY-ACTOROP", "CANARY-LEADER-MEMORY",
-    "secretMissiles", "4242", "97", "spy-ru-in-est", "pup-covert",
+    "secretMissiles", "spy-ru-in-est", "pup-covert",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the host's view`);
+  // Numbers are checked where they live: a bare "97" can turn up in any timestamp.
+  const sheet = projectForViewer(state(), LATVIA).world.countryStats[RUSSIA];
+  assert.equal(sheet.customStats, undefined);
+  assert.equal(sheet.indices.intelligenceService, undefined);
+  assert.equal(sheet.indices.sovereignty, 80);
 });
 
 test("nothing private of the host reaches the second player's view", () => {
@@ -168,7 +173,7 @@ test("nothing private of the host reaches the second player's view", () => {
   for (const canary of [
     "CANARY-LV-PATROL", "CANARY-LV-PROJECT", "CANARY-LV-TO-EST", "CANARY-LV-ORDER", "order-lv-1", "order-lv-patrol",
     SEAL, "CANARY-LV-SCENE", "CANARY-LV-INTERCEPT", "CANARY-LV-OPENING",
-    "CANARY-BALTIC-PROPOSAL", "Riga's goal", "reserves", "5151",
+    "CANARY-BALTIC-PROPOSAL", "Riga's goal", "reserves",
   ]) assert.equal(view.includes(canary), false, `${canary} leaked to the second player's view`);
 });
 
@@ -271,4 +276,36 @@ test("a view is a copy: changing it never changes the host's game", () => {
   view.actions[0].text = "changed";
   assert.equal(source.world.units[0].strength, 90);
   assert.equal(source.actions[0].text, "CANARY-RU-ORDER");
+});
+
+test("a thread's log reads from each side too, and a newcomer sees only what was said since it joined", () => {
+  const docs = state();
+  docs.chat = [{
+    id: "chat-ru-log",
+    player: RUSSIA,
+    countries: [{ code: ESTONIA, name: ESTONIA }, { code: LATVIA, name: LATVIA }],
+    messages: [],
+    events: [
+      { id: "c0", kind: "chat_created", title: "Border talks", by: RUSSIA },
+      { id: "c1", kind: "member_joined", member: { code: ESTONIA, name: ESTONIA }, by: "" },
+      { id: "c2", kind: "message", role: "user", by: "", text: "CANARY-BEFORE-LATVIA" },
+      { id: "c3", kind: "member_joined", member: { code: LATVIA, name: LATVIA }, by: "" },
+      { id: "c4", kind: "message", role: "user", by: "", text: "Moscow speaks." },
+      { id: "c5", kind: "message", role: "leader", by: ESTONIA, code: ESTONIA, text: "Tallinn answers.", memorySummary: "CANARY-LOG-MEMORY" },
+      { id: "c6", kind: "message", role: "leader", by: LATVIA, code: LATVIA, text: "Riga answers." },
+    ],
+  }];
+  const lv = projectForViewer(docs, LATVIA).chat[0];
+  assert.deepEqual(lv.events.map((event) => event.id), ["c0", "c1", "c3", "c4", "c5", "c6"]);
+  const line = (thread, eventId) => thread.events.find((event) => event.id === eventId);
+  assert.deepEqual([line(lv, "c4").role, line(lv, "c4").by], ["leader", RUSSIA]);
+  assert.equal(line(lv, "c6").role, "user", "Latvia's own words");
+  assert.equal(JSON.stringify(lv).includes("CANARY-LOG-MEMORY"), false);
+  assert.equal(JSON.stringify(lv).includes("CANARY-BEFORE-LATVIA"), false);
+
+  const ru = projectForViewer(docs, RUSSIA).chat[0];
+  assert.equal(ru.events.length, 7, "the owner reads its whole thread");
+  assert.equal(line(ru, "c4").role, "user");
+  assert.deepEqual([line(ru, "c6").role, line(ru, "c6").by], ["leader", LATVIA]);
+  assert.equal(JSON.stringify(ru).includes("CANARY-LOG-MEMORY"), false);
 });
