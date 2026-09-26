@@ -26,7 +26,8 @@ import {
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
-import { JSON_URLS, readJson } from "../../runtime/assets.js";
+import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
+import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -3135,6 +3136,16 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         promptCapture.speaker = speaker;
     }
 
+    // When the player leads a group rather than a country (runtime/groups.js), the
+    // leader answering it knows what it is dealing with.
+    const playerGroupText = await (async () => {
+        const playerName = playerCountry || gameData?.country || "";
+        if (!worldData?.groups || !playerName) return "";
+        const catalog = await loadRegionCatalog().catch(() => []);
+        const names = new Map(catalog.map((region) => [region.id, region.name]));
+        return describePlayerGroupForPrompt(worldData, playerName, { regionName: (id) => names.get(id) || id });
+    })();
+
     // The Game Master's standing reminders bind a leader too: a leader told the
     // bridge is down does not offer to meet on it.
     const reminders = renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable });
@@ -3169,7 +3180,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         : "";
 
     // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${politicalSection}${espionage}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    return `${rendered}${politicalSection}${espionage}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
 }
 
 let advisorHistory = [];

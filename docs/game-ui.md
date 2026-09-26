@@ -185,9 +185,10 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 |---|---|---|
 | `pickerTab === "country"` | `CountryPickerMap` (lazy OpenLayers) + a country list built by `buildScenarioCountryOptions` (only factions the scenario actually contains: `world.ownerCodes` ∪ `polityOverrides`, incl. landless factions) | `pickCountry(code)` → `difficultyPick` |
 | `pickerTab === "faction"` | `FactionCreator` (invent a nation: name/color/lore/flag/regions) | `pickFaction(faction)` → `difficultyPick` |
+| `pickerTab === "group"` | **Play as a group**: the scenario's groups (`scenarioGroupsFor(world)`: colour, name, how many regions each controls) and, below, `FactionCreator mode="group"` (name, colour, flag, description, starting area — "controlled", never "claimed") | `pickGroup(group)` → `difficultyPick` (the header shows the group's swatch and name) |
 | `difficultyPick` set | Difficulty grid from `DIFFICULTY_LEVELS` (`src/runtime/difficulty.js`) | `pickDifficulty(id)` |
 
-`pickDifficulty` routes to `startGameForCountry` (new game with country), `startGameForFaction` (new game seeded with an invented polity — merges into `world.polityOverrides`/`regionOwnershipOverrides`/`ownerCodes`, writes colors/flags), or `choosePlayCountry` (Apply-&-Play: `playGameId` set → refines an already-active game). Custom scenario geometry is loaded via `downloadScenarioJsonAsset(id, "regionsGeojson")` so the picker map shows real borders.
+`pickDifficulty` routes to `startGameForCountry` (new game with country), `startGameForFaction` (new game seeded with an invented polity — merges into `world.polityOverrides`/`regionOwnershipOverrides`/`ownerCodes`, writes colors/flags), `startGameForGroup` (the player leads a group: a landless polity of the group's exact name in `polityOverrides` and `ownerCodes`, the group in `world.groups` and its starting area in `groupAreas` — the regions stay their countries'; see world-state.md `groups`), or `choosePlayCountry` (Apply-&-Play: `playGameId` set → refines an already-active game). Custom scenario geometry is loaded via `downloadScenarioJsonAsset(id, "regionsGeojson")` so the picker map shows real borders.
 
 ### 4.6 Editor drawer (game & scenario editor)
 
