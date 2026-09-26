@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyDevice, mapRuntimeLimits } from "./deviceProfile.js";
+import { classifyDevice, mapRuntimeLimits, warmsWholeMapArchives } from "./deviceProfile.js";
 
 test("the Android app and touch-only screens take the constrained path", () => {
   assert.equal(classifyDevice({ native: true }), true);
@@ -29,6 +29,17 @@ test("a phone gets two MapLibre workers and eight requests; a desktop what it ha
   assert.deepEqual(mapRuntimeLimits({ hardwareThreads: 16 }), { workerCount: 6, parallelImageRequests: 24 });
   assert.deepEqual(mapRuntimeLimits({ hardwareThreads: 2 }), { workerCount: 2, parallelImageRequests: 16 });
   assert.deepEqual(mapRuntimeLimits({}), { workerCount: 2, parallelImageRequests: 16 });
+});
+
+test("a phone's browser range-reads the big map archives; the Android app and a desktop load them whole", async () => {
+  assert.equal(warmsWholeMapArchives({ native: false, constrained: true }), false, "iOS Safari, a phone's Chrome");
+  assert.equal(warmsWholeMapArchives({ native: false, constrained: false }), true, "a desktop browser");
+  assert.equal(warmsWholeMapArchives({ native: true, constrained: true }), true, "the Android app cannot range-read its APK");
+  const fs = await import("node:fs");
+  const preload = fs.readFileSync(new URL("./preload.js", import.meta.url), "utf8");
+  for (const key of ["countries", "regions"]) {
+    assert.ok(preload.includes(`warmsWholeMapArchives() ? warmPmtilesArchive(PMTILES_ARCHIVES.${key}`), `the ${key} warm asks first`);
+  }
 });
 
 test("only the map imports maplibre-gl, so the first download goes without it", async () => {

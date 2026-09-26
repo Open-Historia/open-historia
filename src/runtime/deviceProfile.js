@@ -72,3 +72,18 @@ export const mapRuntimeLimits = ({ hardwareThreads, constrained = false } = {}) 
     parallelImageRequests: Math.min(24, Math.max(16, threads * 2)),
   };
 };
+
+// The map's two large archives, regions (~101 MB) and countries (~60 MB), are
+// downloaded whole in the background at startup, hashed against the signed
+// content manifest and kept in memory, so every later tile is a memory read
+// (runtime/preload.js). A browser on a phone does not do that: the downloads
+// land, and are hashed (a second copy each), just as the loading screen hands
+// over to the map, which is when the tile workers and the regions parse peak
+// too. That was the moment iOS Safari killed the tab ("A problem repeatedly
+// occurred"). There the map reads the archives over HTTP range requests, a
+// tile at a time, as it does anyway until a warm finishes; the opening screen
+// needs one 40 KB tile of each. The Android app still loads them whole: its
+// APK assets cannot be range-read (wholeFileSource.js), and it ships the
+// trimmed z8 archives.
+export const warmsWholeMapArchives = ({ native = isNativeBuild(), constrained = isConstrainedDevice() } = {}) =>
+  native || !constrained;
