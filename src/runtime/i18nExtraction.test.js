@@ -8,8 +8,11 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { cleanJsxText, extractFromSource } from "../../scripts/i18n/extractStrings.mjs";
+import { cleanJsxText, extractFromSource, extractTree } from "../../scripts/i18n/extractStrings.mjs";
 
 const extract = (code) => {
   const result = extractFromSource(code, "src/Game/GameUI/probe.jsx", {});
@@ -66,6 +69,35 @@ test("a message module's returned and thrown prose is read", () => {
   assert.deepEqual([...withMessages.patterns.keys()], ["{{label}} is busy right now."]);
   const without = extractFromSource(code, "src/Game/AI/gameplay.js", { jsx: false, catchAll: false });
   assert.equal(without.exact.size + without.patterns.size, 0, "other AI modules are prompts and parsers");
+});
+
+test("a key named for a label holds display text, a lone lowercase word too", () => {
+  const result = extractFromSource(
+    "const META = { electoral: { mode: \"party\", mappedLabel: \"support mapped\", centerLabel: \"Political\", centerSubLabel: \"landscape\" } };\n" +
+    "const other = { publicDescription: \"Includes parties not individually represented.\", storageKey: \"oh-party\" };",
+    "src/runtime/politicalPresentation.js",
+    { jsx: false, catchAll: false },
+  );
+  assert.deepEqual([...result.exact.keys()].sort(), ["Includes parties not individually represented.", "Political", "landscape", "support mapped"]);
+});
+
+test("a screen's thrown messages and the institutions' refusals are read", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "oh-extract-"));
+  try {
+    const write = (rel, code) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), code);
+    };
+    write("src/Game/GameUI/Panel.jsx", "export const save = (name) => { if (!name) throw new Error(\"Give the group a name.\"); return <b>Saved</b>; };");
+    write("src/runtime/institutionalGovernance.js", "export const vote = (i) => { if (!i.active) throw new Error(`${i.name} is not active.`); return `${i.name}: voting opened.`; };");
+    write("src/runtime/elsewhere.js", "export const f = () => { throw new Error(\"Internal invariant broken.\"); };");
+    const { exact, patterns } = extractTree(root);
+    assert.ok(exact.has("Give the group a name."), "a .jsx file's thrown message");
+    assert.ok(patterns.has("{{name}} is not active.") && patterns.has("{{name}}: voting opened."), "an institutions module's refusals and channel lines");
+    assert.ok(!exact.has("Internal invariant broken."), "other runtime modules are read for display fields only");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("the attributes the translator touches are read, templates as patterns", () => {

@@ -124,29 +124,38 @@ const mutateInstitution = (worldInput, institutionInput, mutator) => {
   return { world: { ...world, institutions }, institution: institutions.byId[institution.id], ...result, error: "" };
 };
 
+// An event's headline and line, one whole sentence per action, so a language
+// pack can translate each (the game's own English; the shipped packs carry it).
+const lifecycleEventTitle = (action, subject, name) => {
+  if (action === "founded") return `${name} Is Founded`;
+  if (action === "dissolved") return `${name} Is Dissolved`;
+  if (action === "joined") return `${subject} Joins ${name}`;
+  if (action === "observer") return `${subject} Becomes Observer in ${name}`;
+  if (action === "left") return `${subject} Leaves ${name}`;
+  if (action === "expelled") return `${subject} Is Expelled from ${name}`;
+  if (action === "suspended") return `${subject} Is Suspended from ${name}`;
+  if (action === "reinstated") return `${subject} Returns to ${name}`;
+  if (action === "rejected") return `${subject} Declines ${name}`;
+  return `${subject} ${action} ${name}`;
+};
+
+const lifecycleEventDescription = (action, { founder, polity, name, reason }) => {
+  if (action === "founded") return `${founder} establishes ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "dissolved") return `${name} is formally dissolved${reason ? `: ${reason}` : "."}`;
+  if (action === "joined") return `${polity} joins ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "observer") return `${polity} becomes observer in ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "left") return `${polity} leaves ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "expelled") return `${polity} is expelled from ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "suspended") return `${polity} is suspended from ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "reinstated") return `${polity} returns to ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "rejected") return `${polity} declines ${name}${reason ? `: ${reason}` : "."}`;
+  return `${polity} ${String(action).toLocaleLowerCase()} ${name}${reason ? `: ${reason}` : "."}`;
+};
+
 const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "", reason = "", playerCountry = "" } = {}) => {
-  const actionLabel = {
-    founded: "Founded",
-    joined: "Joins",
-    observer: "Becomes Observer in",
-    left: "Leaves",
-    expelled: "Is Expelled from",
-    suspended: "Is Suspended from",
-    reinstated: "Returns to",
-    dissolved: "Dissolved",
-    rejected: "Declines",
-  }[action] || action;
   const subject = polity || institution?.name || "Institution";
-  const title = action === "founded"
-    ? `${institution.name} Is Founded`
-    : action === "dissolved"
-      ? `${institution.name} Is Dissolved`
-      : `${subject} ${actionLabel} ${institution.name}`;
-  const description = action === "founded"
-    ? `${actor || polity || "A founding government"} establishes ${institution.name}${reason ? `: ${reason}` : "."}`
-    : action === "dissolved"
-      ? `${institution.name} is formally dissolved${reason ? `: ${reason}` : "."}`
-      : `${polity} ${actionLabel.toLocaleLowerCase()} ${institution.name}${reason ? `: ${reason}` : "."}`;
+  const title = lifecycleEventTitle(action, subject, institution.name);
+  const description = lifecycleEventDescription(action, { founder: actor || polity || "A founding government", polity, name: institution.name, reason });
   return {
     id: `institution-lifecycle-${slug(institution?.id || institution?.name)}-${slug(action)}-${slug(polity || date || "institution")}`,
     date: clean(date),
