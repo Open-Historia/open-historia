@@ -17,6 +17,7 @@ import BottomBar from "./BottomBar.jsx";
 import TypeManager from "./TypeManager.jsx";
 import RegionsPanel from "./RegionsPanel.jsx";
 import PolitiesPanel from "./PolitiesPanel.jsx";
+import GroupsPanel from "./GroupsPanel.jsx";
 import TopologyPanel from "./TopologyPanel.jsx";
 import BorderCleanupOverlay, { BorderCleanupNote } from "./BorderCleanupOverlay.jsx";
 import { samePolityName } from "../../server/polityRename.js";
@@ -40,6 +41,8 @@ import {
 import SelectionInspector from "./SelectionInspector.jsx";
 import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
+import MarkerPopup from "./MarkerPopup.jsx";
+import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
 import SearchBar from "./SearchBar.jsx";
 import BasemapPicker from "./BasemapPicker.jsx";
 import FlagPicker from "./FlagPicker.jsx";
@@ -51,6 +54,8 @@ import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed } from "./exportPreset.js";
+import { normalizeGroups } from "../runtime/groups.js";
+import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import { generateFmgWorld } from "./fmg/fmgDriver.js";
@@ -312,6 +317,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // every registered country, with regions or not. Display names
     // change here without re-owning every region.
     polities: d.polities,
+    // The starting units and the groups: both were missing here, so a document's
+    // units vanished on reopening it.
+    units: d.units,
+    groups: d.groups,
+    puppets: d.puppets,
     // Without this the marker never persists, so a document migrates on every open,
     // forever — and, far worse, a document saved after being migrated still reads
     // as legacy to everything downstream.
@@ -491,6 +501,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         flags: doc.flags || {},
         tags: doc.tags || {},
         polities: doc.polities || {},
+        units: Array.isArray(doc.units) ? doc.units : [],
+        groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
+        puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
       });
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
@@ -592,6 +605,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     if (initialMap.polities && typeof initialMap.polities === "object") {
       base.polities = structuredClone(initialMap.polities);
     }
+    base.groups = normalizeGroups(initialMap.groups);
+    // The scenario's puppet states, as its world has them (scenarioPuppets.js).
+    base.puppets = Array.isArray(initialMap.puppets) ? structuredClone(initialMap.puppets) : [];
     if (initialMap.flags) base.flags = normalizePolityKeyedMap(initialMap.flags, base.polities);
     // Same reasoning as flags: without this a round-trip clears the scenario's tags.
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
@@ -609,8 +625,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         regionId: null,
         population: f.properties?.population || 0,
         tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
+        // Its size and its population by year come back too: a round trip
+        // lost the tier, and would lose the series.
+        ...(Number(f.properties?.tier) >= 1 && Number(f.properties?.tier) <= 3 ? { tier: Math.round(Number(f.properties.tier)) } : {}),
+        ...populationByYearField(f.properties),
       }))
       .filter((f) => Array.isArray(f.coord));
+    // The scenario's structures (world.markers) come back as map features, each
+    // keeping its id and whatever the Workshop does not edit (mapFeatures.js).
+    base.features.push(...(Array.isArray(initialMap.markers) ? initialMap.markers : [])
+      .map((marker) => markerToFeature(marker, newId("feat")))
+      .filter(Boolean));
     // The scenario's starting units come back into the Workshop too, so a
     // round-trip keeps them and the Units panel edits what the game starts with.
     base.units = (Array.isArray(initialMap.units) ? initialMap.units : [])
@@ -681,6 +706,17 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.polities, d.regionCount, regionEpoch]);
 
+  // Each group's tint colour, for the map (OlMap/olStyle.js).
+  const groupColors = useMemo(
+    () => Object.fromEntries(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
+    [d.groups],
+  );
+  const groupCount = useMemo(
+    () => new Set([...Object.keys(d.groups || {}), ...Object.keys(api?.listGroupUsage?.() || {})]).size,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, d.groups, regionEpoch],
+  );
+
   const polityChoices = useMemo(() => {
     const keys = new Set(Object.keys(d.polities || {}));
     for (const row of api?.listPolityUsage?.() || []) keys.add(row.key);
@@ -714,6 +750,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         paintOwner={paintOwner}
         paintOnlyOwner={paintOnlyOwner}
         units={d.units}
+        groupColors={groupColors}
         featureSelectionIds={featureSelection}
         onFeatureSelectionChange={setFeatureSelection}
         features={d.features}
@@ -724,8 +761,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           d.setSaveStatus("dirty");
           setRegionEpoch((n) => n + 1);
         }}
-        onFeatureCreate={({ pixel, ...partial }) => {
+        onFeatureCreate={({ pixel, mapFeature = false, ...partial }) => {
           const id = newId("feat");
+          // The Map feature tool: a base, a port, a landmark (mapFeatures.js).
+          if (mapFeature) {
+            d.setFeatures((list) => [...list, newMapFeature({ id, ...partial })]);
+            d.setSaveStatus("dirty");
+            setCityPopup({ id, x: pixel?.[0] ?? 80, y: pixel?.[1] ?? 80, isNew: true });
+            return;
+          }
           d.setFeatures((list) => [
             ...list,
             {
@@ -1025,6 +1069,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
           }}
           removePolity={d.removePolity}
           removePolities={d.removePolities}
+          puppets={d.puppets}
+          setPuppets={d.setPuppets}
           importPolityRoster={d.importPolityRoster}
           setColorOverride={d.setColorOverride}
           setTags={d.setTags}
@@ -1035,6 +1081,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
             d.setActiveTool("paint");
             setOpenPanel(null);
           }}
+          onClose={() => setOpenPanel(null)}
+        />
+      )}
+      {openPanel === "groups" && (
+        <GroupsPanel
+          api={api}
+          groups={d.groups}
+          setGroups={d.setGroups}
+          selection={d.selection}
+          regionEpoch={regionEpoch}
           onClose={() => setOpenPanel(null)}
         />
       )}
@@ -1141,10 +1197,29 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         upsertPolity={d.upsertPolity}
         regionEpoch={regionEpoch}
         onOpenPolities={() => setOpenPanel("polities")}
+        groups={d.groups}
+        onOpenGroups={() => setOpenPanel("groups")}
         onCopyToClipboard={(ids) => copySelectionToClipboard(ids)}
       />
 
-      {cityPopup && (
+      {cityPopup && isMapFeature(d.features.find((f) => f.id === cityPopup.id)) && (
+        <MarkerPopup
+          feature={d.features.find((f) => f.id === cityPopup.id)}
+          x={cityPopup.x}
+          y={cityPopup.y}
+          isNew={cityPopup.isNew}
+          polities={polityChoices}
+          onChange={(patch) =>
+            d.setFeatures((list) => list.map((f) => (f.id === cityPopup.id ? { ...f, ...patch } : f)))
+          }
+          onDelete={() => {
+            d.setFeatures((list) => list.filter((f) => f.id !== cityPopup.id));
+            setCityPopup(null);
+          }}
+          onClose={() => setCityPopup(null)}
+        />
+      )}
+      {cityPopup && !isMapFeature(d.features.find((f) => f.id === cityPopup.id)) && (
         <CityPopup
           feature={d.features.find((f) => f.id === cityPopup.id)}
           x={cityPopup.x}
@@ -1180,6 +1255,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
       <BottomBar
         counts={d.counts}
         polityCount={polityCount}
+        groupCount={groupCount}
         clipboardCount={clipboardCount}
         basemap={d.basemap}
         hasCustomBackground={Boolean(customBg)}

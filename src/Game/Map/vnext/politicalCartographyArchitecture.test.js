@@ -189,6 +189,13 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*service: "World_Terrain_Base"/);
 });
 
+test("the groups' layers are handed a hasMapLayer the map component defines", () => {
+  // GroupAreaLayers finds its place in the layer order through it; passed but
+  // never defined, it threw on the map's first render and took the world view down.
+  assert.match(nations, /hasMapLayer=\{hasMapLayer\}/);
+  assert.match(nations, /const hasMapLayer = \(id\) => Boolean\(map\?\.getMap\?\.\(\)\?\.style && map\.getLayer\(id\)\);/);
+});
+
 test("label geometry is worker-owned and Nations never fits live polity polygons on the main thread", () => {
   assert.match(worker, /buildPolityLabelCollections/);
   assert.match(worker, /aggregatePolityGeometryForOwners/);

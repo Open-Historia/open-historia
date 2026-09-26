@@ -9,6 +9,7 @@ import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { saveBlobToDisk } from "../runtime/saveFile.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
+import { latestPopulation, populationByYearField } from "../runtime/cityPopulation.js";
 
 const WORLD = { west: -180, east: 180, north: 85.05112878, south: -85.05112878 };
 
@@ -630,7 +631,8 @@ const collectImportedCityPoints = (features, polities) => {
     const tier = Number.isFinite(explicitTier) && explicitTier >= 1 && explicitTier <= 3
       ? Math.round(explicitTier)
       : symbolTier;
-    const population = Number(props.population);
+    const series = populationByYearField(props);
+    const population = Number(props.population) || latestPopulation(series.populationByYear);
     const scale = Number(props.scale);
     const labelScale = Number(props.lbSize ?? props.labelScale);
     const sourceRegionId = primitiveKey(props.sourceRegionId ?? props.regionId ?? props.regionID);
@@ -647,6 +649,7 @@ const collectImportedCityPoints = (features, polities) => {
       regionId: sourceRegionId || null,
       sourceRegionId: sourceRegionId || null,
       population: Number.isFinite(population) && population > 0 ? population : 0,
+      ...series,
       tier,
       tags,
       ...(Number.isFinite(scale) && scale > 0 ? { scale } : {}),

@@ -12,6 +12,11 @@
 // missed the ones the game did; now it stamps the world's rows over the file's
 // the same way, and what it saves (exportPreset.js) is the whole of them.
 //
+// The same stamp carries a scenario's group areas (world.groupAreas, region id
+// -> group name; runtime/groups.js) onto each region's `group`. Those live only in
+// the world, never in the map file, so when they are given every region is
+// stamped: its group, or none.
+//
 // Import-free: a feature is anything with getId() and set().
 
 const cleanList = (value) => [...new Set((Array.isArray(value) ? value : [])
@@ -25,11 +30,15 @@ export const claimStamper = (overrides) => {
     ? overrides.claimants
     : null;
   const settled = new Set((Array.isArray(overrides?.settled) ? overrides.settled : []).map((id) => String(id)));
-  if (!rows && !settled.size) return () => {};
+  const groupAreas = overrides?.groupAreas && typeof overrides.groupAreas === "object" && !Array.isArray(overrides.groupAreas)
+    ? overrides.groupAreas
+    : null;
+  if (!rows && !settled.size && !groupAreas) return () => {};
   return (feature) => {
     const id = feature?.getId?.();
     if (id == null) return;
     const key = String(id);
+    if (groupAreas) feature.set("group", String(groupAreas[key] ?? "").trim() || null);
     if (rows && Object.prototype.hasOwnProperty.call(rows, key)) {
       const list = cleanList(rows[key]);
       feature.set("claimants", list.length ? list : null);

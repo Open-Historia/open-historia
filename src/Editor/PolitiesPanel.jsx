@@ -10,8 +10,8 @@ import { ColorField, TagField } from "./fields.jsx";
 import { TAG_SUGGESTIONS } from "../runtime/countryTags.js";
 import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
-import { POLITY_ROLE_PLACEHOLDER } from "../../server/polityRole.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import PuppetFields from "./PuppetFields.jsx";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -70,6 +70,8 @@ const PolitiesPanel = ({
   setTags,
   onOpenFlagPicker,
   onPaintPolity,
+  puppets = [],
+  setPuppets,
   onClose,
 }) => {
   const [query, setQuery] = useState("");
@@ -118,6 +120,14 @@ const PolitiesPanel = ({
       })
       .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
   }, [polities, usage, query]);
+
+  // Every polity by name, unfiltered: the puppet fields' overlord list.
+  const polityChoices = useMemo(
+    () => [...new Set([...Object.keys(polities || {}), ...usage.keys()])]
+      .map((key) => ({ key, name: clean(polities?.[key]?.name) || key }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key)),
+    [polities, usage],
+  );
 
   const allFilteredSelected = rows.length > 0 && rows.every((row) => bulkSelected.has(row.key));
   const selectedBulkRows = useMemo(() => {
@@ -599,22 +609,13 @@ const PolitiesPanel = ({
             <TagField value={tags?.[current.key] || []} suggestions={TAG_SUGGESTIONS} onChange={(next) => setTags?.(current.key, next)} />
           </div>
 
-          <div>
-            <div
-              style={{ fontSize: 10.5, color: "rgba(255,255,255,0.48)", marginBottom: 4 }}
-              title="What this power IS, in your own words — a country claiming land as its own, a terrorist organisation, a gang, one side of a civil war. The game's AI reads it wherever this polity appears."
-            >
-              What it is
-            </div>
-            <input
-              value={current.record?.role || ""}
-              placeholder={POLITY_ROLE_PLACEHOLDER}
-              onChange={(e) => upsertPolity?.(current.key, current.record
-                ? { role: e.target.value }
-                : { name: current.key, code: current.key, aliases: [current.key], status: "active", note: "", role: e.target.value })}
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
-            />
-          </div>
+          <PuppetFields
+            polity={current.key}
+            regionCount={current.regionCount}
+            choices={polityChoices}
+            puppets={puppets}
+            setPuppets={setPuppets}
+          />
 
           {current.record && (
             <div>

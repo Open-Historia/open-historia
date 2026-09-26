@@ -13,6 +13,7 @@ import {
 } from "./polityGeometry.js";
 import { buildPolityLabelCollections } from "./polityLabels.js";
 import { buildRegionRenderRepair, isExplicitAuthoredGeometry } from "./regionRenderRepair.js";
+import { buildGroupAreaIndex, deriveGroupAreas } from "./groupAreas.js";
 
 const EMPTY_FC = Object.freeze({ type: "FeatureCollection", features: [] });
 
@@ -29,6 +30,10 @@ let currentRegionClaimants = {};
 let currentLabelNames = {};
 let renderRepairGeneration = 0;
 let renderRepairGeometryById = new Map();
+// Groups' areas (groupAreas.js): per-region edge lists and label points, built
+// on the first request after the regions load.
+let groupAreaIndex = null;
+let groupLabelPoints = null;
 
 const cancelRenderRepairBuild = () => {
   renderRepairGeneration += 1;
@@ -297,6 +302,8 @@ const resetDerivedCaches = () => {
   currentRegionClaimants = {};
   currentLabelNames = {};
   renderRepairGeometryById = new Map();
+  groupAreaIndex = null;
+  groupLabelPoints = null;
 };
 
 const loadRegionsFromUrl = async (url) => {
@@ -911,6 +918,41 @@ const updateOwnershipCartography = ({
   };
 };
 
+// Which regions each group controls moves no border and no owner, so it is
+// answered on its own, from the caches the political pipeline already holds,
+// and never enters that pipeline's revisions. Nations asks only once this
+// worker has published catalog-ready, and again when repaired shapes land.
+const answerGroupAreas = ({ requestId, geometryEpoch, groupAreas, groups }) => {
+  const startedAt = performance.now();
+  ensureTopology();
+  groupAreaIndex ??= buildGroupAreaIndex(cachedTopology);
+  if (!groupLabelPoints) {
+    const byId = new Map((cachedMetadata?.records ?? []).map((record) => [record.id, record]));
+    groupLabelPoints = cachedTopology.regionIds.map((id) => {
+      const record = byId.get(String(id));
+      return record && Number.isFinite(record.lng) && Number.isFinite(record.lat)
+        ? { lng: record.lng, lat: record.lat, weight: record.territoryWeight }
+        : null;
+    });
+  }
+  const derived = deriveGroupAreas({
+    topology: cachedTopology,
+    index: groupAreaIndex,
+    regions: cachedRegions,
+    groupAreas,
+    groups,
+    geometryFor: (id, feature) => renderRepairGeometryById.get(String(id)) ?? feature?.geometry,
+    pointFor: (regionIndex) => groupLabelPoints[regionIndex],
+  });
+  self.postMessage({
+    messageType: "group-areas-result",
+    requestId,
+    geometryEpoch,
+    ...derived,
+    stats: { elapsedMs: performance.now() - startedAt, groupCount: derived.fills.features.length },
+  });
+};
+
 self.onmessage = async ({ data: message }) => {
   const {
     requestId,
@@ -925,6 +967,20 @@ self.onmessage = async ({ data: message }) => {
     forceFullSnapshot = false,
   } = message ?? {};
   if (!requestId) return;
+
+  if (type === "group-areas") {
+    try {
+      answerGroupAreas({ requestId, geometryEpoch, groupAreas: message.groupAreas ?? {}, groups: message.groups ?? {} });
+    } catch (error) {
+      self.postMessage({
+        messageType: "group-areas-result",
+        requestId,
+        geometryEpoch,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
 
   try {
     let loadStats = null;

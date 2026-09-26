@@ -5,8 +5,9 @@ import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { polityRoleOf } from "../../../server/polityRole.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
+import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
   createApplicationReceipt,
   firstComplaintLine,
@@ -1594,7 +1595,6 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
   ]);
 
   const rows = [];
-  const shownIds = [];
   for (const regionId of ids) {
     const region = byId.get(regionId);
     const baseOwner = normalizeString(region?.country || toCountryName(region?.countryCode) || "");
@@ -1604,7 +1604,6 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 
     if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
 
-    shownIds.push(regionId);
     rows.push(
       `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
       `controller ${controller || "unknown"}` +
@@ -1612,25 +1611,23 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
     );
   }
 
-  if (!rows.length) return "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
-  const shown = rows.slice(0, maxRows);
-  // What the claimants in these rows are, in the map author's or the AI's own
-  // words (server/polityRole.js) — once each, under the rows, so the names in
-  // the rows stay exact.
-  const roles = new Map();
-  for (const regionId of shownIds.slice(0, maxRows)) {
-    for (const name of normalizeArray(world.regionClaimants?.[regionId]).map(normalizeString).filter(Boolean)) {
-      const role = polityRoleOf(world.polityOverrides, name);
-      if (role && !roles.has(name)) roles.set(name, role);
-    }
-  }
-  return shown.join("\n")
-    + (rows.length > maxRows
+  return rows.length > 0
+    ? rows.slice(0, maxRows).join("\n") + (rows.length > maxRows
       ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
       : "")
-    + (roles.size
-      ? `\nWhat these claimants are:\n${[...roles].map(([name, role]) => `- ${name}: ${role}`).join("\n")}`
-      : "");
+    : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+};
+
+// Groups (runtime/groups.js) as the model reads them: each exact name, what it
+// is, and the regions it controls, by name with the id a groupOps entry copies.
+// Empty when the world has none, so a game without groups pays nothing.
+const buildGroupsContext = async (worldLike) => {
+  if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
+  const world = normalizeWorldState(worldLike);
+  if (!Object.keys(world.groups).length) return "";
+  const catalog = await loadRegionCatalog().catch(() => []);
+  const names = new Map(catalog.map((region) => [region.id, region.name]));
+  return describeGroupsForPrompt(world, { regionName: (id) => names.get(id) || id });
 };
 
 const buildGameMasterStorylineContext = (worldLike) => {
@@ -1806,6 +1803,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
+  variables.groupsContext = await buildGroupsContext(bundle.world);
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1847,14 +1845,14 @@ const buildTemplateVariables = async (bundle, options = {}) => {
 const JUMP_LEVERS = [
   "[Levers]",
   "Everything you change rides on an event's impacts, and no event's text may claim a change its impacts do not make. The output function describes each field; these need a word more:",
-  "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"role\":\"<what it is, only when new or changed: a terrorist organisation, the rebel side of a civil war, a government in exile>\",\"stats\":{\"<only the fields that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A better intelligence service is built over time: open it as a project, never as an instant rating.",
+  "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"stats\":{\"<only the fields that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• politicalActorOps {\"op\":\"<operation>\",\"polityKey\":\"<current full name; the new one if this event also renames it>\",\"argsJson\":\"<one JSON object, as a string>\"}: set-government, replace-leader, form-coalition / leave-coalition, create / update / set-party-*, create / update / set-power-bloc-*, set-political-system, set-strategy, set-traits, set-perceptions / remove-perception. Never guess the decoded argsJson shape: use the one given for the op below. Every change of government, leader or party carries these ops, or it changes only the story; stats.leader and stats.government never carry it.",
   POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
   `When an election or a new government is the first settled politics of a young polity, set up its parties, governing force, system, goals and traits in the same event; while results are still being counted, narrate the count, not a result. Traits use only these keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Never use set-political-pressures or set-behavioral-disposition.`,
   "• institutionLifecycleOps: found, invite, apply, respond, withdraw, expel, suspend, reinstate or dissolve, each naming its actorPolity by exact current name; an existing institution by its exact institutionId, and respond with the pending caseId. Governments join, refuse or leave by their own interests and politics, never because relations are friendly, and never for the human player's own membership. An invitation or application is not membership: the institution's own rules decide it.",
   "• markerOps {\"op\":\"build\",\"marker\":{\"name\":\"\",\"kind\":\"city | military base | port | embassy | airfield | …\",\"ownerCode\":\"\",\"at\":\"\",\"note\":\"\",\"foundedAt\":\"\"}} · {\"op\":\"remove\",\"name\":\"<exact name>\",\"note\":\"\"} · {\"op\":\"rename\",\"name\":\"<current name>\",\"newName\":\"\",\"note\":\"\"} · {\"op\":\"population\",\"name\":\"<city>\",\"population\":\"<the new total>\",\"note\":\"\"}. rename and population work on every city on the map.",
-  "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"claimantRole\":\"<what the claimant is: a country claiming the land as its own, a terrorist organisation, the rebel side of a civil war>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it. A claimant need not be a state — a rebel movement, one side of a civil war, a cartel or a gang can claim land too — and claimantRole says what it is, given whenever the claimant is new or has changed.",
-  "• regionControlOps: a side need not be a state either — rebels, one side of a civil war, a militia, a cartel, a terrorist organisation — and actorRole (on a contest) or toRole (on a control) says what it is whenever that side is new or what it is has changed.",
+  "• groupOps {\"op\":\"create | update | dissolve | take | release\",\"name\":\"<exact group name>\",\"newName\":\"\",\"description\":\"<what it is and wants>\",\"color\":\"#RRGGBB\",\"regionIds\":[\"<id or plain region name>\"],\"note\":\"\"}; create founds a group (with its first regions if it holds any), take adds regions to its area, release gives them back (all of them when regionIds is empty), dissolve erases it.",
+  "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
 
@@ -1987,7 +1985,13 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
             name: renamed || name,
             aliases: renamed ? [name] : [],
             coordinates: feature?.geometry?.type === "Point" ? feature.geometry.coordinates : null,
-            population: Number(props.population) || 0,
+            // For the game's date where the scenario gives it by year, unless it
+            // was set by hand (runtime/cityPopulation.js).
+            population: effectiveCityPopulation(props, {
+              date: normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate),
+              cityPopulations: world.cityPopulations,
+              name,
+            }),
             capital: normalizeString(props.capital),
           };
         });
@@ -2505,6 +2509,14 @@ const jumpDifficultyDirective = (difficulty) => {
   return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
 };
 
+// Groups (runtime/groups.js): the rule and the current areas, on every jump,
+// because the world may found one at any time.
+const buildJumpGroupsBlock = (groupsContext) => [
+  "[Groups]",
+  "Groups are actors that are not countries — an insurgency, a cartel, a militia, a warlord's band, a cult, a zombie outbreak — each controlling an area of regions that stay their countries'. Found, change, move or erase them with groupOps whenever an event has one appear, spread, lose ground, change or be destroyed. A group taking a region moves no border; when a group becomes a state that governs its land, found the state with regionTransfers instead.",
+  normalizeString(groupsContext) || "No groups exist yet.",
+].join("\n");
+
 const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = true, stats = {} } = {}) => {
   const playerName = normalizeString(variables?.playerPolity) || "the player's polity";
   let world = {};
@@ -2527,6 +2539,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
+  blocks.push(buildJumpGroupsBlock(variables.groupsContext));
 
   // What is in motion: storylines, pressures, economies and the diplomatic
   // slice (nativeWorldDirector.js), built per segment.
@@ -2910,6 +2923,9 @@ So use the wider picture to choose the sender and the moment — never to give t
   // every narrated place must have its own operation.
   if (taskKey === "gameMaster") {
     systemPrompt = `${systemPrompt}\n\n[GM Territorial Semantics — live override]\nA wartime capture/occupation/liberation/retaking changes DE-FACTO control and must use impacts.regionControlOps, not regionTransfers. Use regionTransfers only for a LEGAL sovereignty change such as treaty cession, annexation/incorporation, recognized hand-over, sale, unification or final settlement. Do not conflate the two just because the old frozen GM prompt says \"moves territory\".\n\n[GM Geographic Completeness — LIVE 8B.2.10]\nTerritorial narration and structured operations must agree PLACE BY PLACE, not merely in aggregate. If an authored event says control is established, expanded, consolidated, seized, occupied, liberated or retaken in several named cities/areas, emit a matching regionControlOps operation for EVERY named place whose map region actually changes control. Never narrate \"Płock, Częstochowa and Warsaw\" while emitting only two control operations. For a city-grounded change, put the actual city name in regionId/regionName or the exact rendered region id/name when known; native validation will map the city point to the rendered region and will reject an incomplete preview rather than silently dropping the city. One operation must describe one intended place: never reuse a nearby city's rendered region for a different named city, and never let event-wide prose substitute for the operation's own geographic target.\n\n[GM Physical-World Completeness — LIVE 10.1B]\nCURRENT MAP STRUCTURES is canonical persistent physical state, including stable marker ids and lifecycle status. For EVERY authored GM event, silently audit whether the prose establishes a significant named geographically concrete physical feature that persists beyond the event OR materially changes an existing supplied feature. If YES, the SAME event MUST contain the matching impacts.markerOps mutation. BUILD only a genuinely new feature. UPDATE the SAME existing markerId for major expansion/completion, capture or operator change, conversion, damage, abandonment, reconstruction, or destruction. RENAME preserves identity. REMOVE is only true canonical deletion/admin cleanup — historical destruction is status=destroyed and the marker remains in canon. Use status literally: planned before work, under_construction once construction has begun, active once operational, damaged after material damage, inactive when out of service, abandoned when left behind, destroyed when physically destroyed. A catastrophic explosion that leaves a damaged site therefore MUST update that existing marker to status=damaged; reconstruction later updates the SAME id toward under_construction/active. If a supplied feature merely participates without changing, reference its exact canonical name naturally but emit no markerOp. Never create marker filler merely because this audit exists.\n\n[Current Non-Normal Territorial State]\n${normalizeString(variables.territorialControlContext) || "No active occupations or contested regions recorded."}`;
+    if (normalizeString(variables.groupsContext)) {
+      systemPrompt = `${systemPrompt}\n\n[Groups]\nActors that are not countries, each controlling an area of regions that stay their countries'. Their exact names, what each is, and where it controls (groupOps creates, changes, erases them and moves their areas):\n${normalizeString(variables.groupsContext)}`;
+    }
   }
 
   if (["actions", "interactiveCreation", "interactiveExecutor"].includes(taskKey)) {
@@ -4048,7 +4064,7 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // did applied with nothing on the timeline to say so.
 const OWN_CONSEQUENCE_IMPACTS = [
   "regionTransfers", "regionClaims", "regionControlOps", "polityChanges", "politicalActorOps",
-  "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "actionIds",
+  "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "groupOps", "actionIds",
 ];
 const eventCarriesOwnConsequence = (event) =>
   OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
@@ -5829,6 +5845,47 @@ const resolveRegionTransfers = async (containers, world, {
     }
     impacts.regionClaims = kept;
   }
+
+  // A group's area names regions the way a claim does — an exact id, or a plain
+  // name — and, like a claim, moves no border, so a region that matches nothing
+  // is dropped with a note instead of costing a retry. A release whose every
+  // region was dropped is dropped whole: an empty list means "release all".
+  for (const { impacts, path } of containers) {
+    const ops = normalizeArray(impacts?.groupOps);
+    if (ops.length === 0) continue;
+    const kept = [];
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const list = Array.isArray(op.regionIds) ? op.regionIds
+        : Array.isArray(op.regions) ? op.regions
+          : op.regionId ? [op.regionId] : [];
+      const resolved = [];
+      for (const token of list) {
+        const id = normalizeString(token);
+        if (byId.has(id)) {
+          resolved.push(id);
+          continue;
+        }
+        const aliased = byAliasId.get(id) ?? [];
+        const named = byName.get(regionKey(token)) ?? [];
+        const matches = aliased.length === 1 ? aliased : named;
+        if (matches.length === 1) {
+          resolved.push(matches[0].id);
+          continue;
+        }
+        console.warn(
+          `[ai] ${path}.groupOps dropped region "${id}" for ${normalizeString(op.name)}: ` +
+            "no single map region matches that id or name.",
+        );
+      }
+      if (list.length > 0 && resolved.length === 0 && normalizeGroupOp(op)?.op === "release") continue;
+      delete op.regions;
+      delete op.regionId;
+      op.regionIds = [...new Set(resolved)];
+      kept.push(op);
+    }
+    impacts.groupOps = kept;
+  }
   // The foundings this pass decided, as create entries on the first event that
   // named each polity (the collector skipped names the payload already declares).
   // Prepended, so a model's own later entry for the same name still lands on top
@@ -5935,6 +5992,29 @@ const validateExactApprovedRegionClaims = (containers) => {
     const regionId = normalizeString(claim?.regionId);
     if (!regionId || !exactIds.has(regionId)) {
       return `${path}.regionClaims[${claimIndex}].regionId "${regionId || "(blank)"}" is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved claim.`;
+    }
+  }
+  return "";
+};
+
+// The same guard for groups' areas: Apply takes the previewed ids as they are.
+const validateExactApprovedGroupAreas = (containers) => {
+  const entries = [];
+  for (const { impacts, path } of containers) {
+    for (const [opIndex, op] of normalizeArray(impacts?.groupOps).entries()) {
+      for (const regionId of normalizeArray(op?.regionIds)) entries.push({ regionId: normalizeString(regionId), opIndex, path });
+    }
+  }
+  if (entries.length === 0) return "";
+
+  const exactCatalog = getPrimedScenarioRegionCatalog() ?? [];
+  if (!Array.isArray(exactCatalog) || exactCatalog.length === 0) {
+    return "Approved group areas cannot be revalidated because the compact scenario region catalog is not primed; regenerate the GM preview after the map finishes loading.";
+  }
+  const exactIds = new Set(exactCatalog.map((region) => normalizeString(region?.id)).filter(Boolean));
+  for (const { regionId, opIndex, path } of entries) {
+    if (!regionId || !exactIds.has(regionId)) {
+      return `${path}.groupOps[${opIndex}].regionIds has "${regionId || "(blank)"}", which is not present in the primed scenario region catalog. Regenerate the GM preview; Apply will not reinterpret or silently drop an approved group area.`;
     }
   }
   return "";
@@ -6208,6 +6288,8 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
+    const exactGroupError = validateExactApprovedGroupAreas(containers);
+    if (exactGroupError) return exactGroupError;
   }
   // Reluctance guard (strict attempt only): events that NARRATE a capture while
   // the whole payload ships ZERO regionTransfers are the recurring field report
@@ -8182,7 +8264,6 @@ const buildTargetDossier = async (bundle, code, normalizedWorld = null) => {
         polity.aliases?.length > 0 ? ` — also known as ${polity.aliases.join(", ")}` : ""
       }`,
     );
-    if (polity.role) lines.push(`What it is: ${polity.role}`);
     if (polity.note) lines.push(`Notes: ${polity.note}`);
   }
 
@@ -14741,6 +14822,7 @@ const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
     "markerOps",
     "institutionLifecycleOps",
     "projectOps",
+    "groupOps",
   ]) {
     if (normalizeArray(impacts[field]).length > 0) return true;
   }
@@ -15492,12 +15574,14 @@ const gameMasterChangeSummary = ({ transaction, summary = "", request = "" }) =>
   const controlOps = impactCount("regionControlOps");
   const claims = impactCount("regionClaims");
   const politicalOps = impactCount("politicalActorOps");
+  const groupOps = impactCount("groupOps");
   const parts = [
     events.length ? `wrote ${events.length === 1 ? "the event" : `${events.length} events`} ${titles}${events.length > 3 ? " and more" : ""} into the record` : "",
     legalTransfers ? `${legalTransfers} legal territorial transfer${legalTransfers === 1 ? "" : "s"}` : "",
     controlOps ? `${controlOps} de-facto control operation${controlOps === 1 ? "" : "s"}` : "",
     claims ? `${claims} territorial claim operation${claims === 1 ? "" : "s"}` : "",
     politicalOps ? `${politicalOps} political-actor operation${politicalOps === 1 ? "" : "s"}` : "",
+    groupOps ? `${groupOps} group operation${groupOps === 1 ? "" : "s"}` : "",
     statCountries.length ? `set the figures of ${statCountries.join(", ")}` : "",
     count(transaction?.warUpdates, "war record", "war records"),
     count(transaction?.relationUpdates, "relation", "relations"),
@@ -15524,6 +15608,7 @@ const gameMasterAcceptedOperationLabels = (transaction) => {
       ["unitOps", "unit"],
       ["markerOps", "marker"],
       ["institutionLifecycleOps", "institution"],
+      ["groupOps", "group"],
       ["createdChats", "event-chat"],
     ]) {
       normalizeArray(impacts[field]).forEach((_, index) => labels.push(`${prefix}:${eventIndex}:${index}`));
