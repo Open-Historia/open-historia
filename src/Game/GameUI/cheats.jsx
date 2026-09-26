@@ -14,6 +14,7 @@ import {
     applyCountryStatPatchToWorld,
     applyEventImpactsToWorld,
     MARKER_STATUSES,
+    mutateWorldState,
     readEventsState,
     readGameData,
     readWorldState,
@@ -2772,27 +2773,30 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
         setStatus("");
     };
 
-    // One administrative event carrying the operations, applied as an AI event is.
+    // One administrative event carrying the operations, applied as an AI event is,
+    // to the world as it stands when the write's turn in the queue comes.
     const applyOps = async (ops, patch = null) => {
-        const world = await readWorldState({ force: true });
-        const result = applyEventImpactsToWorld({
-            world,
-            round: game?.round || 0,
-            events: [{
-                id: `admin-groups-${Date.now().toString(36)}`,
-                date: game?.gameDate || game?.startDate || "",
-                title: "Groups administrative change",
-                description: "Structured administrative mutation from the Groups tool.",
-                importance: "minor",
-                kind: "world",
-                notable: false,
-                playerRelated: false,
-                impacts: { groupOps: ops },
-                source: "manual-admin",
-            }],
+        let next = null;
+        await mutateWorldState((world) => {
+            const result = applyEventImpactsToWorld({
+                world,
+                round: game?.round || 0,
+                events: [{
+                    id: `admin-groups-${Date.now().toString(36)}`,
+                    date: game?.gameDate || game?.startDate || "",
+                    title: "Groups administrative change",
+                    description: "Structured administrative mutation from the Groups tool.",
+                    importance: "minor",
+                    kind: "world",
+                    notable: false,
+                    playerRelated: false,
+                    impacts: { groupOps: ops },
+                    source: "manual-admin",
+                }],
+            });
+            next = patch ? patch(result.world) : result.world;
+            return next;
         });
-        const next = patch ? patch(result.world) : result.world;
-        await writeWorldState(next);
         setWorld(next);
         return next;
     };
@@ -4944,8 +4948,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const previous = Number(current?.properties?.population);
             if (hasPopulationByYear(current?.properties) && String(populationRaw ?? "").trim()
                 && Number.isFinite(population) && population >= 0 && Math.round(population) !== previous) {
-                const world = await readWorldState({ force: true });
-                await writeWorldState({ ...world, cityPopulations: { ...(world?.cityPopulations || {}), [cityPopulationKey(name)]: Math.round(population) } });
+                await mutateWorldState((world) => ({ ...world, cityPopulations: { ...(world?.cityPopulations || {}), [cityPopulationKey(name)]: Math.round(population) } }));
             }
             return { name, tier };
         };
