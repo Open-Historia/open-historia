@@ -482,6 +482,9 @@ export const normalizeActionEntry = (entry, index = 0) => {
     // Carried over unanswered from the last time skip (AI/playerFocus.js
     // settleOrders): the next skip answers it first.
     ...(entry.overdue === true ? { overdue: true } : {}),
+    // The polity whose order this is, in a shared game (runtime/humanPolities.js).
+    // Single player's orders name none: they are the player's.
+    ...(normalizeOptionalString(entry.ownerCode) ? { ownerCode: normalizeOptionalString(entry.ownerCode) } : {}),
   };
 };
 
@@ -3120,12 +3123,16 @@ export const linkStructuresToProjects = (world, links = []) => {
 // Deliberately NOT run from normalizeWorldState: that runs on every read, and
 // pruning there would delete units on a read racing a write and fight the map's
 // 5s poll. Call it from the turn commit and the idle pulse instead.
-export const enforceUnitVolume = (world, { playerCode = "" } = {}) => {
+// playerCodes: every polity a person plays, in a shared game
+// (runtime/humanPolities.js humanCountriesOf); each one's units are exempt.
+export const enforceUnitVolume = (world, { playerCode = "", playerCodes = [] } = {}) => {
   const units = normalizeUnits(world?.units);
-  const player = toCountryName(normalizeOptionalString(playerCode)).toLowerCase();
+  const players = new Set([playerCode, ...normalizeArray(playerCodes)]
+    .map((code) => toCountryName(normalizeOptionalString(code)).toLowerCase())
+    .filter(Boolean));
   const isPlayers = (unit) =>
     unit.source === "player" ||
-    (player && toCountryName(unit.ownerCode).toLowerCase() === player);
+    players.has(toCountryName(unit.ownerCode).toLowerCase());
 
   const mine = units.filter(isPlayers);
   const theirs = units.filter((unit) => !isPlayers(unit));
