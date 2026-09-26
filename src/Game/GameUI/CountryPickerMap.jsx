@@ -343,6 +343,12 @@ const CountryPickerMap = ({
     return () => {
       sourceRef.current?.clear();
       olMap.setTarget(null);
+      // Detaching alone left every layer's canvas alive for the rest of the
+      // session: a picker-sized 2D canvas at the device pixel ratio, two of
+      // them 15 MB each on a phone, carried into the game the player picked.
+      // Disposing the layers and the map releases them.
+      olMap.getLayers().getArray().slice().forEach((layer) => layer.dispose());
+      olMap.dispose();
     };
   }, []);
 
