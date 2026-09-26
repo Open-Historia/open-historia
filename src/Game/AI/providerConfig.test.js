@@ -134,10 +134,10 @@ test("a fresh install starts with an empty Gemini Connection and the default Gem
 // game names one instead: it is what a blank OpenAI model means, and what a
 // player who was on OpenAI carries over.
 test("OpenAI has a default model of its own", () => {
-  assert.equal(config.OPENAI_DEFAULT_MODEL, "gpt-5.6-luna");
+  assert.equal(config.OPENAI_DEFAULT_MODEL, "gpt-6-luna");
   store.set("api_provider", "openai");
   store.set("openai_api_key", "sk-oldsettings");
-  assert.deepEqual(resolved().map(({ provider, model }) => [provider, model]), [["openai", "gpt-5.6-luna"]]);
+  assert.deepEqual(resolved().map(({ provider, model }) => [provider, model]), [["openai", "gpt-6-luna"]]);
 });
 
 // A list as a first launch set it up before the default list existed: one
@@ -230,7 +230,7 @@ test("a player whose calls go to another provider first keeps it first; only the
       { id: "conn_local", provider: "openai-compatible", name: "Local", endpoint: "http://localhost:1234/v1" },
     ],
     list: [
-      { id: "o1", connectionId: "conn_o", model: "gpt-5.6-luna" },
+      { id: "o1", connectionId: "conn_o", model: "gpt-6-luna" },
       { id: "g1", connectionId: "conn_blank", model: "gemini-3.8-flash" },
       { id: "g2", connectionId: "conn_blank", model: "gemini-3.7-flash" },
       { id: "local1", connectionId: "conn_local", model: "qwen3" },
@@ -240,7 +240,7 @@ test("a player whose calls go to another provider first keeps it first; only the
   });
   const list = config.getResolvedFallbackList();
   assert.deepEqual(list.map(({ provider, model }) => `${provider}:${model}`), [
-    "openai:gpt-5.6-luna",
+    "openai:gpt-6-luna",
     "gemini:gemini-3.5-flash-lite",
     "gemini:gemini-3.1-flash-lite",
     "openai-compatible:qwen3",

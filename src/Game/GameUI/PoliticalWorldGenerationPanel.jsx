@@ -168,6 +168,92 @@ const formatDuration = (milliseconds) => {
   return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 };
 
+// The status lines below are each one element holding one sentence, and every
+// count is a whole phrase: the translator (runtime/translator.js) reads an
+// element as a sentence only when all its children are text, so a line break or
+// a plural "s" in between made each piece a separate, untranslatable lookup.
+const AiRequestsUsed = ({ calls, ceiling }) => (
+  <>{`${calls === 1 ? "1 AI request used" : `${calls} AI requests used`}${ceiling ? ` · Safety limit: ${ceiling}` : ""}`}</>
+);
+
+const LiveProgressCounts = ({ info, polityCount }) => {
+  const total = info.totalPolities ?? polityCount;
+  const actors = info.resolvedPolities ?? 0;
+  const memberships = info.memberships ?? 0;
+  const institutionsResolved = info.membershipInstitutionsResolved ?? 0;
+  const institutionsTotal = info.membershipInstitutionsTotal;
+  const alignment = info.governingAlignment ?? 0;
+  const power = info.powerEvidence ?? 0;
+  const verified = info.verified ?? 0;
+  const verificationTargets = info.verificationTargets ?? 0;
+  const steps = info.pendingJobs ?? 0;
+  return (
+    <>
+      <div>
+        {`Political actors: ${actors}/${total} · memberships: ${memberships}/${total}${institutionsTotal ? ` (${institutionsResolved}/${institutionsTotal} institutions resolved)` : ""} · governments & coalitions: ${alignment}/${total} · power: ${power}/${total}${info.verificationRequired ? ` · verified: ${verified}/${verificationTargets}` : ""}`}
+      </div>
+      <div>{Number(steps) === 1 ? "1 step remaining" : `${steps} steps remaining`}</div>
+    </>
+  );
+};
+
+const BatchProgressDetails = ({ info, etaMs }) => {
+  const phase = info?.phase;
+  const inRescue = ["memberships-rescue", "memberships-recovery-split", "memberships-tiny-retry"].includes(phase);
+  const batch = (info?.batchIndex ?? 0) + 1;
+  const batches = info?.totalBatches ?? "?";
+  const attempt = info?.attempt ?? 1;
+  const attempts = info?.maxAttempts ?? 2;
+  const confirmed = info?.verifiedTotal ?? 0;
+  const corrected = info?.correctedTotal ?? 0;
+  const accepted = info?.acceptedTotal ?? 0;
+  const failed = info?.failedTotal ?? 0;
+  return (
+    <>
+      <div>
+        <span>
+          {phase === "historical-verification"
+            ? (info?.verificationPass === "collision-recheck" ? "Timeline-canon collision re-check" : "Historical check")
+            : (phase === "memberships-rescue"
+              ? "Geopolitical unresolved-only rescue"
+              : (phase === "memberships-tiny-retry"
+                ? "Geopolitical final tiny retry"
+                : (info?.generationMode === "quantitative-landscape-fast"
+                  ? "Landscape backfill"
+                  : (info?.generationMode === "governing-alignment-fast"
+                    ? "Governing alignment"
+                    : (info?.generationMode === "geopolitical-fast" ? "Geopolitical baseline" : "Generation")))))}
+        </span>
+        {!inRescue && <span>{` · batch ${batch} of ${batches} · attempt ${attempt} of ${attempts}`}</span>}
+        <span>
+          {phase === "historical-verification"
+            ? ` · ${confirmed} confirmed · ${corrected} corrected · ${failed} failed`
+            : ` · ${accepted} accepted · ${failed} failed`}
+        </span>
+      </div>
+      <div>{etaMs == null ? "Estimated remaining: estimating…" : `Estimated remaining: ${formatDuration(etaMs)}`}</div>
+    </>
+  );
+};
+
+const CheckpointCounts = ({ checkpoint, counts, ready, total, needsRetry, retryCount, unresolvedCount }) => {
+  const calls = checkpoint.modelCalls ?? 0;
+  const ceiling = checkpoint.totalModelCallCeiling;
+  return (
+    <>
+      <div>
+        {`${ready} of ${total} polities ready${needsRetry ? (retryCount === 1 ? " · 1 polity needs another attempt" : ` · ${retryCount} polities need another attempt`) : unresolvedCount ? (unresolvedCount === 1 ? " · 1 polity unfinished" : ` · ${unresolvedCount} polities unfinished`) : ""}`}
+      </div>
+      <div>
+        {`Political actors: ${counts.politicalActors ?? 0}/${total} · memberships: ${counts.memberships ?? 0}/${total} · governments & coalitions: ${counts.governingAlignment ?? 0}/${total} · power: ${counts.powerEvidence ?? 0}/${total}`}
+      </div>
+      <div>
+        {`Institutions: ${counts.institutions ?? 0} · agreements: ${counts.agreements ?? 0} · ${calls === 1 ? "1 AI request used" : `${calls} AI requests used`}${ceiling ? ` · safety limit: ${ceiling}` : ""}`}
+      </div>
+    </>
+  );
+};
+
 const safeFileToken = (value) => clean(value)
   .replace(/[^a-z0-9._-]+/gi, "-")
   .replace(/^-+|-+$/g, "")
@@ -1527,15 +1613,14 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
               {progressReadyPolities} of {progressInfo.totalPolities ?? polityCount} polities ready
             </span>
             <span style={{ color: "rgba(255,255,255,0.52)" }}>
-              {progressInfo.modelCalls ?? 0} AI request{Number(progressInfo.modelCalls) === 1 ? "" : "s"} used{progressInfo.totalModelCallCeiling ? ` · Safety limit: ${progressInfo.totalModelCallCeiling}` : ""}
+              <AiRequestsUsed calls={progressInfo.modelCalls ?? 0} ceiling={progressInfo.totalModelCallCeiling} />
             </span>
           </div>
           <div style={{ background: "rgba(255,255,255,0.08)", borderRadius: 999, height: 8, marginTop: "0.45rem", overflow: "hidden" }}>
             <div style={{ background: "rgba(231,231,234,0.72)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressReadyPercent}%` }} />
           </div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
-            Political actors: {progressInfo.resolvedPolities ?? 0}/{progressInfo.totalPolities ?? polityCount} · memberships: {progressInfo.memberships ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.membershipInstitutionsTotal ? ` (${progressInfo.membershipInstitutionsResolved ?? 0}/${progressInfo.membershipInstitutionsTotal} institutions resolved)` : ""} · governments & coalitions: {progressInfo.governingAlignment ?? 0}/{progressInfo.totalPolities ?? polityCount} · power: {progressInfo.powerEvidence ?? 0}/{progressInfo.totalPolities ?? polityCount}{progressInfo.verificationRequired ? ` · verified: ${progressInfo.verified ?? 0}/${progressInfo.verificationTargets ?? 0}` : ""}<br />
-            {progressInfo.pendingJobs ?? 0} step{Number(progressInfo.pendingJobs) === 1 ? "" : "s"} remaining
+            <LiveProgressCounts info={progressInfo} polityCount={polityCount} />
           </div>
         </div>
       )}
@@ -1557,22 +1642,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             <div style={{ background: "rgba(231,231,234,0.72)", borderRadius: 999, height: "100%", transition: "width 180ms ease", width: `${progressPercent}%` }} />
           </div>
           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.5, marginTop: "0.45rem" }}>
-            {progressInfo?.phase === "historical-verification"
-              ? (progressInfo?.verificationPass === "collision-recheck" ? "Timeline-canon collision re-check" : "Historical check")
-              : (progressInfo?.phase === "memberships-rescue"
-                ? "Geopolitical unresolved-only rescue"
-                : (progressInfo?.phase === "memberships-tiny-retry"
-                  ? "Geopolitical final tiny retry"
-                  : (progressInfo?.generationMode === "quantitative-landscape-fast"
-                    ? "Landscape backfill"
-                    : (progressInfo?.generationMode === "governing-alignment-fast"
-                      ? "Governing alignment"
-                      : (progressInfo?.generationMode === "geopolitical-fast" ? "Geopolitical baseline" : "Generation")))))}{["memberships-rescue", "memberships-recovery-split", "memberships-tiny-retry"].includes(progressInfo?.phase) ? "" : ` batch ${(progressInfo?.batchIndex ?? 0) + 1} of ${progressInfo?.totalBatches ?? "?"} · attempt ${progressInfo?.attempt ?? 1} of ${progressInfo?.maxAttempts ?? 2}`}
-            {progressInfo?.phase === "historical-verification"
-              ? ` · ${progressInfo?.verifiedTotal ?? 0} confirmed · ${progressInfo?.correctedTotal ?? 0} corrected · ${progressInfo?.failedTotal ?? 0} failed`
-              : ` · ${progressInfo?.acceptedTotal ?? 0} accepted · ${progressInfo?.failedTotal ?? 0} failed`}
-            <br />
-            Estimated remaining: {progressEtaMs == null ? "estimating…" : formatDuration(progressEtaMs)}
+            <BatchProgressDetails info={progressInfo} etaMs={progressEtaMs} />
           </div>
           {progressSampleError && (
             <div style={{ background: "rgba(127,29,29,0.13)", border: "1px solid rgba(248,113,113,0.18)", borderRadius: 10, color: "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.5rem", padding: "0.5rem" }}>
@@ -1599,11 +1669,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem" }}>{v2Ready ? "ready" : (v2NeedsRetry ? "needs another attempt" : "saved")}</div>
           </div>
           <div style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.7rem", lineHeight: 1.55, marginTop: "0.3rem" }}>
-            {v2PolitiesReady} of {v2TotalPolities} polities ready{v2NeedsRetry
-              ? ` · ${v2RetryPolityCount} ${v2RetryPolityCount === 1 ? "polity needs" : "polities need"} another attempt`
-              : (v2UnresolvedPolityCount ? ` · ${v2UnresolvedPolityCount} ${v2UnresolvedPolityCount === 1 ? "polity unfinished" : "polities unfinished"}` : "")}<br />
-            Political actors: {v2Counts.politicalActors ?? 0}/{v2TotalPolities} · memberships: {v2Counts.memberships ?? 0}/{v2TotalPolities} · governments & coalitions: {v2Counts.governingAlignment ?? 0}/{v2TotalPolities} · power: {v2Counts.powerEvidence ?? 0}/{v2TotalPolities}<br />
-            Institutions: {v2Counts.institutions ?? 0} · agreements: {v2Counts.agreements ?? 0} · {v2Checkpoint.modelCalls ?? 0} AI request{Number(v2Checkpoint.modelCalls) === 1 ? "" : "s"} used{v2Checkpoint.totalModelCallCeiling ? ` · safety limit: ${v2Checkpoint.totalModelCallCeiling}` : ""}
+            <CheckpointCounts checkpoint={v2Checkpoint} counts={v2Counts} ready={v2PolitiesReady} total={v2TotalPolities} needsRetry={v2NeedsRetry} retryCount={v2RetryPolityCount} unresolvedCount={v2UnresolvedPolityCount} />
           </div>
           {v2Ready ? (
             <div style={{ color: "#bbf7d0", fontSize: "0.7rem", marginTop: "0.45rem" }}>Quality checks passed. The Political World is ready to apply to the scenario.</div>

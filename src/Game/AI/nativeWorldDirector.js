@@ -5,7 +5,6 @@ import {
   buildNativeWorldExplorationSlate,
   deriveWorldTrajectoryValue,
   deferredStorylineReentryHasConcreteTrigger,
-  formatWorldExplorationAuditContract,
   latestCanonicalWorldEventDate,
   worldIntegrityAgeDays,
   worldActorsEquivalent,
@@ -32,6 +31,8 @@ import { boardEntriesConcernedByEvent, isProjectOpen } from "../../runtime/proje
 // - recent history only
 // - bounded candidate count
 // - O(recent events + recent chats + a tiny bounded world-state sample)
+
+export const DIPLOMATIC_STATE_HEADING = "Diplomatic state (the relevant slice of the ledger):";
 
 export const WORLD_DIRECTOR_VERSION = "0.13.1-crisis-seam-repair";
 
@@ -791,43 +792,6 @@ const pushActiveUnitCandidates = (candidates, world, suppressedActors = new Set(
     });
     added += 1;
   }
-};
-
-const formatCurrentPersistentUnitLedger = (world) => {
-  const units = normalizeArray(world?.units)
-    .filter((unit) => unit && typeof unit === "object");
-
-  if (!units.length) {
-    return [
-      "No persistent military units currently exist in world.units.",
-      "This is an EXHAUSTIVE current-state fact: a formation mentioned only in older events/history does not currently exist.",
-    ].join("\n");
-  }
-
-  const lines = units.map((unit, index) => {
-    const id = normalizeString(unit?.id) || "(missing id)";
-    const name = normalizeString(unit?.name) || "Unnamed unit";
-    const owner = normalizeString(unit?.ownerCode || unit?.owner) || "unknown owner";
-    const type = normalizeString(unit?.type) || "unknown type";
-    const status = normalizeString(unit?.status) || "unknown status";
-    const region = normalizeString(unit?.regionId);
-    const strength = Number.isFinite(Number(unit?.strength))
-      ? `strength ${Number(unit.strength)}`
-      : "";
-
-    return `${index + 1}. ${id} | ${owner} | ${name} | ${type} | ${status}` +
-      `${region ? ` | region ${region}` : ""}` +
-      `${strength ? ` | ${strength}` : ""}`;
-  });
-
-  return [
-    `CURRENT PERSISTENT UNIT LEDGER — EXHAUSTIVE (${units.length} unit(s))`,
-    ...lines,
-    "",
-    "Identity rule: only units listed above currently exist. Historical events, consolidated history, chats, scenario prose, and old action text may mention formations that have since been removed or disbanded; those references are historical memory only.",
-    "Never describe an absent historical formation as currently operational, integrated, deployed, reinforced, reorganized, moved, attacked, or otherwise acting in the present.",
-    "If a genuinely new formation is created during THIS pass, narrate that creation explicitly and use a spawn operation. Do not silently resurrect an old deleted unit by reusing its historical name.",
-  ].join("\n");
 };
 
 const normalizeStorylineForDirector = (entry, index = 0) => {
@@ -3592,7 +3556,6 @@ export const buildWorldInitiativeContext = (
     explorationActors,
   );
 
-  const currentUnitLedger = formatCurrentPersistentUnitLedger(bundle?.world || {});
   const currentUnitCount = normalizeArray(bundle?.world?.units).length;
 
   // The player's focus decides how much of the world's own attention this
@@ -3607,114 +3570,49 @@ export const buildWorldInitiativeContext = (
       && `${normalizeString(candidate?.title)} ${normalizeString(candidate?.detail)}`.toLowerCase().includes(playerKey),
   });
   const lines = keptCandidates.map((candidate, index) => {
-    const meta = [
-      candidate.type,
-      candidate.date ? candidate.date : "",
-      `priority ${candidate.score}`,
-      `trajectory ${Number(candidate?.trajectoryValue) || deriveWorldTrajectoryValue(candidate)}/5`,
-    ].filter(Boolean).join(" | ");
-
-    return `${index + 1}. [${meta}] ${candidate.title}` +
-      (candidate.detail ? `\n   Current causal basis: ${candidate.detail}` : "");
+    const when = candidate.date ? ` (${candidate.date})` : "";
+    return `${index + 1}. ${candidate.title}${when}` +
+      (candidate.detail ? `\n   ${candidate.detail}` : "");
   });
 
   const deferredStorylines = allDeferredStorylines
     .slice(0, MAX_DEFERRED_STORYLINE_HINTS);
-  const deferredLines = deferredStorylines.map((storyline, index) => {
-    const stagnationAge = storylineStagnationAgeDays(storyline, horizonDate);
-    const meta = [
-      storyline.id,
-      storyline.kind,
-      storyline.status,
-      `pressure ${storyline.pressure}`,
-      `momentum ${storyline.momentum}`,
-      `visible-stagnation ${stagnationAge}d`,
-      storyline.nextReviewDate ? `next review ${storyline.nextReviewDate}` : "review not scheduled",
-    ].join(" | ");
-    return `${index + 1}. [${meta}] ${storyline.title}`;
-  });
+  const deferredLines = deferredStorylines.map((storyline, index) =>
+    `${index + 1}. [${[storyline.id, storyline.kind, storyline.status, `pressure ${storyline.pressure}`].join(" | ")}] ${storyline.title}`);
 
   const attentionLines = storylineAttention.selected.map((storyline, index) => {
     const visibleAge = parseIsoDate(storyline.lastVisibleEventDate) != null
       ? ageDays(originDate, storyline.lastVisibleEventDate)
-      : 99999;
-    const visibilityGate = visibleAge <= 45
-      ? `visibility gate: a timeline card was emitted ${visibleAge} day(s) ago; another card now requires a material state change, consequence, escalation/de-escalation, new actor/geography/capability, or other genuinely newsworthy milestone`
-      : visibleAge < 99999
-        ? `visibility history: last visible milestone ${visibleAge} day(s) ago`
-        : "visibility history: no prior visible milestone recorded";
-
+      : null;
     const stagnationAge = storylineStagnationAgeDays(storyline, horizonDate);
-
-    // The same test the detector and the validator use, so an active war below
-    // the high-pressure line is warned here too. It used to be flagged by the
-    // repair pass afterwards without ever having been told.
+    // The same test the detector and the validator use: a storyline here that
+    // does not move is sent back for a repair, which is a whole extra request.
     const atBackstop = storylineAtAntiStasisBackstop(storyline, horizonDate, bundle?.world);
-    const backstopSubject = activeCanonicalWarForStoryline(storyline, bundle?.world)
-      ? "active war"
-      : "active high-pressure process";
-    const stagnationReappraisal =
-      atBackstop
-        ? `ANTI-STASIS BACKSTOP: this ${backstopSubject} reaches ${stagnationAge} day(s) without a visible milestone by the pass horizon. Simulate its actors and internal conditions now. The border may remain unchanged, but do NOT copy the same semantic equilibrium forward — reworded prose with the same numbers is rejected. You must ${describeAntiStasisObjectiveRule()}. Cooling or de-escalation counts when it shows in those numbers or as a move to dormant or resolved.`
-        : storyline.pressure >= HIGH_PRESSURE_STAGNATION_THRESHOLD &&
-          stagnationAge >= STAGNATION_REAPPRAISAL_DAYS
-          ? `ENDOGENOUS REAPPRAISAL REQUIRED: this active high-pressure process reaches ${stagnationAge} day(s) without a visible milestone by the pass horizon. Re-simulate actor objectives, manpower/resources, supply, command, morale, politics, diplomacy, weather, tactics, and opportunities from INSIDE the process. A genuine equilibrium may still hold; do not force a card.`
-          : "";
-
     const meta = [
       storyline.id,
       storyline.kind,
       storyline.status,
       `pressure ${storyline.pressure}`,
       `momentum ${storyline.momentum}`,
-      storyline.nextReviewDate ? `next review ${storyline.nextReviewDate}` : "review overdue",
     ].join(" | ");
-
-    const escalation = worldStorylineEscalationPosture(storyline);
-    const escalationLine =
-      ["active", "dormant"].includes(normalizeString(storyline?.status).toLowerCase())
-        ? `escalation posture: ${escalation.label} — plausible next-rung search includes ${escalation.guidance}. ${escalation.momentumNote} This is a search ladder, NOT an automatic escalation script.`
-        : "";
-
     const detail = [
       storyline.participants.length ? `participants: ${storyline.participants.join(", ")}` : "",
       storyline.state ? `state: ${storyline.state}` : "",
-      escalationLine,
       storyline.drivers.length ? `drivers: ${storyline.drivers.join("; ")}` : "",
       storyline.constraints.length ? `constraints: ${storyline.constraints.join("; ")}` : "",
-      storyline.accountedThroughDate ? `accounted through: ${storyline.accountedThroughDate}` : "",
-      visibilityGate,
-      stagnationReappraisal,
+      visibleAge == null ? "no visible event yet" : `last visible event ${visibleAge} day(s) before this jump`,
+      atBackstop
+        ? `MUST MOVE THIS PERIOD: ${stagnationAge} days with no visible development by the stop date; it must ${describeAntiStasisObjectiveRule()}.`
+        : "",
     ].filter(Boolean).join("\n   ");
-
     return `${index + 1}. [${meta}] ${storyline.title}${detail ? `\n   ${detail}` : ""}`;
   });
 
-  const keptExplorationSlate = trimWorldForFocus(explorationSlate, {
-    focus: playerFocus,
-    isPlayerItem: (slot) => slot?.scope === "player-sphere" || slot?.type === "crisis-discovery",
-  });
-  const explorationLines = keptExplorationSlate.map((slot) => {
-    const deferredGuard = slot.deferredTopics.length
-      ? ` Avoid routine restatement of deferred process(es): ${slot.deferredTopics.join("; ")}. Deferral does NOT freeze their actors: a genuinely material endogenous development or external trigger may reactivate one.`
-      : "";
-
-    const basis = normalizeString(slot.basis)
-      ? ` Current native basis: ${normalizeString(slot.basis)}.`
-      : " No specific current pressure was identified; inspect latent causes conservatively.";
-
-    const scope = slot.scope === "player-sphere"
-      ? "PLAYER-SPHERE"
-      : "WIDER-WORLD";
-    const crisisTag = slot.type === "crisis-discovery" ? " | CRISIS-DISCOVERY" : "";
-    const trajectoryTag = Number(slot?.trajectoryValue) > 0
-      ? ` | native trajectory ${Number(slot.trajectoryValue)}/5`
-      : "";
-    const consequenceTag = normalizeArray(slot?.consequenceChannels).length
-      ? ` Potential consequence channels if threshold is genuinely crossed: ${normalizeArray(slot.consequenceChannels).join(", ")}.`
-      : "";
-    return `${slot.id}. [${scope}${crisisTag}${trajectoryTag}] ${slot.actor} — inspect ${slot.domain}.${basis}${consequenceTag}${deferredGuard}`;
-  });
+  // A lane the ledger itself flags as a possible crisis is the one piece of the
+  // exploration slate worth showing: named evidence, not an assignment.
+  const crisisLines = explorationSlate
+    .filter((slot) => slot?.type === "crisis-discovery" && Number(slot?.trajectoryValue) >= 4 && normalizeString(slot?.basis))
+    .map((slot) => `- ${normalizeString(slot.actor)}: ${normalizeString(slot.basis)}`);
 
   const latestVisibleDate = latestCanonicalWorldEventDate(
     bundle?.events,
@@ -3733,162 +3631,36 @@ export const buildWorldInitiativeContext = (
     events: bundle?.events,
     referenceDate: originDate,
   });
-  const consequenceLine = consequenceSignal.level === "low"
-    ? `RECENT CONSEQUENCE SIGNAL: LOW — ${consequenceSignal.eventCount} visible event(s) occurred in the last ${consequenceSignal.lookbackDays} day(s), but only ${consequenceSignal.consequentialCount} crossed a material strategic/political/territorial threshold. Increase THRESHOLD SEARCH PRIORITY inside the SAME simulation pass: re-examine mature current pressures for outcomes that may now have resolved, escalated, cooled, failed, or materially changed. Do not fabricate causeless chaos, but DO sample credible high-impact branches instead of defaulting every uncertain actor to the safest administrative choice.`
-    : `Recent consequence signal: ${consequenceSignal.consequentialCount}/${consequenceSignal.eventCount} visible event(s) crossed a material threshold in the last ${consequenceSignal.lookbackDays} day(s); normal consequence-search posture applies.`;
-
-  const livenessLine =
-    visibleSilenceDays >= 45 && visibleSilenceDays < 99999
-      ? `LIVENESS SEARCH ESCALATION: ${visibleSilenceDays} day(s) have passed since the last canonical visible event. This increases SEARCH EFFORT, not event quota: inspect every exploration slot carefully for strategic change, ordinary consequential history, or specific human/public developments worth showing.`
-      : visibleSilenceDays >= 99999
-        ? "LIVENESS SEARCH ESCALATION: no prior canonical visible event is available; inspect the exploration slate carefully without manufacturing calendar filler."
-        : `Recent visible-history gap: ${visibleSilenceDays} day(s).`;
-
-  const breadthLine = horizonDays >= 21
-    ? `GLOBAL BREADTH CHECK: this whole-world pass spans ${horizonDays} day(s). A final set of 0-3 visible events is unusually sparse, though not forbidden. Complete the exploration slate before finalizing: finding one or two excellent events is NOT a reason to stop searching unrelated regions and actors across ordinary politics/economics/industry, diplomacy, society, science/technology, public life/culture, accidents/disasters, and genuinely changing military situations. This is search calibration, NOT a minimum count or quota: never invent an event merely to increase the number.`
-    : horizonDays >= 7
-      ? `GLOBAL BREADTH CHECK: this pass spans ${horizonDays} day(s). Sparse output can be valid, but still inspect unrelated actors and both consequential and human/public lanes before concluding that little worth showing occurred.`
-      : `GLOBAL BREADTH CHECK: short horizon (${horizonDays || "<1"} day(s)); zero visible events may be completely natural. Do not pad the calendar.`;
-
-  const conflictRiskLine =
-    `CAMPAIGN-STATE CONFLICT PROPENSITY: ${conflictRiskPosture.label} (context index ${conflictRiskPosture.score}/100). ` +
-    `${conflictRiskPosture.guidance}. Era context contributes only a prior: ${conflictRiskPosture.eraLabel}. ` +
-    `Current campaign state overrides the era prior. Never force war because of a date, and never forbid war because the date is modern.`;
-
-  const explorationBalanceLine =
-    `EXPLORATION COMPOSITION TARGET: the 10 native evaluation lanes are structurally balanced at roughly five PLAYER-SPHERE and five WIDER-WORLD lanes. This is an attention balance, NOT an event quota. The final visible timeline may deviate when causality warrants, but neither the player's neighborhood nor the wider world should systematically crowd out the other.`;
 
   const text = [
-    `[Native World Director v${WORLD_DIRECTOR_VERSION} — persistent storyline attention + causal ledger]`,
-    `Origin: ${originDate || "unknown"}`,
-    `Horizon: ${horizonDate || "unknown"}`,
+    `[What Is in Motion — ${originDate || "unknown"} to ${horizonDate || "unknown"}]`,
+    "Storylines are this world's ongoing processes — wars, crises, standoffs, movements. Each one due this period gets one storylineUpdates record saying where it stands on the stop date, whether or not it produces a visible event:",
+    attentionLines.length ? attentionLines.join("\n") : "None due this period.",
     "",
-    "PERSISTENT STORYLINE ATTENTION",
-    "These are unresolved world processes selected by the native scheduler. Every listed storyline must receive one compact storylineUpdates record describing its semantic state through the actual stopDate, even if no visible timeline event is warranted.",
-    attentionLines.length
-      ? attentionLines.join("\n")
-      : "No persisted storyline is due for review yet. New unresolved processes created during this pass must still be persisted and carried to stopDate.",
-    "",
-    "DEFERRED PERSISTED STORYLINES — LOW ATTENTION, NOT FROZEN",
+    "Other open storylines (a record only when something material happens in one):",
     deferredLines.length
-      ? deferredLines.join("\n") + (allDeferredStorylines.length > deferredLines.length ? `\n... plus ${allDeferredStorylines.length - deferredLines.length} additional deferred storyline(s).` : "")
+      ? deferredLines.join("\n") + (allDeferredStorylines.length > deferredLines.length ? `\n... and ${allDeferredStorylines.length - deferredLines.length} more.` : "")
       : "None.",
-    "These persisted processes are outside this pass's focused attention window, so they are NOT entitled to routine servicing, another artillery/patrol card, or a quiet bookkeeping rewrite merely because they exist.",
-    "But deferral schedules ATTENTION, not causality. Their own actors, commanders, institutions, supply systems, politics, morale, objectives, and opponents remain autonomous. If those INTERNAL forces plausibly produce a genuinely material development, the storyline may reactivate itself without waiting for an unrelated external trigger. Link the material event to that existing storyline. External triggers may reactivate it too.",
-    "Continuity is not novelty: another unchanged bombardment, patrol, meeting, weather slowdown, or paraphrase of the same stalemate is still forbidden. Surface what CHANGED because of the ongoing process, not the fact that it continued.",
     "",
-    "WORLD ATTENTION BALANCE",
-    explorationBalanceLine,
-    "Player-sphere means actors currently connected to the player by direct relations, agreements, wars, unresolved shared processes, bounded diplomacy, or present-tense causal evidence. It is not a hard-coded geography list and automatically changes with the campaign.",
+    "Pressures in the record, most pressing first:",
+    lines.length ? lines.join("\n") : "Nothing in the record stands out.",
+    ...(crisisLines.length ? ["", "Instability the record says may be turning into a crisis:", ...crisisLines] : []),
     "",
-    "CRISIS DISCOVERY — NEW PROCESSES WITH TEETH",
-    "One protected wider-world exploration lane deliberately searches latent instability. When the native bounded ledger contains a trajectory-4/5 trigger, that concrete actor/evidence is named in the lane so it cannot disappear behind generic administrative candidates. A crisis is a persistent unstable process with multiple materially different possible outcomes, NOT merely a dramatic headline and NOT automatically a war.",
-    "TRAJECTORY VALUE IS A SELECTION PREFERENCE, NOT A DRAMA QUOTA. Native hints use a 0-5 scale: 0 = isolated process/reporting; 1 = low-branch administrative motion; 2 = settled/material ordinary outcome; 3 = capability/political change that opens meaningful next actions; 4 = unstable process with several materially different branches; 5 = threshold/breakpoint process such as coup struggle, constitutional breakdown, financial panic, mobilization confrontation, secession, or direct security crisis. When two developments are similarly grounded and visible-event space is scarce, prefer the higher-trajectory development. Never manufacture a 4/5 merely to be interesting.",
-    "Political legitimacy breakdown, constitutional/succession struggle, separatism/federal rupture, mass unrest, coup risk, banking/sovereign-debt panic, alliance fracture, resource/energy shock, border/security standoff, sanctions spiral, insurgency, and similar processes may become crises when current causes cross a threshold.",
-    "There is NO crisis quota. If nothing crosses a threshold, leave the lane quiet. If something does, the establishing event must be concrete and the same pass should create a NEW persistent storyline. Its state should identify the trigger, what is unresolved, and at least two plausible consequence channels (for example government survival, territorial control, war/mobilization, diplomacy/alliances, economy/finance, migration/public order, or institutional legitimacy) without predicting which branch must occur.",
-    "A new crisis should be capable of later escalation, de-escalation, settlement, fracture, or transformation. Do not create a storyline for a one-off administrative announcement that has no unresolved downstream stakes.",
+    `Conflict risk in this world right now: ${conflictRiskPosture.label}. ${conflictRiskPosture.guidance}.`,
     "",
-    "ACTIVE PROCESS CAUSAL AUDIT",
-    "For every selected active war/crisis/high-pressure process, actually SIMULATE the actors during this interval before deciding the state is unchanged. Ask: what is each side trying to accomplish; what can it afford; what opportunities/constraints exist; what does the opponent do; what succeeds, partially succeeds, or fails; and what military, political, economic, diplomatic, command, morale, supply, or social consequence follows?",
-    "Do not treat relative country size or historical expectation as a deterministic winner. A smaller power may hold, counterattack, recover ground, exploit overextension, force negotiations, or suffer collapse depending on current capabilities and decisions. A larger power may fail locally. Branch from THIS campaign.",
-    "WWI-era/trench warfare may produce long stretches with little territorial movement. That is legal. But a static border does not mean a dead process: offensives can fail, casualties/attrition can matter, commanders can change, supply can tighten, morale/politics can move, tactical adaptation can occur, negotiations can emerge, or both sides can deliberately reorganize. Only a material consequence deserves a card.",
-    `At ${STAGNATION_REAPPRAISAL_DAYS}+ days without a visible milestone, a high-pressure active process gets mandatory endogenous reappraisal. At ${STAGNATION_BACKSTOP_DAYS}+ days, an active war or high-pressure process may not copy the same equilibrium forward again: it must ${describeAntiStasisObjectiveRule()}. A genuinely different hidden operational or political state counts only when it shows in those numbers — reworded prose with the same numbers is rejected. This is an anti-stasis rule, NOT an event quota.`,
-    "",
-    "RISK, MISCALCULATION, AND CONSEQUENT DIVERGENCE",
-    conflictRiskLine,
-    "Do NOT simulate every non-player government as a perfectly informed expected-value optimizer. Real institutions and leaders can misread intelligence, bluff too long, panic, overestimate deterrence, underestimate an opponent, pursue ideology/prestige/regime survival, obey dysfunctional doctrine, split internally, or knowingly accept terrible odds.",
-    "Strategically foolish is not the same as causally impossible. A state may choose a war it is unlikely to win; an alliance member may defect or hesitate; a leader may gamble on a coup, ultimatum, mobilization, blockade, covert operation, or fait accompli that later proves disastrous. Capability/logistics still determine what happens AFTER the choice.",
-    "Deterrence changes probabilities; it does not set them to zero. Nuclear weapons, NATO membership, economic interdependence, or obvious military imbalance are powerful constraints, not authorial immunity from escalation. If current actors plausibly cross the threshold anyway, simulate the consequences rather than vetoing the choice because it looks irrational in hindsight.",
-    "When an active crisis reaches roughly pressure 55+ or momentum 50+, explicitly test the escalation ladder: reserve call-ups, dispersal, force concentration, logistics preparation, air/naval alerts, border or airspace restrictions, emergency powers, ultimatums, sanctions, sabotage/covert action, alliance consultations, evacuations, and concrete military deployments. Use persistent units/war/relations/agreements only when their native thresholds are actually crossed.",
-    "A crisis event titled only 'readiness remains elevated', 'monitoring continues', 'security posture is maintained', or equivalent is NOT meaningful motion. Either identify what concretely changed, keep the change hidden in storyline state, cool the process, or choose a different event.",
-    "Low-probability high-impact branches are legal when they have a present-tense causal path. Do not require the most likely branch every time; a living alternate-history game needs genuine uncertainty about whether leaders blink, miscalculate, radicalize, fracture, or escalate.",
-    "For an active crisis around pressure 55+ / momentum 50+, explicitly compare THREE branches internally before settling the update: escalation, de-escalation, and continued equilibrium. Continued equilibrium is not the neutral/default answer; it is a positive claim that requires a concrete blocker such as credible mediation, logistical incapacity, domestic restraint, deterrence that actors actually believe, or an operational pause with purpose.",
-    "When escalation and restraint are both plausible, do not systematically choose the lower-variance branch. Across repeated reviews, leaders may gamble, overreact, bluff, mobilize, issue ultimatums, disperse forces, violate another state's expectations, or trigger reciprocal preparation. These steps are not synonymous with war and are often exactly how a crisis becomes dangerous before anyone decides to shoot.",
-    "A failed negotiation must have consequences. If talks collapse while threats continue, do not mechanically return to 'readiness remains elevated'. Recalculate positions: pressure may rise, military preparations may become concrete, sanctions or coercion may change, factions may harden, mediation may intensify, or one side may make a genuine concession. Something about the strategic state should move.",
-    "ESCALATION LADDER IS SEARCH SPACE, NOT A SCRIPT. Background pressure can become coercive friction; coercive friction can become confrontation; confrontation can become pre-conflict brinkmanship; brinkmanship can cross into direct clashes or war. At every rung actors may also pause, split internally, seek mediation, make concessions, or de-escalate. The point is that a crisis is allowed to climb when its current causes support it.",
-    "When a serious visible event crosses a strategic threshold, use the canonical owner that makes the consequence real. Mobilization/deployment should use persistent units where the current ledger supports concrete formations; formal commitments use agreements; bilateral rupture uses relations; actual belligerency uses wars; territorial combat uses control; government/identity change uses polity state; persistent crises use storylines; material economic/social shifts should propagate into Stats through the existing Stats pipeline. Do not write 'major' consequence prose and leave every owner untouched.",
-    "A new unresolved major crisis, nationwide destabilization, coup struggle, mobilization confrontation, financial panic, separatist confrontation, or comparable multi-turn process must persist as a storyline unless it resolves in the same event. Do not create one-card crises.",
-    "",
-    "WORLD ATTENTION FAIRNESS",
-    "Selected storylines are priorities, NOT ownership of the whole world. A dominant war or crisis may receive more attention, but it must not erase unrelated diplomacy, domestic politics, economic developments, military modernization, regional tensions, or genuinely new initiatives elsewhere.",
-    "",
-    "VISIBLE HISTORY GATE",
-    "Scheduler selection means REVIEW AND UPDATE THE HIDDEN STORYLINE STATE. It does NOT entitle that storyline to a visible timeline card.",
-    "A visible event does NOT need to be a decade-defining milestone or something the campaign will still care about years later. Keep specific history worth showing through any of three lanes: (A) major/high-pressure change such as a breakthrough, legal/territorial change, new belligerent, severe crisis or government change; (B) ORDINARY CONSEQUENTIAL history such as a concrete policy result, appointment, industrial initiative, completed infrastructure/capability step, labor/social development, diplomatic move, scientific/technical development, or other new fact that changes what actors can do next; (C) HUMAN/PUBLIC TEXTURE such as a public appearance, ceremony, funeral, wedding, fair, sport, culture, university life, scandal, accident, disaster/public response, notable speech, popular craze, or other specific social/personality event that makes the world feel inhabited.",
-    "Small-scale is NOT the same as filler. Filler means empty process churn, generic status reporting, calendar padding, or another wording of an unchanged state. A modest event with a concrete outcome, memorable human texture, or a new cause/effect is legitimate history even when it has no structured map impact.",
-    "Administrative life exists, but it must not monopolize the feed. Another technical standard, compliance framework, quarterly outlook, routine refinancing window, committee review, inspection protocol, implementation report, or coordination mechanism with no strategic/social/capability delta is normally hidden process, not a visible world event. If several grounded candidate cards are available, compare trajectory value and prefer the ones that change incentives, capabilities, leadership, public behavior, risk, or the trajectory of a live process. A trajectory-4/5 candidate should not lose a scarce visible slot to a trajectory-0/1 administrative success merely because the latter is easy to summarize.",
-    "Routine continuation belongs in storylineUpdates ONLY: repeated artillery exchanges, patrols/probes/skirmishes with no operational consequence, unchanged sieges/fronts, seasonal/weather slowdowns that merely preserve the same posture, recurring intelligence reviews, routine meetings/consultations, and administrative follow-up should not consume timeline slots merely because the process remains active. The exception is an entry on the Projects & Operations board: its progress, stalls, milestones and endings are written as events naming the entry exactly as the board names it, however routine, because the board reads every event and the cleanup only decides what is shown.",
-    "High pressure is NOT novelty. A pressure-95 war may still produce zero visible events in a particular pass when the equilibrium genuinely holds. But high pressure is also not permission for suspended animation: obey the 21/45-day endogenous reappraisal rules, and cool momentum/de-escalate/dormant a process that has genuinely ceased to evolve instead of manufacturing fresh wording for the same state.",
-    "",
-    "INDEPENDENT WORLD SWEEP",
-    "After servicing the selected storylines, independently inspect actors and causes that are NOT already represented by deferred persisted storylines. Search the whole living world, not only current wars or the player's neighborhood.",
-    "Deliberately inspect three lanes: (1) consequential politics/diplomacy/economics/war/technology/social change; (2) ordinary but concrete world motion such as private industrial initiatives, appointments, local political contests, completed projects, discoveries, labor disputes, institutional decisions, and regional developments; (3) human/public texture such as rulers and personalities, culture, sport, universities, ceremonies, scandals, accidents, weather/disasters and public response, civic life, and unusual social episodes.",
-    "The independent sweep is for NEW autonomous developments and genuinely new triggers. It may encounter actors who also belong to a deferred storyline: do not service that storyline routinely, but do allow a genuinely material ENDOGENOUS development from those actors/conditions to reactivate it. Recent-history salience alone is never enough.",
-    `Inside the PLAYER POLITY, the world is still alive: private firms, workers, parties, opposition movements, newspapers, intellectuals, social groups, emerging political personalities, courts, local/state officials, police, officers, and other non-sovereign actors may act autonomously and may create pressure, opportunities, scandals, unrest, inventions, localized violence, or faits accomplis. They must NOT make major sovereign/executive choices on the player's behalf such as choosing national foreign policy, declaring war, signing treaties, ordering strategic mobilization, or deliberately adopting a major national programme. Create the situation; leave ${normalizeString(bundle?.game?.country) || "the player polity"}'s major sovereign choices to the player.`,
-    `FOREIGN POWERS ACT ON THE PLAYER, not only inside them. The clause above is about who may make ${normalizeString(bundle?.game?.country) || "the player polity"}'s OWN decisions; it says nothing about what is done TO them. Another state with a standing claim, a grievance, an ally to protect, a market to keep, or a weak and distracted neighbour to press may direct that at the player exactly as it would at anyone else: demands, ultimatums, incidents, covert support to an insurgency, coercion, and where the ledger supports it, war. Judge it from that power's interests and capability, never from the player being human-controlled — in either direction. A campaign in which nobody has wanted anything from the player for years is not a peaceful world, it is an unattended one.`,
-    "New personalities and movements may emerge when the campaign's conditions support them; do not require a famous historical name or a pre-existing catalog entry. Give major radicalization, coups, civil wars, and similar severe domestic crises a causal runway rather than spawning them from a normal background with no prior pressure.",
-    "This sweep is an evaluation duty, NOT a diversity quota. A specific country, war, or domain may genuinely have nothing worth showing. But absence of a major geopolitical milestone is NOT evidence that an entire month across the whole world contains no history.",
-    "The visible-event ceiling is a maximum, not an allocation. Do not fill every slot, do not space cards mechanically, and do not invent content to hit a count. At the same time, complete the exploration slate before finalizing: one, two, or three excellent events are not a reason to stop searching the rest of the world.",
-    "New autonomous processes may begin in any pass when current interests, structures, personalities, social pressures, and capabilities justify them.",
-    breadthLine,
-    consequenceLine,
-    consequenceSignal.level === "low"
-      ? "When the consequence signal is LOW, search existing selected storylines and current causal evidence FIRST for developments that have genuinely crossed from process into outcome: a vote resolves, a cabinet changes, a strike begins/ends, a project delivers a new capability, a negotiation concludes/fails, a crisis escalates/cools, or a military operation produces a material result. Ordinary concrete history remains valid; this only changes search ordering."
-      : "Do not manufacture threshold events when current causes do not support them.",
-    "",
-    "NATIVE WORLD EXPLORATION SLATE",
-    "Named actor slots are selected only from current campaign evidence (wars, diplomacy, agreements, unresolved processes, units/territory, explicit active lifecycle, or the filtered current causal ledger). They are not sampled from the raw historical/catalog identity registry. The slate is an EVALUATION slate, not a quota and not a request to invent one event per line.",
-    "PLAYER-SPHERE and WIDER-WORLD labels are scheduler attention targets. Evaluate both classes seriously. When two candidates are similarly worthwhile, prefer the one that improves the underrepresented side of the visible month rather than repeatedly selecting another near-player administrative success.",
-    "For independent initiative, treat CURRENT EXPLICIT EVIDENCE and each slot's Current native basis as the present-tense causal seeds. A low-value timeline card that is absent from this current ledger is background history, not permission to manufacture another continuation of it.",
-    explorationLines.length
-      ? explorationLines.join("\n")
-      : "No actor-specific exploration slots were available.",
-    livenessLine,
-    "",
-    ...formatWorldExplorationAuditContract(explorationSlate),
-    "",
-    "CANONICAL DIPLOMATIC STATE",
-    "This is a bounded slice of the persistent diplomatic ledger, not a dump of every country pair. Formal commitments, bilateral political climate, and actual wars are separate facts.",
-    diplomaticAttention.text,
-    "",
-    "CANONICAL ECONOMIC CONSTRAINTS",
-    "Only actors with an already-persisted native Stats baseline are listed here; absence means no canonical numeric baseline exists, not that the actor has infinite resources.",
-    "Use these figures as causal capability/financing constraints, never as rigid action gates. A stressed polity can still mobilize, subsidize, build, or fight by borrowing, taxing, cutting elsewhere, seeking foreign finance, monetizing, or accepting inflation/debt/political consequences.",
+    "Economic baselines (a strained state can still borrow, tax or print, at a price):",
     economicAttention.length
       ? economicAttention.map((row, index) => `${index + 1}. ${row.summary}`).join("\n")
-      : "No attention/exploration actor currently has a canonical economic Stats baseline.",
+      : "None recorded yet.",
     "",
-    "CANONICAL CURRENT MILITARY UNIT STATE",
-    "world.units is the authoritative and exhaustive ledger of named persistent military formations that exist RIGHT NOW.",
-    "History may remember units that no longer exist. Absence from this ledger is authoritative negative evidence: do not resurrect a deleted/disbanded unit from Event History, consolidated history, chat, or scenario prose.",
-    currentUnitLedger,
+    DIPLOMATIC_STATE_HEADING,
+    diplomaticAttention.text,
     "",
-    "CURRENT EXPLICIT EVIDENCE",
-    "These are current causal pressures / continuity anchors, NOT scheduled events and NOT an exhaustive list.",
-    "A foreign polity may still take a genuinely new initiative when its present interests and capabilities justify it.",
-    "",
-    "Ranked current-state evidence:",
-    lines.length
-      ? lines.join("\n")
-      : "No strong explicit pressure was detected by the cheap native pass.",
-    "",
-    "LATENT / HISTORICAL POSSIBILITY",
-    "The explicit ledger is only one source of initiative. Structural conditions that have not recently produced a visible event still exist: alliances, guarantees, rivalries, nationalism, ideology, domestic instability, leadership, military doctrine, mobilization assumptions, economic pressure, colonial competition, social movements, and similar background causes.",
-    "CAUSAL INERTIA IS REAL. A campaign does not become ahistorical merely because the player has not touched a process. Existing commitments, rivalries, institutions, plans, unresolved crises, movements, incentives, and fears continue to exert pressure until THIS campaign changes, exhausts, supersedes, or resolves them.",
-    "Real historical developments AFTER the origin date may be considered as CANDIDATES when their important causal prerequisites remain substantially intact in THIS campaign and no simulated divergence has invalidated them.",
-    "HISTORICAL CONTINUITY IS NOT A PENALTY. When the relevant causal structure has NOT materially changed, that surviving structure is itself a present-tense reason for actors to continue along a historically similar path. Prefer the development best supported by the current world even when it resembles real history; do not invent novelty merely to prove the timeline is alternate.",
-    "A historical candidate is never an appointment. Historical timing must be CAUSALLY RE-EARNED: an exact historical date may survive only when the current campaign still preserves the scheduling mechanism that would put the event on that date (for example an already-planned visit, fixed election, treaty deadline, or other independently scheduled process). A date known only from memorized future chronology is not a cause.",
-    "After any major shock, assassination, declaration, collapse, election, coup, mobilization, treaty, or other branch-changing development, downstream history is reset to possibilities. Recalculate every actor's next choice from current commitments, support, risk, capability, and player authorization.",
-    "If circumstances HAVE materially changed, an actor taking substantially the same escalatory course as real history must be supported by a current-campaign reason. If circumstances have NOT materially changed, do not demand an artificial new trigger just because the resulting choice resembles history.",
-    "Anti-railroading forbids calendar scripts and unsupported downstream assumptions; it does NOT erase historical momentum. No explicit candidate does NOT mean history is suspended, and surviving historical conditions do NOT mean history is guaranteed.",
-    "",
-    "WORLD CONTINUITY CONTRACT",
-    "Timeline events are only visible milestones. Persistent storylines are the authoritative hidden state of ongoing processes.",
-    "The tool field storylineUpdates is ONE STRING, not an array. Return either an empty string when no storyline needs persistence, or one record per line (maximum 16) using exactly: id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state",
-    "Never use ~ inside a storyline field. status = active | dormant | resolved. pressure and momentum are 0-100. startedDate is YYYY-MM-DD when known for a new process and may be blank for an existing one. For an existing storyline, kind/title/participants may be blank because runtime preserves them. Participants are cumulative canonical actors: include newly involved polities, but omission never means removal of previously involved participants. eventNumbersCSV is an optional compatibility hint and may be blank because native code owns causal linkage. state must describe what is true through the actual stopDate.",
-    `For every scheduler-selected storyline, return a compact storylineUpdates record whose state describes what is true through THIS PASS stopDate. High momentum must produce real semantic evolution across multi-week passes. Every canonical ACTIVE war receives endogenous reappraisal at about ${STAGNATION_REAPPRAISAL_DAYS} days regardless of pressure; other high-pressure processes use the same soft guard. Active wars and other protected high-pressure processes reach objective anti-stasis at ${STAGNATION_BACKSTOP_DAYS} days without a visible milestone. Runtime stamps accounting/review dates.`,
-    "When a new event creates an unresolved multi-step process, create a compact storylineUpdates record. You MAY leave eventNumbersCSV blank: native runtime binds storyline records to causally matching events and attaches storylineIds before persistence. Do not spend reasoning effort counting event positions. One polity's own deliberate Project or Operation belongs on the Projects & Operations board, not in storylineUpdates: it may cause or feed a storyline (a rival's reaction, a standoff), but it is not one.",
-    "pressure = seriousness/unresolved stakes. momentum = current rate of meaningful change. High pressure can coexist with low momentum (for example a frozen war).",
+    "[Storyline Records]",
+    "storylineUpdates is ONE string: one record per line, at most 16, fields separated by ~ (never inside a field):",
+    "id~status~pressure~momentum~startedDate~kind~title~participantsCSV~eventNumbersCSV~state",
+    "status is active, dormant or resolved. pressure (how much is at stake) and momentum (how fast it is changing) run 0-100. startedDate is YYYY-MM-DD for a new storyline; an existing one may leave kind, title and participants blank; eventNumbersCSV may be blank; state says what is true on the stop date. Open a new storyline when an event starts something that will run over several turns — a crisis, an insurgency, a standoff, a war — never for a one-off announcement, and never for an effort on the Projects board.",
+    `An active war or high-pressure storyline with no visible development for ${STAGNATION_BACKSTOP_DAYS} days may not stand still: it must ${describeAntiStasisObjectiveRule()}.`,
   ].join("\n");
 
   lastAnalysis = {

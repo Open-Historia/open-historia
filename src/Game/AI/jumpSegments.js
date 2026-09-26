@@ -31,9 +31,9 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 // Below this, one request is comfortably fast enough and splitting would only add
 // round trips and re-send the prompt for nothing.
 export const SEGMENTED_JUMP_MIN_DAYS = 120;
-// A quarter. Chosen to line up with eventCountRangeForDays' [10, 13] band, so
-// three segments of a nine-month jump ask for 30-39 events against the 29-37 a
-// single call would have — the same story, in thirds.
+// A quarter: short enough for any proxy window. Each segment asks for its share
+// of the whole jump's events (segmentEventRange), so three segments of a
+// nine-month jump ask for what one call would have — the same story, in thirds.
 export const SEGMENT_TARGET_DAYS = 92;
 
 // Whole days per segment, as near equal as they divide. The remainder is spread
@@ -54,15 +54,18 @@ export const planJumpSegments = (dateStep) => {
   return spans;
 };
 
-// How many events a span of days should produce. Moved here from gameplay.js so
-// the segment planner and the counts it drives can be tested together.
+// How many events a span of days should produce. A month of history holds a
+// dozen or more newsworthy developments across the world; the bands used to ask
+// for five to seven, and a skip read thin beside the history it stood for
+// (2026-09-26). Long jumps stay near thirty-odd, which is what one answer can
+// write well.
 export const eventCountRangeForDays = (days) => {
-  if (days < 1) return [1, 1];   // sub-day skip (e.g. 6 hours)
-  if (days <= 7) return [1, 2];
-  if (days <= 31) return [5, 7];
-  if (days <= 92) return [10, 13];
-  if (days <= 184) return [19, 27];
-  return [29, 37];
+  if (days < 1) return [1, 2];   // sub-day skip (e.g. 6 hours)
+  if (days <= 7) return [3, 6];
+  if (days <= 31) return [10, 15];
+  if (days <= 92) return [16, 22];
+  if (days <= 184) return [22, 30];
+  return [28, 36];
 };
 
 // Human-readable label for the skipped span, used in the AI prompt. Collapses
@@ -88,8 +91,16 @@ export const formatDurationLabel = (days) => {
 // `pace` is the scenario author's setting (worldDirection.js scaleEventRange): it
 // scales how crowded a period is, BEFORE the queued orders raise the floor — an
 // author who wants a sparse chronicle still owes the player a slot per order.
-export const segmentEventRange = (spanDays, plannedActionShare, { pace = 100 } = {}) => {
-  let [minEvents, maxEvents] = scaleEventRange(eventCountRangeForDays(spanDays), pace);
+//
+// `totalDays` is the whole jump when this span is one segment of it: the segment
+// then asks for its share of the whole jump's range, so the pieces add up to what
+// one call would have asked for.
+export const segmentEventRange = (spanDays, plannedActionShare, { pace = 100, totalDays = 0 } = {}) => {
+  const whole = Number(totalDays) > Number(spanDays) ? Number(totalDays) : 0;
+  const base = whole
+    ? eventCountRangeForDays(whole).map((count) => Math.max(1, Math.round((count * spanDays) / whole)))
+    : eventCountRangeForDays(spanDays);
+  let [minEvents, maxEvents] = scaleEventRange(base, pace);
   if (plannedActionShare > minEvents) {
     minEvents = Math.min(plannedActionShare, 37);
     maxEvents = Math.max(maxEvents, minEvents + 3);
@@ -128,9 +139,15 @@ export const buildSegmentBriefing = (priorEvents) => {
 // and the doctrine come from the world director's directive (gameplay.js);
 // this is the reminder that the records must actually come back.
 export const STORYLINE_INSTRUCTION =
-  "Persistent storylines are autonomous causal processes: advance the ones the Native World Director selected, "
-  + "let a deferred one re-enter only through a genuinely material development of its own actors, and return compact "
-  + "storylineUpdates for every due process and every new unresolved process, with semantic state through this stop date.";
+  "Give every storyline due this period its storylineUpdates record, with where it stands on the stop date, "
+  + "and open one for each new process that will run on.";
+
+// The last thing every jump request says: the writing brief, where a long prompt
+// is followed best (the template's [How to Write an Event] has it in full).
+export const WRITING_REMINDER =
+  "Write every event as How to Write an Event describes: the title is the headline, and the description tells "
+  + "the story under it — who did what, where, how, in what order, and what came of it — never the headline again "
+  + "in more words.";
 
 export const buildSegmentInstruction = ({
   mode = "jump",
@@ -146,14 +163,15 @@ export const buildSegmentInstruction = ({
   priorEvents = [],
 } = {}) => {
   const autoMessage =
-    "Simulate an auto-jump and stop at the next notable or player-relevant event. Return JSON only. " +
-    "Scale the events array to the time actually covered before your stop point: roughly 1-2 events per week, " +
-    "5-7 per month, 10-13 per quarter, up to 29-37 for a full year — spread their dates across the covered period. "
+    "Simulate an auto-jump: run the world forward from the Origin Date and stop at the first event that needs the "
+    + "player, which comes last and is notable. Return JSON only. Scale the events to the time you actually cover "
+    + "before that point — roughly 3-6 a week, 10-15 a month, 16-22 a quarter, up to 28-36 for a full year — dated "
+    + "where they fall. "
     + STORYLINE_INSTRUCTION;
   const jumpMessage =
-    `Simulate a standard jump forward to the requested target date. Return JSON only. The "events" array must ` +
-    `contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}), with their dates ` +
-    `spread across the skipped period. ${STORYLINE_INSTRUCTION}`;
+    `Simulate everything that happens in the world from the Origin Date to the target date. Return JSON only. ` +
+    `The "events" array must contain between ${minEvents} and ${maxEvents} events (this jump covers ${durationLabel}) ` +
+    `— as many as the period really holds — dated where they fall across it. ${STORYLINE_INSTRUCTION}`;
 
   if (segmentCount <= 1) return mode === "auto" ? autoMessage : jumpMessage;
 
