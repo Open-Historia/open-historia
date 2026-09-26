@@ -1,0 +1,8 @@
+# Open Historia — what stays out of the multiplayer server's image © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE).
+# The image installs its own node_modules from the lockfile; the tests, the
+# docs and the build files are not needed to run it.
+node_modules
+test
+*.md
+Dockerfile
+.dockerignore
