@@ -101,3 +101,21 @@ test("the loopback carries the screen's requests and controls to the engine, and
   engine.close();
   screen.close();
 });
+
+test("a closed loopback end goes quiet: a late status or parting word is dropped, not thrown", async () => {
+  const statuses = [];
+  const engine = createLoopbackEngineSide({});
+  const screen = createLoopbackScreenSide({ onStatus: (status) => statuses.push(status) });
+  engine.close();
+  assert.doesNotThrow(() => engine.status({ open: false }));
+  assert.doesNotThrow(() => engine.send({ t: "notice", level: "info", text: "late" }));
+  screen.close();
+  assert.doesNotThrow(() => screen.bye());
+  assert.doesNotThrow(() => screen.control("stop"));
+  assert.doesNotThrow(() => {
+    engine.close();
+    screen.close();
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(statuses, []);
+});

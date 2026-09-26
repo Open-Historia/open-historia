@@ -15,10 +15,10 @@
 
 import { useSyncExternalStore } from "react";
 import { JSON_URLS, publishJsonWriteBatch } from "../../runtime/assets.js";
-import { activateGame, createGame, getLibraryState, refreshLibraryCatalog } from "../../runtime/library.js";
+import { activateGame, createGame, getLibraryState, refreshLibraryCatalog, setSharedGameEntry } from "../../runtime/library.js";
 import { createGameClient } from "./gameClient.js";
 import { remoteRuntimeActive, startRemoteRuntime, stopRemoteRuntime } from "./remoteRuntime.js";
-import { setSharedRequester } from "./sharedGameBridge.js";
+import { setSharedGameRole, setSharedRequester } from "./sharedGameBridge.js";
 import { createLoopbackScreenSide } from "../transport/loopback.js";
 import { createClientSession } from "../session/client.js";
 import { relayChannelFactory } from "../signaling/relays.js";
@@ -35,6 +35,10 @@ const IDLE = Object.freeze({
   notices: [],
   connection: "", // the session's state, or "loopback"
   engine: null, // the host's engine status (hosting only)
+  // A guest's local game of the host's scenario, which the map is drawn from:
+  // "" | preparing | ready. Countries are offered only once it is ready, so
+  // the page never shows its own game where the shared one should be.
+  standIn: "",
   error: "",
 });
 
@@ -53,7 +57,7 @@ export const subscribeSharedGame = (listener) => {
 export const useSharedGame = () => useSyncExternalStore(subscribeSharedGame, getSharedGame, getSharedGame);
 export const sharedGameActive = () => state.mode !== "off" && state.mode !== "ended";
 
-let current = null; // { client, runtime, session?, screen?, pendingViews: [] }
+let current = null; // { client, runtime, gameId, session?, screen?, pendingViews: [] }
 
 const deviceIdentity = () => loadDeviceIdentity(localStorage);
 
@@ -68,6 +72,18 @@ const refusedWrite = (key) => set({
   notices: [...state.notices, { level: "warn", text: `That change (${key}) is made by the host in a shared game, and this one cannot be requested yet.`, at: Date.now() }].slice(-20),
 });
 
+// A view reaches the page's documents, and its game document the library's
+// entry for the game it is shown in (library.js setSharedGameEntry): the menu
+// bar and the loading screen name the player's country and the host's date.
+const applyToRuntime = (view) => {
+  const applied = current.runtime.apply(view);
+  const game = view?.docs?.game;
+  if (applied && current.gameId && game && typeof game === "object") {
+    setSharedGameEntry({ gameId: current.gameId, country: game.country, currentDate: game.gameDate });
+  }
+  return applied;
+};
+
 const makeClient = (send) => createGameClient({
   send,
   applyView: (view) => {
@@ -76,7 +92,7 @@ const makeClient = (send) => createGameClient({
       current.pendingViews.push(view);
       return true;
     }
-    return current.runtime.apply(view);
+    return applyToRuntime(view);
   },
   onChange: ({ lobby, round, notices }) => set({
     lobby,
@@ -89,7 +105,7 @@ const makeClient = (send) => createGameClient({
 const startViews = () => {
   if (!current || current.runtime) return;
   current.runtime = beginRuntime(refusedWrite);
-  for (const view of current.pendingViews.splice(0)) current.runtime.apply(view);
+  for (const view of current.pendingViews.splice(0)) applyToRuntime(view);
 };
 
 // --- Hosting (desktop) ---------------------------------------------------------
@@ -103,8 +119,9 @@ export const hostSharedGame = async ({ settings, name } = {}) => {
   const devEngine = !probe?.supported && Boolean(import.meta.env?.DEV);
   if (!probe?.supported && !devEngine) throw new Error("Hosting a shared game needs the desktop app.");
   set({ ...IDLE, mode: "opening", role: "host", connection: "loopback" });
+  setSharedGameRole("host");
   const identity = deviceIdentity();
-  current = { pendingViews: [], runtime: null };
+  current = { pendingViews: [], runtime: null, gameId: String(getLibraryState().activeGameId || "") };
   const screen = createLoopbackScreenSide({
     onMessage: (message) => current?.client.receive(message),
     onStatus: (engine) => {
@@ -148,7 +165,7 @@ export const hostControl = (action, args = null) => current?.screen?.control(act
 // --- Joining ---------------------------------------------------------------------
 
 // The host's scenario must be in this library: the map is drawn from it.
-const prepareStandIn = async (lobby, roomId) => {
+const prepareStandIn = async (owner, lobby, roomId) => {
   await refreshLibraryCatalog({ force: true }).catch(() => {});
   const library = getLibraryState();
   const scenarioId = String(lobby?.scenario?.id || "");
@@ -164,7 +181,14 @@ const prepareStandIn = async (lobby, roomId) => {
     gameId = "";
   }
   if (!gameId || !(library.games ?? []).some((game) => game?.id === gameId)) {
+    // Made with a known id, so its entry has no country from the first moment
+    // it is in the library: for a guest with no games of their own the new one
+    // is the library's game straight away.
+    const wanted = `shared-game-${[...crypto.getRandomValues(new Uint8Array(6))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    if (current !== owner) return false;
+    setSharedGameEntry({ gameId: wanted, country: "" });
     const created = await createGame({
+      id: wanted,
       scenarioId,
       name: `Shared game: ${String(lobby?.settings?.name || "with friends").slice(0, 60)}`,
       gamePatch: { country: String(lobby?.countries?.[0] || "") },
@@ -177,14 +201,22 @@ const prepareStandIn = async (lobby, roomId) => {
     }
   }
   if (!gameId) throw new Error("Could not make a local game to show the shared one in.");
+  // Left meanwhile: nothing to open.
+  if (current !== owner) return false;
+  // No country until one is taken: the stand-in's own is only a placeholder,
+  // and it must not be what the loading screen names.
+  owner.gameId = gameId;
+  setSharedGameEntry({ gameId, country: "" });
   await activateGame(gameId);
+  return current === owner;
 };
 
 export const joinSharedGame = async ({ token, name } = {}) => {
   if (sharedGameActive()) throw new Error("A shared game is already open.");
   const invite = parseInvite(String(token ?? "").trim()); // throws a readable InviteError
   set({ ...IDLE, mode: "opening", role: "guest", token: invite.token });
-  current = { pendingViews: [], runtime: null, preparing: null };
+  setSharedGameRole("guest");
+  current = { pendingViews: [], runtime: null, gameId: "", preparing: null };
   const session = createClientSession({
     token: invite.token,
     device: deviceIdentity(),
@@ -199,9 +231,17 @@ export const joinSharedGame = async ({ token, name } = {}) => {
     onMessage: (message) => {
       current?.client.receive(message);
       if (message.t === "lobby" && current && !current.preparing) {
-        current.preparing = prepareStandIn(message, invite.roomId)
-          .then(startViews)
-          .catch((error) => set({ error: String(error?.message || error) }));
+        const owner = current;
+        set({ standIn: "preparing" });
+        owner.preparing = prepareStandIn(owner, message, invite.roomId)
+          .then((ready) => {
+            if (!ready || current !== owner) return;
+            startViews();
+            set({ standIn: "ready" });
+          })
+          .catch((error) => {
+            if (current === owner) set({ standIn: "", error: String(error?.message || error) });
+          });
       }
     },
   });
@@ -238,6 +278,8 @@ export const leaveSharedGame = async ({ stopHosting = true } = {}) => {
   }
   leaving?.session?.leave();
   set({ ...IDLE });
-  // Back to this device's own documents.
+  setSharedGameRole("");
+  // Back to this device's own documents, and the library's own entry.
+  setSharedGameEntry(null);
   await refreshLibraryCatalog({ force: true }).catch(() => {});
 };

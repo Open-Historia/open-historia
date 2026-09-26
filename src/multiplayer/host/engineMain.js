@@ -208,9 +208,10 @@ const boot = async () => {
       channelFactory: relayChannelFactory,
       room: { name: settings.name, seats: settings.seats, version: SHARED_GAME_VERSION },
       appMessages: PLAYER_REQUESTS,
-      onJoin: (player) => gameHost.join(player),
-      onLeave: (player) => gameHost.leave(player),
-      onMessage: (player, message) => gameHost.receive(player, message),
+      // A connection closing after "stop" still reports its leaving.
+      onJoin: (player) => gameHost?.join(player),
+      onLeave: (player) => gameHost?.leave(player),
+      onMessage: (player, message) => gameHost?.receive(player, message),
       onStatus: (status) => {
         relays = status?.relays ?? status ?? null;
         report();

@@ -112,7 +112,10 @@ const Lobby = ({ shared, me }) => {
         ))}
       </div>
 
-      {!me && lobby && role !== "host" ? (
+      {!me && lobby && role !== "host" && shared.standIn !== "ready" && !error ? (
+        <div style={{ ...small, marginTop: "1rem" }}>Setting up the map…</div>
+      ) : null}
+      {!me && lobby && role !== "host" && shared.standIn === "ready" ? (
         <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
           <select value={choice} onChange={(event) => setChoice(event.target.value)} style={{ ...button, flex: 1, justifyContent: "flex-start" }}>
             <option value="">Choose your country…</option>

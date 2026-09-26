@@ -32,6 +32,22 @@ const FROM_ENGINE = union("type", {
 
 const channelOf = (channelImpl) => new (channelImpl ?? globalThis.BroadcastChannel)(LOOPBACK_CHANNEL);
 
+// A closed BroadcastChannel throws on postMessage; once an end is closed it
+// goes quiet instead, so a late status or a parting word cannot crash it.
+const outbox = (channel) => {
+  let open = true;
+  return {
+    post: (data) => {
+      if (open) channel.postMessage(data);
+    },
+    close: () => {
+      if (!open) return;
+      open = false;
+      channel.close();
+    },
+  };
+};
+
 // The engine's end: one player (the host's screen), its requests and its controls.
 export const createLoopbackEngineSide = ({ channelImpl, onHello = () => {}, onRequest = () => {}, onControl = () => {}, onBye = () => {} } = {}) => {
   const channel = channelOf(channelImpl);
@@ -46,10 +62,11 @@ export const createLoopbackEngineSide = ({ channelImpl, onHello = () => {}, onRe
     } else if (data.type === "control") onControl(data.action, data.args ?? null);
     else onBye();
   };
+  const out = outbox(channel);
   return {
-    send: (message) => channel.postMessage({ type: "message", message }),
-    status: (status) => channel.postMessage({ type: "status", status }),
-    close: () => channel.close(),
+    send: (message) => out.post({ type: "message", message }),
+    status: (status) => out.post({ type: "status", status }),
+    close: out.close,
   };
 };
 
@@ -65,11 +82,12 @@ export const createLoopbackScreenSide = ({ channelImpl, onMessage = () => {}, on
       if (message.ok) onMessage(message.value);
     }
   };
+  const out = outbox(channel);
   return {
-    hello: (device, name) => channel.postMessage({ type: "hello", device, name: String(name ?? "").slice(0, 40) }),
-    request: (message) => channel.postMessage({ type: "request", message }),
-    control: (action, args = null) => channel.postMessage({ type: "control", action, args }),
-    bye: () => channel.postMessage({ type: "bye" }),
-    close: () => channel.close(),
+    hello: (device, name) => out.post({ type: "hello", device, name: String(name ?? "").slice(0, 40) }),
+    request: (message) => out.post({ type: "request", message }),
+    control: (action, args = null) => out.post({ type: "control", action, args }),
+    bye: () => out.post({ type: "bye" }),
+    close: out.close,
   };
 };
