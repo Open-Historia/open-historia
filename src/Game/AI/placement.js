@@ -6,7 +6,7 @@
 // this map is good at resolving. So a unit or a structure may be placed with a
 // phrase — `at` — and the engine works out the point:
 //
-//   "Kharkiv"                        the place itself (a city, a base, a unit, a region)
+//   "Kharkiv, Ukraine"               the place itself (a city, a base, a unit, a region)
 //   "near Kharkiv"                   beside it, not on top of it
 //   "east of Kharkiv"                a short way off in that direction
 //   "eastern Ukraine" / "Donetsk Oblast, north"   that part of a region or a country
@@ -16,12 +16,14 @@
 //   "between Kyiv and Kharkiv"       halfway
 //   "[36.2, 50.0]"                   longitude, latitude, when it really is known
 //
+// A name is said with the country it is in, because two countries have a Montana.
+//
 // The WHOLE phrase is tried as a name before any of it is read as grammar, so
 // North Korea, South Ossetia, the Ivory Coast and the West Bank are places and
 // not directions — but only as the map spells it: a lookup loose enough to take
 // "off Sevastopol" for the region Sevastopol would put every fleet ashore.
 //
-// DELIBERATELY IMPORT-FREE. The caller hands in a gazetteer — find(name, { exact })
+// DELIBERATELY IMPORT-FREE. The caller hands in a gazetteer — find(name, options)
 // and regionAt(point) — built from the map it already has (gameplay.js
 // buildPlacementGazetteer), so everything here runs under bare node. Every
 // result is deterministic: the same phrase for the same thing on the same map is
@@ -208,6 +210,23 @@ const stripArticle = (text) => asText(text).replace(/^(?:the|a|an)\s+/i, "");
 // Words for a kind of ground after a place name — "Putumayo jungle frontier",
 // "the Donbas region" — which no map spells as part of the name.
 const GROUND_WORDS = /\s+(?:jungles?|frontiers?|borders?|borderlands?|regions?|areas?|sectors?|front|zones?|countryside|hinterland|outskirts)$/i;
+// The country a name is in, said after a comma: "Montana, United States".
+// Two countries have a Montana, so an unqualified one is whichever the map lists
+// first, and a US base ordered in Montana was built in Bulgaria. The directive
+// below tells the model to name the country; this takes it off the name and
+// hands it to the gazetteer, which uses it to choose between places that share
+// the name. A tail the comma grammar above already claims is not a country:
+// "Donetsk Oblast, north" is a part of one place and "Crimea, coast" its shore.
+const QUALIFIER_TAIL = /^(.+?)\s*,\s*([^,()]{2,48}?)\)?$/;
+const GROUND_TAIL = /^(?:coast|coastal|shore|seaside|centre|center|central|middle|interior|heart)$/i;
+const splitQualifier = (text) => {
+    const match = asText(text).match(QUALIFIER_TAIL);
+    if (!match) return null;
+    const tail = stripArticle(match[2]).replace(/\s+(?:part|half|side|sector|end)$/i, "").trim();
+    if (!tail || readDirection(tail) || GROUND_TAIL.test(tail)) return null;
+    const name = stripArticle(match[1]);
+    return name ? { name, country: tail } : null;
+};
 const stripGround = (text) => {
     let out = asText(text);
     for (let guard = 0; guard < 4; guard += 1) {
@@ -309,9 +328,19 @@ export const readPlacement = (phrase, { owner = "" } = {}) => {
         }
         if (changed) add(bare);
     }
+    // Every reading again with its country taken off the name and carried as
+    // `country`, each one just before the unqualified readings it came from. The
+    // whole phrase is only split when it is the whole of the reading: the grammar
+    // keeps its own comma, and "Montana, US facing Bulgaria" is not a country.
+    const splits = readings.map((reading, index) => (
+        typeof reading.name === "string" && (index > 0 || readings.length === 1) ? splitQualifier(reading.name) : null
+    ));
     // Where the words could be grammar, the whole phrase is a name only as the
-    // map spells it; a phrase that can be nothing else may be matched loosely.
+    // map spells it; a phrase that can be nothing else may be matched loosely,
+    // qualifier and all: "Putumayo jungle frontier, Colombia" is the Putumayo
+    // the map spells, and the comma keeps a bare name from matching loosely.
     if (readings.length > 1) readings[0].exact = true;
+    readings.splice(1, 0, ...splits.map((split, index) => (split ? { ...readings[index], ...split } : null)).filter(Boolean));
     return readings;
 };
 
@@ -319,11 +348,14 @@ export const readPlacement = (phrase, { owner = "" } = {}) => {
 // Resolving it against the map
 // ---------------------------------------------------------------------------
 //
-// gazetteer.find(name, { exact }) -> null, or
+// gazetteer.find(name, { exact, country, prefer }) -> null, or
 //   { kind: "unit" | "marker" | "city", name, point: [lng, lat] }
 //   { kind: "region", name, region: { id, name, geometry } }
 //   { kind: "polity", name, regions: [{ id, name, geometry }] }
 //   (`exact`: the name as the map spells it, or an alias — no near misses)
+//   (`country`: the country the phrase named after a comma, which decides between
+//    places that share a name and is ignored where it holds none of them)
+//   (`prefer`: the polity doing the placing, which decides an unqualified one)
 // gazetteer.regionAt(point) -> { id, name, geometry } | null
 
 export const NEAR_KM = 22;
@@ -400,16 +432,22 @@ const done = (point, how, gazetteer, label) => {
     return { lng: Number(point[0].toFixed(5)), lat: Number(point[1].toFixed(5)), regionId: region?.id ?? "", regionName: region?.name ?? "", how, label };
 };
 
-const resolveReading = (reading, gazetteer, seed) => {
+// A second place a phrase names, "Kyiv, Ukraine" as readily as "Kyiv".
+const findNamed = (gazetteer, text, prefer) => {
+    const split = splitQualifier(text);
+    return gazetteer.find(split ? split.name : text, { country: split ? split.country : "", prefer });
+};
+
+const resolveReading = (reading, gazetteer, seed, prefer = "") => {
     if (reading.kind === "coordinates") return done(reading.point, "coordinates", gazetteer, "");
     if (reading.kind === "between") {
-        const first = positionOf(gazetteer.find(reading.first), seed);
-        const second = positionOf(gazetteer.find(reading.second), seed);
+        const first = positionOf(findNamed(gazetteer, reading.first, prefer), seed);
+        const second = positionOf(findNamed(gazetteer, reading.second, prefer), seed);
         if (!first || !second) return null;
         return done([(first[0] + second[0]) / 2, (first[1] + second[1]) / 2], "between", gazetteer, `between ${reading.first} and ${reading.second}`);
     }
 
-    const thing = gazetteer.find(reading.name, { exact: Boolean(reading.exact) });
+    const thing = gazetteer.find(reading.name, { exact: Boolean(reading.exact), country: reading.country ?? "", prefer });
     if (!thing) return null;
 
     if (reading.kind === "place") {
@@ -500,7 +538,7 @@ const resolveReading = (reading, gazetteer, seed) => {
     }
 
     if (reading.kind === "facing") {
-        const other = gazetteer.find(reading.toward);
+        const other = findNamed(gazetteer, reading.toward, prefer);
         if (!other) return null;
         const from = positionOf(thing, seed);
         if (!from) return null;
@@ -521,6 +559,8 @@ const resolveReading = (reading, gazetteer, seed) => {
 
 // { lng, lat, regionId, regionName, how, label } — or { error } saying what could
 // not be found, in words the model can act on next turn.
+// `owner` is the polity doing the placing: what "the border with Colombia" is
+// measured from, and which Montana an unqualified "Montana" means.
 export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
     const readings = readPlacement(phrase, { owner });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
@@ -528,11 +568,12 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "" 
     for (const reading of readings) {
         let resolved = null;
         try {
-            resolved = resolveReading(reading, gazetteer, seed);
+            resolved = resolveReading(reading, gazetteer, seed, asText(owner));
         } catch {
             resolved = null; // one odd polygon must not cost the turn its other placements
         }
-        if (resolved) return resolved;
+        // `country` says the phrase named one, so a caller can tell the model to.
+        if (resolved) return reading.country ? { ...resolved, country: reading.country } : resolved;
     }
     // `names` is every place the phrase could be read as naming — the whole of
     // "off Falkland Islands", and the "Falkland Islands" inside it — so a caller
@@ -564,11 +605,12 @@ export const resolveRegionPlacement = (regionId, gazetteer, { seedText = "" } = 
 export const PLACEMENT_DIRECTIVE = [
     "[Placing Things — say WHERE in words]",
     "Every unit you spawn or move and every structure you build can be placed with `at`: a phrase naming places the map knows. The engine finds the exact point, keeps it inside the right borders, and moves it clear of anything already standing there. Prefer `at` to coordinates: a guessed longitude puts an army in the sea.",
-    "- \"Kharkiv\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
-    "- \"near Kharkiv\" — beside it. \"east of Kharkiv\" — a short way off in that direction. \"toward Kharkiv\" — a move's objective; it gets as far as the days allow.",
-    "- \"eastern Ukraine\", \"Donetsk Oblast, north\" — that part of a country or region.",
-    "- \"Donetsk Oblast facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
-    "- \"coast of Crimea\" — on land at the sea's edge. \"off Sevastopol\" — AT SEA, for fleets.",
-    "- \"between Kyiv and Kharkiv\" — halfway.",
+    "ALWAYS NAME THE COUNTRY after a comma: \"Montana, United States\", \"Kharkiv, Ukraine\", \"Alexandria, Egypt\". Two countries have a Montana and two have an Alexandria, and a bare name is whichever of them the map happens to list first: a US base ordered in Montana was built in Bulgaria. The full name or the code (\"US\", \"USA\") both work. A unit or structure already on the map, named exactly as the map spells it, needs no country.",
+    "- \"Kharkiv, Ukraine\" — a city, a region, an existing structure or unit, exactly as the map spells it.",
+    "- \"near Kharkiv, Ukraine\" — beside it. \"east of Kharkiv, Ukraine\" — a short way off in that direction. \"toward Kharkiv, Ukraine\" — a move's objective; it gets as far as the days allow.",
+    "- \"eastern Ukraine\", \"Donetsk Oblast, Ukraine, north\" — that part of a country or region.",
+    "- \"Donetsk Oblast, Ukraine facing Russia\" — the side of one place nearest another: a front, a border garrison. \"the border with Russia\" puts a unit on its own country's side of that border.",
+    "- \"coast of Crimea, Ukraine\" — on land at the sea's edge. \"off Sevastopol, Ukraine\" — AT SEA, for fleets.",
+    "- \"between Kyiv, Ukraine and Kharkiv, Ukraine\" — halfway.",
     "Give lng and lat only for a point you actually know that no name describes (open ocean, a spot in a desert). If you give both, `at` wins. A `regionId` copied exactly from the map also places a unit, and is used when `at` names nothing the map knows.",
 ].join("\n");

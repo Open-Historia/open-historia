@@ -113,6 +113,7 @@ import {
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
+import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
@@ -238,7 +239,7 @@ import {
 } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
-import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity, resolveStockCountryCode } from "../../runtime/polityIdentity.js";
 import {
   applyWarUpdates,
   bindWarUpdatesToEvents,
@@ -2125,20 +2126,89 @@ const buildPlacementGazetteer = (context, world) => {
   const withGeometry = context.rows.filter((row) => row.geometry && row.bbox);
   const asRegion = (row) => ({ id: row.id, name: row.name, owner: row.owner, geometry: row.geometry });
 
+  // Which country a token names, as this map knows it: the owner label its
+  // regions carry (aliases and legacy codes included), and the ISO3 a stock
+  // map's region ids start with, so "US", "USA" and "United States" all land on
+  // USA.27_1 whoever holds it now.
+  const countryOf = (token) => {
+    const raw = normalizeString(token).replace(/^the\s+/i, "");
+    if (!raw) return null;
+    const label = context.resolveOwner(raw) || context.resolveOwner(toCountryName(raw));
+    // Its official name, its ISO3, or its ISO2, written any way a model writes it.
+    const iso3 = normalizeString(resolveStockCountryCode(raw) || countryGidFromIdentity(raw) || countryGidFromIdentity(fold(raw))).toUpperCase();
+    return label || iso3 ? { label, iso3 } : null;
+  };
+  // 2 for a region the country holds, 1 for one that is geographically its, 0 for neither.
+  const countryRank = (row, want) => {
+    if (!row || !want) return 0;
+    if (want.label && fold(row.owner) === fold(want.label)) return 2;
+    if (!want.iso3) return 0;
+    const gid = normalizeString(row.id).split(".")[0].toUpperCase();
+    return gid === want.iso3 || normalizeString(countryGidFromIdentity(row.owner)).toUpperCase() === want.iso3 ? 1 : 0;
+  };
+  // The place of that name inside one country: its city first, as everywhere else.
+  // `exactOnly` is the whole-phrase attempt and stays strict here too, or "off
+  // Okinawa, Japan" would match the region Okinawa and put the fleet ashore.
+  const findInCountry = (name, key, want, exactOnly) => {
+    const best = (list, rank) => list
+      .map((entry) => ({ entry, rank: rank(entry) }))
+      .filter((hit) => hit.rank > 0)
+      .sort((a, b) => b.rank - a.rank)[0]?.entry ?? null;
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const city = best(context.cityRows.filter(named), (entry) => countryRank(context.regionOfCity(entry), want));
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    const pool = withGeometry.filter((row) => countryRank(row, want) > 0);
+    const matched = pool.length
+      ? matchRegionName(name, pool, exactOnly ? { allowFuzzy: false, minSubstring: Infinity } : { maxFuzzy: 1 })
+      : null;
+    return matched?.region ? { kind: "region", name: matched.region.name, region: asRegion(matched.region) } : null;
+  };
+  // Every country holding a place of this name, for telling the model to say which.
+  // Cached: one payload asks for the same handful of names several times over.
+  const sharedNames = new Map();
+  const sharedName = (name) => {
+    const key = fold(name);
+    if (!key) return [];
+    if (sharedNames.has(key)) return sharedNames.get(key);
+    const named = (entry) => fold(entry.name) === key || normalizeArray(entry.aliases).some((alias) => fold(alias) === key);
+    const owners = [...context.cityRows.filter(named).map((city) => context.regionOfCity(city)), ...withGeometry.filter(named)]
+      .map((row) => normalizeString(row?.owner))
+      .filter(Boolean);
+    const found = [...new Set(owners)];
+    sharedNames.set(key, found);
+    return found;
+  };
+
   // `exact`: the name as the map spells it (or an alias, or "Kharkiv" for
   // "Kharkiv Oblast") and nothing looser — the whole-phrase attempt, where a
   // substring match would read "off Sevastopol" as the region Sevastopol.
-  const find = (name, { exact: exactOnly = false } = {}) => {
+  // `country`: the one the phrase named after a comma ("Montana, United States").
+  // `prefer`: the polity doing the placing, which decides a bare shared name.
+  const find = (name, { exact: exactOnly = false, country = "", prefer = "" } = {}) => {
     const key = fold(name);
     if (!key) return null;
     const unit = units.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
     if (unit) return { kind: "unit", name: unit.name, point: [unit.lng, unit.lat] };
     const marker = markers.find((entry) => fold(entry.id) === key || fold(entry.name) === key);
     if (marker) return { kind: "marker", name: marker.name, point: [marker.lng, marker.lat] };
-    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
-    if (city) return { kind: "city", name: city.name, point: city.coordinates };
+    // The country the model was told to name decides between places sharing one.
+    // A country the map does not know, or one holding no such place, is ignored:
+    // a wrong qualifier must not make a real place vanish.
+    const wanted = countryOf(country);
+    const qualified = wanted ? findInCountry(name, key, wanted, exactOnly) : null;
+    if (qualified) return qualified;
     // A country before a region: "Ukraine" is the country even where a region shares the name.
     const owner = context.resolveOwner(name);
+    // Unqualified and shared: the polity placing it decides. "Montana" ordered by
+    // the United States is the state, not the Bulgarian province the map lists
+    // first. A country keeps its own name against any preference.
+    const preferred = !wanted && !owner ? countryOf(prefer) : null;
+    if (preferred && sharedName(name).length > 1) {
+      const mine = findInCountry(name, key, preferred, exactOnly);
+      if (mine) return mine;
+    }
+    const city = context.cityRows.find((entry) => fold(entry.name) === key || entry.aliases.some((alias) => fold(alias) === key));
+    if (city) return { kind: "city", name: city.name, point: city.coordinates };
     const owned = owner ? (context.ownerRows.get(owner) ?? []).filter((row) => row.geometry) : [];
     const exact = withGeometry.find((row) => fold(row.name) === key || row.aliases.some((alias) => fold(alias) === key));
     if (owned.length && !(exact && owned.length === 1)) return { kind: "polity", name: owner, regions: owned.map(asRegion) };
@@ -2205,7 +2275,7 @@ const buildPlacementGazetteer = (context, world) => {
     if (!owner) return null;
     return (context.ownerRows.get(owner) ?? []).length > 0;
   };
-  return { find, findRegionId, suggest, regionAt, nearestLand, holdsLand };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2242,7 +2312,8 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       const phrase = normalizeString(marker.at ?? op.at);
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
+      // `owner`: the polity building it, which decides which Montana "Montana" is.
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2290,6 +2361,18 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
         noteReceipt(receipt, "adjusted",
           `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a unit"} could not be placed at "${entry.phrase}" — ${byPhrase.error}. `
           + `Its regionId ${entry.regionId} was used instead: ${resolved.regionName || "that region"}.`);
+      }
+      // A name two countries share, written without the country the directive asks
+      // for. Only the phrase can be ambiguous: a regionId names one region.
+      const shared = byPhrase && !byPhrase.error && !resolved.country && resolved.label
+        ? gazetteer.sharedName(resolved.label)
+        : [];
+      if (shared.length > 1 && !["unit", "marker"].includes(gazetteer.find(resolved.label)?.kind)) {
+        // Where it actually went, which is the builder's own country when it has one.
+        const went = gazetteer.regionAt([resolved.lng, resolved.lat])?.owner || shared[0];
+        noteReceipt(receipt, "adjusted",
+          `${entry.title ? `Event "${entry.title}": ` : ""}"${entry.phrase}" could be ${shared.slice(0, 3).join(" or ")}: `
+          + `it was placed in ${went}. Always name the country, as "${resolved.label}, ${went}".`);
       }
       target[lngKey] = resolved.lng;
       target[latKey] = resolved.lat;
@@ -2819,7 +2902,7 @@ So use the wider picture to choose the sender and the moment — never to give t
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
     const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
-    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. CURRENT PERSISTENT UNITS is authoritative; do not spend lookup rounds rediscovering units or powers that are already supplied here. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit whenever the event establishes that formation at a materially different place: advances, marches, crosses, enters, reaches, arrives, embarks, sails, retreats, redeploys, establishes a camp/encampment, or fights at a named battlefield away from its current position. Set posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting.\n3. EXPLICIT RELOCATION IS NOT OPTIONAL. If a supplied event clearly says an identifiable existing formation changed location, return a move for that unit. Use the event's destination wording in 'at' (for example 'Etruria', 'toward Rome', 'Apulia') and let the native placement/unit engine ground it and enforce travel speed. A destination may be far away: the engine advances long orders over time as standing orders, so do NOT omit a move merely because the objective is beyond one turn's travel.\n4. A conscription law, mobilization order with no field movement, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n5. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again. A warship or submarine commissioned or delivered into service, or a squadron, air wing or task group formed or stood up, IS a new formation: spawn it for the power that commissioned it, at its home port or base, even when that power already has units. Laying down hulls, ordering ships or funding a programme is not.\n6. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n7. Do not invent military activity for diplomatic, political or economic events. Return no ops only when the event truly leaves every supplied persistent unit materially unchanged.\n8. Never change territory. The territory layer is separate.\n9. Use only supplied existing unit ids. Prefer 'at' to coordinates; copy the event's named destination instead of guessing longitude/latitude.\n\nReturn exactly the required tool payload.`;
+    systemPrompt = `${systemPrompt}\n\n[Native Unit Director — runtime rules]\nYou are NOT writing new history. The supplied events are already canonical candidates. Your only job is to make existing persistent military units behave consistently with those events.\n\nCURRENT GAME DATE: ${normalizeString(variables.unitDirectorGameDate)}\nCURRENT ROUND: ${normalizeString(variables.unitDirectorRound)}\n\nCURRENT PERSISTENT UNITS:\n${directorUnits}\n\nMILITARY EVENT CANDIDATES:\n${directorCandidates}\n\nPriority order:\n1. REUSE existing unit ids. CURRENT PERSISTENT UNITS is authoritative; do not spend lookup rounds rediscovering units or powers that are already supplied here. Existing armies should move, fight, weaken, retreat and persist across turns.\n2. MOVE a current unit whenever the event establishes that formation at a materially different place: advances, marches, crosses, enters, reaches, arrives, embarks, sails, retreats, redeploys, establishes a camp/encampment, or fights at a named battlefield away from its current position. Set posture to what it is doing there (assaulting, massing, holding, withdrawing, transit, patrol, blockade, exercise). Fighting is a move into contact with posture assaulting.\n3. EXPLICIT RELOCATION IS NOT OPTIONAL. If a supplied event clearly says an identifiable existing formation changed location, return a move for that unit. Use the event's destination wording in 'at' (for example 'Etruria', 'toward Rome', 'Apulia') and let the native placement/unit engine ground it and enforce travel speed. A destination may be far away: the engine advances long orders over time as standing orders, so do NOT omit a move merely because the objective is beyond one turn's travel.\n4. A conscription law, mobilization order with no field movement, readiness measure, exercise, procurement, training, administrative integration or other military-policy event is NOT movement or combat.\n5. SPAWN only when the event genuinely creates a new formation, mobilization or reinforcement that is not already represented. Never spawn a new counter merely because an existing army is fighting again. A warship or submarine commissioned or delivered into service, or a squadron, air wing or task group formed or stood up, IS a new formation: spawn it for the power that commissioned it, at its home port or base, even when that power already has units. Laying down hulls, ordering ships or funding a programme is not.\n6. strength only when the event itself narrates casualties, attrition, disease, desertion, refit, reinforcement or demobilization for that formation. remove only for explicit destruction or disbandment.\n7. Do not invent military activity for diplomatic, political or economic events. Return no ops only when the event truly leaves every supplied persistent unit materially unchanged.\n8. Never change territory. The territory layer is separate.\n9. Use only supplied existing unit ids. Prefer 'at' to coordinates; copy the event's named destination instead of guessing longitude/latitude, and name the country after it ('Kharkiv, Ukraine').\n\nReturn exactly the required tool payload.`;
   }
 
   // GM territorial semantics: regionTransfers move LEGAL sovereignty, regionControlOps
