@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { B64URL, HEX_ID, NAME, bool, int, list, literal, obj, record, safeParse, str, union, validate } from "./validate.js";
+import { B64URL, HEX_ID, NAME, bool, int, json, list, literal, obj, record, safeParse, str, union, validate } from "./validate.js";
 
 const hello = obj({
   t: literal("hello"),
@@ -112,6 +112,20 @@ test("safeParse refuses oversize and deeply nested text before parsing it", () =
   assert.equal(safeParse('{"a": "\\"[[[["}').ok, true);
   assert.equal(safeParse("{not json").ok, false);
   assert.equal(safeParse(42).ok, false);
+});
+
+test("json copies plain JSON, bounded, and refuses anything else", () => {
+  const view = obj({ t: literal("view"), docs: json(6) });
+  const docs = { world: { units: [{ id: "u1", lng: 1.5 }], notes: null }, events: [] };
+  const result = validate(view, { t: "view", docs });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value.docs, docs);
+  assert.notEqual(result.value.docs.world, docs.world);
+  assert.equal(validate(view, { t: "view", docs: { a: { b: { c: { d: { e: { f: { g: 1 } } } } } } } }).ok, false);
+  assert.equal(validate(view, { t: "view", docs: JSON.parse('{"x":{"__proto__":{"y":1}}}') }).ok, false);
+  assert.equal(validate(view, { t: "view", docs: { f: () => 1 } }).ok, false);
+  assert.equal(validate(view, { t: "view", docs: { n: Infinity } }).ok, false);
+  assert.equal(validate(view, { t: "view", docs: new Date() }).ok, false);
 });
 
 test("a hostile payload fuzz never throws and never passes", () => {
