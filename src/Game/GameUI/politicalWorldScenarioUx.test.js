@@ -20,11 +20,14 @@ test("Scenario Politics makes institution authoring guided instead of one raw fo
   const source = read("./InstitutionAuthoringPanel.jsx");
 
   assert.match(source, />Institutions<\/div>/);
-  assert.match(source, />Identity<\/div>/);
-  assert.match(source, />Members<\/div>/);
-  assert.match(source, />Visual identity<\/div>/);
-  assert.match(source, /Type a polity name/);
-  assert.match(source, /Bulk edit member list/);
+  assert.match(source, /Identity & lifecycle/);
+  assert.match(source, /Starting membership/);
+  assert.match(source, /Visual identity/);
+  assert.match(source, /Manage institutions/);
+  assert.match(source, /data-institution-authoring-manager="true"/);
+  assert.match(source, /Search scenario polities/);
+  assert.match(source, /Only canonical polities in this scenario can be added/);
+  assert.match(source, /Advanced bulk edit member list/);
   assert.match(source, /Advanced details/);
 });
 
