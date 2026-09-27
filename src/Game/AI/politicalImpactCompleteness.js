@@ -126,7 +126,7 @@ const COALITION_FORMATION_RE = /(?:\b(?:forms?|formed|establishes?|established)\
 const NONPARTY_GOVERNMENT_RE = /\b(?:provisional|interim|transitional|caretaker|technocratic|non[- ]partisan|partyless|military junta|royal cabinet|royal government|independent cabinet|emergency administration)\b/i;
 const PARTY_CREATION_RE = /(?:\b(?:founds?|founded|forms?|formed|creates?|created|launches?|launched|establishes?|established|organizes?|organized|reorganizes?|reorganized|reconstitutes?|reconstituted)\s+(?:a |the )?(?:new )?(?:political )?(?:party|movement|bloc)\b|\b(?:party|movement|bloc)\s+(?:is\s+)?(?:founded|formed|created|launched|established|reorganized|reconstituted)\b|\b(?:party )?(?:split|merger|merge|merged|breakaway|secession from|renames?|renamed)\b)/i;
 const LEADERSHIP_RE = /\b(?:president|prime minister|chancellor|premier|head of state|head of government|monarch|king|queen|emperor|empress)\b/i;
-const LEADERSHIP_CHANGE_RE = /\b(?:elected|appointed|names?|named|sworn in|takes? office|assumes? office|resigns?|resigned|steps? down|dies?|died|succeeds?|succeeded|replaces?|replaced|ousts?|ousted|deposed|abdicates?|abdicated)\b/i;
+const LEADERSHIP_CHANGE_RE = /\b(?:elected|appointed|names?|named|sworn in|takes? office|assumes? office|resigns?|resigned|steps? down|dies?|died|dead|death|passes? away|assassinated|assassination|killed|murdered|succeeds?|succeeded|replaces?|replaced|ousts?|ousted|deposed|abdicates?|abdicated)\b/i;
 const REGIME_CHANGE_RE = /\b(?:coup|revolution|regime change|overthrows?|overthrown|seizes? power|junta|restoration|restored monarchy|abolishes? the monarchy|dissolves? parliament)\b/i;
 
 const anyOp = (ops, names) => names.some((name) => ops.has(name));
@@ -330,6 +330,109 @@ export const politicalImpactCompletenessIssue = (event, { world = null } = {}) =
   }
 
   return null;
+};
+
+
+export const scriptedPoliticalImpactRequirements = (beats, { world = null } = {}) => list(beats)
+  .map((beat) => {
+    const title = clean(beat?.title) || clean(beat?.text).slice(0, 140) || "untitled scripted event";
+    const event = { title, description: clean(beat?.text), impacts: { politicalActorOps: [] } };
+    const issue = politicalImpactCompletenessIssue(event, { world });
+    return issue ? { beat, issue } : null;
+  })
+  .filter(Boolean);
+
+const officeholderName = (value) => {
+  if (typeof value === "string") return clean(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  return clean(value.name || value.id);
+};
+
+const beatPoliticalText = (beat) => `${clean(beat?.title)} ${clean(beat?.text)}`.trim().toLocaleLowerCase();
+
+const actorReferenceTokens = (polityKey, actor) => {
+  const government = actor?.government && typeof actor.government === "object" ? actor.government : {};
+  const weighted = [
+    [polityKey, 100],
+    [clean(polityKey).replace(/^the\s+/i, ""), 95],
+    [actor?.name, 90],
+    [officeholderName(actor?.leader), 85],
+    [officeholderName(government.headOfState), 85],
+    [officeholderName(government.headOfGovernment), 85],
+    ...list(actor?.parties).flatMap((party) => [
+      [officeholderName(party?.leader), 75],
+      [party?.name, 45],
+      [party?.shortName, 35],
+    ]),
+    ...list(actor?.powerBlocs).flatMap((bloc) => [[bloc?.name, 30], [bloc?.shortName, 25]]),
+  ];
+  return weighted
+    .map(([token, weight]) => [clean(token), weight])
+    .filter(([token]) => token.length >= 3);
+};
+
+const relevantScriptedPoliticalActors = (requirements, world) => {
+  const byPolity = world?.politicalActors?.byPolity && typeof world.politicalActors.byPolity === "object"
+    ? world.politicalActors.byPolity
+    : {};
+  const texts = list(requirements).map(({ beat }) => beatPoliticalText(beat)).filter(Boolean);
+  if (!texts.length) return [];
+  return Object.entries(byPolity)
+    .map(([polityKey, actor]) => {
+      const score = actorReferenceTokens(polityKey, actor).reduce((best, [token, weight]) => (
+        texts.some((text) => text.includes(token.toLocaleLowerCase())) ? Math.max(best, weight) : best
+      ), 0);
+      return { polityKey, actor, score };
+    })
+    .filter((row) => row.score > 0)
+    .sort((left, right) => right.score - left.score || left.polityKey.localeCompare(right.polityKey))
+    .slice(0, 6)
+    .map(({ polityKey, actor }) => [polityKey, actor]);
+};
+
+const scriptedPoliticalActorContext = (requirements, world) => {
+  const selected = relevantScriptedPoliticalActors(requirements, world);
+  if (!selected.length) {
+    return "No exact Political Actor was matched from the scripted-beat text. Use the live canonical context/lookups; do not guess stable party/bloc ids or historical officeholders.";
+  }
+
+  const lines = [
+    "Current canonical Political World references matched to these scripted beats:",
+    "These are the state to simulate FROM. A scripted shock does not freeze the historical downstream settlement. Reuse exact ids and current officeholders where referenced.",
+  ];
+  for (const [polityKey, actor] of selected) {
+    const government = actor?.government && typeof actor.government === "object" ? actor.government : {};
+    const system = actor?.politicalSystem && typeof actor.politicalSystem === "object" ? actor.politicalSystem : {};
+    lines.push(`POLITY: ${polityKey}`);
+    lines.push(`Political system: ${JSON.stringify({ type: system.type || "", representation: system.representation || "", regimeCharacter: system.regimeCharacter || "", publicLabel: system.publicLabel || "" })}`);
+    lines.push(`Current offices: leader=${JSON.stringify(officeholderName(actor?.leader))}; headOfState=${JSON.stringify(officeholderName(government.headOfState))}; headOfGovernment=${JSON.stringify(officeholderName(government.headOfGovernment))}`);
+    lines.push(`Government party ids: ruling=${JSON.stringify(list(government.rulingPartyIds))}; coalition=${JSON.stringify(list(government.coalitionPartyIds))}; coalitionName=${JSON.stringify(clean(government.coalitionName))}`);
+    const parties = list(actor?.parties).slice(0, 12);
+    if (parties.length) {
+      lines.push("Canonical parties:");
+      for (const party of parties) {
+        lines.push(`- id=${JSON.stringify(clean(party?.id))} name=${JSON.stringify(clean(party?.name))} leader=${JSON.stringify(officeholderName(party?.leader))}`);
+      }
+    }
+    const blocs = list(actor?.powerBlocs).slice(0, 8);
+    if (blocs.length) {
+      lines.push("Canonical power blocs:");
+      for (const bloc of blocs) lines.push(`- id=${JSON.stringify(clean(bloc?.id))} name=${JSON.stringify(clean(bloc?.name))}`);
+    }
+  }
+  return lines.join("\n").slice(0, 6000);
+};
+
+export const buildScriptedPoliticalImpactInstruction = (requirements, { world = null } = {}) => {
+  const rows = list(requirements);
+  if (!rows.length) return "";
+  return "[Canonical political requirements for scripted events]\n"
+    + "The scenario-authored beat fixes the shock/outcome explicitly written by the author. Political World still owns the resulting government, leader, party, coalition and political-system state. "
+    + "SIMULATE the immediate political consequences from the CURRENT campaign canon and return the matching politicalActorOps on THAT event. This includes constitutional succession, acting leadership, government/coalition consequences or other structural follow-through when the beat logically establishes them. "
+    + "Do not hardcode the real-history successor or settlement when campaign canon has diverged, and do not rewrite the beat to avoid its authored structural change.\n"
+    + rows.map(({ beat, issue }) => `- ${clean(beat?.date) || "(due date)"} — ${clean(beat?.title) || clean(beat?.text) || "scripted event"}: ${issue.message}`).join("\n")
+    + `\n${scriptedPoliticalActorContext(rows, world)}`
+    + "\nUse the normal politicalActorOps contract and exact native argsJson shapes. If the current canon supports a successor or settlement, encode it rather than merely narrating it. If canon genuinely leaves the consequence unresolved, represent only what is established; never invent a silent state change. A completed structural claim without valid matching operations must remain invalid for the normal corrective path.";
 };
 
 export const validatePoliticalImpactCompleteness = (candidate, { world = null } = {}) => {

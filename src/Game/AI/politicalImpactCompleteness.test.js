@@ -388,3 +388,52 @@ test("a coalition label without stable governing party ids does not count as can
 
   assert.equal(issue?.kind, "government-governing-force");
 });
+
+test("scripted leadership resignation is identified as requiring canonical Political World ops", async () => {
+  const { scriptedPoliticalImpactRequirements, buildScriptedPoliticalImpactInstruction } = await import("./politicalImpactCompleteness.js");
+  const beats = [{ id: "silina-resigns", date: "2026-09-01", title: "Prime Minister Evika Siliņa Resigns", text: "Prime Minister Evika Siliņa resigns after losing coalition support." }];
+  const rows = scriptedPoliticalImpactRequirements(beats, { world: {} });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].issue.kind, "leadership");
+  assert.match(buildScriptedPoliticalImpactInstruction(rows), /matching politicalActorOps on THAT event/i);
+});
+
+test("scripted assassination asks the simulator to derive succession from current Political World", async () => {
+  const { scriptedPoliticalImpactRequirements, buildScriptedPoliticalImpactInstruction } = await import("./politicalImpactCompleteness.js");
+  const beats = [{
+    id: "george-i-assassinated",
+    date: "1913-03-18",
+    title: "George I Assassinated",
+    text: "King George I is assassinated in Thessaloniki.",
+  }];
+  const world = {
+    politicalActors: {
+      byPolity: {
+        Greece: {
+          polityKey: "Greece",
+          leader: { id: "george-i", name: "George I", title: "King of the Hellenes" },
+          politicalSystem: { type: "constitutional_monarchy", representation: "electoral", regimeCharacter: "constitutional", publicLabel: "Constitutional Monarchy" },
+          government: {
+            headOfState: "George I",
+            headOfGovernment: "Eleftherios Venizelos",
+            rulingPartyIds: ["liberal-party"],
+            coalitionPartyIds: [],
+          },
+          parties: [{ id: "liberal-party", name: "Liberal Party", leader: "Eleftherios Venizelos" }],
+        },
+      },
+    },
+  };
+
+  const rows = scriptedPoliticalImpactRequirements(beats, { world });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].issue.kind, "leadership");
+
+  const instruction = buildScriptedPoliticalImpactInstruction(rows, { world });
+  assert.match(instruction, /SIMULATE the immediate political consequences from the CURRENT campaign canon/);
+  assert.match(instruction, /constitutional succession/);
+  assert.match(instruction, /Do not hardcode the real-history successor or settlement/);
+  assert.match(instruction, /POLITY: Greece/);
+  assert.match(instruction, /George I/);
+  assert.match(instruction, /liberal-party/);
+});

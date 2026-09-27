@@ -73,8 +73,9 @@ import {
   stripWorldSweepAudit,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
-import { validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import { buildScriptedPoliticalImpactInstruction, scriptedPoliticalImpactRequirements, validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
+import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
   applyPoliticalActorOperation,
@@ -6404,6 +6405,12 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // deliberately semantic/completeness validation, not a second political engine.
   const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world });
   if (politicalCompletenessError) return politicalCompletenessError;
+
+  // A normal timeline pass cannot independently pronounce an existing native
+  // institution proposal adopted/rejected/etc. Institution governance owns that
+  // terminal fact and emits its own canonical outcome event when the ballot closes.
+  const institutionOutcomeError = generatedInstitutionOutcomeIntegrityIssue(candidate, world);
+  if (institutionOutcomeError) return institutionOutcomeError;
 
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];
@@ -13212,6 +13219,9 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       });
       state.scriptedEventPending = scriptedPlan.pendingState;
       const scriptedBeats = scriptedPlan.eligible;
+      const scriptedPoliticalRequirements = scriptedPoliticalImpactRequirements(scriptedBeats, { world: ledgerWorld });
+      const scriptedPoliticalInstruction = buildScriptedPoliticalImpactInstruction(scriptedPoliticalRequirements, { world: ledgerWorld });
+      state.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements.length > 0;
       const [pacedMin, pacedMax] = segmentCount > 1
         ? segmentEventRange(spanDays, plannedActionShare, { pace: direction?.eventPace, totalDays: safeDays })
         : segmentEventRange(safeDays, plannedActionCount, { pace: direction?.eventPace });
@@ -13308,7 +13318,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         // Only a single-call jump falls back on its own. A failing SEGMENT throws
         // instead, so the catch below can hold the turn and hand the player the
         // choice rather than quietly deciding for them.
-        ...(evaluation || segmentCount > 1
+        ...(evaluation || segmentCount > 1 || scriptedPoliticalRequirements.length
           ? {}
           : { fallback: () => fallbackJumpSimulation({ bundle, days: dateStep || 1, mode, targetDate }) }),
         ...(showEvents ? { onPartialEvents: markStreamedEvents(showEvents, { world: ledgerWorld, game: bundle.game, priorEvents: segmentBundle.events }) } : {}),
@@ -13329,7 +13339,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           targetDate,
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
-        }), buildScriptedEventsInstruction(scriptedBeats), WRITING_REMINDER].filter(Boolean).join("\n\n"),
+        }), buildScriptedEventsInstruction(scriptedBeats), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
         validatePayload: withReceiptDraft(async (candidate, { finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
           // retry remains — the model gets the exact error and usually fixes its
@@ -13555,6 +13565,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     // is no other segment to keep and nothing to retry piecemeal: it falls back
     // for the whole period exactly as it always did.
     if (segmentCount <= 1) {
+      if (state.structuralScriptedFallbackBlocked) throw error;
       console.warn(`[ai] the jump failed (${reason}) — falling back for the whole period.`);
       logDebugEvent("warn", "[turn] The jump failed; it falls back.", { reason });
       state.segmentPayloads.length = 0;

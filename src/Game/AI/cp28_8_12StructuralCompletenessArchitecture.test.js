@@ -50,3 +50,10 @@ test("GM and ordinary turn prompts share the native politicalActorOps argsJson g
   assert.match(gameplay, /POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE/);
   assert.match(gameplay, /Never guess the decoded argsJson shape/);
 });
+
+test("structural scripted political beats block prose-only deterministic fallback", () => {
+  assert.match(gameplay, /scriptedPoliticalImpactRequirements\(scriptedBeats/);
+  assert.match(gameplay, /buildScriptedPoliticalImpactInstruction\(scriptedPoliticalRequirements,\s*\{\s*world:\s*ledgerWorld\s*\}\)/);
+  assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0/);
+  assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked\) throw error/);
+});
