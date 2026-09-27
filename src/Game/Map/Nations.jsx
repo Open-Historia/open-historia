@@ -463,9 +463,18 @@ const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
 // MapLibre requires camera expressions to keep ["zoom"] as the direct input
 // of the top-level step/interpolate expression. Data-driven visibility therefore
 // belongs in each stop output, never around the zoom ramp with a top-level case.
-// A scenario showing relief tiles may pass its own lighter stops
-// (Map/scenarioTerrain.js); everything else uses the ramp above.
-const buildPoliticalFillOpacity = (hiddenExpression = null, stops = POLITICAL_FILL_OPACITY_STOPS) => [
+const buildPoliticalFillOpacity = (hiddenExpression = null) => [
+  "interpolate", ["linear"], ["zoom"],
+  ...POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
+    zoom,
+    hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
+  ]),
+];
+
+// The same expression over a scenario's own lighter stops, used only while its
+// relief tiles are on screen (Map/scenarioTerrain.js). Same shape: zoom stays
+// the top-level input, visibility lives in each stop.
+const buildScenarioReliefFillOpacity = (stops, hiddenExpression = null) => [
   "interpolate", ["linear"], ["zoom"],
   ...stops.flatMap(([zoom, opacity]) => [
     zoom,
@@ -3124,7 +3133,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const shownRelief = useSyncExternalStore(subscribeShownRelief, getShownRelief, getShownRelief);
   const reliefFillStops = shownRelief?.fillOpacity || null;
   const politicalFillOpacity = useMemo(
-    () => (reliefFillStops ? buildPoliticalFillOpacity(null, reliefFillStops) : POLITICAL_FILL_OPACITY),
+    () => (reliefFillStops ? buildScenarioReliefFillOpacity(reliefFillStops) : POLITICAL_FILL_OPACITY),
     [reliefFillStops],
   );
   const stockRegionsFillPaint = useMemo(
@@ -3139,11 +3148,13 @@ const WorldMap = ({ isGlobe = false }) => {
     [customActive, politicalFillOpacity],
   );
   const transitionAwareFillOpacity = useMemo(() => (customFlag
-    ? buildPoliticalFillOpacity([
+    ? (reliefFillStops
+      ? buildScenarioReliefFillOpacity(reliefFillStops, ["boolean", ["feature-state", "ownershipTransitionHidden"], false])
+      : buildPoliticalFillOpacity([
         "boolean",
         ["feature-state", "ownershipTransitionHidden"],
         false,
-      ], reliefFillStops || undefined)
+      ]))
     : 0), [customFlag, reliefFillStops]);
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
