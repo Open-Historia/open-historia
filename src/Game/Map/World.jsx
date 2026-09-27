@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
-import { buildScenarioTerrainStyle } from "./scenarioTerrain.js";
+import { buildScenarioTerrainStyle, publishShownRelief } from "./scenarioTerrain.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
@@ -611,6 +611,13 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const validBasemapOverride = isBuiltinBasemapId(basemapOverride) ? basemapOverride : "";
   const useScenarioBackground = !validBasemapOverride;
   const effectiveCustomBg = useScenarioBackground ? customBg : null;
+  // Tell the political layers whether relief tiles are actually on screen, so
+  // a scenario's lighter fill ramp applies only then (Map/scenarioTerrain.js).
+  const shownRelief = effectiveCustomBg?.terrain || null;
+  useEffect(() => {
+    publishShownRelief(shownRelief);
+    return () => publishShownRelief(null);
+  }, [shownRelief]);
   const effectiveBgDeclared = useScenarioBackground ? bgDeclared : false;
   const effectiveBasemap = resolveBasemapId({
     overrideId: validBasemapOverride,

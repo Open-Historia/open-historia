@@ -6,6 +6,9 @@ import {
   SCENARIO_TERRAIN_PAINTED,
   buildScenarioTerrainStyle,
   createReliefTileLoader,
+  getShownRelief,
+  publishShownRelief,
+  subscribeShownRelief,
   normalizeScenarioTerrain,
   wantsScenarioTerrain,
 } from "./scenarioTerrain.js";
@@ -63,4 +66,30 @@ test("a relief tile the archive lacks comes back transparent, never empty", asyn
   assert.deepEqual([...present.data], [1, 2, 3]);
   // A PNG: without a body MapLibre leaves the tile loading and the map never idles.
   assert.deepEqual([...missing.data.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+});
+
+test("a scenario's lighter fill ramp is kept only when it is a clean list of rising stops", () => {
+  const ramp = [[1.5, 0.46], [5, 0.44], [8, 0.28], [14, 0.24]];
+  assert.deepEqual(normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: ramp } }).fillOpacity, ramp);
+  assert.deepEqual(
+    normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: [[2, 0], [9, 3]] } }).fillOpacity,
+    [[2, 0.05], [9, 1]],
+    "opacities clamp so owners never vanish entirely",
+  );
+  for (const bad of [[[5, 0.4]], [[5, 0.4], [3, 0.3]], [[5, 0.4], ["x", 0.3]], "0.3", {}]) {
+    assert.equal(normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: bad } }).fillOpacity, undefined);
+  }
+});
+
+test("the shown relief is shared with subscribers and cleared back to none", () => {
+  let calls = 0;
+  const unsubscribe = subscribeShownRelief(() => { calls += 1; });
+  publishShownRelief({ minzoom: 0, maxzoom: 8, fillOpacity: [[1, 0.5], [8, 0.3]] });
+  publishShownRelief({ minzoom: 0, maxzoom: 8, fillOpacity: [[1, 0.5], [8, 0.3]] });
+  assert.deepEqual(getShownRelief().fillOpacity, [[1, 0.5], [8, 0.3]]);
+  assert.equal(calls, 1, "an unchanged relief does not re-render the political layers");
+  publishShownRelief(null);
+  assert.equal(getShownRelief(), null);
+  assert.equal(calls, 2);
+  unsubscribe();
 });

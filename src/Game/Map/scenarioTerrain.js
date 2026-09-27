@@ -26,6 +26,23 @@ const validBounds = (value) => Array.isArray(value)
   && Number(value[0]) < Number(value[2])
   && Number(value[1]) < Number(value[3]);
 
+// How strongly owners' colours cover the relief, by zoom: [[zoom, opacity], …].
+// Relief is detail, and the default ramp (Nations.jsx) thickens the political
+// fill to ~0.8 up close, which buries it. A scenario may ask for a lighter ramp;
+// it applies only while its relief is on screen. At least two stops, zooms
+// strictly rising, opacities 0.05–1; anything else is ignored.
+const normalizeFillOpacityStops = (value) => {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 16) return null;
+  const stops = [];
+  for (const stop of value) {
+    const zoom = Number(stop?.[0]), opacity = Number(stop?.[1]);
+    if (!Number.isFinite(zoom) || !Number.isFinite(opacity) || zoom < 0 || zoom > 24) return null;
+    if (stops.length && zoom <= stops[stops.length - 1][0]) return null;
+    stops.push([zoom, Math.max(0.05, Math.min(1, opacity))]);
+  }
+  return stops;
+};
+
 // The descriptor's terrain block as the map needs it, or null when the scenario
 // declares none. Only a vector background can carry relief tiles: an image
 // background already replaces the whole map.
@@ -34,12 +51,31 @@ export const normalizeScenarioTerrain = (descriptor) => {
   if (!terrain || typeof terrain !== "object" || Array.isArray(terrain)) return null;
   const minzoom = clampZoom(terrain.minzoom, 0);
   const maxzoom = Math.max(minzoom, clampZoom(terrain.maxzoom, 8));
+  const fillOpacity = normalizeFillOpacityStops(terrain.fillOpacity);
   return {
     minzoom,
     maxzoom,
     ...(validBounds(terrain.bounds) ? { bounds: terrain.bounds.map(Number) } : {}),
+    ...(fillOpacity ? { fillOpacity } : {}),
   };
 };
+
+// The relief the map is showing right now (World.jsx publishes it once the
+// archive has opened; null when none, or Painted), so the political layers
+// (Nations.jsx) can use the scenario's lighter fill ramp only while it shows.
+let shownRelief = null;
+const reliefListeners = new Set();
+export const publishShownRelief = (terrain) => {
+  const next = terrain || null;
+  if (JSON.stringify(next) === JSON.stringify(shownRelief)) return;
+  shownRelief = next;
+  for (const listener of reliefListeners) listener();
+};
+export const subscribeShownRelief = (listener) => {
+  reliefListeners.add(listener);
+  return () => reliefListeners.delete(listener);
+};
+export const getShownRelief = () => shownRelief;
 
 // Whether this player wants relief tiles at all (the Settings → Map choice).
 export const wantsScenarioTerrain = (setting) => setting !== SCENARIO_TERRAIN_PAINTED;
