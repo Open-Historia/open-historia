@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
+import { buildScenarioTerrainStyle } from "./scenarioTerrain.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
@@ -332,9 +333,13 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
     };
   }
   if (customBg?.kind === "vector" && customBg.geojson) {
+    // Relief tiles, when the scenario ships them and the player wants them, draw
+    // over the vector shapes; the shapes stay beneath as the fallback wherever a
+    // tile is missing (Map/scenarioTerrain.js).
+    const relief = buildScenarioTerrainStyle(customBg.terrain, customBg.terrain?.url);
     return {
       version: 8,
-      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson } },
+      sources: { "custom-bg-vec": { type: "geojson", data: customBg.geojson }, ...relief.sources },
       layers: [
         { id: "custom-bg-sea", type: "background", paint: { "background-color": "#0b1a2b" } },
         // A fill layer only draws (Multi)Polygons, so no geometry-type filter is
@@ -343,6 +348,7 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
         // its own biome colour in `fill`.
         { id: "custom-bg-fill", type: "fill", source: "custom-bg-vec", paint: { "fill-color": ["coalesce", ["get", "fill"], "#33435c"] } },
         { id: "custom-bg-line", type: "line", source: "custom-bg-vec", paint: { "line-color": "rgba(0,0,0,0.18)", "line-width": 0.4 } },
+        ...relief.layers,
       ],
       sky: { "atmosphere-blend": 0 },
     };
@@ -745,7 +751,11 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const basemapRenderKey = buildBasemapRenderKey({
     projection,
     basemapId: effectiveBasemap,
-    backgroundKind: effectiveBgDeclared ? effectiveCustomBg?.kind || "declared" : "builtin",
+    // Relief tiles on or off is a different style too: remount rather than swap
+    // sources under a live React Source tree.
+    backgroundKind: effectiveBgDeclared
+      ? `${effectiveCustomBg?.kind || "declared"}${effectiveCustomBg?.terrain ? "+relief" : ""}`
+      : "builtin",
   });
   // Remount once the remote vector style becomes ready. MapLibre style swaps
   // otherwise destroy/recreate style-owned layers under a live React Source

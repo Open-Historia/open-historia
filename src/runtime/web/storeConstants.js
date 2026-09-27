@@ -32,7 +32,7 @@ export const CORE_JSON_ASSET_KEYS = ["game", "prompts", "world"];
 export const JSON_ASSET_KEYS = [...STORAGE_JSON_ASSET_KEYS, ...CORE_JSON_ASSET_KEYS];
 export const OPTIONAL_JSON_ASSET_KEYS = ["colors", "flags", "tags", "stats", "institutionLogos"];
 export const RUNTIME_ONLY_JSON_ASSET_KEYS = ["snapshots", "intercepts"];
-export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions"];
+export const PMTILES_ASSET_KEYS = ["cities", "countries", "regions", "terrain"];
 export const SCENARIO_GEOJSON_ASSET_KEYS = ["regionsGeojson", "citiesGeojson", "backgroundData"];
 // Order matters for assetStatus (Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)).
 export const UPLOADABLE_SCENARIO_ASSET_KEYS = [

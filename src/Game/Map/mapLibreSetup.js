@@ -8,6 +8,7 @@
 // map exists; each is idempotent.
 import mapLibreGl from "maplibre-gl";
 import { basemapTileLoader, pmtilesProtocol } from "../../runtime/assets.js";
+import { RELIEF_PROTOCOL, createReliefTileLoader } from "./scenarioTerrain.js";
 import { isConstrainedDevice, mapRuntimeLimits } from "../../runtime/deviceProfile.js";
 
 const { addProtocol, setMaxParallelImageRequests, setWorkerCount } = mapLibreGl;
@@ -33,6 +34,9 @@ export const configureMapRuntime = () => {
 export const ensurePmtilesProtocol = () => {
   if (!pmtilesRegistered) {
     addProtocol("pmtiles", pmtilesProtocol.tile.bind(pmtilesProtocol));
+    // A scenario's relief tiles: the same archives, gaps answered transparent
+    // (Map/scenarioTerrain.js).
+    addProtocol(RELIEF_PROTOCOL, createReliefTileLoader(pmtilesProtocol.tilev4.bind(pmtilesProtocol)));
     pmtilesRegistered = true;
   }
   return pmtilesProtocol;

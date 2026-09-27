@@ -23,6 +23,7 @@ Every runtime asset the map depends on, with its physical filename, MIME, and ho
 | Nation flags | `flags` | `flags.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/flags` | Owner code → PNG data URL; `{}` when absent |
 | Nation tags | `tags` | `tags.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/tags` | Owner code → `string[]`; **starting** tags only (merge with `world.countryTags`) |
 | Map background | `backgroundData` | `background.json` (per-scenario) | Scenario dir | `GET /api/runtime/json/backgroundData` | Heavy `{dataUrl}`/`{geojson}` payload; loaded only when `world.background` set |
+| Relief tiles | `terrain` | `terrain.pmtiles` (per-scenario, raster) | Scenario dir only — **no stock archive** | `GET /api/runtime/pmtiles/terrain` | Raster relief drawn over a vector background when `world.background.terrain` declares it and the player has not picked Painted (Settings → Map). A scenario without one answers 404 and keeps its vector background — see [Game map §3](game-map.md#3-the-base-style-buildworldstyle) |
 | World state | `world` | `world.json` (per-game/scenario) | Game dir, else scenario | `GET /api/runtime/json/world` | The live simulation document — see [World state](world-state.md) |
 | Runtime game JSON | `game`, `events`, `chat`, `actions`, `advisor`, `prompts`, `snapshots` | under game `storage/` | Game dir | `GET/PUT /api/runtime/json/<key>` | Per-game session state; polled ~5s |
 

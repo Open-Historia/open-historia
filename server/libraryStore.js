@@ -440,6 +440,11 @@ const PMTILES_ASSET_FILES = {
   cities: "cities.pmtiles",
   countries: "countries.pmtiles",
   regions: "regions.pmtiles",
+  // A scenario's own raster relief tiles, drawn over its vector background when
+  // world.background.terrain declares them. Scenario-only: there is no stock
+  // archive, so a scenario without one answers 404 and the game keeps the
+  // vector background (src/Game/Map/scenarioTerrain.js).
+  terrain: "terrain.pmtiles",
 };
 
 // Custom geometry authored in the map editor. Stored per-scenario (static map
@@ -3539,6 +3544,7 @@ const exportScenarioBundle = (scenarioId) => {
       stats: buildScenarioBundleAsset(scenarioId, "stats"),
       countries: buildScenarioBundleAsset(scenarioId, "countries"),
       regions: buildScenarioBundleAsset(scenarioId, "regions"),
+      terrain: buildScenarioBundleAsset(scenarioId, "terrain"),
       regionsGeojson: buildScenarioBundleAsset(scenarioId, "regionsGeojson"),
       citiesGeojson: buildScenarioBundleAsset(scenarioId, "citiesGeojson"),
       // The custom map background travels with the scenario (always embedded, like

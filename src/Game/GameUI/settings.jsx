@@ -70,6 +70,7 @@ import {
     setStoredLanguage,
 } from "../../runtime/i18n.js";
 import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { SCENARIO_TERRAIN_PAINTED } from "../Map/scenarioTerrain.js";
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -2004,6 +2005,8 @@ const SettingsWorkspace = ({
     updateMapSetting,
     basemapStyle,
     updateBasemapStyle,
+    scenarioTerrain,
+    updateScenarioTerrain,
     labelFont,
     updateLabelFont,
     telemetryOn,
@@ -2117,6 +2120,14 @@ const SettingsWorkspace = ({
                             {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
                         </select>
                         <div style={helperStyle}>Scenario default uses the map chosen by the scenario author. Overrides apply immediately.</div>
+                    </div>
+                    <div style={fieldGroupStyle}>
+                        <label style={labelStyle} htmlFor="game-scenario-terrain">Scenario terrain</label>
+                        <select id="game-scenario-terrain" value={scenarioTerrain} onChange={(event) => updateScenarioTerrain(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                            <option value="" style={{ color: "black" }}>Relief (detailed, when the scenario has it)</option>
+                            <option value={SCENARIO_TERRAIN_PAINTED} style={{ color: "black" }}>Painted</option>
+                        </select>
+                        <div style={helperStyle}>For scenarios with their own map. Relief stays sharp when zoomed in; Painted is lighter. Scenarios without relief always use Painted.</div>
                     </div>
                     {/* Labels rasterize from the player's LOCAL fonts (the style
                         has no glyph server), so any installed family works - the
@@ -2404,6 +2415,8 @@ const SettingsMenu = ({
     // scenario's own), read live so the picker follows a change made elsewhere.
     const storedBasemapStyle = useMapSettingValue(MAP_SETTING_KEYS.basemapStyle);
     const basemapStyle = isBuiltinBasemapId(storedBasemapStyle) ? storedBasemapStyle : "";
+    // Relief tiles or the painted vector map, for scenarios that ship both.
+    const scenarioTerrain = useMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain) === SCENARIO_TERRAIN_PAINTED ? SCENARIO_TERRAIN_PAINTED : "";
 
     const [mapSettings, setMapSettingsState] = useState(() => ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
@@ -2427,6 +2440,7 @@ const SettingsMenu = ({
         setMapSettingsState((current) => ({ ...current, [stateKey]: value }));
     };
     const updateBasemapStyle = (value) => setMapSettingValue(MAP_SETTING_KEYS.basemapStyle, value);
+    const updateScenarioTerrain = (value) => setMapSettingValue(MAP_SETTING_KEYS.scenarioTerrain, value);
 
     useEffect(() => {
         const onUpdateCheckResult = (event) => setUpdateCheckResult(event?.detail || { status: "error" });
@@ -2513,6 +2527,8 @@ const SettingsMenu = ({
             updateMapSetting={updateMapSetting}
             basemapStyle={basemapStyle}
             updateBasemapStyle={updateBasemapStyle}
+            scenarioTerrain={scenarioTerrain}
+            updateScenarioTerrain={updateScenarioTerrain}
             labelFont={labelFontShown}
             updateLabelFont={updateLabelFont}
             telemetryOn={telemetryOn}
