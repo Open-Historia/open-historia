@@ -3,7 +3,7 @@
  */
 
 import { institutionStrategicPriority, institutionsForPolity, normalizeInstitutions, resolveInstitutionRecord } from "./institutions.js";
-import { institutionCanProposeAmendment, institutionCanTableProposal } from "./institutionalGovernance.js";
+import { institutionCanCallProposalVote, institutionCanProposeAmendment, institutionCanTableProposal } from "./institutionalGovernance.js";
 
 const UNTITLED_PROPOSAL_LABEL = "Untitled proposal";
 
@@ -109,9 +109,10 @@ export const buildInstitutionProposalView = (institution, proposal, playerCountr
     createdBy: clean(proposal?.createdBy),
     lastUpdatedDate: clean(proposal?.lastUpdatedDate || proposal?.voting?.closedDate || proposal?.voting?.openedDate || proposal?.createdDate),
     playerSponsor,
-    playerCanSubmitForVote: playerSponsor
-      && ["debate", "formalized"].includes(lower(proposal?.status))
-      && unresolvedAmendments === 0,
+    playerCanCallVote: institutionCanCallProposalVote(institution, playerCountry, proposal),
+    // Compatibility projection for UI/Advisor paths that still use the older
+    // name. This now describes legal player procedure, not proposal ownership.
+    playerCanSubmitForVote: institutionCanCallProposalVote(institution, playerCountry, proposal),
   };
 };
 

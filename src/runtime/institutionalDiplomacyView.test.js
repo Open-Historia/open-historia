@@ -59,6 +59,20 @@ test("proposal presentation identifies sponsor-owned debate motions without gran
 
 
 
+test("proposal presentation lets an eligible player call a vote on another member's ready motion", () => {
+  const proposalWorld = structuredClone(world);
+  proposalWorld.institutions.byId.union.proposals.foreignMotion = {
+    id: "foreign-motion", title: "Foreign Motion", type: "resolution", status: "debate",
+    createdBy: "B", sponsorPolities: ["B"], amendments: [],
+  };
+  const view = buildInstitutionDiplomacyView({ world: proposalWorld, institutionId: "union", playerCountry: "Player" });
+  const motion = view.proposals.find((entry) => entry.id === "foreign-motion");
+  assert.equal(motion.playerSponsor, false);
+  assert.equal(motion.playerCanCallVote, true);
+  assert.equal(motion.playerCanSubmitForVote, true, "legacy affordance mirrors the native call-vote right");
+});
+
+
 test("amendment presentation exposes only authority-safe player actions", () => {
   const amendmentWorld = structuredClone(world);
   amendmentWorld.institutions.byId.union.proposals.motion = {

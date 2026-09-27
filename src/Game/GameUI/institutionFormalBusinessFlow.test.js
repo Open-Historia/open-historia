@@ -14,12 +14,18 @@ test("institution agenda offers an explicit debate-first or immediate-vote path"
   assert.match(source, /onRequestCouncilTurn\?\.\(\{ institutionId, proposalId, kind: mode === "vote" \? "vote" : "debate"/);
 });
 
-test("a sponsor can call a native vote with an optional Council closing comment", () => {
+test("an eligible player member can call a native vote with an optional Council closing comment", () => {
   const source = read("./InstitutionsWorkspace.jsx");
+  const view = read("../../runtime/institutionalDiplomacyView.js");
+  const governance = read("../../runtime/institutionalGovernance.js");
   assert.match(source, /data-institution-call-vote="true"/);
+  assert.match(source, /proposal\.playerCanSubmitForVote/);
+  assert.match(view, /playerCanSubmitForVote: institutionCanCallProposalVote/);
   assert.match(source, /Closing comment before the vote \(optional\)/);
   assert.match(source, />Call vote<\/button>/);
   assert.match(source, /commitInstitutionalPlayerVoteRequest/);
+  assert.match(governance, /command: \{ type: "call-vote", proposalId, caller: player \}/);
+  assert.match(governance, /institutionCanCallProposalVote/);
   assert.match(source, /playerComment, source: "call-vote"/);
 });
 

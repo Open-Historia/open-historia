@@ -467,3 +467,30 @@ test("a founding negotiation is response-complete after every invitee accepts or
   });
   assert.equal(context.text, "");
 });
+
+test("player can withdraw a pending accession application and its ballot is closed as withdrawn", () => {
+  const founded = foundBaltic([]);
+  const institutionId = founded.institution.id;
+  const externalWorld = structuredClone(founded.world);
+  externalWorld.institutions.byId[institutionId] = {
+    ...externalWorld.institutions.byId[institutionId],
+    members: [{ polity: "Republic of Estonia", status: "member", role: "leader", sinceDate: "2014-08-20" }],
+    leaders: ["Republic of Estonia"],
+  };
+  const application = applyInstitutionLifecycleCommandCore({
+    world: externalWorld, playerCountry: "Republic of Latvia", date: "2014-09-05",
+    command: { type: "apply", institutionId, requestedStatus: "member", reason: "Riga seeks accession." },
+  });
+  const cancelled = applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-09-06",
+    command: { type: "cancel-application", institutionId, caseId: application.lifecycleCase.id, polity: "Republic of Latvia", authority: "player" },
+  });
+  assert.equal(cancelled.lifecycleCase.status, "withdrawn");
+  assert.equal(cancelled.proposal.status, "withdrawn");
+  assert.equal(cancelled.proposal.voting.closedDate, "2014-09-06");
+  assert.equal(cancelled.institution.members.some((entry) => entry.polity === "Republic of Latvia"), false);
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: cancelled.world, playerCountry: "Republic of Latvia", date: "2014-09-07",
+    command: { type: "cancel-application", institutionId, caseId: application.lifecycleCase.id, polity: "Republic of Latvia", authority: "player" },
+  }), /no longer pending/i);
+});

@@ -7,9 +7,11 @@ import {
   applyInstitutionalPlayerMessage,
   castInstitutionProposalVote,
   castInstitutionProposalVoteBatch,
+  callInstitutionProposalVote,
   closeInstitutionProposalVoting,
   createInstitutionProposal,
   institutionEligibleVoters,
+  institutionCanCallProposalVote,
   institutionCanTableProposal,
   institutionCanProposeAmendment,
   implementInstitutionProposal,
@@ -715,6 +717,24 @@ test("only a current canonical sponsor may submit an existing proposal for forma
     world: result.world, institutionId: "council", proposalId: result.proposal.id, requester: "B", date: "2000-01-02",
   });
   assert.equal(opened.proposal.status, "voting");
+  assert.deepEqual(opened.proposal.voting.eligibleVoters, ["A", "B", "C"]);
+});
+
+
+test("an eligible member may call a ready foreign-sponsored proposal to vote without taking sponsorship", () => {
+  const lodged = lodgeInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", proposer: "B", date: "2000-01-01",
+    proposal: { id: "member-call-vote", title: "Member Call Vote", type: "program", summary: "Test player procedural authority." },
+  });
+  const before = lodged.world.institutions.byId.council.proposals[lodged.proposal.id];
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "C", before), true);
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "D", before), false, "observer status is not proposal-eligible under the member-only rule");
+  const opened = callInstitutionProposalVote({
+    world: lodged.world, institutionId: "council", proposalId: lodged.proposal.id, caller: "C", date: "2000-01-02",
+  });
+  assert.equal(opened.proposal.status, "voting");
+  assert.equal(opened.proposal.createdBy, "B");
+  assert.deepEqual(opened.proposal.sponsorPolities, ["B"]);
   assert.deepEqual(opened.proposal.voting.eligibleVoters, ["A", "B", "C"]);
 });
 

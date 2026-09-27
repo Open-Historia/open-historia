@@ -170,3 +170,11 @@ test("institution workspace keeps a readable typography floor across every tab",
   const tooSmall = sizes.filter((size) => Number.isFinite(size) && size < 0.58);
   assert.deepEqual(tooSmall, []);
 });
+
+test("pending player accession applications expose a native withdraw-application recovery action", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  assert.match(source, /data-player-application-cancel-controls="true"/);
+  assert.match(source, /Withdraw application/);
+  assert.match(source, /type: "cancel-application"/);
+  assert.match(source, /canCancelApplication=/);
+});
