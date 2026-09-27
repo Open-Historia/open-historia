@@ -1386,6 +1386,13 @@ export const applyInstitutionalChatGovernanceBatch = ({
   const applied = [];
   const rejected = [];
   for (const action of list(formalActions)) {
+    if (action?.type === "institution_invalid") {
+      rejected.push({
+        action,
+        reason: clean(action?.validationError) || `${clean(action?.rawType) || "institution action"} is malformed.`,
+      });
+      continue;
+    }
     const actorToken = clean(action?.actorName);
     const polity = actorByFold.get(lower(actorToken));
     if (!polity) {
@@ -1433,6 +1440,59 @@ export const applyInstitutionalChatGovernanceBatch = ({
       applied.push({ action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null });
     } catch (error) {
       rejected.push({ action, reason: clean(error?.message || error) || "formal institutional action was refused" });
+    }
+  }
+
+  // Formal state is the authority. If an actor's generated formal action was
+  // malformed or refused, do not keep that same turn's generated speech as if
+  // the legal act had succeeded. Drop only the current batch's messages from
+  // those actors and replace them with one native, explicit refusal notice.
+  // This is actor/action association, not prose parsing: arbitrary languages
+  // and phrasings cannot turn a rejected mutation into apparent canon.
+  if (rejected.length && list(chatEvents).length) {
+    const rejectedActors = new Map();
+    for (const entry of rejected) {
+      const actorName = clean(entry?.action?.actorName);
+      const actorKey = lower(actorName);
+      if (!actorKey) continue;
+      const row = rejectedActors.get(actorKey) || { name: actorName, reasons: [] };
+      const reason = clean(entry?.reason) || "formal action was refused";
+      if (!row.reasons.includes(reason)) row.reasons.push(reason);
+      rejectedActors.set(actorKey, row);
+    }
+    const rejectedMessageIds = new Set(list(chatEvents)
+      .filter((event) => rejectedActors.has(lower(event?.by)))
+      .map((event) => clean(event?.id))
+      .filter(Boolean));
+    if (rejectedMessageIds.size) {
+      chats = chats.map((chat) => clean(chat?.id) === clean(materialized.channel.id)
+        ? (normalizeChatEntry({
+          ...chat,
+          events: list(chat?.events).filter((event) => !rejectedMessageIds.has(clean(event?.id))),
+          messages: list(chat?.messages).filter((message) => !rejectedMessageIds.has(clean(message?.id))),
+        }) || chat)
+        : chat);
+    }
+    const groups = new Map();
+    for (const row of rejectedActors.values()) {
+      for (const reason of row.reasons) {
+        const names = groups.get(reason) || [];
+        if (!names.includes(row.name)) names.push(row.name);
+        groups.set(reason, names);
+      }
+    }
+    const parts = [...groups.entries()].slice(0, 4).map(([reason, names]) => {
+      const shown = names.slice(0, 4);
+      const actorText = `${shown.join(", ")}${names.length > shown.length ? ` +${names.length - shown.length} more` : ""}`;
+      return `${actorText}: ${reason}`;
+    });
+    if (parts.length) {
+      chats = appendInstitutionSystemMessage(
+        chats,
+        materialized.channel.id,
+        `Formal business was not recorded — ${parts.join("; ")}`,
+        date,
+      );
     }
   }
 
