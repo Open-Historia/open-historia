@@ -62,7 +62,8 @@ test("a relief tile the archive lacks comes back transparent, never empty", asyn
   });
   const present = await load({ url: "ohrelief://http://x/terrain/5/1/1", type: "arrayBuffer" }, new AbortController());
   const missing = await load({ url: "ohrelief://http://x/terrain/5/2/2", type: "arrayBuffer" }, new AbortController());
-  assert.deepEqual(seen, ["pmtiles://http://x/terrain/5/1/1", "pmtiles://http://x/terrain/5/2/2"], "asks pmtiles for the same archive");
+  assert.deepEqual(seen.slice(0, 2), ["pmtiles://http://x/terrain/5/1/1", "pmtiles://http://x/terrain/5/2/2"], "asks pmtiles for the same archive");
+  assert.deepEqual(seen.slice(2), ["pmtiles://http://x/terrain/4/1/1", "pmtiles://http://x/terrain/3/0/0", "pmtiles://http://x/terrain/2/0/0", "pmtiles://http://x/terrain/1/0/0", "pmtiles://http://x/terrain/0/0/0"], "then its ancestors, none of which exist");
   assert.deepEqual([...present.data], [1, 2, 3]);
   // A PNG: without a body MapLibre leaves the tile loading and the map never idles.
   assert.deepEqual([...missing.data.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
@@ -92,4 +93,32 @@ test("the shown relief is shared with subscribers and cleared back to none", () 
   assert.equal(getShownRelief(), null);
   assert.equal(calls, 2);
   unsubscribe();
+});
+
+test("a missing relief tile is drawn from its nearest ancestor, cropped to the right quarter", async () => {
+  const asked = [];
+  const upscales = [];
+  const load = createReliefTileLoader(async (params) => {
+    asked.push(params.url);
+    // Only zoom 9 exists: deeper detail was rendered just around cities.
+    return /\/9\/\d+\/\d+$/.test(params.url) ? { data: new Uint8Array([9]) } : { data: null };
+  }, { upscale: async (bytes, levels, ox, oy) => { upscales.push([[...bytes], levels, ox, oy]); return new Uint8Array([7, 7]); } });
+  const tile = await load({ url: "ohrelief://http://x/terrain/11/1135/1002", type: "arrayBuffer" }, new AbortController());
+  assert.deepEqual([...tile.data], [7, 7]);
+  assert.deepEqual(asked, [
+    "pmtiles://http://x/terrain/11/1135/1002",
+    "pmtiles://http://x/terrain/10/567/501",
+    "pmtiles://http://x/terrain/9/283/250",
+  ]);
+  // 1135 = 283·4 + 3, 1002 = 250·4 + 2: the child sits at column 3, row 2 of the ancestor.
+  assert.deepEqual(upscales, [[[9], 2, 3, 2]]);
+});
+
+test("with no ancestor, or no way to scale one, a missing relief tile is transparent", async () => {
+  const none = createReliefTileLoader(async () => ({ data: null }), { upscale: async () => new Uint8Array([1]) });
+  const empty = await none({ url: "ohrelief://http://x/terrain/5/3/3" }, new AbortController());
+  assert.deepEqual([...empty.data.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+  const cannotScale = createReliefTileLoader(async (p) => (p.url.endsWith("/4/1/1") ? { data: new Uint8Array([4]) } : { data: null }), { upscale: async () => null });
+  const fallback = await cannotScale({ url: "ohrelief://http://x/terrain/5/3/3" }, new AbortController());
+  assert.deepEqual([...fallback.data.slice(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
 });

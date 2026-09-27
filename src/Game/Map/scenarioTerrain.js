@@ -81,11 +81,17 @@ export const getShownRelief = () => shownRelief;
 export const wantsScenarioTerrain = (setting) => setting !== SCENARIO_TERRAIN_PAINTED;
 
 // ohrelief:// is pmtiles:// for relief tiles, except that a tile the archive
-// does not have comes back transparent. pmtiles answers a missing raster tile
+// does not have is never answered empty. pmtiles answers a missing raster tile
 // with no data, and MapLibre leaves such a tile "loading" forever: the map never
-// goes idle and the game's loading screen never clears. An archive with gaps —
-// open sea is the obvious one — must show the vector background there instead.
+// goes idle and the game's loading screen never clears.
+//
+// A missing tile is drawn from its nearest ancestor instead (cropped and scaled
+// up), so an archive may be sparse at its deepest zooms — a scenario can ship
+// extra detail only around its cities — and still cover everywhere else with
+// the best tile it has. With no ancestor either (open sea), the tile is
+// transparent and the vector background shows.
 export const RELIEF_PROTOCOL = "ohrelief";
+const MAX_ANCESTOR_LEVELS = 6;
 const TRANSPARENT_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 const transparentPng = () => {
   const text = atob(TRANSPARENT_PNG_BASE64);
@@ -94,10 +100,44 @@ const transparentPng = () => {
   return bytes;
 };
 
+// The part of an ancestor tile that covers a descendant `levels` below it, at
+// (ox, oy) among its 2^levels × 2^levels children, scaled up to a full tile.
+// Browser-only (createImageBitmap + OffscreenCanvas); null where unavailable.
+export const upscaleAncestorTile = async (bytes, levels, ox, oy) => {
+  if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") return null;
+  const image = await createImageBitmap(new Blob([bytes]));
+  try {
+    const span = image.width / 2 ** levels;
+    const canvas = new OffscreenCanvas(image.width, image.height);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(image, ox * span, oy * span, span, span, 0, 0, image.width, image.height);
+    const blob = await canvas.convertToBlob({ type: "image/png" });
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    image.close?.();
+  }
+};
+
 // MapLibre protocol handler over the pmtiles one (Protocol#tilev4).
-export const createReliefTileLoader = (pmtilesTile) => async (params, abortController) => {
-  const response = await pmtilesTile({ ...params, url: String(params.url).replace(`${RELIEF_PROTOCOL}://`, "pmtiles://") }, abortController);
-  return response?.data ? response : { data: transparentPng() };
+export const createReliefTileLoader = (pmtilesTile, { upscale = upscaleAncestorTile } = {}) => async (params, abortController) => {
+  const url = String(params.url).replace(`${RELIEF_PROTOCOL}://`, "pmtiles://");
+  const response = await pmtilesTile({ ...params, url }, abortController);
+  if (response?.data) return response;
+  const match = url.match(/^(pmtiles:\/\/.+)\/(\d+)\/(\d+)\/(\d+)$/);
+  if (match) {
+    const [, archive, z, x, y] = match;
+    for (let levels = 1; levels <= MAX_ANCESTOR_LEVELS && Number(z) - levels >= 0; levels += 1) {
+      const ax = Number(x) >> levels, ay = Number(y) >> levels;
+      const ancestor = await pmtilesTile({ ...params, url: `${archive}/${Number(z) - levels}/${ax}/${ay}` }, abortController);
+      if (!ancestor?.data) continue;
+      const data = await upscale(ancestor.data, levels, Number(x) - (ax << levels), Number(y) - (ay << levels)).catch(() => null);
+      if (data) return { data };
+      break;
+    }
+  }
+  return { data: transparentPng() };
 };
 
 // Source + layer for the style's vector-background branch. Past maxzoom MapLibre
