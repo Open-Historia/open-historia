@@ -54,8 +54,23 @@ export const collectAutonomousInstitutionBallotWork = (world = {}, playerCountry
   maxVotersPerInstitution = 32,
 } = {}) => {
   const work = [];
+  const relevant = new Map();
   for (const entry of institutionsForPolity(world, playerCountry, { includeSuspended: false, includeDissolved: false })) {
     const institution = entry?.institution || entry;
+    if (institution?.id) relevant.set(clean(institution.id), institution);
+  }
+  const source = world?.institutions?.byId && typeof world.institutions.byId === "object"
+    ? world.institutions.byId
+    : (world?.institutions && typeof world.institutions === "object" ? world.institutions : {});
+  for (const institution of Object.values(source || {})) {
+    if (!institution || typeof institution !== "object" || !institution.id) continue;
+    const lifecycleRelevant = values(institution.lifecycleCases).some((entry) => (
+      [entry?.polity, entry?.initiatedBy].some((name) => lower(name) === lower(playerCountry))
+      && ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))
+    ));
+    if (lifecycleRelevant) relevant.set(clean(institution.id), institution);
+  }
+  for (const institution of relevant.values()) {
     if (lower(institution?.status || "active") === "dissolved") continue;
     const votingProposals = values(institution?.proposals)
       .filter((proposal) => lower(proposal?.status) === "voting" && proposal?.voting)

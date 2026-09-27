@@ -87,8 +87,13 @@ const sectionStyle = {
   padding: "0.72rem",
 };
 
-const emptyParty = () => ({
-  id: `custom-party-${Date.now().toString(36)}`,
+const emptyParty = () => {
+  const id = `custom-party-${Date.now().toString(36)}`;
+  const editorKey = `party-editor:new:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`;
+  return ({
+  _editorKey: editorKey,
+  _sourceId: "",
+  id,
   name: "New political entity",
   shortName: "",
   leader: "",
@@ -103,9 +108,15 @@ const emptyParty = () => ({
   coalition: false,
   priorityField: "publicPriorities",
 });
+};
 
-const emptyBloc = () => ({
-  id: `custom-bloc-${Date.now().toString(36)}`,
+const emptyBloc = () => {
+  const id = `custom-bloc-${Date.now().toString(36)}`;
+  const editorKey = `bloc-editor:new:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 7)}`;
+  return ({
+  _editorKey: editorKey,
+  _sourceId: "",
+  id,
   name: "New power bloc",
   shortName: "",
   kind: "",
@@ -119,6 +130,7 @@ const emptyBloc = () => ({
   influenceLabel: "",
   priorityField: "publicPriorities",
 });
+};
 
 const actorLabel = (world, polityKey) => clean(world?.polityOverrides?.[polityKey]?.name) || clean(polityKey) || "Unknown polity";
 
@@ -434,7 +446,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Ruling and coalition flags write to canonical government party IDs.</div>
                     <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
                       {(draft.parties || []).map((party, index) => (
-                        <details key={party.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
+                        <details key={party._editorKey || `party-row-${index}`} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
                           <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>{party.name || `Political entity ${index + 1}`}{party.ruling ? " · Government" : party.coalition ? " · Coalition" : ""}</summary>
                           <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", marginTop: "0.6rem" }}>
                             {[["Name", "name"], ["Short name", "shortName"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={party[field] ?? ""} onChange={(event) => editParty(index, field, event.target.value)} /></div>)}
@@ -465,7 +477,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Power blocs / non-party actors ({draft.powerBlocs?.length || 0})</summary>
                     <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.6rem" }}>
                       {(draft.powerBlocs || []).map((bloc, index) => (
-                        <details key={bloc.id || index} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
+                        <details key={bloc._editorKey || `bloc-row-${index}`} style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.075)", borderRadius: "10px", padding: "0.55rem" }}>
                           <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 800 }}>{bloc.name || `Power bloc ${index + 1}`}</summary>
                           <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))", marginTop: "0.6rem" }}>
                             {[["Name", "name"], ["Short name", "shortName"], ["Kind", "kind"], ["Status", "status"], ["Leader", "leader"], ["Ideology", "ideology"], ["Influence label", "influenceLabel"]].map(([label, field]) => <div key={field}><label style={labelStyle}>{label}</label><input style={inputStyle} value={bloc[field] ?? ""} onChange={(event) => editBloc(index, field, event.target.value)} /></div>)}

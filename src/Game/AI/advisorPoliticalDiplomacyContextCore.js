@@ -27,7 +27,7 @@ const proposalSummary = (view) => {
     const flags = [];
     if (proposal.status === "voting" && proposal.playerEligible && !proposal.playerBallot) flags.push("PLAYER VOTE PENDING");
     if (proposal.playerCanVeto) flags.push("veto available");
-    if (proposal.playerCanSubmitForVote) flags.push("may submit for vote");
+    if (proposal.playerCanCallVote || proposal.playerCanSubmitForVote) flags.push("may call vote");
     if (proposal.playerCanAmend) flags.push("may amend");
     const amendmentReview = list(proposal?.amendmentItems).filter((item) => item?.playerCanResolve).length;
     if (amendmentReview) flags.push(`${amendmentReview} amendment review${amendmentReview === 1 ? "" : "s"} pending`);

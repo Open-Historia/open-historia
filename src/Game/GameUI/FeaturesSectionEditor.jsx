@@ -101,6 +101,7 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, world, onChan
                             ? event.trigger.conditions.map((condition) => ({ ...condition }))
                             : event.trigger?.conditions,
                         },
+                        outcomes: Array.isArray(event.outcomes) ? event.outcomes.map((outcome) => ({ ...outcome })) : event.outcomes,
                       }));
                       return (
                         <div key={setting.key}>

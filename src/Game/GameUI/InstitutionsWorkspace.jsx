@@ -204,7 +204,7 @@ const fieldStyle = {
   background: "rgba(0,0,0,.2)", color: "white", padding: ".48rem .56rem", fontSize: ".68rem", fontFamily: "inherit",
 };
 
-const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null }) => {
+const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, canCancelApplication = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null, onCancelApplication = null }) => {
   const kind = humanize(entry?.kind || "membership case");
   const status = humanize(entry?.status || "pending");
   const tone = ["accepted", "resolved"].includes(lower(entry?.status)) ? "good"
@@ -224,6 +224,9 @@ const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, ca
     {entry?.terms && <div style={{ marginTop: ".28rem", fontSize: ".6rem", lineHeight: 1.4, color: "var(--oh-grey-muted)" }}>Terms: {entry.terms}</div>}
     {canOpenNegotiation && <div data-foreign-lifecycle-negotiation-controls="true" style={{ display: "flex", justifyContent: "flex-end", marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)" }}>
       <button className="oh-tap-row" disabled={busy} onClick={() => onOpenNegotiation?.()} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 7, background: "rgba(255,255,255,.05)", color: "var(--oh-grey-text)", padding: ".28rem .46rem", fontSize: ".6rem", fontWeight: 760, cursor: busy ? "wait" : "pointer" }}>{opening ? "Opening…" : "Open negotiation →"}</button>    </div>}
+    {canCancelApplication && <div data-player-application-cancel-controls="true" style={{ display: "flex", justifyContent: "flex-end", marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+      <button className="oh-tap-row" disabled={busy} onClick={() => onCancelApplication?.()} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Withdraw application</button>
+    </div>}
     {canRespond && <div data-player-lifecycle-response-controls="true" style={{ display: "flex", flexWrap: "wrap", gap: ".3rem", marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)" }}>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("accept")} style={{ border: "1px solid rgba(34,197,94,.24)", borderRadius: 7, background: "rgba(34,197,94,.08)", color: "#bbf7d0", padding: ".26rem .42rem", fontSize: ".6rem", fontWeight: 760, cursor: busy ? "wait" : "pointer" }}>Accept</button>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("seek-observer")} style={{ border: "1px solid var(--oh-grey-border)", borderRadius: 7, background: "rgba(255,255,255,.045)", color: "var(--oh-grey-text)", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Seek observer status</button>
@@ -589,6 +592,9 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const respondToLifecycleCase = (entry, decision) => lifecycleCommand(`respond:${entry?.id}:${decision}`, {
     type: "respond", caseId: entry?.id, actorPolity: playerCountry, decision, reason: clean(lifecycleReason), authority: "player",
   });
+  const cancelApplication = (entry) => lifecycleCommand(`cancel-application:${entry?.id}`, {
+    type: "cancel-application", caseId: entry?.id, polity: playerCountry, reason: clean(lifecycleReason), authority: "player",
+  });
   const openLifecycleNegotiation = async (entry) => {
     if (!entry?.id || !selectedView?.institution?.id) return;
     const groupedCases = lower(entry?.kind) === "founding-invitation"
@@ -716,7 +722,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
 
         {selectedPendingLifecycle.length > 0 && <section>
           <div style={{ fontSize: ".64rem", fontWeight: 850, letterSpacing: ".075em", textTransform: "uppercase", color: "rgba(253,230,138,.68)", marginBottom: ".45rem" }}>Pending membership business</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} />)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canCancelApplication={lower(entry?.polity) === lower(playerCountry) && lower(entry?.kind) === "application" && ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} onCancelApplication={() => cancelApplication(entry)} />)}</div>
         </section>}
 
         <section>

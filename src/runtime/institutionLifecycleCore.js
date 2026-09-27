@@ -788,6 +788,38 @@ export const applyInstitutionLifecycleCommandCore = ({
     return { world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, proposal: result.proposal, createdChat: hearing, action };
   }
 
+  if (type === "cancel-application") {
+    const actor = canonicalPolity(command.polity || command.actorPolity || player, world);
+    const caseId = clean(command.caseId);
+    if (!actor || !caseId) throw new Error("Cancelling an application requires the applicant and lifecycle case id.");
+    const authority = lifecycleAuthority({ actor, player, authority: command.authority || "player" });
+    if (!authority.allowed) throw new Error(authority.reason);
+    const current = baseInstitution.lifecycleCases?.[caseId];
+    if (!current || lower(current.kind) !== "application" || lower(current.polity) !== lower(actor)) {
+      throw new Error("Only the applicant may cancel their own canonical membership application.");
+    }
+    if (!["pending", "negotiating", "pending-approval"].includes(lower(current.status))) {
+      throw new Error("This membership application is no longer pending.");
+    }
+    const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
+      const lifecycleCase = { ...institution.lifecycleCases[caseId], status: "withdrawn", decision: "", resolvedDate: clean(date), updatedDate: clean(date), reason: clean(command.reason) || institution.lifecycleCases[caseId]?.reason || "Application withdrawn by applicant" };
+      setCase(institution, lifecycleCase, localWorld);
+      const proposalId = clean(lifecycleCase.proposalId);
+      if (proposalId && institution.proposals?.[proposalId]) {
+        const proposal = clone(institution.proposals[proposalId]);
+        if (!["passed", "failed", "vetoed", "withdrawn", "archived", "implementation"].includes(lower(proposal.status))) {
+          proposal.status = "withdrawn";
+          proposal.lastUpdatedDate = clean(date) || proposal.lastUpdatedDate || "";
+          if (proposal.voting && !proposal.voting.closedDate) proposal.voting = { ...proposal.voting, closedDate: clean(date), outcome: proposal.voting.outcome || { status: "withdrawn", reason: "Application withdrawn by applicant" } };
+          institution.proposals = { ...(institution.proposals || {}), [proposalId]: proposal };
+        }
+      }
+      return { lifecycleCase, proposal: proposalId ? institution.proposals?.[proposalId] || null : null };
+    });
+    if (result.error) throw new Error(result.error);
+    return { world: result.world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, proposal: result.proposal, action: "application-withdrawn" };
+  }
+
   if (type === "withdraw") {
     const polity = canonicalPolity(command.polity || player, world);
     const member = memberByPolity(baseInstitution, polity);

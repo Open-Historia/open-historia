@@ -111,3 +111,30 @@ test("Political Debug snapshot shows full trait catalog and native-derived value
   assert.ok(Object.prototype.hasOwnProperty.call(snapshot, "decisionAuthority"));
   assert.ok(snapshot.derivedDisposition);
 });
+
+
+test("renaming stable party and bloc IDs preserves hidden canonical fields while editor row identity stays separate", () => {
+  const actor = structuredClone(baseActor);
+  actor.parties[0].aliases = ["Old Tories"];
+  actor.parties[0].internalStrategy = "Preserve the landed coalition";
+  actor.parties[0].color = "#123456";
+  actor.powerBlocs[0].privateGoal = "Preserve officer autonomy";
+  actor.powerBlocs[0].color = "#654321";
+  const world = { politicalActors: { schemaVersion: 6, byPolity: { "Test Empire": actor } } };
+  const editor = politicalActorToEditorState(actor);
+  const partyKey = editor.parties[0]._editorKey;
+  const blocKey = editor.powerBlocs[0]._editorKey;
+  assert.notEqual(partyKey, editor.parties[0].id);
+  assert.notEqual(blocKey, editor.powerBlocs[0].id);
+  editor.parties[0].id = "new-conservatives";
+  editor.powerBlocs[0].id = "new-army";
+  const saved = applyPoliticalEditorStateToWorld(world, "Test Empire", editor);
+  const party = saved.parties.find((entry) => entry.id === "new-conservatives");
+  const bloc = saved.powerBlocs.find((entry) => entry.id === "new-army");
+  assert.deepEqual(party.aliases, ["Old Tories"]);
+  assert.equal(party.internalStrategy, "Preserve the landed coalition");
+  assert.equal(party.color, "#123456");
+  assert.equal(bloc.privateGoal, "Preserve officer autonomy");
+  assert.equal(bloc.color, "#654321");
+  assert.ok(saved.government.rulingPartyIds.includes("new-conservatives"));
+});

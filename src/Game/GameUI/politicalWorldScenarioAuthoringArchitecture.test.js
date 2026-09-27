@@ -41,3 +41,12 @@ test("Scenario Political World selects use explicit dark option colors", () => {
   assert.match(source, /color: "#f8fafc"/);
   assert.match(source, /<option style=\{optionStyle\}/);
 });
+
+
+test("editable stable party and bloc IDs are not used as React row keys", () => {
+  const source = read("./PoliticalWorldAuthoringPanel.jsx");
+  assert.match(source, /key=\{party\._editorKey/);
+  assert.match(source, /key=\{bloc\._editorKey/);
+  assert.doesNotMatch(source, /key=\{party\.id \|\| index\}/);
+  assert.doesNotMatch(source, /key=\{bloc\.id \|\| index\}/);
+});

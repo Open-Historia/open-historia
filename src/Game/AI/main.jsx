@@ -2744,7 +2744,7 @@ When you recommend a concrete formal institutional step that the player can lega
 
 Allowed draft shapes:
 - Table a new agenda resolution: {"type":"table-proposal","institutionId":"<exact id>","proposalType":"resolution","title":"<short title>","summary":"<what the institution should decide>"}
-- Submit an EXISTING player-sponsored proposal for formal voting: {"type":"submit-proposal","institutionId":"<exact id>","proposalId":"<exact existing proposal id>"}
+- Call a formal vote on an EXISTING ready proposal when the player has that native procedural right: {"type":"submit-proposal","institutionId":"<exact id>","proposalId":"<exact existing proposal id>"}
 - Cast the player's ballot on an EXISTING open proposal: {"type":"vote","institutionId":"<exact id>","proposalId":"<exact existing proposal id>","choice":"yes|no|abstain|veto","reason":"<optional rationale>"}
 - Send a membership invitation through the institution lifecycle: {"type":"invite","institutionId":"<exact id>","polity":"<exact target polity name>","requestedStatus":"member|observer|associate|participant","reason":"<optional rationale>"}
 

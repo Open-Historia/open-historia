@@ -7,9 +7,11 @@ import {
   applyInstitutionalPlayerMessage,
   castInstitutionProposalVote,
   castInstitutionProposalVoteBatch,
+  callInstitutionProposalVote,
   closeInstitutionProposalVoting,
   createInstitutionProposal,
   institutionEligibleVoters,
+  institutionCanCallProposalVote,
   institutionCanTableProposal,
   institutionCanProposeAmendment,
   implementInstitutionProposal,
@@ -719,6 +721,24 @@ test("only a current canonical sponsor may submit an existing proposal for forma
 });
 
 
+test("an eligible member may call a ready foreign-sponsored proposal to vote without taking sponsorship", () => {
+  const lodged = lodgeInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", proposer: "B", date: "2000-01-01",
+    proposal: { id: "member-call-vote", title: "Member Call Vote", type: "program", summary: "Test player procedural authority." },
+  });
+  const before = lodged.world.institutions.byId.council.proposals[lodged.proposal.id];
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "C", before), true);
+  assert.equal(institutionCanCallProposalVote(lodged.world.institutions.byId.council, "D", before), false, "observer status is not proposal-eligible under the member-only rule");
+  const opened = callInstitutionProposalVote({
+    world: lodged.world, institutionId: "council", proposalId: lodged.proposal.id, caller: "C", date: "2000-01-02",
+  });
+  assert.equal(opened.proposal.status, "voting");
+  assert.equal(opened.proposal.createdBy, "B");
+  assert.deepEqual(opened.proposal.sponsorPolities, ["B"]);
+  assert.deepEqual(opened.proposal.voting.eligibleVoters, ["A", "B", "C"]);
+});
+
+
 test("policy commitment is complete institutional state, not reusable execution authority", () => {
   let result = createInstitutionProposal({
     world: makeWorld(simpleRule),
@@ -820,4 +840,49 @@ test("one-request institution batch refuses model authority for the human withou
   assert.match(result.rejected[0].reason, /human-controlled/i);
   assert.ok(result.world.institutions.byId.council.proposals["npc-motion"]);
   assert.equal(result.world.institutions.byId.council.proposals["fake-player-motion"], undefined);
+});
+
+test("a refused formal action fails closed for that actor's same-turn Council speech and leaves a native notice", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: makeWorld(simpleRule), chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-01",
+    chatEvents: [
+      { id: "false-claim", kind: "message", time: "2000-01-01", by: "B Republic", role: "leader", code: "B", text: "We formally submit the finalized framework." },
+      { id: "safe-sibling", kind: "message", time: "2000-01-01", by: "C Republic", role: "leader", code: "C", text: "We remain ready to negotiate." },
+    ],
+    formalActions: [{ type: "institution_submit_proposal", actorName: "B Republic", proposalId: "missing-proposal" }],
+  });
+  assert.equal(result.applied.length, 0);
+  assert.equal(result.rejected.length, 1);
+  const text = result.channel.messages.map((message) => message.text).join("\n");
+  assert.doesNotMatch(text, /formally submit the finalized framework/i);
+  assert.match(text, /remain ready to negotiate/i);
+  assert.match(text, /Formal business was not recorded/i);
+  assert.match(text, /B Republic/i);
+});
+
+test("Council applies resolve-amendment then submit-proposal sequentially in one native formal batch", async () => {
+  const { applyInstitutionalChatGovernanceBatch } = await import("./institutionalGovernance.js");
+  let prepared = createInstitutionProposal({
+    world: makeWorld(simpleRule), institutionId: "council", date: "2000-01-01",
+    proposal: { id: "connectivity", title: "Connectivity Framework", createdBy: "B", sponsorPolities: ["B"] },
+  });
+  prepared = transitionInstitutionProposal({ world: prepared.world, institutionId: "council", proposalId: "connectivity", status: "debate", date: "2000-01-02" });
+  prepared = addInstitutionProposalAmendment({
+    world: prepared.world, institutionId: "council", proposalId: "connectivity", proposer: "A", date: "2000-01-03",
+    amendment: { id: "latvia-guardrail", text: "Keep support temporary and independently reviewed." },
+  });
+
+  const result = applyInstitutionalChatGovernanceBatch({
+    world: prepared.world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-04",
+    formalActions: [
+      { type: "institution_resolve_amendment", actorName: "B Republic", proposalId: "connectivity", amendmentId: "latvia-guardrail", amendmentStatus: "accepted" },
+      { type: "institution_submit_proposal", actorName: "B Republic", proposalId: "connectivity" },
+    ],
+  });
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.applied.length, 2);
+  const proposal = result.world.institutions.byId.council.proposals.connectivity;
+  assert.equal(proposal.amendments[0].status, "accepted");
+  assert.equal(proposal.status, "voting");
 });

@@ -22,3 +22,22 @@ test("partitions formal governance actions from ordinary Beta chat actions", () 
   assert.equal(result.conversational.length, 1);
   assert.equal(result.formal[0].proposalType, "resolution");
 });
+
+test("malformed formal institution actions stay in the formal lane with a precise validation error", () => {
+  const source = [
+    {
+      type: "institution_resolve_amendment",
+      actorName: "Estonia",
+      proposalId: "regional-connectivity",
+      amendmentStatus: "accepted",
+      // amendmentId intentionally missing: this is the live-playtest failure shape.
+    },
+    { type: "send_message", actorName: "Estonia", content: "We support the finalized text." },
+  ];
+  const result = partitionInstitutionChatActions(source);
+  assert.equal(result.formal.length, 1);
+  assert.equal(result.conversational.length, 1);
+  assert.equal(result.formal[0].type, "institution_invalid");
+  assert.equal(result.formal[0].rawType, "institution_resolve_amendment");
+  assert.match(result.formal[0].validationError, /requires amendmentId/i);
+});

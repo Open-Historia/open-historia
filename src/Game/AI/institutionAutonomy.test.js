@@ -121,3 +121,26 @@ test("interactive ballot directive allows a few short statements but still requi
   assert.match(directive, /send_message/);
   assert.match(directive, /Do not act for the human player/);
 });
+
+test("autonomous ballot work services an accession ballot even when the human is only the applicant", () => {
+  const accessionInstitution = structuredClone(institution);
+  accessionInstitution.id = "un";
+  accessionInstitution.members = [
+    { polity: "Republic of Lithuania", status: "member" },
+    { polity: "Republic of Estonia", status: "member" },
+  ];
+  accessionInstitution.lifecycleCases = {
+    latvia: { id: "latvia", kind: "application", polity: "Republic of Latvia", initiatedBy: "Republic of Latvia", status: "pending-approval", proposalId: "accession" },
+  };
+  accessionInstitution.proposals = {
+    accession: {
+      id: "accession", title: "Latvia accession", status: "voting",
+      voting: { openedDate: "2014-08-19", eligibleVoters: ["Republic of Lithuania", "Republic of Estonia"], ballots: {} },
+    },
+  };
+  const applicantWorld = { institutions: { schemaVersion: 1, byId: { un: accessionInstitution } } };
+  const work = collectAutonomousInstitutionBallotWork(applicantWorld, "Republic of Latvia");
+  assert.equal(work.length, 1);
+  assert.equal(work[0].institutionId, "un");
+  assert.deepEqual(work[0].actors, ["Republic of Lithuania", "Republic of Estonia"]);
+});
