@@ -7,7 +7,7 @@
 //
 // Which server: localStorage "oh:mp:server" (an https:// or, for development,
 // http:// origin). None is configured yet: the browser waits behind "Coming
-// soon" (ui/PublicServers.jsx) until the user's own server exists.
+// soon" (ui/PublicLobbies.jsx) until the user's own server exists.
 
 import { B64URL, HEX_ID, NAME, bool, int, json, list, num, obj, safeParse, str, validate } from "../protocol/validate.js";
 

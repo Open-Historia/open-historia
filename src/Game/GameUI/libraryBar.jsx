@@ -77,8 +77,9 @@ const UNIT_TYPE_LABELS = {
 const MapEditor = lazy(() => import("../../Editor/MapEditor.jsx"));
 // Lazy so the GitHub-backed Community tab costs nothing until opened.
 const CommunityPanel = lazy(() => import("./communityHub.jsx"));
-// Shared games: host, join with a token, and the public browser (multiplayer/).
-const MultiplayerPanel = lazy(() => import("../../multiplayer/ui/MultiplayerPanel.jsx"));
+// Lobbies: join a private one by invite code, host one, and the public list
+// (multiplayer/).
+const LobbiesTab = lazy(() => import("../../multiplayer/ui/LobbiesTab.jsx"));
 // Lazy so OpenLayers only loads when the country picker map is opened.
 const CountryPickerMap = lazy(() => import("./CountryPickerMap.jsx"));
 
@@ -213,6 +214,15 @@ const ButtonIcon = ({ kind, size = 15, strokeWidth = 1.9 }) => {
       return (
         <svg aria-hidden="true" {...common}>
           <path d="m9 7 8 5-8 5z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "host":
+      return (
+        <svg aria-hidden="true" {...common}>
+          <circle cx="9" cy="8" r="3.2" />
+          <path d="M3.5 19c.6-3.1 2.8-5 5.5-5s4.9 1.9 5.5 5" />
+          <path d="M16 5.2a3 3 0 0 1 0 5.6" />
+          <path d="M17.5 14.3c1.7.6 2.8 2.3 3 4.7" />
         </svg>
       );
     case "archive":
@@ -1734,6 +1744,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     selectedScenarioId,
   } = useLibraryState();
   const [activeTab, setActiveTab] = useState("games");
+  // The Lobbies tab's host settings, opened by its "Host a lobby" action.
+  const [lobbyHosting, setLobbyHosting] = useState(false);
   const [menuOpen, setMenuOpenState] = useState(menuOpenDefault);
   // Whether the menu was opened from inside a game (⌂ Exit Game, or the game
   // menu's Game Management), so that a phone's Back can close it again and
@@ -2969,8 +2981,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   );
 
   // The open tab's own actions: in the bar on a desktop, heading the page on a
-  // phone. The Community tab brings its own.
-  const tabActions = activeTab === "community" ? [] : [
+  // phone. The Community tab brings its own; the Lobbies tab's is hosting one.
+  const tabActions = activeTab === "community" ? [] : activeTab === "lobbies" ? [
+    { icon: "host", label: "Host a lobby", run: () => setLobbyHosting(true) },
+  ] : [
     { icon: "refresh", label: "Refresh", run: () => refreshLibraryCatalog({ force: true }).catch(() => {}) },
     activeTab === "scenarios"
       ? { icon: "import", label: "Import Scenario", phoneLabel: "Import Scenario", run: () => importScenarioInputRef.current?.click() }
@@ -3358,7 +3372,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 scrollbarWidth: "none",
               }}
             >
-              {["games", "scenarios", "community", "multiplayer"].map((tab) => (
+              {["games", "scenarios", "community", "lobbies"].map((tab) => (
                 <button
                   key={tab}
                   className="oh-tap-row"
@@ -3372,7 +3386,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                   }, touch)}
                   type="button"
                 >
-                  {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : tab === "community" ? "Community" : "Multiplayer"}
+                  {tab === "games" ? "Games" : tab === "scenarios" ? "Scenarios" : tab === "community" ? "Community" : "Lobbies"}
                 </button>
               ))}
             </div>
@@ -3421,15 +3435,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 ))}
               </div>
             )}
-            {activeTab === "multiplayer" ? (
+            {activeTab === "lobbies" ? (
               <Suspense
                 fallback={
                   <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
-                    Loading Multiplayer…
+                    Loading lobbies…
                   </div>
                 }
               >
-                <MultiplayerPanel onEnterGame={() => setMenuOpen(false)} />
+                <LobbiesTab hosting={lobbyHosting} onHostingChange={setLobbyHosting} onEnterGame={() => setMenuOpen(false)} />
               </Suspense>
             ) : activeTab === "community" ? (
               <Suspense

@@ -1,8 +1,9 @@
-/*! Open Historia — the public game browser © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Games anyone can join, with filters, from a multiplayer server
-// (signaling/publicServers.js). Built, and covered by a large "Coming soon"
-// until the user's own server is up: the user asked for exactly that. Lifting
-// the cover is `comingSoon={false}` once a server is configured.
+/*! Open Historia — the public lobby list © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Every lobby anyone can join, with filters, from a multiplayer server
+// (signaling/publicServers.js), under the invite code in the Lobbies tab
+// (LobbiesTab.jsx). Built, and covered by a large "Coming soon" until the
+// user's own server is up: the user asked for exactly that. Lifting the cover
+// is `comingSoon={false}` once a server is configured.
 
 import React, { useEffect, useState } from "react";
 import { configuredServer, listPublicRooms } from "../signaling/publicServers.js";
@@ -26,7 +27,7 @@ const SAMPLE = [
   { roomId: "sample-3", name: "Cold War, slow rounds", scenario: { name: "Modern Day" }, players: 2, seats: 6, round: { minutes: 1440 }, language: "en", cheats: "off", payment: "host", password: true },
 ];
 
-export default function PublicServers({ comingSoon = true }) {
+export default function PublicLobbies({ comingSoon = true }) {
   const [filters, setFilters] = useState({ q: "", language: "", cheats: "", minOpen: "", password: "" });
   const [result, setResult] = useState({ rooms: comingSoon ? SAMPLE : [], total: 0, error: "" });
   const server = configuredServer();
@@ -55,9 +56,9 @@ export default function PublicServers({ comingSoon = true }) {
   const set = (key) => (event) => setFilters((previous) => ({ ...previous, [key]: event.target.value }));
 
   return (
-    <section style={card} aria-label="Public games">
+    <section style={card} aria-label="Public lobbies">
       <div aria-hidden={comingSoon} style={{ filter: comingSoon ? "blur(2px) saturate(0.6)" : "none", opacity: comingSoon ? 0.5 : 1, pointerEvents: comingSoon ? "none" : "auto" }}>
-        <h3 style={{ color: "#fff", fontSize: "1.1rem", fontWeight: 800, margin: "0 0 0.8rem" }}>Public games</h3>
+        <h3 style={{ color: "#fff", fontSize: "1.1rem", fontWeight: 800, margin: "0 0 0.8rem" }}>Public lobbies</h3>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "0.8rem" }}>
           <input style={{ ...input, flex: "1 1 12rem" }} placeholder="Search names and scenarios" value={filters.q} onChange={set("q")} maxLength={60} />
           <select style={input} value={filters.language} onChange={set("language")}>
@@ -89,7 +90,7 @@ export default function PublicServers({ comingSoon = true }) {
         <table style={{ borderCollapse: "collapse", width: "100%" }}>
           <thead>
             <tr>
-              {["Game", "Scenario", "Players", "Rounds", "Language", "Cheats", ""].map((title) => (
+              {["Lobby", "Scenario", "Players", "Rounds", "Language", "Cheats", ""].map((title) => (
                 <th key={title} style={{ ...cell, borderTop: "none", color: "rgba(255,255,255,0.55)", fontSize: "0.72rem", textTransform: "uppercase" }}>{title}</th>
               ))}
             </tr>
@@ -107,7 +108,7 @@ export default function PublicServers({ comingSoon = true }) {
               </tr>
             ))}
             {!result.rooms.length ? (
-              <tr><td colSpan={7} style={{ ...cell, color: "rgba(255,255,255,0.5)" }}>{result.error || "No public games match."}</td></tr>
+              <tr><td colSpan={7} style={{ ...cell, color: "rgba(255,255,255,0.5)" }}>{result.error || "No public lobbies match."}</td></tr>
             ) : null}
           </tbody>
         </table>
@@ -116,7 +117,7 @@ export default function PublicServers({ comingSoon = true }) {
         <div style={{ alignItems: "center", display: "flex", flexDirection: "column", inset: 0, justifyContent: "center", position: "absolute", textAlign: "center" }}>
           <div style={{ color: "#fff", fontSize: "clamp(2rem, 6vw, 3.4rem)", fontWeight: 900, letterSpacing: "-0.03em", textShadow: "0 4px 24px rgba(0,0,0,0.6)" }}>Coming soon</div>
           <div style={{ color: "rgba(255,255,255,0.75)", fontSize: "0.9rem", marginTop: "0.5rem", maxWidth: "26rem", textShadow: "0 2px 12px rgba(0,0,0,0.6)" }}>
-            Public games need a server of our own. Until then, share an invite token with the people you want to play with.
+            Public lobbies need a server of our own. Until then, join a private lobby with its invite code, or host one.
           </div>
         </div>
       ) : null}
