@@ -193,3 +193,64 @@ test("a planned chance beyond an auto-stop date is not committed", () => {
   const before = commitScriptedEventPlan({}, plan, { throughDate: "1914-03-22" });
   assert.deepEqual(before.state, {});
 });
+
+test("region-control predicates use live overrides before authored base ownership and fail closed when unknown", () => {
+  const controlled = { ...world, regionOwnershipOverrides: { R1: "GER" } };
+  assert.equal(evaluateScriptedEventCondition({ type: "polity_controls_region", polityId: "GER", regionId: "R1", baseOwner: "FRA" }, controlled).matched, true);
+  assert.equal(evaluateScriptedEventCondition({ type: "polity_controls_region", polityId: "FRA", regionId: "R1", baseOwner: "FRA" }, controlled).matched, false);
+  assert.equal(evaluateScriptedEventCondition({ type: "polity_not_controls_region", polityId: "GER", regionId: "R2", baseOwner: "FRA" }, controlled).matched, true);
+  assert.equal(evaluateScriptedEventCondition({ type: "polity_not_controls_region", polityId: "GER", regionId: "UNKNOWN" }, controlled).matched, false);
+});
+
+test("scripted-event dependency negatives stay false until the referenced event actually resolves", () => {
+  const unresolved = { scriptedEventState: {} };
+  assert.equal(evaluateScriptedEventCondition({ type: "scripted_event_skipped", eventId: "prior" }, world, unresolved).matched, false);
+  assert.equal(evaluateScriptedEventCondition({ type: "scripted_outcome_not_selected", eventId: "prior", outcomeId: "b" }, world, unresolved).matched, false);
+  const resolved = { scriptedEventState: { prior: { outcome: "fired", selectedOutcomeId: "a" } } };
+  assert.equal(evaluateScriptedEventCondition({ type: "scripted_event_fired", eventId: "prior" }, world, resolved).matched, true);
+  assert.equal(evaluateScriptedEventCondition({ type: "scripted_outcome_selected", eventId: "prior", outcomeId: "a" }, world, resolved).matched, true);
+  assert.equal(evaluateScriptedEventCondition({ type: "scripted_outcome_not_selected", eventId: "prior", outcomeId: "b" }, world, resolved).matched, true);
+});
+
+test("one weighted branch outcome is selected once and survives retry plus save reload", () => {
+  let rolls = 0;
+  const branched = { ...event("election"), outcomes: [
+    { id: "a", title: "A wins", text: "Candidate A wins.", weight: 25 },
+    { id: "b", title: "B wins", text: "Candidate B wins.", weight: 75 },
+  ] };
+  const first = planScriptedEvents([branched], { world, random: () => { rolls += 1; return 0.8; } });
+  assert.equal(first.eligible.length, 1);
+  assert.equal(first.eligible[0].selectedOutcomeId, "b");
+  assert.equal(first.eligible[0].text, "Candidate B wins.");
+  assert.equal(rolls, 1, "100% trigger consumes no roll; only the branch selection rolls");
+  const retry = planScriptedEvents([branched], { world, pendingState: first.pendingState, random: () => { rolls += 1; return 0; } });
+  assert.equal(retry.eligible[0].selectedOutcomeId, "b");
+  assert.equal(rolls, 1, "held retry must not reroll branch selection");
+  const committed = commitScriptedEventPlan({}, retry, { throughDate: "1914-03-21" });
+  assert.equal(committed.state.election.selectedOutcomeId, "b");
+  const afterReload = planScriptedEvents([branched], { world, resolvedState: normalizeScriptedEventState(committed.state), random: () => { rolls += 1; return 0; } });
+  assert.deepEqual(afterReload.eligible, []);
+  assert.equal(rolls, 1);
+});
+
+test("later due events in the same plan can depend on the selected outcome of an earlier event", () => {
+  const primary = { ...event("primary", undefined, "1914-03-20"), outcomes: [
+    { id: "reformer", text: "The reformer wins.", weight: 1 },
+    { id: "hardliner", text: "The hardliner wins.", weight: 0 },
+  ] };
+  const followup = event("followup", { mode: "rules", operator: "all", conditions: [
+    { type: "scripted_outcome_selected", eventId: "primary", outcomeId: "reformer" },
+  ], percent: 100 }, "1914-03-21");
+  const plan = planScriptedEvents([primary, followup], { world, random: () => 0.2 });
+  assert.deepEqual(plan.eligible.map((row) => row.id), ["primary", "followup"]);
+});
+
+test("a branch with no positive-weight outcome fails closed", () => {
+  const branched = { ...event("bad-branch"), outcomes: [
+    { id: "a", text: "A", weight: 0 },
+    { id: "b", text: "B", weight: -4 },
+  ] };
+  const plan = planScriptedEvents([branched], { world, random: () => 0 });
+  assert.deepEqual(plan.eligible, []);
+  assert.equal(plan.resolutions[0].outcome, "skipped");
+});

@@ -34,3 +34,15 @@ test("all native select options in the manager retain explicit dark popup colors
     for (const tag of optionTags) assert.match(tag, /style=\{optionStyle\}/);
   }
 });
+
+test("scripted event branching authoring exposes dependency, territory and weighted outcome controls", () => {
+  assert.match(source, /Polity controls region/);
+  assert.match(source, /Scripted event happened/);
+  assert.match(source, /Scripted outcome was selected/);
+  assert.match(source, /aria-label="Referenced scripted event"/);
+  assert.match(source, /aria-label="Referenced scripted outcome"/);
+  assert.match(source, /data-scripted-event-outcomes="true"/);
+  assert.match(source, /Mutually exclusive outcomes/);
+  assert.match(source, /aria-label="Outcome weight"/);
+  assert.match(source, /exactly one positive-weight outcome/);
+});

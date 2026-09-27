@@ -87,6 +87,28 @@ const subordinationExists = (world, polityId, overlordId, expectedKind = "") => 
   ));
 };
 
+const scriptedResolutionEntry = (state, eventId) => {
+  const id = text(eventId);
+  return id ? record(state)[id] || null : null;
+};
+
+const effectiveRegionController = (world, condition) => {
+  const regionId = text(condition?.regionId);
+  if (!regionId) return "";
+  const overrides = record(world?.regionOwnershipOverrides);
+  if (Object.prototype.hasOwnProperty.call(overrides, regionId)) {
+    const override = overrides[regionId];
+    if (typeof override === "string") return text(override);
+    return text(override?.owner || override?.ownerCode || override?.controller || override?.polity);
+  }
+  return text(condition?.baseOwner);
+};
+
+const resolvedScriptedState = (resolvedState, pendingState) => ({
+  ...normalizeScriptedEventState(resolvedState),
+  ...record(pendingState),
+});
+
 export const normalizeScriptedEventState = (value) => {
   const source = record(value);
   const out = {};
@@ -103,12 +125,17 @@ export const normalizeScriptedEventState = (value) => {
     };
     if (Number.isFinite(Number(entry.roll))) normalized.roll = Math.max(0, Math.min(1, Number(entry.roll)));
     if (Number.isFinite(Number(entry.percent))) normalized.percent = Math.max(0, Math.min(100, Number(entry.percent)));
+    if (text(entry.selectedOutcomeId)) normalized.selectedOutcomeId = text(entry.selectedOutcomeId).slice(0, 160);
+    if (Number.isFinite(Number(entry.outcomeRoll))) normalized.outcomeRoll = Math.max(0, Math.min(1, Number(entry.outcomeRoll)));
+    if (entry.effectiveWeights && typeof entry.effectiveWeights === "object" && !Array.isArray(entry.effectiveWeights)) {
+      normalized.effectiveWeights = Object.fromEntries(Object.entries(entry.effectiveWeights).slice(0, 24).map(([key, value]) => [text(key).slice(0, 160), Math.max(0, Number(value) || 0)]));
+    }
     out[id] = normalized;
   }
   return out;
 };
 
-export const evaluateScriptedEventCondition = (conditionInput, world = {}) => {
+export const evaluateScriptedEventCondition = (conditionInput, world = {}, { scriptedEventState = {} } = {}) => {
   const condition = record(conditionInput);
   const type = lower(condition.type);
 
@@ -194,16 +221,41 @@ export const evaluateScriptedEventCondition = (conditionInput, world = {}) => {
       reason: "",
     };
   }
+  case "polity_controls_region":
+  case "polity_not_controls_region": {
+    if (!text(condition.polityId) || !text(condition.regionId)) return { matched: false, reason: "missing polity or region id" };
+    const controller = effectiveRegionController(world, condition);
+    if (!controller) return { matched: false, reason: "region controller unavailable" };
+    const same = lower(controller) === lower(condition.polityId);
+    return { matched: type === "polity_controls_region" ? same : !same, reason: "" };
+  }
+  case "scripted_event_fired":
+  case "scripted_event_skipped": {
+    if (!text(condition.eventId)) return { matched: false, reason: "missing scripted event id" };
+    const prior = scriptedResolutionEntry(scriptedEventState, condition.eventId);
+    if (!prior || !["fired", "skipped"].includes(lower(prior.outcome))) return { matched: false, reason: "referenced scripted event unresolved" };
+    return { matched: lower(prior.outcome) === (type === "scripted_event_fired" ? "fired" : "skipped"), reason: "" };
+  }
+  case "scripted_outcome_selected":
+  case "scripted_outcome_not_selected": {
+    if (!text(condition.eventId) || !text(condition.outcomeId)) return { matched: false, reason: "missing scripted event or outcome id" };
+    const prior = scriptedResolutionEntry(scriptedEventState, condition.eventId);
+    if (!prior || !["fired", "skipped"].includes(lower(prior.outcome))) return { matched: false, reason: "referenced scripted event unresolved" };
+    if (lower(prior.outcome) !== "fired") return { matched: type === "scripted_outcome_not_selected", reason: "" };
+    if (!text(prior.selectedOutcomeId)) return { matched: false, reason: "referenced scripted event has no selected outcome" };
+    const selected = text(prior.selectedOutcomeId) === text(condition.outcomeId);
+    return { matched: type === "scripted_outcome_selected" ? selected : !selected, reason: "" };
+  }
   default:
     return { matched: false, reason: type ? `unsupported condition ${type}` : "missing condition type" };
   }
 };
 
-export const evaluateScriptedEventConditions = (triggerInput, world = {}) => {
+export const evaluateScriptedEventConditions = (triggerInput, world = {}, options = {}) => {
   const trigger = record(triggerInput);
   const conditions = array(trigger.conditions);
   if (!conditions.length) return { matched: false, matchedCount: 0, requiredCount: 0, results: [], reason: "no conditions" };
-  const results = conditions.map((condition) => evaluateScriptedEventCondition(condition, world));
+  const results = conditions.map((condition) => evaluateScriptedEventCondition(condition, world, options));
   const matchedCount = results.filter((entry) => entry.matched).length;
   const rawOperator = lower(trigger.operator).replace(/-/g, "_");
   const operator = ["all", "any", "at_least"].includes(rawOperator) ? rawOperator : "all";
@@ -222,14 +274,14 @@ export const evaluateScriptedEventConditions = (triggerInput, world = {}) => {
   };
 };
 
-const resolutionFor = (event, world, random) => {
+const resolutionFor = (event, world, random, scriptedEventState = {}) => {
   const trigger = record(event?.trigger);
   const mode = lower(trigger.mode || "always");
 
   if (mode === "rules") {
     const conditions = array(trigger.conditions);
     const evaluation = conditions.length
-      ? evaluateScriptedEventConditions(trigger, world)
+      ? evaluateScriptedEventConditions(trigger, world, { scriptedEventState })
       : { matched: true, matchedCount: 0, requiredCount: 0, results: [], reason: "" };
     const percent = Math.max(0, Math.min(100, Number.isFinite(Number(trigger.percent)) ? Number(trigger.percent) : 100));
     if (!evaluation.matched) {
@@ -275,7 +327,7 @@ const resolutionFor = (event, world, random) => {
   }
 
   if (mode === "conditional") {
-    const evaluation = evaluateScriptedEventConditions(trigger, world);
+    const evaluation = evaluateScriptedEventConditions(trigger, world, { scriptedEventState });
     return {
       outcome: evaluation.matched ? "fired" : "skipped",
       mode,
@@ -291,6 +343,39 @@ const resolutionFor = (event, world, random) => {
     date: text(event?.date),
     reason: "unsupported trigger mode",
     event,
+  };
+};
+
+const selectWeightedOutcome = (event, random) => {
+  const outcomes = array(event?.outcomes)
+    .map((entry) => ({ ...entry, weight: Math.max(0, Number(entry?.weight) || 0) }))
+    .filter((entry) => text(entry?.id) && text(entry?.text) && entry.weight > 0);
+  if (!outcomes.length) return { error: "no eligible positive-weight outcomes" };
+  const weights = Object.fromEntries(outcomes.map((entry) => [text(entry.id), entry.weight]));
+  const total = outcomes.reduce((sum, entry) => sum + entry.weight, 0);
+  if (!(total > 0)) return { error: "outcome weights total zero" };
+  const sample = Number(random?.());
+  const roll = Number.isFinite(sample) ? Math.max(0, Math.min(0.999999999999, sample)) : 0.5;
+  let cursor = roll * total;
+  let selected = outcomes[outcomes.length - 1];
+  for (const outcome of outcomes) {
+    cursor -= outcome.weight;
+    if (cursor < 0) { selected = outcome; break; }
+  }
+  return { selected, roll, weights };
+};
+
+const eventWithSelectedOutcome = (event, resolution) => {
+  const selectedId = text(resolution?.selectedOutcomeId);
+  if (!selectedId) return event;
+  const selected = array(event?.outcomes).find((entry) => text(entry?.id) === selectedId);
+  if (!selected) return event;
+  return {
+    ...event,
+    title: text(selected.title) || text(event?.title),
+    text: text(selected.text) || text(event?.text),
+    selectedOutcomeId: selectedId,
+    parentText: text(event?.text),
   };
 };
 
@@ -315,13 +400,30 @@ export const planScriptedEvents = (eventsInput, {
 
     let resolution = pending[id];
     if (!resolution || !["fired", "skipped"].includes(lower(resolution.outcome))) {
-      resolution = resolutionFor(event, world, random);
+      const stateForConditions = resolvedScriptedState(resolved, pending);
+      resolution = resolutionFor(event, world, random, stateForConditions);
+      if (resolution.outcome === "fired" && array(event?.outcomes).length) {
+        const branch = selectWeightedOutcome(event, random);
+        if (branch.error) {
+          resolution = { ...resolution, outcome: "skipped", reason: branch.error };
+        } else {
+          resolution = {
+            ...resolution,
+            selectedOutcomeId: text(branch.selected.id),
+            outcomeRoll: branch.roll,
+            effectiveWeights: branch.weights,
+          };
+        }
+      }
       pending[id] = {
         outcome: resolution.outcome,
         mode: resolution.mode,
         date: resolution.date,
         ...(Number.isFinite(resolution.roll) ? { roll: resolution.roll } : {}),
         ...(Number.isFinite(resolution.percent) ? { percent: resolution.percent } : {}),
+        ...(text(resolution.selectedOutcomeId) ? { selectedOutcomeId: text(resolution.selectedOutcomeId) } : {}),
+        ...(Number.isFinite(resolution.outcomeRoll) ? { outcomeRoll: resolution.outcomeRoll } : {}),
+        ...(resolution.effectiveWeights ? { effectiveWeights: resolution.effectiveWeights } : {}),
       };
     } else {
       resolution = { ...resolution, event };
@@ -329,7 +431,7 @@ export const planScriptedEvents = (eventsInput, {
 
     const withEvent = { ...resolution, event };
     resolutions.push(withEvent);
-    if (withEvent.outcome === "fired") eligible.push(event);
+    if (withEvent.outcome === "fired") eligible.push(eventWithSelectedOutcome(event, withEvent));
   }
 
   return { eligible, resolutions, pendingState: pending };
@@ -354,6 +456,9 @@ export const commitScriptedEventPlan = (resolvedState, plan, { throughDate = "" 
       resolvedDate: text(event?.date),
       ...(Number.isFinite(resolution.roll) ? { roll: resolution.roll } : {}),
       ...(Number.isFinite(resolution.percent) ? { percent: resolution.percent } : {}),
+      ...(text(resolution.selectedOutcomeId) ? { selectedOutcomeId: text(resolution.selectedOutcomeId) } : {}),
+      ...(Number.isFinite(resolution.outcomeRoll) ? { outcomeRoll: resolution.outcomeRoll } : {}),
+      ...(resolution.effectiveWeights ? { effectiveWeights: resolution.effectiveWeights } : {}),
     };
     state[id] = persisted;
     if (persisted.outcome === "fired") fired.push(event);

@@ -25,6 +25,12 @@ const CONDITION_DEFINITIONS = [
   { type: "institution_member_status", label: "Polity has institution status", fields: ["institutionId", "polityId", "status"] },
   { type: "polity_subordinate_to", label: "Polity is subordinate to polity", fields: ["polityId", "overlordId", "kind"] },
   { type: "polity_not_subordinate_to", label: "Polity is not subordinate to polity", fields: ["polityId", "overlordId", "kind"] },
+  { type: "polity_controls_region", label: "Polity controls region", fields: ["polityId", "regionId", "baseOwner"] },
+  { type: "polity_not_controls_region", label: "Polity does not control region", fields: ["polityId", "regionId", "baseOwner"] },
+  { type: "scripted_event_fired", label: "Scripted event happened", fields: ["eventId"] },
+  { type: "scripted_event_skipped", label: "Scripted event did not happen", fields: ["eventId"] },
+  { type: "scripted_outcome_selected", label: "Scripted outcome was selected", fields: ["eventId", "outcomeId"] },
+  { type: "scripted_outcome_not_selected", label: "Scripted outcome was not selected", fields: ["eventId", "outcomeId"] },
 ];
 
 const CONDITION_BY_TYPE = Object.fromEntries(CONDITION_DEFINITIONS.map((entry) => [entry.type, entry]));
@@ -37,6 +43,7 @@ const makeEvent = () => ({
   trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
 });
 const makeCondition = () => ({ type: "polity_exists", polityId: "" });
+const makeOutcome = () => ({ id: `outcome-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`, text: "", weight: 1 });
 
 const buttonStyle = (styles, extra = {}) => ({
   ...styles.actionButtonStyle,
@@ -141,6 +148,7 @@ const cloneScriptedEvent = (event) => ({
     ...rulesFromTrigger(event?.trigger),
     conditions: array(rulesFromTrigger(event?.trigger).conditions).map((condition) => ({ ...condition })),
   },
+  outcomes: array(event?.outcomes).map((outcome) => ({ ...outcome, id: `${clean(outcome?.id) || "outcome"}-${Math.random().toString(36).slice(2, 6)}` })),
 });
 
 const ScriptedEventsEditor = ({
@@ -379,6 +387,10 @@ const ScriptedEventsEditor = ({
                       {definition.fields.includes("overlordId") && (
                         <EntityField ariaLabel="Overlord polity" id={`${prefix}-overlord`} options={polityOptions} placeholder="Search overlord" styles={styles} value={condition?.overlordId || ""} onChange={(overlordId) => patchCondition(index, conditionIndex, { overlordId })} />
                       )}
+                      {definition.fields.includes("regionId") && <input aria-label="Region id" placeholder="Stable region ID" style={flexibleInputStyle(styles)} value={condition?.regionId || ""} onChange={(e) => patchCondition(index, conditionIndex, { regionId: e.target.value })} />}
+                      {definition.fields.includes("baseOwner") && <EntityField ariaLabel="Base region owner" id={`${prefix}-base-owner`} options={polityOptions} placeholder="Base owner" styles={styles} value={condition?.baseOwner || ""} onChange={(baseOwner) => patchCondition(index, conditionIndex, { baseOwner })} />}
+                      {definition.fields.includes("eventId") && <select aria-label="Referenced scripted event" style={selectStyle(styles,{flex:"1 1 12rem"})} value={condition?.eventId || ""} onChange={(e) => patchCondition(index, conditionIndex, { eventId: e.target.value, outcomeId: "" })}><option style={optionStyle} value="">Select event</option>{events.filter((_, row) => row !== index).map((candidate) => <option key={candidate.id} style={optionStyle} value={candidate.id}>{eventTitle(candidate)}</option>)}</select>}
+                      {definition.fields.includes("outcomeId") && <select aria-label="Referenced scripted outcome" style={selectStyle(styles,{flex:"1 1 12rem"})} value={condition?.outcomeId || ""} onChange={(e) => patchCondition(index, conditionIndex, { outcomeId: e.target.value })}><option style={optionStyle} value="">Select outcome</option>{array(events.find((candidate) => candidate.id === condition?.eventId)?.outcomes).map((outcome) => <option key={outcome.id} style={optionStyle} value={outcome.id}>{clean(outcome.title || outcome.text || outcome.id)}</option>)}</select>}
                       {definition.fields.includes("status") && (
                         <select aria-label="Institution membership status" style={selectStyle(styles, { flex: "0.8 1 9rem", width: "auto" })} value={clean(condition?.status) || "member"} onChange={(e) => patchCondition(index, conditionIndex, { status: e.target.value })}>
                           {INSTITUTION_MEMBER_STATUSES.map((status) => <option key={status} style={optionStyle} value={status}>{titleCase(status)}</option>)}
@@ -399,6 +411,23 @@ const ScriptedEventsEditor = ({
               })}
             </div>
           )}
+        </section>
+
+        <section data-scripted-event-outcomes="true" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", padding: "0.65rem" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
+            <div><div style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.72rem", fontWeight: 800, textTransform: "uppercase" }}>Mutually exclusive outcomes</div><div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", marginTop: "0.16rem" }}>Optional. When present, native code selects exactly one positive-weight outcome and persists the selection.</div></div>
+            <button type="button" className="oh-tap-row" style={buttonStyle(styles)} onClick={() => patchEvent(index, { outcomes: [...array(event?.outcomes), makeOutcome()] })}>+ Add outcome</button>
+          </div>
+          {array(event?.outcomes).length ? <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
+            {array(event.outcomes).map((outcome, outcomeIndex) => <div key={outcome.id || outcomeIndex} style={{ border: "1px solid rgba(255,255,255,0.06)", borderRadius: "9px", padding: "0.48rem" }}>
+              <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "minmax(9rem, 0.8fr) 6rem auto" }}>
+                <input aria-label="Outcome id" style={styles.inputStyle} value={outcome.id || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,id:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="outcome-id" />
+                <input aria-label="Outcome weight" type="number" min="0" step="0.1" style={styles.inputStyle} value={outcome.weight ?? 1} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,weight:Number(e.target.value)}; patchEvent(index,{outcomes:rows}); }} />
+                <button type="button" className="oh-tap-row" style={buttonStyle(styles,{color:"#fecaca"})} onClick={() => patchEvent(index,{outcomes:array(event.outcomes).filter((_,row)=>row!==outcomeIndex)})}>Remove</button>
+              </div>
+              <textarea aria-label="Outcome text" rows={3} style={{...styles.inputStyle,marginTop:"0.4rem",resize:"vertical",width:"100%"}} value={outcome.text || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,text:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="What happens if this outcome is selected?" />
+            </div>)}
+          </div> : null}
         </section>
 
         <section style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", padding: "0.65rem" }}>
