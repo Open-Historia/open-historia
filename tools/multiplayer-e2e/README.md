@@ -1,24 +1,30 @@
 # Multiplayer, end to end
 
-One shared game, hosted, joined with an invite token and played for a round in
-two real browsers. It runs the real built game (`dist/`), real WebRTC between
-the two pages, and the game's real Nostr signaling code over a local relay. The
-round is the game's own time skip, run in the host's engine page, with a
-stand-in model answering it.
+One shared game, hosted, joined with an invite code and played for a round in
+two real browsers. It runs:
+- the real built game (`dist/`);
+- real WebRTC between the two pages;
+- the game's real Nostr signaling code, over a local relay or the public ones;
+- the game's own time skip in the host's engine page, with a stand-in model
+  answering it.
 
-Nothing leaves this machine. The relay is `relay.mjs`, and the model's API
-calls are answered inside the browser (Chrome DevTools `Fetch`), so no key is
-used and no request reaches Google.
+The model's API calls are answered inside the browser (Chrome DevTools
+`Fetch`), so no key is used and no request reaches Google. By default the relay
+is local too (`relay.mjs`), and nothing leaves this machine.
 
 ## Run it
 
 ```bash
 npm run build      # at the repo root: the run serves dist/
 cd tools/multiplayer-e2e
-npm install        # once: the relay's WebSocket server
+npm install        # once: the local relay's WebSocket server
 node e2e.mjs
 ```
 
+- `RELAYS=public node e2e.mjs` signals over the game's own public Nostr relays
+  (`src/multiplayer/signaling/nostr.js`), as players do. They carry only
+  encrypted signaling, but they see this machine's IP address. WebRTC then asks
+  the public STUN servers too.
 - Chrome must be installed. Set `CHROME=<path>` if it is not in a usual place.
 - Ports 3811 and 3812 (the host's and the guest's app servers) and 9461
   (Chrome's DevTools) must be free.
@@ -35,9 +41,17 @@ node e2e.mjs
   and the guest's screen. The guest is on its own origin, with its own library
   and storage.
 
+The real desktop app's hidden engine window is not part of this run.
+
 ## What it checks
 
-- **Hosting:** the host shares its game and gets an `oh1-` invite token.
+- **The Lobbies tab:**
+  - It is in the main menu.
+  - Its "Host a lobby" action opens the host's settings.
+  - The invite code is at the top of the tab, above the public lobbies, which
+    are under "Coming soon".
+- **Hosting:** the host opens its lobby, gets an `oh1-` invite code, and
+  reaches its signaling relays.
 - **Joining:** the guest joins through the relay, reaches the lobby and takes a
   country, and its view says it plays that country.
   - Its loading screen never names the stand-in game's placeholder country.

@@ -1,15 +1,17 @@
-/*! Open Historia — the main menu's Multiplayer tab © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// Three ways into a shared game:
-//   - Host: share the game you have open with friends (the desktop app runs it);
-//   - Join: paste the invite token a host sent you;
-//   - Public servers: a browser for games anyone can join. It is built and waits
-//     behind "Coming soon" until there is a server to list them on.
+/*! Open Historia — the main menu's Lobbies tab © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Where shared games are found, joined and hosted, all in the main game's menu:
+//   - at the top, an invite code: the way into a private lobby;
+//   - "Host a lobby", the tab's action in the menu bar (libraryBar.jsx), opens
+//     the host's settings under it. A lobby is the game the player has open,
+//     and the desktop app runs it;
+//   - below, every public lobby, with filters. It is built, and waits behind
+//     "Coming soon" until there is a server to list them on (PublicLobbies.jsx).
 
 import React, { useEffect, useState } from "react";
 import { useLibraryState } from "../../runtime/library.js";
 import { MAX_SEATS, SEATS_AVAILABLE_NOW, DEFAULT_SETTINGS } from "../host/settings.js";
 import { hostSharedGame, joinSharedGame, useSharedGame } from "../client/sharedGame.js";
-import PublicServers from "./PublicServers.jsx";
+import PublicLobbies from "./PublicLobbies.jsx";
 
 const card = {
   background: "rgba(255,255,255,0.035)",
@@ -47,15 +49,56 @@ const rememberName = (name) => {
   }
 };
 
-const Field = ({ title, children, hint }) => (
-  <label style={{ display: "block" }}>
+const Field = ({ title, children, hint, style }) => (
+  <label style={{ display: "block", ...style }}>
     <span style={label}>{title}</span>
     {children}
     {hint ? <span style={{ ...note, display: "block", marginTop: "0.35rem" }}>{hint}</span> : null}
   </label>
 );
 
-const HostCard = ({ onEnterGame }) => {
+// The top of the tab: a private lobby's invite code.
+const InviteBar = ({ onEnterGame }) => {
+  const shared = useSharedGame();
+  const [code, setCode] = useState("");
+  const [name, setName] = useState(rememberedName);
+  const [error, setError] = useState("");
+
+  const join = async (event) => {
+    event.preventDefault();
+    if (!code.trim() || shared.mode !== "off") return;
+    setError("");
+    try {
+      rememberName(name);
+      // A bad code is refused here, with the menu still showing why.
+      await joinSharedGame({ token: code, name: name || "Player" });
+      onEnterGame?.();
+    } catch (failure) {
+      setError(String(failure?.message || failure));
+    }
+  };
+
+  return (
+    <form style={card} aria-label="Join a private lobby" onSubmit={join}>
+      <h3 style={heading}>Join a private lobby</h3>
+      <p style={lead}>Enter the invite code the host sent you. You will need the lobby&apos;s scenario in your library.</p>
+      <div style={{ alignItems: "flex-end", display: "flex", flexWrap: "wrap", gap: "0.7rem" }}>
+        <Field title="Invite code" style={{ flex: "3 1 16rem" }}>
+          <input style={input} value={code} onChange={(event) => setCode(event.target.value)} placeholder="oh1-…" spellCheck={false} autoComplete="off" />
+        </Field>
+        <Field title="Your name" style={{ flex: "1 1 9rem" }}>
+          <input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Player" />
+        </Field>
+        <button type="submit" style={{ ...primary, minHeight: "2.75rem" }} disabled={!code.trim() || shared.mode !== "off"}>Join</button>
+      </div>
+      <p style={note}>Your computer connects straight to the host&apos;s, so the host can see your IP address. Other players cannot.</p>
+      {error ? <p style={errorText}>{error}</p> : null}
+    </form>
+  );
+};
+
+// "Host a lobby": the game this player has open, shared.
+const HostPanel = ({ onClose, onEnterGame }) => {
   const { activeGame } = useLibraryState();
   const shared = useSharedGame();
   const [settings, setSettings] = useState({ ...DEFAULT_SETTINGS, name: activeGame?.name ? `${activeGame.name}` : DEFAULT_SETTINGS.name });
@@ -84,6 +127,7 @@ const HostCard = ({ onEnterGame }) => {
     try {
       rememberName(name);
       await hostSharedGame({ settings, name: name || "Host" });
+      onClose?.();
       onEnterGame?.();
     } catch (failure) {
       setError(String(failure?.message || failure));
@@ -93,21 +137,21 @@ const HostCard = ({ onEnterGame }) => {
   };
 
   return (
-    <section style={card}>
-      <h3 style={heading}>Host a game</h3>
+    <section style={card} aria-label="Host a lobby">
+      <h3 style={heading}>Host a lobby</h3>
       <p style={lead}>
-        Share the game you have open. You keep playing your own country; friends you send the invite token to take others.
+        Your lobby is the game you have open. You keep playing your own country; players you send the invite code to take others.
         Your computer runs the game and pays for its AI with your key.
       </p>
       {desktop === false && !import.meta.env?.DEV ? (
-        <p style={note}>Hosting needs the desktop app. You can still join games from here.</p>
+        <p style={note}>Hosting needs the desktop app. You can still join lobbies from here.</p>
       ) : !activeGame ? (
-        <p style={note}>Open a game first (the Games tab), then come back to share it.</p>
+        <p style={note}>Open a game first (the Games tab), then come back to host it.</p>
       ) : (
         <>
           <div style={grid}>
             <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Host" /></Field>
-            <Field title="Game name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
+            <Field title="Lobby name"><input style={input} value={settings.name} maxLength={60} onChange={update("name")} /></Field>
             <Field title={`Players: ${settings.seats}`} hint={`Up to ${SEATS_AVAILABLE_NOW} for now; up to ${MAX_SEATS} is coming later.`}>
               <input type="range" min={2} max={MAX_SEATS} value={settings.seats} onChange={(event) => setSettings((previous) => ({ ...previous, seats: Math.min(SEATS_AVAILABLE_NOW, Number(event.target.value)) }))} style={{ width: "100%" }} />
             </Field>
@@ -132,59 +176,27 @@ const HostCard = ({ onEnterGame }) => {
             Until relays are available, players connect straight to your computer: you and each player can see each other&apos;s IP address.
             Players never see one another&apos;s. Some strict networks (many mobile carriers) cannot connect this way.
           </p>
-          <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-            <button type="button" style={primary} disabled={busy || shared.mode !== "off"} onClick={open}>
-              {busy ? "Opening…" : "Open to players"}
-            </button>
-          </div>
         </>
       )}
-      {error ? <p style={errorText}>{error}</p> : null}
-    </section>
-  );
-};
-
-const JoinCard = ({ onEnterGame }) => {
-  const shared = useSharedGame();
-  const [token, setToken] = useState("");
-  const [name, setName] = useState(rememberedName);
-  const [error, setError] = useState("");
-
-  const join = async () => {
-    setError("");
-    try {
-      rememberName(name);
-      // A bad token is refused here, with the menu still showing why.
-      await joinSharedGame({ token, name: name || "Player" });
-      onEnterGame?.();
-    } catch (failure) {
-      setError(String(failure?.message || failure));
-    }
-  };
-
-  return (
-    <section style={card}>
-      <h3 style={heading}>Join with an invite token</h3>
-      <p style={lead}>Paste the token a host sent you. You will need the same scenario in your library.</p>
-      <div style={grid}>
-        <Field title="Invite token"><input style={input} value={token} onChange={(event) => setToken(event.target.value)} placeholder="oh1-…" spellCheck={false} autoComplete="off" /></Field>
-        <Field title="Your name"><input style={input} value={name} maxLength={40} onChange={(event) => setName(event.target.value)} placeholder="Player" /></Field>
-      </div>
-      <p style={note}>Your computer connects straight to the host&apos;s, so the host can see your IP address. Other players cannot.</p>
       <div style={{ display: "flex", gap: "0.6rem", marginTop: "1rem" }}>
-        <button type="button" style={primary} disabled={!token.trim() || shared.mode !== "off"} onClick={join}>Join</button>
+        {activeGame && (desktop !== false || import.meta.env?.DEV) ? (
+          <button type="button" style={primary} disabled={busy || shared.mode !== "off"} onClick={open}>
+            {busy ? "Opening…" : "Open the lobby"}
+          </button>
+        ) : null}
+        <button type="button" style={button} onClick={onClose}>Cancel</button>
       </div>
       {error ? <p style={errorText}>{error}</p> : null}
     </section>
   );
 };
 
-export default function MultiplayerPanel({ onEnterGame }) {
+export default function LobbiesTab({ hosting = false, onHostingChange, onEnterGame }) {
   return (
     <div style={{ display: "grid", gap: "1.1rem", maxWidth: "62rem", margin: "0 auto" }}>
-      <JoinCard onEnterGame={onEnterGame} />
-      <HostCard onEnterGame={onEnterGame} />
-      <PublicServers />
+      <InviteBar onEnterGame={onEnterGame} />
+      {hosting ? <HostPanel onClose={() => onHostingChange?.(false)} onEnterGame={onEnterGame} /> : null}
+      <PublicLobbies />
     </div>
   );
 }

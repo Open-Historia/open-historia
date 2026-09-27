@@ -8,6 +8,8 @@
 //   npm run build            (at the repo root: the run serves dist/)
 //   npm install              (here, once: the relay's WebSocket server)
 //   node e2e.mjs             (CHROME=<path to chrome> if it is somewhere else)
+//   RELAYS=public node e2e.mjs   signals over the game's own public Nostr relays
+//                                instead (they see this machine's address)
 //
 // Host: app server A (engine handle stubbed as in electron/main.cjs), with a
 //   tab on engine.html (the hidden engine window) and a tab on the game (the
@@ -45,8 +47,15 @@ const check = (name, ok, detail = "") => {
 };
 
 // --- servers ---------------------------------------------------------------------
-const relay = await startRelay();
-const RELAY = `ws://127.0.0.1:${relay.port}/relay`;
+// RELAYS=public: the game's own relays (signaling/nostr.js DEFAULT_RELAYS), as
+// a player's would be. They carry only encrypted signaling, but they see this
+// machine's address.
+const PUBLIC_RELAYS = process.env.RELAYS === "public";
+const relay = PUBLIC_RELAYS ? null : await startRelay();
+const RELAY = relay ? `ws://127.0.0.1:${relay.port}/relay` : "";
+const RELAY_SETTING = RELAY
+  ? `localStorage.setItem("oh:mp:relays", ${JSON.stringify(JSON.stringify([RELAY]))});`
+  : `localStorage.removeItem("oh:mp:relays");`;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "oh-mp-e2e-"));
 const serverLogs = [];
 const startApp = (name, port, role) => {
@@ -132,14 +141,16 @@ for (let i = 0; i < 50; i += 1) {
     await sleep(200);
   }
 }
-const openTab = async (url) => {
-  const target = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/new?${encodeURIComponent(url)}`, { method: "PUT" })).json();
-  const tab = await cdp(target.webSocketDebuggerUrl);
+const instrument = async (tab) => {
   await tab.send("Runtime.enable");
   tab.logs = [];
   tab.on("Runtime.consoleAPICalled", (params) => tab.logs.push(`${params.type}: ${params.args.map((arg) => arg.value ?? arg.description ?? "").join(" ")}`.slice(0, 400)));
   tab.on("Runtime.exceptionThrown", (params) => tab.logs.push(`exception: ${JSON.stringify(params.exceptionDetails).slice(0, 400)}`));
   return tab;
+};
+const openTab = async (url) => {
+  const target = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/new?${encodeURIComponent(url)}`, { method: "PUT" })).json();
+  return instrument(await cdp(target.webSocketDebuggerUrl));
 };
 const until = async (tab, expression, ms = 30000) => {
   const deadline = Date.now() + ms;
@@ -175,14 +186,9 @@ const withHelpers = (tab) => tab.eval(HELPERS);
 let answeredJumps = 0;
 let engineTab = null;
 const sentTools = [];
+// The host's AI settings: a Gemini key only the stand-in model ever sees.
+const AI_SETTING = `localStorage.setItem("api_provider", "gemini"); localStorage.setItem("gemini_api_key", "e2e-dummy-key"); localStorage.setItem("ai_limit_generation", "1");`;
 try {
-  // The engine window: this device's settings first (a local relay, and a
-  // Gemini key the stand-in answers for), then the stand-in model.
-  const engine = await openTab(`${HOST}/engine.html`);
-  engineTab = engine;
-  await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
-  await engine.eval(`localStorage.setItem("oh:mp:relays", ${JSON.stringify(JSON.stringify([RELAY]))});
-    localStorage.setItem("api_provider", "gemini"); localStorage.setItem("gemini_api_key", "e2e-dummy-key"); localStorage.setItem("ai_limit_generation", "1"); true`);
   const TARGET = jumpTargetDate(ORIGIN, 30);
   const addDays = (iso, n) => new Date(Date.parse(`${iso}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
   let GUEST_COUNTRY = "";
@@ -208,7 +214,6 @@ try {
       ],
     };
   };
-  await engine.send("Fetch.enable", { patterns: [{ urlPattern: "*generativelanguage.googleapis.com*", requestStage: "Request" }] });
   // The model's API is cross-origin to the page: the stand-in answers the
   // browser's preflight, and every answer carries the CORS headers a real one does.
   const cors = [
@@ -221,9 +226,16 @@ try {
     const entries = request.postDataEntries ?? [];
     return entries.map((entry) => Buffer.from(entry.bytes ?? "", "base64").toString("utf8")).join("");
   };
-  engine.on("Fetch.requestPaused", async ({ requestId, request }) => {
+  // Every page on the host's origin reads the same key, so each one's calls to
+  // the model are answered here, and none leaves this machine. Only the
+  // engine's time skip is answered with a round.
+  const standInModel = async (page) => {
+    await page.send("Fetch.enable", { patterns: [{ urlPattern: "*generativelanguage.googleapis.com*", requestStage: "Request" }] });
+    page.on("Fetch.requestPaused", (paused) => answerModel(page, paused));
+  };
+  const answerModel = async (page, { requestId, request }) => {
     if (request.method === "OPTIONS") {
-      await engine.send("Fetch.fulfillRequest", { requestId, responseCode: 204, responseHeaders: cors, body: "" });
+      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 204, responseHeaders: cors, body: "" });
       return;
     }
     let tool = "(unknown)";
@@ -244,32 +256,63 @@ try {
       lastJumpBody = text;
       const frames = [{ candidates: [{ content: { role: "model", parts: [{ functionCall: { name: tool, args: jumpAnswer(text) } }] }, finishReason: "STOP" }] }];
       const sse = frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join("");
-      await engine.send("Fetch.fulfillRequest", { requestId, responseCode: 200, responseHeaders: [...cors, { name: "content-type", value: "text/event-stream" }], body: Buffer.from(sse).toString("base64") });
+      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 200, responseHeaders: [...cors, { name: "content-type", value: "text/event-stream" }], body: Buffer.from(sse).toString("base64") });
     } else {
-      await engine.send("Fetch.fulfillRequest", { requestId, responseCode: 400, responseHeaders: [...cors, { name: "content-type", value: "application/json" }], body: Buffer.from(JSON.stringify({ error: { code: 400, message: "stand-in" } })).toString("base64") });
+      await page.send("Fetch.fulfillRequest", { requestId, responseCode: 400, responseHeaders: [...cors, { name: "content-type", value: "application/json" }], body: Buffer.from(JSON.stringify({ error: { code: 400, message: "stand-in" } })).toString("base64") });
     }
-  });
+  };
 
-  // The host's screen.
+  const shots = path.join(HERE, "shots");
+  fs.mkdirSync(shots, { recursive: true });
+  const shoot = async (tab, name) => {
+    const reply = await tab.send("Page.captureScreenshot", { format: "png" });
+    if (reply.result?.data) fs.writeFileSync(path.join(shots, `${name}.png`), Buffer.from(reply.result.data, "base64"));
+  };
+
+  // The engine and the host's screen: the run opens engine.html itself, with
+  // this device's settings (the relay, and the key) and the stand-in model
+  // before anything can call it.
+  const engine = await openTab(`${HOST}/engine.html`);
+  engineTab = engine;
+  await until(engine, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
+  await standInModel(engine);
+  await engine.eval(`${RELAY_SETTING} ${AI_SETTING} true`);
   const host = await openTab(`${HOST}/`);
+  await standInModel(host);
   await until(host, `location.origin === ${JSON.stringify(HOST)} && document.readyState === 'complete'`, 30000);
   await withHelpers(host);
-  check("the host's game loads with the Multiplayer tab", await until(host, "(window.__e2e || false) && window.__e2e.buttons('Multiplayer').length > 0", 60000));
-  await host.eval("window.__e2e.click('Multiplayer')");
-  await until(host, "window.__e2e.buttons('Open to players').length > 0", 15000);
-  await host.eval("window.__e2e.click('Open to players')");
+  check("the host's game loads with the Lobbies tab", await until(host, "(window.__e2e || false) && window.__e2e.buttons('Lobbies').length > 0", 60000));
+  await host.eval("window.__e2e.click('Lobbies')");
+  await until(host, "window.__e2e.buttons('Host a lobby').length > 0", 15000);
+  await host.eval("window.__e2e.click('Host a lobby')");
+  const hostPanel = await until(host, "window.__e2e.buttons('Open the lobby').length > 0", 15000);
+  check("the Lobbies tab's \"Host a lobby\" opens the host's settings", hostPanel);
+  await shoot(host, "0-host-a-lobby");
+  await host.eval("window.__e2e.click('Open the lobby')");
   const hosting = await until(host, "Boolean(document.querySelector('code') && document.querySelector('code').textContent.startsWith('oh1-'))", 45000);
   const token = hosting ? await host.eval("document.querySelector('code').textContent") : "";
   check("hosting shows an invite token", hosting, token ? `${token.slice(0, 24)}…` : host.logs.slice(-6).join(" | "));
+  const relaysUp = await until(host, "/Relays: [1-9]/.test(document.body.textContent)", 30000);
+  const relayLine = await host.eval("(document.body.textContent.match(/Relays: [^A-Z]*?connected/) || [''])[0]");
+  check("the host reaches its signaling relays", relaysUp, `${PUBLIC_RELAYS ? "public" : "local"}: ${relayLine}`);
 
   // The guest.
   const guest = await openTab(`${GUEST}/`);
   await until(guest, `location.origin === ${JSON.stringify(GUEST)} && document.readyState === 'complete'`, 30000);
-  await guest.eval(`localStorage.setItem("oh:mp:relays", ${JSON.stringify(JSON.stringify([RELAY]))}); true`);
+  await guest.eval(`${RELAY_SETTING} true`);
   await withHelpers(guest);
-  await until(guest, "window.__e2e.buttons('Multiplayer').length > 0", 60000);
-  await guest.eval("window.__e2e.click('Multiplayer')");
+  await until(guest, "window.__e2e.buttons('Lobbies').length > 0", 60000);
+  await guest.eval("window.__e2e.click('Lobbies')");
   await until(guest, "Boolean(document.querySelector('input[placeholder=\"oh1-…\"]'))", 15000);
+  // The invite code heads the tab, above the public list under "Coming soon".
+  const layout = await guest.eval(`(() => {
+    const code = document.querySelector('input[placeholder="oh1-…"]');
+    const list = document.querySelector('section[aria-label="Public lobbies"]');
+    const soon = Boolean(list && list.textContent.includes("Coming soon"));
+    return { codeFirst: Boolean(code && list && (code.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING)), soon };
+  })()`);
+  check("the Lobbies tab: an invite code at the top, the public lobbies under \"Coming soon\"", layout?.codeFirst && layout?.soon, JSON.stringify(layout));
+  await shoot(guest, "0-lobbies-tab");
   await guest.eval(`(() => { const e = window.__e2e; e.type(document.querySelector('input[placeholder="oh1-…"]'), ${JSON.stringify(token)}); const name = [...document.querySelectorAll('input[placeholder="Player"]')][0]; if (name) e.type(name, "Guest"); return true; })()`);
   await sleep(300);
   await guest.eval(`(() => {
@@ -283,8 +326,9 @@ try {
     return true;
   })()`);
   await guest.eval("window.__e2e.click('Join')");
+  const joinedAt = Date.now();
   const lobby = await until(guest, "[...document.querySelectorAll('select')].some((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country'))", 90000);
-  check("the guest finds the host through the relay and reaches the lobby", lobby, lobby ? "" : guest.logs.slice(-8).join(" | "));
+  check("the guest finds the host through the relay and reaches the lobby", lobby, lobby ? `in ${((Date.now() - joinedAt) / 1000).toFixed(1)} s` : guest.logs.slice(-8).join(" | "));
   await withHelpers(guest);
   GUEST_COUNTRY = await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); const names = [...select.options].map((o) => o.value).filter(Boolean); return names.find((n) => /^Russia/.test(n)) || names.find((n) => n !== ${JSON.stringify(HOST_COUNTRY)}); })()`);
   await guest.eval(`(() => { const select = [...document.querySelectorAll('select')].find((s) => s.options[0] && s.options[0].textContent.startsWith('Choose your country')); window.__e2e.choose(select, ${JSON.stringify(GUEST_COUNTRY)}); return true; })()`);
@@ -334,12 +378,6 @@ try {
     guestQueued && hostQueued
       && guestActions.every((a) => a.ownerCode === GUEST_COUNTRY) && hostActions.every((a) => a.ownerCode === HOST_COUNTRY),
     JSON.stringify({ guest: guestActions.map((a) => `${a.ownerCode}: ${a.text}`), host: hostActions.map((a) => `${a.ownerCode}: ${a.text}`) }));
-  const shots = path.join(HERE, "shots");
-  fs.mkdirSync(shots, { recursive: true });
-  const shoot = async (tab, name) => {
-    const reply = await tab.send("Page.captureScreenshot", { format: "png" });
-    if (reply.result?.data) fs.writeFileSync(path.join(shots, `${name}.png`), Buffer.from(reply.result.data, "base64"));
-  };
   await shoot(guest, "1-guest-planning");
   await shoot(host, "1-host-planning");
 
@@ -385,7 +423,7 @@ try {
   check("the run itself", false, String(error?.stack || error));
 } finally {
   const passed = results.filter((result) => result.ok).length;
-  console.log(`\n${passed}/${results.length} passed; relay events ${relay.stats.events}`);
+  console.log(`\n${passed}/${results.length} passed; ${relay ? `local relay events ${relay.stats.events}` : "over the public relays"}`);
   if (passed < results.length) {
     console.log("--- engine console (tail) ---");
     console.log((engineTab?.logs ?? []).slice(-40).join(String.fromCharCode(10)));
@@ -395,6 +433,6 @@ try {
   chrome.kill();
   hostServer.kill();
   guestServer.kill();
-  relay.close();
+  relay?.close();
   setTimeout(() => process.exit(passed === results.length ? 0 : 1), 500);
 }

@@ -89,11 +89,11 @@ const Lobby = ({ shared, me }) => {
 
       {role === "host" && token ? (
         <div style={{ marginTop: "1rem" }}>
-          <div style={small}>Invite token: anyone who has it can join, up to {lobby?.settings?.seats ?? 8} players.</div>
+          <div style={small}>Invite code: anyone who has it can join, up to {lobby?.settings?.seats ?? 8} players.</div>
           <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", marginTop: "0.35rem" }}>
             <code style={{ background: "rgba(255,255,255,0.06)", borderRadius: "8px", flex: 1, fontSize: "0.72rem", overflow: "hidden", padding: "0.45rem 0.6rem", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{token}</code>
             <button type="button" style={button} onClick={copy}>{copied ? "Copied" : "Copy"}</button>
-            <button type="button" style={button} onClick={() => hostControl("rotate")} title="A new token: the old one stops working">New token</button>
+            <button type="button" style={button} onClick={() => hostControl("rotate")} title="A new code: the old one stops working">New code</button>
           </div>
           <div style={{ ...small, marginTop: "0.35rem" }}>
             Relays: {engine?.relays ? `${engine.relays.connected ?? 0} of ${engine.relays.total ?? 0} connected` : "connecting…"}

@@ -253,7 +253,7 @@ export const joinSharedGame = async ({ token, name } = {}) => {
 const connectionError = (connection) => ({
   rejected: "The host turned this device away.",
   lost: "The connection to the host was lost.",
-  invalid: "That invite token is not valid.",
+  invalid: "That invite code is not valid.",
 }[connection] || "");
 
 // --- Playing ---------------------------------------------------------------------
