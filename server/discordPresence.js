@@ -22,7 +22,7 @@ import net from "node:net";
 
 // The "Open Historia" application in Discord's developer portal. Public, not a
 // secret: every Rich Presence client sends its application id in the clear.
-export const DISCORD_APPLICATION_ID = "";
+export const DISCORD_APPLICATION_ID = "1529270119916896326";
 
 // The logo is an image URL, which Discord fetches itself, so there is no art to
 // upload to the developer portal.
