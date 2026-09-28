@@ -3119,7 +3119,7 @@ const ADVISOR_GROUPS_ARE = "actors that are not countries (armed groups, cartels
 // With the functions, the count alone: the model knows there is something to
 // ask about, and asks when the conversation turns to it.
 const buildAdvisorGroupsDirective = (groupCount) => `[Groups on the Map]
-Besides its countries, this world has ${groupCount} group${groupCount === 1 ? "" : "s"}: ${ADVISOR_GROUPS_ARE}. Who they are, what each one is and where it controls come from two functions: list_groups (every group, or only those in one country) and group_info (one group in full, by its exact name). Call them whenever the conversation turns to a group, to who really holds a place, or to threats inside a country, rather than guessing a group's name or its area. Ask for everything you need in one turn, and never mention the lookup in your reply.`;
+Besides its countries, this world has ${groupCount} group${groupCount === 1 ? "" : "s"}: ${ADVISOR_GROUPS_ARE}. Who they are, what each one is and where it controls come from list_groups, which gives every group in full (or only those in one country): what it is, its former names, and every region it controls with the country each belongs to. One call is enough; group_info is only for a group whose region list came back cut short. Call list_groups whenever the conversation turns to a group, to who really holds a place, or to threats inside a country, rather than guessing a group's name or its area, and never mention the lookup in your reply.`;
 
 // Without the functions, the list: what list_groups would have answered, a
 // line a group. A world with a great many groups lists the first

@@ -275,9 +275,10 @@ export const GROUP_LOOKUP_TOOLS = Object.freeze([
   {
     name: "list_groups",
     description:
-      "Every group on the map: an actor that is not a country (an armed group, a cartel, a militia, a movement, an outbreak), "
-      + "controlling an area of regions that still belong to their countries. Each by its EXACT name, what it is, how many regions "
-      + "it controls and in which countries.",
+      "Every group on the map in full: an actor that is not a country (an armed group, a cartel, a militia, a movement, an outbreak), "
+      + "controlling an area of regions that still belong to their countries. Each by its EXACT name, with what it is, its former "
+      + "names, how many regions it controls and in which countries, and every region it controls with the country each belongs to. "
+      + "One call answers everything about the groups.",
     schema: object("Optional filter.", {
       country: text("Optional: only groups controlling regions of this country (its exact name)."),
     }),
@@ -285,8 +286,8 @@ export const GROUP_LOOKUP_TOOLS = Object.freeze([
   {
     name: "group_info",
     description:
-      "One group in full: what it is, its former names, and every region it controls with the country each belongs to. "
-      + "Use the exact name from list_groups.",
+      "One group in full, by its exact name or a former name. Only needed when list_groups cut a group's region list short "
+      + "(moreRegions): this lists up to 500 of its regions.",
     schema: object("Which group.", { name: text("The group's exact name.") }, ["name"]),
   },
 ]);
@@ -589,6 +590,25 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
 // ---------------------------------------------------------------------------
 
 const regionBrief = (row) => ({ id: row.id, name: row.name, owner: row.owner || "unowned" });
+
+// How many regions a group lists: list_groups gives every group in full, each
+// region list up to LIST_GROUP_REGIONS and all of them together up to
+// LIST_GROUPS_REGION_BUDGET, so a world of great insurgencies still answers in
+// one call of bounded size; group_info lists one group's up to GROUP_INFO_REGIONS.
+const LIST_GROUP_REGIONS = 200;
+const LIST_GROUPS_REGION_BUDGET = 1500;
+const GROUP_INFO_REGIONS = 500;
+
+// One group as both functions answer it.
+const groupInFull = (groupName, group, rows, limit) => ({
+  name: groupName,
+  ...(group.description ? { description: group.description } : {}),
+  ...(group.formerNames?.length ? { formerNames: group.formerNames } : {}),
+  regionsControlled: rows.length,
+  inCountries: countriesOf(rows),
+  regions: rows.slice(0, limit).map(regionBrief),
+  ...(rows.length > limit ? { moreRegions: rows.length - limit } : {}),
+});
 
 // The world's groups and the regions each controls, as rows of this map. An
 // area row this map does not render is left out rather than named by its id.
@@ -1250,19 +1270,24 @@ export const executeLookup = (context, name, args = {}) => {
     case "list_groups": {
       const { groups, rowsOf } = groupsOnMap(context);
       const country = clean(a.country) ? context.resolveOwner(a.country) || clean(a.country) : "";
-      const listed = Object.keys(groups).map((groupName) => {
+      let budget = LIST_GROUPS_REGION_BUDGET;
+      const listed = [];
+      for (const groupName of Object.keys(groups)) {
         const rows = rowsOf(groupName);
-        return {
-          name: groupName,
-          ...(groups[groupName].description ? { description: groups[groupName].description.slice(0, 400) } : {}),
-          regionsControlled: rows.length,
-          inCountries: countriesOf(rows),
-        };
-      }).filter((group) => !country || group.inCountries.some((entry) => entry.country === country));
+        if (country && !rows.some((row) => (row.owner || "unowned") === country)) continue;
+        const limit = Math.min(LIST_GROUP_REGIONS, budget);
+        budget -= Math.min(rows.length, limit);
+        listed.push(groupInFull(groupName, groups[groupName], rows, limit));
+      }
       if (!listed.length) {
         return { groups: [], note: country ? `No group controls any region of ${country}.` : "There are no groups on the map." };
       }
-      return { groups: listed };
+      return {
+        groups: listed,
+        ...(listed.some((group) => group.moreRegions)
+          ? { note: "Some region lists were cut short (moreRegions). group_info lists one group's regions at greater length." }
+          : {}),
+      };
     }
     case "group_info": {
       const { groups, rowsOf } = groupsOnMap(context);
@@ -1270,17 +1295,7 @@ export const executeLookup = (context, name, args = {}) => {
       if (!groupName) {
         return { error: `No group named "${clean(a.name)}". Names are exact.`, groups: Object.keys(groups) };
       }
-      const group = groups[groupName];
-      const rows = rowsOf(groupName);
-      return {
-        name: groupName,
-        ...(group.description ? { description: group.description } : {}),
-        ...(group.formerNames?.length ? { formerNames: group.formerNames } : {}),
-        regionsControlled: rows.length,
-        inCountries: countriesOf(rows),
-        regions: rows.slice(0, 200).map(regionBrief),
-        ...(rows.length > 200 ? { moreRegions: rows.length - 200 } : {}),
-      };
+      return groupInFull(groupName, groups[groupName], rowsOf(groupName), GROUP_INFO_REGIONS);
     }
     default:
       return { error: `Unknown lookup "${clean(name)}". Available: ${[...LOOKUP_TOOL_NAMES, ...GROUP_LOOKUP_TOOL_NAMES].join(", ")}.` };
