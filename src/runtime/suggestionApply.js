@@ -13,6 +13,7 @@
 import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { buildScenarioSnapshot, politicsEntries, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
+import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -158,6 +159,10 @@ export const buildDetailSave = (accepted, details) => {
     } else if (change.kind === "politics") {
       const current = Object.prototype.hasOwnProperty.call(worldPatch, change.field) ? worldPatch[change.field] : data.world?.[change.field];
       worldPatch[change.field] = applyPoliticsChange(current, change);
+      // A canon context is read only beside the canon version, as the Politics
+      // tab writes it (materializeScenarioCanon): accepting one makes the
+      // author's canon current, or its divergence and packs would be ignored.
+      if (change.field === "canonContext" && isRecord(change.to)) worldPatch.canonModelVersion = CANON_MODEL_VERSION;
     } else if (change.kind === "stats" || change.kind === "institutionLogos") {
       if (change.to === null || change.to === undefined) clears.push(change.kind);
       else uploads.push({ key: change.kind, json: change.to });

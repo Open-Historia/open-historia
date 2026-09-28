@@ -21,6 +21,7 @@
 import { FEATURE_DEFINITIONS, normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidance.js";
 import { normalizeGroups } from "./groups.js";
+import { isCurrentCanonWorld } from "./scenarioCanon.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
 import {
@@ -514,6 +515,15 @@ const metaOf = (scenario) => {
   };
 };
 
+// The canon context as the game reads it (scenarioCanon.js readScenarioCanon):
+// only a world whose canon is current has one. Generating the Political World
+// makes a scenario's canon current — canonModelVersion beside the context — and
+// a context without the version is ignored, its divergence and reference packs
+// with it. So a scenario that gained a Political World shows a canon change
+// even when a stale context was already sitting in it, and accepting that
+// change makes the author's canon current too (suggestionApply.js).
+const canonContextOf = (world) => (isCurrentCanonWorld(world) ? world.canonContext ?? null : null);
+
 export const buildScenarioSnapshot = (bundle) => {
   const legacyOwners = isRecord(bundle?.data?.world) && needsOwnerMigration(bundle.data.world);
   const source = isRecord(bundle) ? migrateBundleOwners(bundle) : {};
@@ -532,7 +542,7 @@ export const buildScenarioSnapshot = (bundle) => {
     world: Object.fromEntries(WORLD_DETAIL_FIELDS.map((key) => [key, key === "allowedUnitTypes"
       ? (Array.isArray(world[key]) ? [...new Set(world[key].map(clean).filter(Boolean))].sort() : [])
       : textOf(world[key])])),
-    politics: Object.fromEntries(POLITICS_FIELDS.map((key) => [key, world[key] ?? null])),
+    politics: Object.fromEntries(POLITICS_FIELDS.map((key) => [key, key === "canonContext" ? canonContextOf(world) : world[key] ?? null])),
     prompts: flattenGuidance(data.prompts),
     stats: bundleAssetJson(assets.stats) ?? null,
     institutionLogos: bundleAssetJson(assets.institutionLogos) ?? null,
@@ -565,12 +575,15 @@ export const buildScenarioSnapshot = (bundle) => {
 
 // What changed inside one record, as the paths a person would name
 // ("government.leader"), for showing a Politics entry's change. Lists and
-// values are compared whole; at most `max` paths, the first ones in order.
+// values are compared whole; a record that appeared or went away is read
+// field by field; at most `max` paths, the first ones in order.
 export const changedPathsOf = (before, after, { max = 6 } = {}) => {
   const paths = [];
   const walk = (a, b, prefix) => {
     if (paths.length > max || sameValue(a, b)) return;
-    if (isRecord(a) && isRecord(b)) {
+    if ((isRecord(a) || a == null) && (isRecord(b) || b == null)) {
+      a = a ?? {};
+      b = b ?? {};
       for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])]) walk(a[key], b[key], prefix ? `${prefix}.${key}` : key);
       return;
     }
@@ -630,10 +643,13 @@ export const politicsEntries = (value, container, within = "") => {
   const map = within ? (isRecord(value) ? value[within] : null) : value;
   return new Map(Object.entries(isRecord(map) ? map : {}));
 };
+// The canon context is one setting (the universe, the divergence, the
+// reference packs): changed whole, whatever its shape happens to look like.
+const WHOLE_POLITICS_FIELDS = new Set(["canonContext"]);
 const diffPolitics = (field, from, to, changes) => {
   if (sameValue(from, to)) return;
-  const fromShape = politicsShapeOf(from);
-  const toShape = politicsShapeOf(to);
+  const fromShape = WHOLE_POLITICS_FIELDS.has(field) ? "value" : politicsShapeOf(from);
+  const toShape = WHOLE_POLITICS_FIELDS.has(field) ? "value" : politicsShapeOf(to);
   const shape = fromShape === "empty" ? toShape : toShape === "empty" || toShape === fromShape ? fromShape : "value";
   if (shape !== "list" && shape !== "map" && !shape.startsWith("ledger:")) {
     changes.push({ id: `politics:${field}`, area: "details", kind: "politics", field, container: "value", entry: null, from: from ?? null, to: to ?? null });

@@ -289,8 +289,14 @@ const DetailValue = ({ change, coverBefore }) => {
   }
   if (change.kind === "politics") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
-    // Which fields of the entry changed, the way tracked changes show a word.
-    const paths = change.op === "change" ? changedPathsOf(change.from, change.to, { max: POLITICS_PATHS_SHOWN }) : [];
+    // Which fields of the entry changed, the way tracked changes show a word;
+    // for a value changed whole (the canon context), its fields, a new one's
+    // measured from nothing.
+    const record = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const whole = !change.op && (record(change.from) || record(change.to));
+    const paths = change.op === "change" || whole
+      ? changedPathsOf(whole ? change.from ?? {} : change.from, whole ? change.to ?? {} : change.to, { max: POLITICS_PATHS_SHOWN })
+      : [];
     return (
       <div style={{ display: "grid", gap: "0.2rem" }}>
         <div style={quietTextStyle}>{text}</div>
