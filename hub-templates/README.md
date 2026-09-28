@@ -54,3 +54,32 @@ Add this field to `scenario.yml` (the app already prefills it):
 
 Without this field everything still works; scenario-carried basemaps just can't be deduped
 (they may appear alongside an identical dedicated post).
+
+## Suggested changes (no template change)
+
+A player who downloaded a scenario and edited it can suggest the changes to its author
+(`src/Game/GameUI/ScenarioSuggestions.jsx`). The suggestion is a **comment on the
+original post**, made by the player, with a small `<scenario>-suggestion.zip` attached
+(`open-historia-scenario-suggestion/1`: `suggestion.json`, plus `files/cover.<ext>` or
+`files/background.json` when those changed). The comment ends with a marker line:
+
+```
+Open-Historia-Suggestion: sug-1a2b3c4d
+```
+
+The author's game counts a comment as a suggestion when it has a `.zip` attachment, and
+either the file name contains "suggestion" or the marker is present
+(`parseSuggestionComment`, `src/runtime/hubPosts.js`). Any other comment is only a
+comment.
+
+The author's game recognises its own posts by a key that **Publish** writes into the
+`technical` field of `scenario.yml`: the line `Scenario-Key: oh-<16 hex>`, next to
+`Basemap-Hash` / `Flags-Count`. The live form already has that field (its label is
+"Basemap info (auto-filled — leave blank)"). The line only works if the field keeps the
+id `technical` and is not required to be empty. A post made before this version, or one
+whose author cleared the field, carries no key. Its author links it by hand from the
+scenario's Community card (**Link my post**: the post's address or number).
+
+Everything is read without signing in. GitHub's unauthenticated API allows 60 requests
+an hour: the game reads the scenario list at most once every five minutes, and reads a
+post's comments only when its comment count has moved.

@@ -22,6 +22,13 @@ const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 const PUBLIC_DIR = path.join(PROJECT_ROOT, "public");
 import { DATA_DIR as SERVER_DATA_DIR } from "./dataDir.js";
 import { coarsenFeatureCollection } from "./coarseGeometry.js";
+import {
+  fetchableHubOrigin,
+  hubOriginAfterWrite,
+  normalizeHubOrigin,
+  normalizeHubPublished,
+  normalizeHubReviews,
+} from "./hubProvenance.js";
 const SCENARIOS_DIR = path.join(SERVER_DATA_DIR, "scenarios");
 const GAMES_DIR = path.join(SERVER_DATA_DIR, "games");
 const SCENARIO_MANIFEST_PATH = path.join(SERVER_DATA_DIR, "scenario-manifest.json");
@@ -767,22 +774,10 @@ const saveGameManifest = (manifest) => {
   });
 };
 
-// Provenance for scenarios imported straight from the community hub: which post
-// (issue number), which exact bundle file, and when. The bundle URL doubles as
-// the update signal — GitHub mints a new attachment URL for every re-upload, so
-// a post whose current bundleUrl differs from the recorded one has an update
-// (the hub-cache route relies on the same immutability).
-const normalizeHubOrigin = (raw) => {
-  if (!raw || typeof raw !== "object") return null;
-  const postId = Number(raw.postId);
-  const bundleUrl = String(raw.bundleUrl ?? "").trim();
-  if (!Number.isFinite(postId) || postId <= 0 || !bundleUrl) return null;
-  return {
-    bundleUrl,
-    postId,
-    syncedAt: String(raw.syncedAt ?? "").trim() || new Date().toISOString(),
-  };
-};
+// Provenance for scenarios imported straight from the community hub (which post,
+// which exact bundle file, when, and whether it has been edited since), the post
+// the player made of their own scenario, and the suggestions they reviewed:
+// server/hubProvenance.js, shared with the web store.
 
 const normalizePlayCount = (raw) => {
   const value = Number(raw);
@@ -809,6 +804,8 @@ const readScenarioMeta = (scenarioId) => {
     heroSubtitle: String(raw?.heroSubtitle ?? "").trim() || description,
     heroTitle: String(raw?.heroTitle ?? "").trim() || name,
     hubOrigin: normalizeHubOrigin(raw?.hubOrigin),
+    hubPublished: normalizeHubPublished(raw?.hubPublished),
+    hubReviews: normalizeHubReviews(raw?.hubReviews),
     id: scenarioId,
     name,
     playCount: normalizePlayCount(raw?.playCount),
@@ -817,7 +814,10 @@ const readScenarioMeta = (scenarioId) => {
   };
 };
 
-const writeScenarioMeta = (scenarioId, updates) => {
+// `touch: false` is for bookkeeping that is not an edit of the scenario — the
+// hub post it was found under, a suggestion reviewed — so it neither moves the
+// scenario up "Last Updated" nor marks a downloaded copy as changed.
+const writeScenarioMeta = (scenarioId, updates, { touch = true } = {}) => {
   const current = readScenarioMeta(scenarioId);
   const next = {
     ...current,
@@ -832,16 +832,21 @@ const writeScenarioMeta = (scenarioId, updates) => {
     updates?.countryNameOverrides && typeof updates.countryNameOverrides === "object"
     ? updates.countryNameOverrides
     : current.countryNameOverrides,
-    // Hub provenance survives ONLY when a write explicitly carries it (the
-    // import/update paths stamp it last). Every other meta write is a local
-    // modification — a rename, an editor apply, a cover change — which turns
-    // the copy into a fork, and a fork must stop offering hub updates that
-    // would overwrite the player's work.
-    hubOrigin: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubOrigin")
-      ? normalizeHubOrigin(updates.hubOrigin)
-      : null,
+    // A write that carries hubOrigin sets it (the import/update paths stamp it
+    // last) or clears it (Unlink). Every other meta write is a local
+    // modification — a rename, an editor apply, a cover change — which keeps the
+    // link but marks it edited: an edited copy must stop offering hub updates
+    // that would overwrite the player's work, and must still know its original
+    // so the player can suggest their changes back (hubProvenance.js).
+    hubOrigin: hubOriginAfterWrite(current.hubOrigin, updates ?? {}, { touch }),
+    hubPublished: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubPublished")
+      ? normalizeHubPublished(updates.hubPublished)
+      : current.hubPublished,
+    hubReviews: Object.prototype.hasOwnProperty.call(updates ?? {}, "hubReviews")
+      ? normalizeHubReviews(updates.hubReviews)
+      : current.hubReviews,
     id: scenarioId,
-    updatedAt: new Date().toISOString(),
+    updatedAt: touch ? new Date().toISOString() : current.updatedAt,
   };
 
   writeJsonFile(getScenarioMetaPath(scenarioId), next);
@@ -1961,8 +1966,8 @@ const setSelectedScenario = (scenarioId) => {
 // Play stamps power the main menu's "Last Played"/"Most Played" rows. They
 // bypass writeGameMeta/writeScenarioMeta on purpose: those stamp updatedAt
 // (which would turn "Last Updated" into "Last Played") and writeScenarioMeta
-// drops hubOrigin on any write it isn't explicitly handed (which would fork a
-// hub scenario off update tracking just for playing it).
+// marks a hub copy edited on any write it isn't explicitly handed (which would
+// take a hub scenario off update tracking just for playing it).
 const recordGamePlayed = (gameId) => {
   try {
     const metaPath = getGameMetaPath(gameId);
@@ -2225,9 +2230,15 @@ const createGame = ({
   return getGameDetails(resolvedGameId);
 };
 
-const updateScenario = (
-  scenarioId,
-  {
+// The hub bookkeeping a scenario write may carry (server/hubProvenance.js):
+// hubOrigin (null unlinks the scenario from the post it was downloaded from),
+// hubPublished (the player's own post) and hubReviews (suggestions reviewed).
+const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
+const pickHubProvenance = (body) =>
+  Object.fromEntries(HUB_PROVENANCE_KEYS.filter((key) => Object.hasOwn(body ?? {}, key)).map((key) => [key, body[key]]));
+
+const updateScenario = (scenarioId, body = {}) => {
+  const {
     accentColor,
     countryNameOverrides,
     description,
@@ -2245,12 +2256,22 @@ const updateScenario = (
     subtitle,
     world,
     worldPatch,
-  } = {},
-) => {
+  } = body ?? {};
   ensureScenarioStore();
 
   if (!fs.existsSync(getScenarioDirectory(scenarioId))) {
     throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+
+  // A write that only records hub bookkeeping is not an edit: it must not stamp
+  // updatedAt, and must not mark a downloaded copy as changed.
+  const provenance = pickHubProvenance(body);
+  const edits = [accentColor, countryNameOverrides, description, eyebrow, features, game, gamePatch, heroSubtitle,
+    heroTitle, name, prompts, promptsPatch, storage, subtitle, world, worldPatch].some((value) => value !== undefined);
+  if (Object.keys(provenance).length && !edits) {
+    writeScenarioMeta(scenarioId, provenance, { touch: false });
+    if (setActive) setSelectedScenario(scenarioId);
+    return getScenarioDetails(scenarioId);
   }
 
   const currentMeta = readScenarioMeta(scenarioId);
@@ -2312,6 +2333,9 @@ const updateScenario = (
       }
     }
   }
+
+  // Bookkeeping riding along with an edit lands after it, as written.
+  if (Object.keys(provenance).length) writeScenarioMeta(scenarioId, provenance, { touch: false });
 
   if (setActive) {
     setSelectedScenario(scenarioId);
@@ -3801,7 +3825,9 @@ const exportGameBundle = (gameId) => {
     // is one both installs ship, or one that can still be fetched from the hub.
     scenarioRef: {
       builtIn: BUILT_IN_SCENARIO_IDS.has(game.scenarioId),
-      hubOrigin: scenario?.hubOrigin ?? null,
+      // Only a copy that is still the post's file can be fetched again; an
+      // edited one keeps its link but travels in the zip (hubProvenance.js).
+      hubOrigin: fetchableHubOrigin(scenario?.hubOrigin),
       // This install does not have the map either — the game was imported without
       // it, or the scenario was deleted out from under it. There is nothing to
       // embed, so the zip travels as a pointer and the receiver is left in
@@ -3810,7 +3836,7 @@ const exportGameBundle = (gameId) => {
       scenarioId: game.scenarioId,
       // Only worth measuring when the map might actually have to travel.
       scenarioBytes:
-      scenario?.missing || BUILT_IN_SCENARIO_IDS.has(game.scenarioId) || scenario?.hubOrigin
+      scenario?.missing || BUILT_IN_SCENARIO_IDS.has(game.scenarioId) || fetchableHubOrigin(scenario?.hubOrigin)
       ? 0
       : scenarioBundleBytes(game.scenarioId),
       // A missing scenario is named by its id (buildScenarioCatalogEntry), which

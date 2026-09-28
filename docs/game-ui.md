@@ -156,7 +156,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 | `mostPlayedGames` | `playCount` desc, then `round` | `games` |
 | `mostPlayedScenarios` | `playCount` desc, then `gameCount` | `scenarios` |
 | `lastUpdatedScenarios` | `updatedAt` desc | `scenarios` |
-| `yourScenarios` | filter `!hubOrigin` and not the untouched built-in | `scenarios` |
+| `yourScenarios` | filter `!hubOrigin` or `hubOrigin.editedAt` (a hub import the player has edited), and not the untouched built-in | `scenarios` |
 
 ### 4.4 Cards
 
@@ -176,6 +176,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 | Edit | `onEdit`→`openScenarioEditor` | `loadScenarioDetails` → editor drawer |
 | Clone Scenario | `onClone`→`handleScenarioClone` | `createScenario({seedScenarioId, setActive})` |
 | (whole card) | `onSelect`→`selectScenario` | Marks `selectedScenarioId` |
+| **💬 N suggestions** (only on the player's own posted scenario with suggestions waiting) | `SuggestionCountBadge` → `onEdit` | Opens the drawer, whose Community card lists them (see [§4.8](#48-suggested-changes)) |
 
 ### 4.5 Country / faction picker (New Game flow)
 
@@ -198,22 +199,62 @@ Section tabs (`SectionTabs`): scenarios show `overview | world | features | prom
 
 | Section | Fields | Writes via |
 |---|---|---|
-| overview | Name, Eyebrow, Accent (color), Subtitle, Description, Hero Title, Hero Subtitle | `saveScenario`/`saveGame` meta |
+| overview | Scenarios only, at the top: the **Community card** (`ScenarioCommunityCard`, see [§4.8](#48-suggested-changes)). Then Name, Eyebrow, Accent (color), Subtitle, Description, Hero Title, Hero Subtitle | `saveScenario`/`saveGame` meta |
 | world | Player Country, Game Date, Language, **Deployable Troop Types** (scenario only, `UNIT_TYPES` toggles), World Before Round One (`startingTimelineText`), Simulation Rules, Country Label Font/Letter Color/Border Color | merged into `world` |
 | features | `FeaturesSectionEditor` (`FeaturesSectionEditor.jsx`): one card per entry of `FEATURE_DEFINITIONS` (`server/gameFeatures.js`) — today Espionage, Idle diplomacy with its "one attempt every N minutes" setting, and World direction (the pace, the world's share, the map's tempo, and two `type: "text"` settings — the priority rules and the scripted events, one dated beat per line — rendered as textareas that show what was typed rather than the normalized value, because the normalizer trims and a field that trims on every keystroke cannot hold the space between two words; see [world direction](ai-overview.md#world-direction-what-an-author-sets-as-numbers)). A scenario edits its complete configuration (On/Off + settings), the default for every game made from it; a game edits only overrides, each control offering **Scenario default** so an unset field keeps following the scenario, including changes made to the scenario later (`resolveFeatures`). The library resolves the active game's features into `src/runtime/gameFeatures.js` (`useActiveFeatures` for the UI, `isActiveFeatureEnabled` for the simulation): espionage off hides the Spy tab and stops spy reports, intercept refreshes, the turn's espionage resolution and the simulator's spy orders; idle diplomacy's setting sets the per-minute chance of `maybeSendIdleDiplomacy`'s chat half (off keeps only the movement pulse). Scenario and game bundles carry `features`. | `saveScenario`/`saveGame` meta `features` (`readScenarioMeta`/`readGameMeta` normalise it on both stores) |
 | prompts | `PromptSectionEditor`: one tab per section of `PROMPT_EDITOR_SECTIONS` (the prompts with guidance), and inside it one textarea per guidance passage declared in `promptGuidance.js` (the role, the tone, what to simulate, what makes a good event…) with **Reset to default** per passage and per section. The technical text — placeholders, output contracts, map rules — is never shown or stored, so it cannot be broken here and it follows the app's defaults as they change; a pack in the old whole-prompt shape is ignored (ai-prompts.md §2). | `serializePromptPack` → `prompts` as `{ promptModel: 2, guidance }` |
 | assets | Upload/Reset per asset (cover; scenario adds cities/colors/countries/regions) via hidden file inputs | `uploadScenarioAsset`/`clearScenarioAsset` etc. |
 | bundles | **Download .zip** / **Download JSON** (`exportScenarioBundle` + `splitScenarioBundleImage`) | disk download |
 
-Footer: **Save** (`handleSave`), **🗺️ Open Map Editor** (scenario only — loads current geometry/owners/cities/palette/flags/background then opens the lazy `MapEditor` at z 10050; on apply → `applyMapToScenario`), **Delete** (if `record.canDelete`, `window.confirm`).
+Footer: **Save** (`handleSave`), **🗺️ Open Map Editor** (scenario only — `openMapEditorFor` loads current geometry/owners/cities/palette/flags/background then opens the lazy `MapEditor` at z 10050; on apply → `applyMapToScenario`), **Suggest changes** (only on a scenario downloaded from the hub, `record.hubOrigin`; see [§4.8](#48-suggested-changes)), **Delete** (if `record.canDelete`, `window.confirm`).
 
 Save is careful: scenario/game meta writes merge `currentGame`/`currentWorld` so a partial write never wipes `startDate`/`gameDate`/`round` or `polityOverrides`/`ownerCodes` (the "Undated" and wiped-map bugs called out in comments).
 
 ### 4.7 Hub update detection
 
-When the Scenarios tab shows any scenario carrying `hubOrigin`, an effect (`libraryBar.jsx:1308`) lazy-imports `communityHub.jsx`'s `fetchHubPosts()` and builds `hubPostById`. `scenarioUpdateAvailable(scenario)` returns true when the post's current `bundleUrl` differs from the imported one → the card's primary button flips to **⬆ Update**. `handleScenarioUpdate` calls `downloadHubBundle` + `updateScenarioFromBundle(id, bundle)`, replacing the copy in place (existing games keep working).
+When the Scenarios tab shows any unedited hub import (`hubOrigin` without `editedAt`), an effect (`libraryBar.jsx:2145`) calls `fetchHubPosts()` (`src/runtime/hubPosts.js`, cached five minutes) and builds `hubPostById`. `scenarioUpdateAvailable(scenario)` returns true when the post's current `bundleUrl` differs from the imported one → the card's primary button flips to **⬆ Update**. `handleScenarioUpdate` calls `downloadHubBundle` + `updateScenarioFromBundle(id, bundle)`, replacing the copy in place (existing games keep working) and re-stamping `hubOrigin` with the post's title and author. An **edited** copy is never offered an update, which would overwrite the player's work: its player suggests their changes to the post instead (§4.8).
 
-### 4.8 In-game floating cluster & server shutdown
+### 4.8 Suggested changes
+
+A player who downloaded a community scenario and changed it can send the changes, not the whole scenario, back to its author. The suggestion travels as a **comment on the original post** with a small `.zip` attached, and the author accepts or rejects each change, like tracked changes in a word processor. Everything reads the hub without signing in: GitHub's unauthenticated API allows 60 requests an hour, and no Worker writes to GitHub. The player posts the comment themselves.
+
+**What each scenario remembers** (`server/hubProvenance.js`, shared by both stores; see [server.md](server.md#hub-provenance-where-a-scenario-came-from-and-where-it-went)):
+
+| Field | Meaning |
+|---|---|
+| `hubOrigin` | The post this copy was downloaded from (`postId`, `bundleUrl`, `title`, `author`). An edit keeps it and stamps `editedAt`. **Unlink from the community post** (`handleUnlinkOrigin`, with a confirm) writes `hubOrigin: null`: the copy is the player's own from then on, and is compared with nothing. |
+| `hubPublished` | The player's own posts of this scenario: `key` (the `Scenario-Key` written into the post by **Publish**), `postIds`, the `suggestions` found in their comments, the `blocked` contributors, and the `commentCounts` last seen. |
+| `hubReviews` | Per suggestion: `reviewing` / `done` / `dismissed`, and the ids of the changes accepted and rejected. |
+
+**The Community card** (`ScenarioCommunityCard`, at the top of the drawer's Overview) shows what applies:
+
+- **From the community** (a download): the post (`View the post ↗`), whether the copy is changed, **Suggest changes** and **Unlink from the community post**.
+- **Your post on the hub** (the player's own post): the suggestions waiting, grouped by contributor (each **Review**, **View the comment on GitHub ↗**, and **Reject all from @login**), the reviewed and dismissed ones behind **Reviewed suggestions (N)**, **Check for suggestions** (a forced read), **Open a suggestion file** (a `.zip` someone sent another way), the **Blocked contributors** with **Unblock**, and **Unlink the post** (stops looking; the post stays on the hub).
+- **Link my post**: a scenario published before this version carries no key; the player gives the post's address or number (`handleLinkPost`).
+
+**Suggest changes** (`SuggestChangesDialog`, `ScenarioSuggestions.jsx:426`). Unsaved edits in the drawer are saved first, with a confirm (`handleSuggestChanges`). The dialog downloads the post's bundle and exports the copy (`exportScenarioBundle`), and `diffScenarioBundles` (`src/runtime/scenarioChanges.js`) lists what changed, in two parts: **Changes outside the map** and **Changes on the map**. An unchanged copy says so. The player may add a name and a note. **Save the file and open the post** then does three things. It opens the post at its comment box first, while the click still counts as the player's. It copies the comment (`buildSuggestionComment`) to the clipboard. It saves `<scenario>-suggestion.zip` (`buildSuggestionZip`). **Only save the file** skips the post. The dialog then shows the steps: paste the comment, drag the file in, click Comment. The comment's text is also shown there, for when the clipboard was refused.
+
+**The author learns of it.** When the menu opens, the effect at `libraryBar.jsx:2221` reads the post list once (`fetchHubPosts`, cached five minutes; the effect itself runs at most once every five minutes). `refreshPublishedRecord` (`hubPosts.js`) finds the posts carrying the scenario's key. It then reads a post's comments only when the post's comment count has moved. A comment is a suggestion when it has a `.zip` attachment, and either the file name says "suggestion" or the comment carries the marker line `Open-Historia-Suggestion: sug-…`. Where the author sees it:
+
+- `SuggestionsBanner` above the Games and Scenarios tabs: **💬 People have suggested changes to your scenarios**, one button per scenario;
+- the card's badge;
+- the Community card.
+
+A deleted comment takes its suggestion with it.
+
+**The changelog** (`SuggestionReviewDialog`, `ScenarioSuggestions.jsx:589`). The dialog downloads the suggestion's file through `/api/hub/file`, exports the author's scenario as it is now, and marks each change outside the map with one of three states:
+
+- *open*;
+- *You changed this too* (a conflict: the author rewrote it since posting; accepting replaces their version);
+- *Already in your scenario*.
+
+Text changes show a word diff (`diffWords`). **Accept** applies the change at once (`buildDetailSave` in `src/runtime/suggestionApply.js`: meta, game, world, features, prompts, Politics entries, cover, stats sheet and logos in one save). **Undo** puts back what was there. **Reject** only records the decision. Accept all and Reject all are there too. The map's changes are summarised, with **🗺️ Review the map changes**. The footer offers **Reject all from @login**, **Mark as reviewed**, **Dismiss** (put away unreviewed, offered on a download error too) and **Done**. Decisions are kept in `hubReviews` as they are made.
+
+**Review the map changes** (`openMapReview`) opens the Workshop with a `review` ({ suggestion, decisions, onSaved }). It lists and marks each change on the map, to accept or reject one by one ([map-editor.md §25](map-editor.md#25-reviewing-suggested-changes-suggestionreviewpaneljsx)). Its decisions are merged into `hubReviews` only when the map is saved. The suggestion is `done` once every change, on the map and off it, is decided.
+
+**Reject all from @login** (`handleRejectContributor`) is for a contributor flooding a post with bad edits. After a confirm, the login goes into `hubPublished.blocked` on **every** scenario this player has posted (`withContributorBlocked`). Their suggestions are dropped, an open review of theirs closes, and anything they post later is never stored (logins compare case-insensitively). Blocking resets `commentCounts`, so the next look re-reads every comment. **Unblock** does the same the other way, and their suggestions come back on that next look. A suggestion opened from a file carries only a free-text name, so it cannot be blocked this way.
+
+### 4.9 In-game floating cluster & server shutdown
 
 When the menu is closed, `LibraryTopBar` renders a compact cluster (z 9997): a session-summary pill (`summaryText` = name / country / date), **⌂ Exit Game** (→ `setMenuOpen(true)`). Desktop lays them out top-left of the date widget; phones put **⌂** in the left gutter. The ⏻ server-shutdown button that used to sit beside it is gone from the beta; `POST /api/server/shutdown` stays for scripts and the launcher.
 
@@ -473,7 +514,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 20 | Country / faction picker | `libraryBar.jsx` | modal | `countryPicker` | country options, custom regions | `createGame`, `saveGame`, `activateGame` |
 | 21 | Map editor host | `libraryBar.jsx` | overlay | `isMapEditorOpen` | scenario assets | `applyMapToScenario` → many asset writes + new game |
 | 22 | ⌂ Exit Game / summary | `libraryBar.jsx` | cluster | `!menuOpen` | `activeGame` | `setMenuOpen(true)` |
-| 23 | Community hub tab | `communityHub.jsx` | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle`, publish/export |
+| 23 | Community hub tab | `communityHub.jsx` (posts read by `runtime/hubPosts.js`) | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle` (stamps `hubOrigin`), publish/export (writes `Scenario-Key`, see [§4.8](#48-suggested-changes)) |
 
 ---
 

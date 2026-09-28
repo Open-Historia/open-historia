@@ -130,7 +130,11 @@ export const useMapDocument = (initial) => {
     fetch("/assets/colors.json")
       .then((r) => (r.ok ? r.json() : {}))
       .then((c) => {
-        if (alive) setColors(c || {});
+        // Under what is there, never over it: a scenario's own palette may
+        // have been merged in already (mergeColors, at hydration), and this
+        // fetch landing after it used to wipe it — the next save then wrote
+        // generated colours over every country the author had coloured.
+        if (alive) setColors((current) => ({ ...(c || {}), ...current }));
       })
       .catch(() => {});
     return () => {
