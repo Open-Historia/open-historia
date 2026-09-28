@@ -563,6 +563,23 @@ export const buildScenarioSnapshot = (bundle) => {
 
 // ---- the diff -----------------------------------------------------------------
 
+// What changed inside one record, as the paths a person would name
+// ("government.leader"), for showing a Politics entry's change. Lists and
+// values are compared whole; at most `max` paths, the first ones in order.
+export const changedPathsOf = (before, after, { max = 6 } = {}) => {
+  const paths = [];
+  const walk = (a, b, prefix) => {
+    if (paths.length > max || sameValue(a, b)) return;
+    if (isRecord(a) && isRecord(b)) {
+      for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])]) walk(a[key], b[key], prefix ? `${prefix}.${key}` : key);
+      return;
+    }
+    paths.push({ path: prefix, from: a ?? null, to: b ?? null });
+  };
+  walk(before, after, "");
+  return paths;
+};
+
 const TEXT_FIELDS = new Set(["meta.description", "meta.subtitle", "meta.heroSubtitle", "world.simulationRules", "world.startingTimelineText"]);
 
 const featureLabel = (featureKey, settingKey) => {
@@ -582,30 +599,54 @@ const entryKeyOf = (entry, index) => {
   return `#${index}`;
 };
 const entryLabelOf = (entry, key) => (isRecord(entry) ? clean(entry.name || entry.title || entry.label || entry.id) || key : key);
+// A ledger: one map of records inside a wrapper that also carries its format
+// (`{ schemaVersion, byPolity }` for the political actors and the power
+// status, `{ schemaVersion, ledgerVersion, byId }` for the institutions). Its
+// entries are what an author edits, one country or one institution at a time;
+// the wrapper's other fields are bookkeeping, never a change of their own.
+export const POLITICS_LEDGER_KEYS = Object.freeze(["byPolity", "byId"]);
+export const politicsLedgerKeyOf = (value) => (isRecord(value)
+  ? POLITICS_LEDGER_KEYS.find((key) => isRecord(value[key]) && Object.values(value[key]).every(isRecord)) ?? ""
+  : "");
+export const politicsLedgerShellOf = (value, within) => {
+  if (!isRecord(value)) return {};
+  const shell = { ...value };
+  delete shell[within];
+  return shell;
+};
 // What a Politics value is made of: a list of entries, a map of records keyed
-// by id, or anything else (one value, changed whole).
+// by id, a ledger (above), or anything else (one value, changed whole).
 const politicsShapeOf = (value) => {
   if (isEmptyValue(value)) return "empty";
   if (Array.isArray(value)) return value.every(isRecord) ? "list" : "value";
+  const within = politicsLedgerKeyOf(value);
+  if (within) return `ledger:${within}`;
   if (isRecord(value) && Object.values(value).every(isRecord)) return "map";
   return "value";
 };
-export const politicsEntries = (value, container) => (container === "list"
-  ? new Map((Array.isArray(value) ? value : []).map((entry, index) => [entryKeyOf(entry, index), entry]))
-  : new Map(Object.entries(isRecord(value) ? value : {})));
+// A Politics value's entries by key; `within` names a ledger's map.
+export const politicsEntries = (value, container, within = "") => {
+  if (container === "list") return new Map((Array.isArray(value) ? value : []).map((entry, index) => [entryKeyOf(entry, index), entry]));
+  const map = within ? (isRecord(value) ? value[within] : null) : value;
+  return new Map(Object.entries(isRecord(map) ? map : {}));
+};
 const diffPolitics = (field, from, to, changes) => {
   if (sameValue(from, to)) return;
   const fromShape = politicsShapeOf(from);
   const toShape = politicsShapeOf(to);
-  const container = fromShape === "empty" ? toShape : toShape === "empty" || toShape === fromShape ? fromShape : "value";
-  if (container !== "list" && container !== "map") {
+  const shape = fromShape === "empty" ? toShape : toShape === "empty" || toShape === fromShape ? fromShape : "value";
+  if (shape !== "list" && shape !== "map" && !shape.startsWith("ledger:")) {
     changes.push({ id: `politics:${field}`, area: "details", kind: "politics", field, container: "value", entry: null, from: from ?? null, to: to ?? null });
     return;
   }
-  const a = politicsEntries(from, container);
-  const b = politicsEntries(to, container);
+  const container = shape === "list" ? "list" : "map";
+  const within = shape.startsWith("ledger:") ? shape.slice("ledger:".length) : "";
+  // The wrapper a first entry is put into, when the author has no ledger yet.
+  const ledger = within ? { within, shell: politicsLedgerShellOf(isEmptyValue(to) ? from : to, within) } : {};
+  const a = politicsEntries(from, container, within);
+  const b = politicsEntries(to, container, within);
   const push = (key, op, entry, before, after) => changes.push({
-    id: `politics:${field}:${key}`, area: "details", kind: "politics", field, container, entry: key, label: entryLabelOf(entry, key), op, from: before, to: after,
+    id: `politics:${field}:${key}`, area: "details", kind: "politics", field, container, ...ledger, entry: key, label: entryLabelOf(entry, key), op, from: before, to: after,
   });
   for (const [key, entry] of b) {
     if (!a.has(key)) push(key, "add", entry, null, entry);

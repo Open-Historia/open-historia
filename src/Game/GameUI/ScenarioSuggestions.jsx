@@ -26,7 +26,7 @@ import {
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { downloadHubBundle, downloadHubFile, hubPostUrl } from "../../runtime/hubPosts.js";
-import { buildScenarioSnapshot, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
+import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
   buildSuggestionComment,
@@ -252,6 +252,18 @@ const valueText = (value) => {
   return String(value);
 };
 
+// A value inside a Politics entry, short: the entry's own data, never
+// translated. Records and lists of records as compact JSON, cut.
+const POLITICS_VALUE_CHARS = 90;
+const politicsValueText = (value) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const text = Array.isArray(value) && value.every((item) => item === null || typeof item !== "object")
+    ? value.join(", ")
+    : typeof value === "object" ? JSON.stringify(value) : String(value);
+  return text.length > POLITICS_VALUE_CHARS ? `${text.slice(0, POLITICS_VALUE_CHARS).trimEnd()}…` : text || "—";
+};
+const POLITICS_PATHS_SHOWN = 5;
+
 const statsSummary = (sheet) => {
   const sections = Array.isArray(sheet?.sections) ? sheet.sections : [];
   const stats = sections.reduce((total, section) => total + (Array.isArray(section?.stats) ? section.stats.length : 0), 0);
@@ -277,7 +289,22 @@ const DetailValue = ({ change, coverBefore }) => {
   }
   if (change.kind === "politics") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
-    return <div style={quietTextStyle}>{text}</div>;
+    // Which fields of the entry changed, the way tracked changes show a word.
+    const paths = change.op === "change" ? changedPathsOf(change.from, change.to, { max: POLITICS_PATHS_SHOWN }) : [];
+    return (
+      <div style={{ display: "grid", gap: "0.2rem" }}>
+        <div style={quietTextStyle}>{text}</div>
+        {paths.slice(0, POLITICS_PATHS_SHOWN).map((entry) => (
+          <div data-no-translate key={entry.path} style={{ fontSize: "0.76rem", lineHeight: 1.45, overflowWrap: "anywhere" }}>
+            <span style={{ color: "rgba(255,255,255,0.55)" }}>{entry.path}: </span>
+            <span style={{ color: "#fecaca", textDecoration: "line-through" }}>{politicsValueText(entry.from)}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)" }}> → </span>
+            <span style={{ color: "#bbf7d0" }}>{politicsValueText(entry.to)}</span>
+          </div>
+        ))}
+        {paths.length > POLITICS_PATHS_SHOWN ? <div data-no-translate style={quietTextStyle}>…</div> : null}
+      </div>
+    );
   }
   if (change.kind === "institutionLogos") return <div style={quietTextStyle}>Changed</div>;
   const color = /^#[0-9a-f]{6}$/i;

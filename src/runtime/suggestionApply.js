@@ -12,7 +12,7 @@
 
 import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
-import { buildScenarioSnapshot, politicsEntries, sameValue } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, politicsEntries, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -33,7 +33,7 @@ export const detailValueIn = (snapshot, change) => {
     case "politics": {
       const value = snapshot.politics?.[change.field];
       if (change.container === "value" || !change.entry) return value ?? null;
-      return politicsEntries(value, change.container).get(change.entry) ?? null;
+      return politicsEntries(value, change.container, ledgerKeyOfChange(change)).get(change.entry) ?? null;
     }
     case "stats":
       return snapshot.stats ?? null;
@@ -64,8 +64,31 @@ export const detailStatuses = (changes, currentBundle) => {
     .map((change) => [change.id, detailChangeStatus(change, snapshot)]));
 };
 
+// The ledger map a Politics change is about (scenarioChanges.js), or "" for a
+// plain list or map. Only the known keys: a file names it.
+const ledgerKeyOfChange = (change) => (POLITICS_LEDGER_KEYS.includes(change?.within) ? change.within : "");
+
+// One ledger entry into the author's ledger: their other entries stay, and so
+// does their wrapper, a format counter taking the newer of the two.
+const applyLedgerChange = (current, change, within) => {
+  const ledger = isRecord(current) ? clone(current) : {};
+  const shell = isRecord(change.shell) ? change.shell : {};
+  for (const [key, value] of Object.entries(shell)) {
+    if (key === within) continue;
+    if (!Object.prototype.hasOwnProperty.call(ledger, key)) ledger[key] = clone(value);
+    else if (typeof value === "number" && typeof ledger[key] === "number") ledger[key] = Math.max(value, ledger[key]);
+  }
+  const entries = isRecord(ledger[within]) ? ledger[within] : {};
+  if (change.op === "remove") delete entries[change.entry];
+  else entries[change.entry] = clone(change.to);
+  ledger[within] = entries;
+  return ledger;
+};
+
 const applyPoliticsChange = (current, change) => {
   if (change.container === "value" || !change.entry) return clone(change.to);
+  const within = ledgerKeyOfChange(change);
+  if (within) return applyLedgerChange(current, change, within);
   if (change.container === "list") {
     const list = Array.isArray(current) ? clone(current) : [];
     const entries = [...politicsEntries(list, "list").keys()];

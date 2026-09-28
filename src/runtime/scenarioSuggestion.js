@@ -52,11 +52,19 @@ const KNOWN_KINDS = new Set([
   "map-field", "background",
 ]);
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+// A Politics change names the ledger it goes into and the entry, both of
+// which become object keys when it is applied: only a ledger this build knows,
+// and never a key that would reach an object's prototype.
+const POLITICS_LEDGERS = new Set(["byPolity", "byId"]);
+const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const validPoliticsChange = (change) => (change.within === undefined || POLITICS_LEDGERS.has(change.within))
+  && (change.entry === undefined || change.entry === null || (typeof change.entry === "string" && !UNSAFE_KEYS.has(change.entry)));
 const validChange = (change) => isRecord(change)
   && typeof change.id === "string" && change.id
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
   && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
+  && (change.kind !== "politics" || validPoliticsChange(change))
   && (change.kind !== "borders" || Array.isArray(change.regions));
 
 export const normalizeSuggestion = (raw) => {
