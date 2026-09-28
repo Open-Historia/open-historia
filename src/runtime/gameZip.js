@@ -47,9 +47,10 @@ export const formatZipSize = (bytes) => {
 const MAX_EMBEDDED_SCENARIO_BYTES = 32 * 1024 * 1024;
 
 // An exported Game carries its map only when we do NOT know where that map can
-// be fetched from. A built-in scenario is on every install; a hub scenario whose
-// origin survived (hubOrigin is dropped the moment the player edits it) can be
-// downloaded again; `missing` means this install has no copy to embed, which is
+// be fetched from. A built-in scenario is on every install; a hub scenario still
+// as its post has it can be downloaded again (the stores hand on hubOrigin only
+// while the copy is unedited: server/hubProvenance.js fetchableHubOrigin);
+// `missing` means this install has no copy to embed, which is
 // the ordinary state of a game imported without its map. Anything else — made in
 // the editor, or a hub map since edited — has no other home, so it travels, if it
 // is small enough to travel at all.

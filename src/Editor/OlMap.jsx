@@ -2037,6 +2037,85 @@ const OlMap = ({
           removed: entries.filter((entry) => entry.removed).length,
         };
       },
+      // Put regions exactly as given, by id, as ONE undo step: each `upsert`
+      // feature (GeoJSON, WGS84, its id in properties.id) replaces the shape of
+      // the region with its id — and, with `withAttributes`, its owner, name,
+      // type, claims and group too — or joins the map under that id; each id in
+      // `remove` leaves it. Unlike a paste nothing is carved: this is how a
+      // reviewed border change lands (the suggestion's whole cluster of
+      // neighbouring regions at once, so its borders meet as they were drawn).
+      applyRegionPatch: ({ upsert = [], remove = [], withAttributes = false } = {}) => {
+        const format = new GeoJSON();
+        const steps = [];
+        for (const raw of Array.isArray(upsert) ? upsert : []) {
+          const id = raw?.properties?.id ?? raw?.id;
+          if (id === undefined || id === null || !raw?.geometry) continue;
+          const key = String(id);
+          let geometry;
+          try {
+            geometry = format.readGeometry(raw.geometry, { dataProjection: "EPSG:4326", featureProjection: "EPSG:3857" });
+          } catch (e) {
+            console.warn("[editor] a suggested region could not be read:", key, e);
+            continue;
+          }
+          if (!/Polygon$/.test(geometry.getType())) continue;
+          const props = raw.properties || {};
+          const attrs = {
+            owner: props.owner || null,
+            name: props.name || "Region",
+            typeId: props.typeId || defaultTypeIdRef.current || "land",
+            claimants: Array.isArray(props.claimants) && props.claimants.length ? props.claimants : null,
+            group: props.group || null,
+            gid0: props.gid0 || "",
+          };
+          const existing = regionSource.getFeatureById(key);
+          if (existing) {
+            const before = { geometry: existing.getGeometry().clone(), edited: existing.get("edited"), attrs: {} };
+            if (withAttributes) for (const field of Object.keys(attrs)) before.attrs[field] = existing.get(field) ?? null;
+            steps.push({
+              undo: () => {
+                existing.setGeometry(before.geometry.clone());
+                if (before.edited) existing.set("edited", before.edited); else existing.unset("edited");
+                for (const [field, value] of Object.entries(before.attrs)) existing.set(field, value);
+              },
+              redo: () => {
+                existing.setGeometry(geometry.clone());
+                existing.set("edited", true);
+                if (withAttributes) for (const [field, value] of Object.entries(attrs)) existing.set(field, value);
+              },
+            });
+          } else {
+            const feature = new Feature({ geometry: geometry.clone() });
+            feature.setId(key);
+            feature.setProperties({ ...attrs, id: key, edited: true });
+            steps.push({
+              undo: () => regionSource.removeFeature(feature),
+              redo: () => regionSource.addFeature(feature),
+            });
+          }
+        }
+        for (const id of Array.isArray(remove) ? remove : []) {
+          const feature = regionSource.getFeatureById(String(id));
+          if (!feature) continue;
+          steps.push({
+            undo: () => regionSource.addFeature(feature),
+            redo: () => regionSource.removeFeature(feature),
+          });
+        }
+        if (!steps.length) return { changed: 0 };
+        const refresh = () => {
+          regionLayer.changed();
+          labelLayer.changed();
+          notifyRegions();
+        };
+        steps.forEach((step) => step.redo());
+        refresh();
+        pushCmd({
+          undo: () => { [...steps].reverse().forEach((step) => step.undo()); refresh(); },
+          redo: () => { steps.forEach((step) => step.redo()); refresh(); },
+        });
+        return { changed: steps.length };
+      },
       getRegionSummary: (id) => {
         const f = regionSource.getFeatureById(id);
         return f ? summarize(f) : null;

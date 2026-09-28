@@ -133,7 +133,8 @@ server/data/
   scenarios/
     <scenarioId>/
       scenario.json              # meta (name, hero*, accentColor, coverImageContentType,
-                                 #        countryNameOverrides, hubOrigin, playCount, timestamps)
+                                 #        countryNameOverrides, hubOrigin, hubPublished, hubReviews,
+                                 #        playCount, timestamps)
       world.json  game.json  prompts.json   # CORE_JSON_ASSET_FILES
       colors.json flags.json tags.json       # OPTIONAL_JSON_ASSET_FILES
       cover-image.bin            # uploaded cover (content type in scenario.json)
@@ -263,10 +264,27 @@ Bundles are the shareable unit strangers swap on the community hub. Schema strin
 - **Export** — `exportScenarioBundle(id)` (`server/libraryStore.js`) returns `{ schema, scenario{meta}, data{7 core assets}, assets{...}, mode: "full", exportedAt }`. Every export is full: cover, colors, flags, tags, geometry, background and any custom PMTiles archive travel whenever the scenario has them. The former light mode (which dropped custom PMTiles) is gone; `?mode=` on the route is accepted and ignored, and older `mode: "light"` bundles still import.
   - **What is base64 and what is not.** Binaries (the cover, a custom PMTiles archive) are base64. JSON assets — the region and city geometry, a vector background — are the JSON itself (`encodeJsonFile`), because base64 made every shared map a third bigger for nothing: in a real hub bundle the region geometry was 17.1 MB of the 18.1 MB file, against 12.8 MB of actual geometry. Anything that does not parse as JSON still falls back to base64, byte-exact. The importer reads both shapes, so the bundles already on the hub import unchanged (`server/scenarioBundleWeight.test.js`).
   - **Inside a .zip the heavy assets are real entries.** `src/runtime/bundleFiles.js` lifts every embedded asset over 64 KB out of `scenario.json` into `assets/<file>` — text DEFLATEd, binaries STOREd — leaving `{ mode: "file", file, format }` behind, and puts them back on import before the bundle reaches the importer, which never learns it happened. The same lift is used by the scenario export, the hub publish and a game export carrying its map. That hub map: 18.1 MB as one JSON document, 13.8 MB with the geometry as JSON, **4.2 MB** as a zip.
-- **Import** — `importScenarioBundle` (`server/libraryStore.js:2529`) creates a **new** scenario, writes its core data via `updateScenario`, lays down each embedded asset via `applyScenarioBundleAsset`, then stamps `hubOrigin` last (so the import's own meta writes don't clear it) and selects it.
-- **Update-in-place** — `updateScenarioFromBundle` (`server/libraryStore.js:2635`) is the hub card's "Update" button: it keeps the local `id` (games reference scenarios by id) and `createdAt`, replaces meta/world/assets from the new bundle, and visits **every** uploadable key so an asset the new version dropped doesn't linger. `hubOrigin` is re-stamped last so the card reverts to "New Game" after refresh.
+- **Import** — `importScenarioBundle` (`server/libraryStore.js:3546`) creates a **new** scenario, writes its core data via `updateScenario`, lays down each embedded asset via `applyScenarioBundleAsset`, then stamps `hubOrigin` last (so the import's own writes never count as the player's edits) and selects it.
+- **Update-in-place** — `updateScenarioFromBundle` (`server/libraryStore.js:3657`) is the hub card's "Update" button: it keeps the local `id` (games reference scenarios by id) and `createdAt`, replaces meta/world/assets from the new bundle, and visits **every** uploadable key so an asset the new version dropped doesn't linger. `hubOrigin` is re-stamped last so the card reverts to "New Game" after refresh.
 
-`hubOrigin` (`{ postId, bundleUrl, syncedAt }`, normalized at `server/libraryStore.js:575-585`) is provenance for hub imports. **Any meta write that doesn't explicitly carry `hubOrigin` clears it** (`writeScenarioMeta`, `server/libraryStore.js:639-641`) — a local edit forks the copy and stops offering overwrites. GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal (and the reason `/api/hub/file`'s disk cache can never go stale). See [Scenario hub](runtime-services.md).
+### Hub provenance: where a scenario came from and where it went
+
+A scenario keeps three records about the community hub in `scenario.json`. They are normalised by `server/hubProvenance.js`, which is pure and shared with the web store (`src/runtime/web/models.js`), so the two stores never disagree. Tests: `server/hubProvenance.test.js`.
+
+| Record | Shape | Written by |
+|---|---|---|
+| `hubOrigin` | `{ postId, bundleUrl, syncedAt, title?, author?, editedAt? }` — the post this copy was downloaded from | the import and **Update** (stamped last); `null` from **Unlink** |
+| `hubPublished` | `{ key, publishedAt, postIds[], author?, title?, suggestions[], blocked?[], checkedAt?, commentCounts? }` — the player's own posts of this scenario and the suggestions left on them | **Publish** (the key), **Link my post**, the suggestion checks, **Reject all from @…** / **Unblock** |
+| `hubReviews` | `{ [suggestionId]: { status: reviewing|done|dismissed, accepted[], rejected[], updatedAt } }` | the review dialog; the map editor on save |
+
+The rules:
+
+- **An edit keeps `hubOrigin` and stamps `editedAt`** (`hubOriginAfterWrite`, used by `writeScenarioMeta`). Before, the first local edit erased it. An edited copy is never offered an **Update**, which would overwrite the player's work. It still knows its original, which **Suggest changes** compares against. A write that carries `hubOrigin` sets it, and an explicit `hubOrigin: null` unlinks the scenario for good.
+- **Bookkeeping is not an edit.** `updateScenario` (`server/libraryStore.js:2240`) writes a body that carries only `hubOrigin` / `hubPublished` / `hubReviews` with `touch: false`. That write moves neither `updatedAt` nor `editedAt`. In a body that also edits the scenario, the provenance is written after the edit.
+- **An edited copy's games carry their map.** `fetchableHubOrigin` returns null for an edited copy, so a game exported from it embeds the map rather than pointing at a post whose file is no longer what the game was played on.
+- **Suggestions are references**, never the files: `{ id, postId, commentId, author, createdAt, zipUrl, note }`, with `zipUrl` a GitHub attachment. There are at most 50, and a blocked contributor's (a case-insensitive login in `blocked`, at most 100) are dropped on every write. `withContributorBlocked` also resets `commentCounts`, so the next check re-reads every comment. `openHubSuggestions(published, reviews)` lists the suggestions not yet reviewed or dismissed.
+
+GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal, and the reason `/api/hub/file`'s disk cache can never go stale. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
 
 ---
 

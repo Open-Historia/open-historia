@@ -9,7 +9,7 @@
 // wired to the document state hook. Kept isolated from the game (its own React
 // tree, its own map instance) so it can't disturb the game's MapLibre map.
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import "ol/ol.css";
 import OlMap from "./OlMap.jsx";
 import Toolbar from "./Toolbar.jsx";
@@ -58,6 +58,7 @@ import { normalizeGroups } from "../runtime/groups.js";
 import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
+import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
 import { generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
@@ -85,7 +86,9 @@ const normalizePolityKeyedMap = (input, polities) => {
   return out;
 };
 
-const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}) => {
+// review: a suggestion to review in this map (libraryBar.jsx, from the Suggested
+// changes dialog): { suggestion, decisions, onSaved(decisions) }.
+const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, review: reviewSource = null } = {}) => {
   const d = useMapDocument();
   const isMobile = useIsMobile();
   // Opened from a scenario: the scenario's own map (regions/cities/colors) is
@@ -139,6 +142,26 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
+
+  // ---- reviewing a suggestion's map changes (SuggestionReviewPanel.jsx) -----
+  // A suggested basemap goes on the map the way the Basemap picker puts one
+  // there: OlMap renders it and hands the persistable form back to the document.
+  const setReviewBackground = useCallback((saved) => {
+    setCustomBgId(null);
+    if (saved) {
+      setCustomBg(rebuildPersistedBackground(saved, { persisted: false }));
+    } else {
+      setCustomBg(null);
+      d.patchMetadata({ customBackground: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.patchMetadata]);
+  const review = useSuggestionReview({ review: reviewSource, api, d, setBackground: setReviewBackground, regionEpoch });
+  useSuggestionMarkup(api, review, regionEpoch);
+  // The review opens beside the map once the scenario's map has loaded.
+  useEffect(() => {
+    if (hydrated && reviewSource) setOpenPanel("suggestions");
+  }, [hydrated, reviewSource]);
 
   // ---- the region clipboard: pieces of one map pasted into another ----------
   // The clipboard lives in regionClipboard.js (IndexedDB behind a module
@@ -380,6 +403,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         d.colors,
       );
       await onApplyToScenario(seed, { play });
+      // What the author decided about a suggestion's map changes is kept with
+      // the scenario only now that the map it decided about is saved into it.
+      if (reviewSource) {
+        try { await reviewSource.onSaved?.(review.decisionsForSave()); } catch (e) { console.warn("[editor] could not record the review:", e); }
+      }
       setScenarioDirty(false);
       setCleanupNote(describeCleanupResult(cleanup, cleanupError));
       if (!play && closeAfter) onClose?.();
@@ -1165,6 +1193,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         />
       )}
 
+      {openPanel === "suggestions" && review.active && (
+        <SuggestionReviewPanel
+          review={review}
+          doc={d.doc}
+          api={api}
+          suggestion={reviewSource?.suggestion}
+          onClose={() => setOpenPanel(null)}
+        />
+      )}
+
       {openPanel === "clipboard" && (
         <ClipboardPanel
           clipboard={clipboard}
@@ -1257,6 +1295,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap } = {}
         polityCount={polityCount}
         groupCount={groupCount}
         clipboardCount={clipboardCount}
+        suggestionCount={review.active ? review.pendingCount : null}
         basemap={d.basemap}
         hasCustomBackground={Boolean(customBg)}
         onOpenBasemaps={() => setBasemapPickerOpen(true)}
