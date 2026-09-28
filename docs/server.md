@@ -92,6 +92,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | --- | --- | --- | --- |
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, and it replies `504` rather than hanging | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
+| POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
 | GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256 | `server/server.js:575` |
 | POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
 | GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
@@ -305,5 +306,17 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
 | `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
+| `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
+| `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |
+
+## Discord Rich Presence
+
+Discord shows "Playing Open Historia" on a player's profile and beside their name in every server's member list when a program on the same computer tells the Discord app what is being played. This server is that program: it runs on the player's computer, in the desktop app (`electron/main.cjs` imports it) and in the downloadable local server. The website runs in a browser and the Android app on a phone, and neither can reach a Discord app.
+
+- The page reports what is on screen: `src/runtime/discordPresence.js` `presenceFor` / `useDiscordPresence`, called from the HUD (`src/Game/GameUI/main.jsx`), posts `/api/presence` 1.5 s after the last change, and not at all in a web build (`VITE_OH_WEB`).
+- `server/discordPresence.js` speaks Discord's local protocol itself (no dependency): the socket `discord-ipc-0..9` (a named pipe on Windows; a Unix socket under `XDG_RUNTIME_DIR`/`TMPDIR`, including the Flatpak and Snap locations), frames of opcode + length + JSON, a handshake with the application id, then `SET_ACTIVITY`. It reconnects every 30 s while Discord is closed, sends at most one update per 4 s (Discord takes five in twenty seconds) and nothing that is already showing, and stops for good if Discord does not know the application id.
+- What shows: "Playing Open Historia" (the Discord application's name), then "Playing as France", "Modern Day · 1 January 2016", the time since the game was opened, the logo (an image URL, so there is no art to upload) and a "Play Open Historia" button to openhistoria.com. "In the main menu" outside a game.
+- The application: `DISCORD_APPLICATION_ID` in `server/discordPresence.js`, an application named "Open Historia" in Discord's developer portal (discord.com/developers/applications). The id (`1529270119916896326`) is public. With no id, the whole feature is inert.
+- Off: a player turns it off in Discord (User Settings, Activity Privacy, "Share your detected activities with others"); a server owner with `OH_DISCORD_PRESENCE=0`.
 
 Related sibling pages: [World state](world-state.md) · [Map editor](map-editor.md) · [Scenario hub](runtime-services.md).

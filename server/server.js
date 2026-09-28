@@ -72,6 +72,7 @@ import { appendLog, clearLog, readLogSince } from "./logStore.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
+import { createDiscordPresence, DISCORD_APPLICATION_ID, normalizePresence } from "./discordPresence.js";
 const app = express();
 const PORT = process.env.PORT || 3000;
 const distDir = path.join(__dirname, "../dist");
@@ -502,6 +503,22 @@ const APP_UPDATE_MANIFESTS = {
 // absent everywhere else, which is what makes these routes inert in the zip build
 // and on the website.
 const desktopUpdater = () => globalThis.__ohAutoUpdate || null;
+
+// Discord's "Playing Open Historia" (server/discordPresence.js). This server runs
+// on the player's computer, beside their Discord app; the page says what is on
+// screen and the presence client passes it on. OH_DISCORD_APP_ID overrides the
+// application (for testing another one); OH_DISCORD_PRESENCE=0 turns it off.
+const discordPresence = createDiscordPresence({
+  applicationId: process.env.OH_DISCORD_APP_ID || DISCORD_APPLICATION_ID,
+  log: (level, message) => (level === "warn" ? console.warn : console.log)(`[discord] ${message}`),
+});
+
+// Only this computer's player: a phone playing on this server over the LAN is
+// somebody else, and must not change what this computer's Discord says.
+app.post("/api/presence", jsonParser, (req, res) => {
+  if (isLoopbackAddress(req.socket?.remoteAddress)) discordPresence.update(normalizePresence(req.body));
+  res.status(204).end();
+});
 
 const APP_UPDATE_TTL_MS = 3 * 60 * 1000;
 const appUpdateCache = new Map(); // track -> { at, data }
