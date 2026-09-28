@@ -50,6 +50,14 @@ _Avoid_: Reviewer, pass, reconciler (as the name of the check)
 An authored starting position — the map, the polities and the opening state — that a Game is started from. Never written to during play, so one Scenario can seed many Games.
 _Avoid_: Preset, map, mod
 
+**Basemap**:
+The picture drawn beneath a Scenario's regions: an image, a vector drawing, or detailed terrain as map tiles. It is kept in the library and shared by every Scenario that names it. A Scenario names its Basemap; it never carries a tiled one.
+_Avoid_: Background (as the term for the record), terrain pack, map
+
+**Tiled Basemap**:
+A Basemap stored as an archive of map tiles and read a few tiles at a time as the player zooms. It is downloaded once, to disk, whatever its size.
+_Avoid_: Relief, terrain (as the term for the record)
+
 **Game**:
 One playthrough of a Scenario: everything the player has done and everything the world has become since it started. The thing a player names, continues, archives and exports.
 _Avoid_: Save, save game, campaign, session (as the term for the record)
