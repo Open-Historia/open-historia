@@ -17,6 +17,7 @@ import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
+import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
@@ -262,6 +263,34 @@ export const LOOKUP_TOOLS = Object.freeze([
   },
 
 ]);
+
+// The groups (runtime/groups.js): actors that are not countries, each
+// controlling an area of regions that stay their countries'. A list of their
+// own, apart from LOOKUP_TOOLS, for a conversation that asks about them when
+// they come up rather than carrying them in every message: the advisor
+// (main.jsx advisorGroupLookups). The narrator's tasks already read every group
+// in their prompts (gameplay.js buildGroupsContext), and region_info names the
+// group that controls a region. executeLookup answers these for any caller.
+export const GROUP_LOOKUP_TOOLS = Object.freeze([
+  {
+    name: "list_groups",
+    description:
+      "Every group on the map: an actor that is not a country (an armed group, a cartel, a militia, a movement, an outbreak), "
+      + "controlling an area of regions that still belong to their countries. Each by its EXACT name, what it is, how many regions "
+      + "it controls and in which countries.",
+    schema: object("Optional filter.", {
+      country: text("Optional: only groups controlling regions of this country (its exact name)."),
+    }),
+  },
+  {
+    name: "group_info",
+    description:
+      "One group in full: what it is, its former names, and every region it controls with the country each belongs to. "
+      + "Use the exact name from list_groups.",
+    schema: object("Which group.", { name: text("The group's exact name.") }, ["name"]),
+  },
+]);
+export const GROUP_LOOKUP_TOOL_NAMES = Object.freeze(GROUP_LOOKUP_TOOLS.map((tool) => tool.name));
 
 // The instruction that goes with the tools.
 export const LOOKUP_DIRECTIVE = [
@@ -560,6 +589,24 @@ export const placesNamedIn = (context, textValue, { limit = PLACES_NAMED_LIMIT }
 // ---------------------------------------------------------------------------
 
 const regionBrief = (row) => ({ id: row.id, name: row.name, owner: row.owner || "unowned" });
+
+// The world's groups and the regions each controls, as rows of this map. An
+// area row this map does not render is left out rather than named by its id.
+const groupsOnMap = (context) => {
+  const groups = normalizeGroups(context.world?.groups);
+  const areas = groupRegions(normalizeGroupAreas(context.world?.groupAreas, groups));
+  const rowsOf = (name) => array(areas[name]).map((id) => context.byId.get(clean(id))).filter(Boolean);
+  return { groups, rowsOf };
+};
+// How many of these regions each country holds, most first.
+const countriesOf = (rows) => {
+  const counts = new Map();
+  for (const row of rows) {
+    const owner = row.owner || "unowned";
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([country, regions]) => ({ country, regions }));
+};
 
 const unknownPower = (context, token) => ({
   error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
@@ -1200,8 +1247,43 @@ export const executeLookup = (context, name, args = {}) => {
         authority: "read-only canonical governance evidence; membership is not consent and this lookup cannot cast votes or decide outcomes",
       };
     }
+    case "list_groups": {
+      const { groups, rowsOf } = groupsOnMap(context);
+      const country = clean(a.country) ? context.resolveOwner(a.country) || clean(a.country) : "";
+      const listed = Object.keys(groups).map((groupName) => {
+        const rows = rowsOf(groupName);
+        return {
+          name: groupName,
+          ...(groups[groupName].description ? { description: groups[groupName].description.slice(0, 400) } : {}),
+          regionsControlled: rows.length,
+          inCountries: countriesOf(rows),
+        };
+      }).filter((group) => !country || group.inCountries.some((entry) => entry.country === country));
+      if (!listed.length) {
+        return { groups: [], note: country ? `No group controls any region of ${country}.` : "There are no groups on the map." };
+      }
+      return { groups: listed };
+    }
+    case "group_info": {
+      const { groups, rowsOf } = groupsOnMap(context);
+      const groupName = findGroupKey(groups, a.name);
+      if (!groupName) {
+        return { error: `No group named "${clean(a.name)}". Names are exact.`, groups: Object.keys(groups) };
+      }
+      const group = groups[groupName];
+      const rows = rowsOf(groupName);
+      return {
+        name: groupName,
+        ...(group.description ? { description: group.description } : {}),
+        ...(group.formerNames?.length ? { formerNames: group.formerNames } : {}),
+        regionsControlled: rows.length,
+        inCountries: countriesOf(rows),
+        regions: rows.slice(0, 200).map(regionBrief),
+        ...(rows.length > 200 ? { moreRegions: rows.length - 200 } : {}),
+      };
+    }
     default:
-      return { error: `Unknown lookup "${clean(name)}". Available: ${LOOKUP_TOOL_NAMES.join(", ")}.` };
+      return { error: `Unknown lookup "${clean(name)}". Available: ${[...LOOKUP_TOOL_NAMES, ...GROUP_LOOKUP_TOOL_NAMES].join(", ")}.` };
   }
 };
 

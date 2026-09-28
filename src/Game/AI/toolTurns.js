@@ -155,6 +155,24 @@ export const appendLookupRound = (history, calls, results) => {
 // How much of a history is lookup traffic, for logs.
 export const lookupRoundCount = (history) => array(history).filter((entry) => callsOf(entry).length > 0).length;
 
+// The lookup rounds of a history as plain text: what the model asked, then what
+// came back. For an endpoint that refused the function declarations mid-
+// conversation (some local servers and gateways take no tools at all), which a
+// history of function calls cannot then be sent to either. The model still
+// reads every answer it asked for.
+export const flattenLookupRounds = (history) => array(history).map((entry) => {
+  const calls = callsOf(entry);
+  const responses = responsesOf(entry);
+  if (entry?.role === "model" && calls.length) {
+    const text = textOf(entry);
+    return { role: "model", parts: [{ text: [text, ...calls.map((call) => `[Looked up ${describeLookupCall(call)}]`)].filter(Boolean).join("\n") }] };
+  }
+  if (responses.length) {
+    return { role: "user", parts: [{ text: responses.map((response) => `[${clean(response.name) || "lookup"} answered: ${serialise(response.response)}]`).join("\n") }] };
+  }
+  return entry;
+});
+
 // One line for a call, the way a log reads it: name(key="value", n=3). Long
 // strings are cut so a list of calls stays a list and not a transcript.
 const argValue = (value, max) => {

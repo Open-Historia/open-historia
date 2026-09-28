@@ -13,7 +13,7 @@ import {
     updateEntry,
 } from "./providerConfig.js";
 import { formatResetTime, runWithFallback } from "./fallbackRunner.js";
-import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger } from "./requestBudget.js";
+import { BACKGROUND_REQUEST, PLAYER_REQUEST, requestLedger, savingRequests } from "./requestBudget.js";
 import {
     DEFAULT_ANSWER_RESERVE_TOKENS,
     contextWindowKey,
@@ -27,7 +27,7 @@ import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
-import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
+import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
 import { describePuppetBriefing, describeRole, livePuppetsFor, puppetBriefingFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import {
@@ -65,11 +65,25 @@ import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from 
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
-import { readAnthropicStreamedResponse, readGeminiStreamedResponse, readOpenAIStreamedResponse } from "./streamAssembly.js";
+import {
+    applyAnthropicFrame,
+    applyGeminiFrame,
+    applyOpenAIFrame,
+    createAnthropicStreamState,
+    createGeminiStreamState,
+    createOpenAIStreamState,
+    finishAnthropicStream,
+    finishGeminiStream,
+    finishOpenAIStream,
+    readAnthropicStreamedResponse,
+    readGeminiStreamedResponse,
+    readOpenAIStreamedResponse,
+} from "./streamAssembly.js";
 import {
     anthropicMessagesFromHistory,
     appendLookupRound,
     describeLookupCall,
+    flattenLookupRounds,
     geminiContentsFromHistory,
     lookupCallsFromAnthropic,
     lookupCallsFromGemini,
@@ -77,6 +91,9 @@ import {
     lookupRoundCount,
     openAiMessagesFromHistory,
 } from "./toolTurns.js";
+import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
+import { viewerAudience } from "./audience.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
     formatDateReadable,
@@ -646,7 +663,7 @@ async function retryOrFailByStatus(response, { attempt, retries, retryDelay, dea
     await sleep(wait, signal);
 }
 
-async function streamTextSSE(response, extractDelta, onChunk) {
+async function streamTextSSE(response, extractDelta, onChunk, onFrame = null) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -675,6 +692,9 @@ async function streamTextSSE(response, extractDelta, onChunk) {
                 let json;
                 try { json = JSON.parse(payload); } catch { continue; }
                 frames += 1;
+                // A chat that may call a lookup function (chatLookupsFor) hands
+                // every frame to the reducer assembling those calls as well.
+                if (onFrame) { try { onFrame(json); } catch { /* a collector must not break the stream */ } }
                 // An error object in place of a delta: the provider gave up
                 // mid-stream. Keep the FIRST one — it is the cause; anything
                 // after it is fallout.
@@ -709,6 +729,20 @@ async function streamTextSSE(response, extractDelta, onChunk) {
         sample,
     };
 }
+
+// A chat that may call lookup functions: the advisor, when its game has groups
+// (advisorGroupLookups below). The functions are declared, the model answers in
+// text or asks, and its text streams to the UI either way; each provider path
+// collects the calls from the same stream (the streamAssembly.js reducers) and
+// hands back { chatText, lookupCalls } when the model asked. runWithLookups
+// answers and asks again, and gives the caller the text. `refused`: the
+// endpoint refused function declarations, so none are sent and any earlier
+// lookup rounds go as text (toolTurns.js flattenLookupRounds).
+const chatLookupsFor = (tool, onChunk, lookupTools, refused) => (
+    !tool && onChunk && !refused && Array.isArray(lookupTools) && lookupTools.length ? lookupTools : []
+);
+// Whether a call is such a chat at all, refused or not.
+const isLookupChat = (tool, onChunk, lookupTools) => chatLookupsFor(tool, onChunk, lookupTools, false).length > 0;
 
 // One incremental text chunk per provider's stream event. NOTE: joinGeminiParts
 // trims, which would swallow the leading space of each chunk and run words
@@ -990,19 +1024,30 @@ async function callGemini(systemPrompt, history, {
         // overloaded error INSIDE the stream arrives as an HTTP 200, never
         // reaches that check, and gets its own single retry.
         let retriedInStream = false;
+        let chatToolsRefused = false;
         for (let pass = 1; ; pass += 1) {
+            const chatTools = chatLookupsFor(tool, onChunk, lookupTools, chatToolsRefused);
             const response = await fetch(streamUrl, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     system_instruction: { parts: [{ text: systemPrompt }] },
-                    contents: geminiContentsFromHistory(history),
+                    contents: geminiContentsFromHistory(chatToolsRefused ? flattenLookupRounds(history) : history),
                     generationConfig: {
                         maxOutputTokens: Math.max(1, Number(maxTokens) || 8192),
                         ...samplingConfig,
                         ...(getReasoningEnabled() ? { thinkingConfig: { thinkingBudget: 8192 } } : {}),
                     },
                     ...customParams,
+                    ...(chatTools.length ? {
+                        tools: [{ functionDeclarations: chatTools.map((entry) => ({
+                            name: entry.name,
+                            description: entry.description,
+                            parameters: toGeminiSchema(entry.schema),
+                        })) }],
+                        // Free to answer or ask; on the round that must answer, only answer.
+                        toolConfig: { functionCallingConfig: { mode: requireOutputTool ? "NONE" : "AUTO" } },
+                    } : {}),
                 }),
                 signal,
             });
@@ -1013,12 +1058,23 @@ async function callGemini(systemPrompt, history, {
             }
             if (!response.ok) {
                 const payload = await readErrorPayload(response);
+                const failure = classifyProviderFailure({ status: response.status, payload });
+                // The advisor's lookup functions, refused: ask again without them,
+                // once, with any earlier lookup rounds as text.
+                if ([400, 422].includes(response.status) && !chatToolsRefused && isLookupChat(tool, onChunk, lookupTools) && !waitingCannotFix(failure)) {
+                    chatToolsRefused = true;
+                    console.warn("[ai] Gemini refused the advisor's lookup functions; asking again without them.");
+                    continue;
+                }
                 throw refusedRequestError("Gemini",
                     extractErrorMessage(payload, `Gemini API request failed (${response.status})`),
-                    classifyProviderFailure({ status: response.status, payload }),
+                    failure,
                 );
             }
-            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk);
+            const callState = chatTools.length && !requireOutputTool ? createGeminiStreamState() : null;
+            const streamResult = await streamTextSSE(response, geminiStreamDelta, onChunk, callState ? (frame) => applyGeminiFrame(callState, frame) : null);
+            const chatCalls = callState ? lookupCallsFromGemini(finishGeminiStream(callState), "") : [];
+            if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
             if (!retriedInStream && isBusyErrorPayload(streamResult.streamError) && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedInStream = true;
@@ -1200,6 +1256,8 @@ async function callOpenAIStyleChatCompletions({
     // that honours it at all. (The history still carries the earlier calls;
     // the chat-completions API does not require those tools to be declared.)
     const lookupDeclarations = tool && Array.isArray(lookupTools) && !requireOutputTool ? lookupTools : [];
+    // The advisor's lookup functions (chatLookupsFor), until the endpoint refuses them.
+    let chatToolsRefused = false;
     // Where to BEGIN on the ladder. "auto" (the default) starts at the strongest
     // method; a configured mode starts lower, skipping rungs this endpoint has
     // already been shown not to honour. Either way the ladder can still walk
@@ -1239,6 +1297,10 @@ async function callOpenAIStyleChatCompletions({
     let attempt = 1;
     while (attempt <= retries) {
         const requestCustomParams = { ...customParams };
+        // Declared while the model may still ask; left out on the round that
+        // must answer, since the chat-completions API takes the earlier calls in
+        // the history without the tools declared.
+        const chatTools = requireOutputTool ? [] : chatLookupsFor(tool, onChunk, lookupTools, chatToolsRefused);
         if (disableToolReasoning) {
             delete requestCustomParams.reasoning;
         }
@@ -1274,7 +1336,7 @@ async function callOpenAIStyleChatCompletions({
             payload: {
                 model,
                 ...(streamThisRequest ? { stream: true } : {}),
-                messages: toOpenAIMessages(requestSystemPrompt, history),
+                messages: toOpenAIMessages(requestSystemPrompt, chatToolsRefused ? flattenLookupRounds(history) : history),
                 // Reasoning toggle (settings) — honored by o-series/gpt-5 models and
                 // most OpenAI-compatible gateways. Sent in EVERY mode, tool calls
                 // included: local backends (textgen/oobabooga, llama.cpp) map it onto
@@ -1339,6 +1401,13 @@ async function callOpenAIStyleChatCompletions({
                 ...(structuredMode === "json_object" ? {
                     response_format: { type: "json_object" },
                 } : {}),
+                ...(chatTools.length ? {
+                    tools: chatTools.map((entry) => ({
+                        type: "function",
+                        function: { name: entry.name, description: entry.description, parameters: entry.schema },
+                    })),
+                    tool_choice: "auto",
+                } : {}),
             },
         });
         onRequest?.(response.status);
@@ -1373,6 +1442,15 @@ async function callOpenAIStyleChatCompletions({
             if (streamThisRequest && isStreamingRefusal(errorMessage)) {
                 streamingDisabled = true;
                 console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
+                continue;
+            }
+
+            // The advisor's lookup functions, refused by an endpoint that takes no
+            // tools (or no tool history): ask again without them, once, with any
+            // earlier lookup rounds as text.
+            if (!chatToolsRefused && isLookupChat(tool, onChunk, lookupTools)) {
+                chatToolsRefused = true;
+                console.warn(`[ai] ${providerLabel} refused the advisor's lookup functions; asking again without them.`);
                 continue;
             }
 
@@ -1433,8 +1511,11 @@ async function callOpenAIStyleChatCompletions({
         // on the actual content-type so a gateway that ignored stream:true (plain
         // JSON) safely falls through to the buffered path below.
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk);
+            const callState = chatTools.length ? createOpenAIStreamState() : null;
+            const streamResult = await streamTextSSE(response, openaiStreamDelta, onChunk, callState ? (frame) => applyOpenAIFrame(callState, frame) : null);
             const { text: streamed, reasoning: streamedReasoning, streamError } = streamResult;
+            const chatCalls = callState ? lookupCallsFromOpenAI(finishOpenAIStream(callState), "") : [];
+            if (chatCalls.length) return { chatText: streamed, lookupCalls: chatCalls };
             if (streamed) return streamed;
             // The provider said what went wrong inside the stream. Say THAT
             // rather than the generic empty-reply guess below — and if it was
@@ -1577,6 +1658,12 @@ async function callOpenAIStyleChatCompletions({
             if (text) noteStructuredModeLanding(observerKey, startedStructuredMode, structuredMode, configuredStructuredMode);
             if (structuredMode === "json_schema" && text) return { rawText: text, toolInput: null };
             return { rawText: text, toolInput: null };
+        }
+
+        // The advisor's lookup functions, from a gateway that answered buffered.
+        if (!tool && chatTools.length) {
+            const chatCalls = lookupCallsFromOpenAI(data, "");
+            if (chatCalls.length) return { chatText: text, lookupCalls: chatCalls };
         }
 
         if (!text) {
@@ -1778,6 +1865,7 @@ async function callAnthropic(systemPrompt, history, {
         : Math.max(Number(customParams.max_tokens) || 0, anthropicModelMax.get(model) || ANTHROPIC_MAX_OUTPUT);
     delete customParams.max_tokens;
 
+    let chatToolsRefused = false;
     for (let attempt = 1; attempt <= retries; attempt++) {
         // EVERY request streams unless the gateway has refused to. The reason is
         // keep-alive, not rendering: a buffered request sends zero bytes for the
@@ -1791,12 +1879,18 @@ async function callAnthropic(systemPrompt, history, {
         // it renders tokens and therefore streamed. Nothing downstream changes: the
         // readers reassemble the provider's normal envelope.
         const streamThisRequest = !streamingDisabled;
+        // The advisor's lookup functions (chatLookupsFor). Extended thinking is
+        // left out while they are declared: an answer that follows a lookup has
+        // to hand its thinking block back with the call, and the history keeps
+        // no thinking blocks.
+        const chatTools = chatLookupsFor(tool, onChunk, lookupTools, chatToolsRefused);
+        const thinks = reasoning && !tool && !chatTools.length;
         const body = {
             model,
             system: buildAnthropicSystemContent(systemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
-            ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
+            ...(thinks ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !thinks }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -1804,8 +1898,13 @@ async function callAnthropic(systemPrompt, history, {
             // purpose — so a timeline jump could be rejected before generating a
             // single token. readAnthropicStreamedResponse rebuilds the envelope.
             ...(streamThisRequest ? { stream: true } : {}),
-            messages: toAnthropicMessages(history),
+            messages: toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history),
             ...customParams,
+            ...(chatTools.length ? {
+                tools: chatTools.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
+                // Free to answer or ask; on the round that must answer, only answer.
+                tool_choice: { type: requireOutputTool ? "none" : "auto" },
+            } : {}),
             ...(tool ? {
                 tools: [
                     { name: tool.name, description: tool.description, input_schema: tool.schema },
@@ -1864,11 +1963,21 @@ async function callAnthropic(systemPrompt, history, {
                 console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
                 continue;
             }
+            // The advisor's lookup functions, refused: ask again without them,
+            // once, with any earlier lookup rounds as text.
+            if (response.status === 400 && !chatToolsRefused && isLookupChat(tool, onChunk, lookupTools) && attempt < retries) {
+                chatToolsRefused = true;
+                console.warn("[ai] Anthropic refused the advisor's lookup functions; asking again without them.");
+                continue;
+            }
             throw refusedRequestError("Anthropic", message, failure);
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
+            if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
@@ -1926,6 +2035,12 @@ async function callAnthropic(systemPrompt, history, {
             return { rawText: anthropicToolText, toolInput: null };
         }
         const text = extractAnthropicText(data);
+
+        // The advisor's lookup functions, from an endpoint that answered buffered.
+        if (!tool && chatTools.length && !requireOutputTool) {
+            const chatCalls = lookupCallsFromAnthropic(data, "");
+            if (chatCalls.length) return { chatText: text, lookupCalls: chatCalls };
+        }
 
         if (!text) {
             throw new Error("Anthropic response did not contain text.");
@@ -2015,8 +2130,15 @@ async function callAnthropicCompatible(systemPrompt, history, {
     // and an entry is exactly that pair.
     const observerKey = settings.id;
 
+    let chatToolsRefused = false;
     for (let attempt = 1; attempt <= retries; attempt++) {
         const useToolChannel = Boolean(tool) && structuredMode === "tool";
+        // The advisor's lookup functions (chatLookupsFor). Extended thinking is
+        // left out while they are declared: an answer that follows a lookup has
+        // to hand its thinking block back with the call, and the history keeps
+        // no thinking blocks.
+        const chatTools = chatLookupsFor(tool, onChunk, lookupTools, chatToolsRefused);
+        const thinks = reasoning && !tool && !chatTools.length;
         // In text_json the schema has to travel in the prompt, since there is no
         // parameter to carry it. The sentinel gives a rambling model a defined
         // point to stop planning and start answering (jsonSalvage.js).
@@ -2039,8 +2161,8 @@ async function callAnthropicCompatible(systemPrompt, history, {
             model,
             system: buildAnthropicSystemContent(requestSystemPrompt, staticPrefixEnd),
             max_tokens: requestedMaxTokens,
-            ...(reasoning && !tool ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
-            ...temperatureBody(taskKey, { enabled: !(reasoning && !tool) }),
+            ...(thinks ? { thinking: { type: "enabled", budget_tokens: 4096 } } : {}),
+            ...temperatureBody(taskKey, { enabled: !thinks }),
             // Streamed for BOTH the advisor (onChunk, tokens to the UI) and tool
             // calls. A tool call must stream because the Messages API refuses a
             // non-streaming request whose max_tokens implies a long generation —
@@ -2048,8 +2170,13 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // purpose — so a timeline jump could be rejected before generating a
             // single token. readAnthropicStreamedResponse rebuilds the envelope.
             ...(streamThisRequest ? { stream: true } : {}),
-            messages: toAnthropicMessages(history),
+            messages: toAnthropicMessages(chatToolsRefused ? flattenLookupRounds(history) : history),
             ...customParams,
+            ...(chatTools.length ? {
+                tools: chatTools.map((entry) => ({ name: entry.name, description: entry.description, input_schema: entry.schema })),
+                // Free to answer or ask; on the round that must answer, only answer.
+                tool_choice: { type: requireOutputTool ? "none" : "auto" },
+            } : {}),
             ...(useToolChannel ? {
                 tools: [
                     { name: tool.name, description: tool.description, input_schema: tool.schema },
@@ -2098,11 +2225,21 @@ async function callAnthropicCompatible(systemPrompt, history, {
                 console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");
                 continue;
             }
+            // The advisor's lookup functions, refused: ask again without them,
+            // once, with any earlier lookup rounds as text.
+            if (response.status === 400 && !chatToolsRefused && isLookupChat(tool, onChunk, lookupTools) && attempt < retries) {
+                chatToolsRefused = true;
+                console.warn("[ai] The Anthropic-compatible endpoint refused the advisor's lookup functions; asking again without them.");
+                continue;
+            }
             throw refusedRequestError("The Anthropic-compatible endpoint", message, failure);
         }
 
         if (onChunk && !tool && String(response.headers.get("content-type") || "").includes("text/event-stream")) {
-            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk);
+            const callState = chatTools.length && !requireOutputTool ? createAnthropicStreamState() : null;
+            const streamResult = await streamTextSSE(response, anthropicStreamDelta, onChunk, callState ? (frame) => applyAnthropicFrame(callState, frame) : null);
+            const chatCalls = callState ? lookupCallsFromAnthropic(finishAnthropicStream(callState), "") : [];
+            if (chatCalls.length) return { chatText: streamResult.text, lookupCalls: chatCalls };
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
@@ -2177,6 +2314,12 @@ async function callAnthropicCompatible(systemPrompt, history, {
         }
         const text = extractAnthropicText(data);
 
+        // The advisor's lookup functions, from an endpoint that answered buffered.
+        if (!tool && chatTools.length && !requireOutputTool) {
+            const chatCalls = lookupCallsFromAnthropic(data, "");
+            if (chatCalls.length) return { chatText: text, lookupCalls: chatCalls };
+        }
+
         if (!text) {
             throw new Error("Anthropic-compatible response did not contain text.");
         }
@@ -2244,6 +2387,10 @@ const elapsedSeconds = (startedAt) => `${((Date.now() - startedAt) / 1000).toFix
 // prompt tokens on one jump. The directive tells it to ask everything at once.
 const DEFAULT_LOOKUP_ROUNDS = 3;
 
+// A chat's round comes back as { chatText, lookupCalls } when the model asked
+// (chatLookupsFor); once it stops asking, what the caller gets is the text.
+const chatAnswer = (result) => (result && typeof result === "object" && typeof result.chatText === "string" ? result.chatText : result);
+
 // Every round the model spends asking is reported to `onRound` — callAI
 // writes it to the telemetry record and the diagnostics log — so "what did
 // the model look up before it answered" is answerable from the console.
@@ -2261,11 +2408,14 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
         // The answer, or a request that could not be turned into one (a final
         // round still asking questions falls through to the runner's retry).
         if (!calls.length || result?.toolInput || requireOutputTool) {
+            // A chat (the advisor) answers in text, and that is its answer.
+            const answer = chatAnswer(result);
+            const answered = Boolean(result?.toolInput) || typeof answer === "string";
             if (round > 0) {
-                logDebugEvent("ai-call", `${label}: ${provider} answered after ${round} lookup round${round === 1 ? "" : "s"}${result?.toolInput ? "" : " without calling the output function"}.`,
-                    { lookupRounds: lookupRoundCount(conversation), answered: Boolean(result?.toolInput), forcedOutput: requireOutputTool });
+                logDebugEvent("ai-call", `${label}: ${provider} answered after ${round} lookup round${round === 1 ? "" : "s"}${answered ? "" : " without calling the output function"}.`,
+                    { lookupRounds: lookupRoundCount(conversation), answered, forcedOutput: requireOutputTool });
             }
-            return result;
+            return answer;
         }
         const elapsedMs = Date.now() - roundStartedAt;
         const results = [];
@@ -2925,6 +3075,76 @@ A Puppet is a separate country holding its own territory and sovereignty, whose 
 ${lines.length ? lines.join("\n") : "No country is known to direct another."}`;
 };
 
+// The groups (runtime/groups.js) on the advisor's side: two lookup functions
+// (lookupTools.js GROUP_LOOKUP_TOOLS) the model calls when a question turns to
+// a group, answered from the world as the player has seen it (viewAsSeen), in
+// place of every group listed in every message. Only in a game that has groups,
+// and only while Settings > AI lookup functions is on and requests are not
+// being saved: the narrator's lookups follow the same rule
+// (gameplay.js lookupFunctionsEnabled), since each round is a request.
+// Otherwise the advisor is handed the list itself (describeAdvisorGroups), as
+// Save AI requests promises: the names it needs instead of looking them up.
+const advisorGroupCount = (world) => Object.keys(normalizeGroups(world?.groups)).length;
+const advisorGroupFunctionsAllowed = () => !savingRequests() && getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+// The map indexed for the lookups, the player's government asking, not the
+// narrator (audience.js).
+const advisorGroupContext = ({ world, player }) => loadRegionCatalog().catch(() => []).then((regions) => buildLookupContext({
+    regions,
+    world,
+    player,
+    audience: viewerAudience([player]),
+}));
+const advisorGroupLookups = ({ world, player }) => {
+    if (!advisorGroupFunctionsAllowed()) return null;
+    const groupCount = advisorGroupCount(world);
+    if (!groupCount) return null;
+    let contextPromise = null;
+    // The map indexed on first use: a reply that asks nothing loads nothing.
+    const context = () => {
+        contextPromise ??= advisorGroupContext({ world, player });
+        return contextPromise;
+    };
+    return {
+        tools: GROUP_LOOKUP_TOOLS,
+        // One round to ask and then the answer; a second only when the first
+        // answer raised another question.
+        maxRounds: 2,
+        groupCount,
+        execute: async (name, args) => executeLookup(await context(), name, args),
+    };
+};
+
+const ADVISOR_GROUPS_ARE = "actors that are not countries (armed groups, cartels, militias, movements and the like), each controlling an area of regions that still belong to their countries";
+
+// With the functions, the count alone: the model knows there is something to
+// ask about, and asks when the conversation turns to it.
+const buildAdvisorGroupsDirective = (groupCount) => `[Groups on the Map]
+Besides its countries, this world has ${groupCount} group${groupCount === 1 ? "" : "s"}: ${ADVISOR_GROUPS_ARE}. Who they are, what each one is and where it controls come from two functions: list_groups (every group, or only those in one country) and group_info (one group in full, by its exact name). Call them whenever the conversation turns to a group, to who really holds a place, or to threats inside a country, rather than guessing a group's name or its area. Ask for everything you need in one turn, and never mention the lookup in your reply.`;
+
+// Without the functions, the list: what list_groups would have answered, a
+// line a group. A world with a great many groups lists the first
+// ADVISOR_GROUPS_LISTED and counts the rest.
+const ADVISOR_GROUPS_LISTED = 60;
+const ADVISOR_GROUP_DESCRIPTION_CHARS = 200;
+const describeAdvisorGroups = async ({ world, player }) => {
+    if (!advisorGroupCount(world)) return "";
+    const { groups = [] } = executeLookup(await advisorGroupContext({ world, player }), "list_groups", {});
+    if (!groups.length) return "";
+    const lines = groups.slice(0, ADVISOR_GROUPS_LISTED).map((group) => {
+        const description = group.description
+            ? ` — ${group.description.length > ADVISOR_GROUP_DESCRIPTION_CHARS ? `${group.description.slice(0, ADVISOR_GROUP_DESCRIPTION_CHARS).trimEnd()}…` : group.description}`
+            : "";
+        const where = group.regionsControlled
+            ? `controls ${group.regionsControlled} region${group.regionsControlled === 1 ? "" : "s"}: ${group.inCountries.map((entry) => `${entry.country} ${entry.regions}`).join(", ")}`
+            : "controls no regions";
+        return `- ${group.name} (${where})${description}`;
+    });
+    const more = groups.length - lines.length;
+    return `[Groups on the Map]
+Besides its countries, this world has these groups: ${ADVISOR_GROUPS_ARE}. Use their exact names.
+${lines.join("\n")}${more > 0 ? `\n…and ${more} more.` : ""}`;
+};
+
 async function buildAdvisorSystemPrompt() {
     await ensurePromptsLoaded();
     const [savedGame, actionData, savedChats, savedWorld, savedEvents, advisorData] = await Promise.all([
@@ -2961,6 +3181,8 @@ async function buildAdvisorSystemPrompt() {
         renderTemplate(promptPack.advisor, { ...variables, ...helperValues }),
         variables,
     );
+    const groupLookups = advisorGroupLookups({ world: worldData, player: gameData?.country || "" });
+    const groupsListed = groupLookups ? "" : await describeAdvisorGroups({ world: worldData, player: gameData?.country || "" });
     const advisorPoliticalDiplomacy = buildAdvisorPoliticalDiplomacyContext({
         world: worldData,
         playerPolity: gameData?.country || "",
@@ -2980,6 +3202,9 @@ async function buildAdvisorSystemPrompt() {
         // the puppet ledger rides the turn's restore point like the other
         // ledgers do.
         buildAdvisorPuppetsDirective(worldData, gameData?.country || ""),
+        // The groups: behind two lookup functions (advisorGroupLookups), or,
+        // while requests are being saved, listed (describeAdvisorGroups).
+        groupLookups ? buildAdvisorGroupsDirective(groupLookups.groupCount) : groupsListed,
         // The government's papers (runtime/reportDelivery.js): what reached it
         // through its diplomats, its agents and the news. The file the player
         // no longer browses; the advisor, as the government's staff, reads it.
@@ -2993,7 +3218,7 @@ async function buildAdvisorSystemPrompt() {
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
         ADVISOR_FORMATTING_DIRECTIVE,
     ].filter(Boolean);
-    return `${rendered}\n\n${directives.join("\n\n")}`;
+    return { systemPrompt: `${rendered}\n\n${directives.join("\n\n")}`, lookups: groupLookups };
 }
 
 // `speakingAs` names the polity whose leader is about to reply. It decides both
@@ -3215,7 +3440,7 @@ function compactConversationHistory(history) {
 // ahead of what the player typed; it goes no further than this history.
 export async function sendMessage(userMessage, options) {
     const { catchUp = "", ...opts } = options || {};
-    const systemPrompt = await buildAdvisorSystemPrompt();
+    const { systemPrompt, lookups } = await buildAdvisorSystemPrompt();
     advisorHistory.push({ role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] });
     advisorHistory = compactConversationHistory(advisorHistory);
 
@@ -3230,7 +3455,7 @@ export async function sendMessage(userMessage, options) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor" });
+        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
         advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
