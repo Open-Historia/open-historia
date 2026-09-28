@@ -9,6 +9,7 @@ import { displayNameMigrations, renamePolityInColors, renamePolityInWorld } from
 import { advanceRecurringDate, canPlayerDirect, isMilestoneOutstanding, normalizeMilestoneRepeat } from "./projects.js";
 import { dedupeEventLog, eventCanonicalKey } from "./eventDedup.js";
 import { normalizeEventTags } from "./eventTags.js";
+import { normalizeEventPresentation } from "./eventQuote.js";
 import { normalizeEventAgency } from "./eventAgency.js";
 import { buildOwnerAliasMap, createOwnerResolver, isRealCountryName, toCountryName } from "./ownerNames.js";
 import { foundPolityIfUnknown } from "./polityFounding.js";
@@ -3406,10 +3407,16 @@ export const normalizeEventEntry = (entry, index = 0) => {
     return null;
   }
 
+  const presentation = normalizeEventPresentation({
+    description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    quote: entry.quote,
+  });
+
   return {
     createdAt: normalizeOptionalString(entry.createdAt) || new Date().toISOString(),
     date: normalizeOptionalString(entry.date),
-    description: normalizeOptionalString(entry.description || entry.summary || entry.text),
+    description: presentation.description,
+    ...(presentation.quote ? { quote: presentation.quote } : {}),
     id: normalizeOptionalString(entry.id) || generateId(`event-${index}`),
     impacts: normalizeEventImpacts(entry.impacts),
     agency: normalizeEventAgency(entry.agency),

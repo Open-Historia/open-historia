@@ -110,6 +110,7 @@ test("legacy scripted-event text migrates to unconditional composable rules with
   assert.equal(events.length, 1);
   assert.equal(events[0].date, "1914-06-28");
   assert.equal(events[0].text, "Archduke Franz Ferdinand is assassinated in Sarajevo.");
+  assert.equal(events[0].textMode, "generated");
   assert.deepEqual(events[0].trigger, { mode: "rules", operator: "all", conditions: [], percent: 100 });
   assert.match(events[0].id, /^scripted-/);
 });
@@ -251,4 +252,35 @@ test("Player focus: the scenario sets the default level and a game chooses its o
   assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
   assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
   assert.equal(featureDefaults().playerFocus.enabled, true);
+});
+
+test("scripted event normalization preserves weighted outcomes and new canonical predicates", () => {
+  const [row] = normalizeScriptedEvents([{
+    id: "election", date: "2028-01-01", text: "Election resolves.", textMode: "exact",
+    trigger: { mode: "rules", operator: "all", percent: 100, conditions: [
+      { type: "polity_controls_region", polityId: "A", regionId: "R1", baseOwner: "B" },
+      { type: "scripted_outcome_selected", eventId: "prior", outcomeId: "reform" },
+    ] },
+    outcomes: [
+      { id: "a", text: "A wins.", weight: 25 },
+      { id: "b", text: "B wins.", weight: 75 },
+    ],
+  }]);
+  assert.equal(row.textMode, "exact");
+  assert.equal(row.outcomes.length, 2);
+  assert.equal(row.outcomes[1].weight, 75);
+  assert.equal(row.trigger.conditions[0].regionId, "R1");
+  assert.equal(row.trigger.conditions[0].baseOwner, "B");
+  assert.equal(row.trigger.conditions[1].eventId, "prior");
+  assert.equal(row.trigger.conditions[1].outcomeId, "reform");
+
+  const saved = normalizeFeatureSettings({
+    worldDirection: { scriptedEvents: [row] },
+  }).worldDirection.scriptedEvents;
+  assert.equal(saved[0].textMode, "exact", "scenario save normalization must keep the wording mode");
+  assert.equal(saved[0].outcomes.length, 2, "scenario save normalization must keep mutually exclusive outcomes");
+  assert.equal(saved[0].outcomes[0].id, "a");
+  assert.equal(saved[0].outcomes[1].weight, 75);
+  assert.equal(saved[0].trigger.conditions[0].regionId, "R1");
+  assert.equal(saved[0].trigger.conditions[1].outcomeId, "reform");
 });

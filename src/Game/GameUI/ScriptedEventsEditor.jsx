@@ -16,8 +16,8 @@ const array = (value) => Array.isArray(value) ? value : [];
 const CONDITION_DEFINITIONS = [
   { type: "polity_exists", label: "Polity exists", fields: ["polityId"] },
   { type: "polity_not_exists", label: "Polity does not exist", fields: ["polityId"] },
-  { type: "political_actor_exists", label: "Political World exists for polity", fields: ["polityId"] },
-  { type: "political_actor_not_exists", label: "Political World does not exist for polity", fields: ["polityId"] },
+  { type: "political_actor_exists", label: "Polity has Political World data", fields: ["polityId"] },
+  { type: "political_actor_not_exists", label: "Polity has no Political World data", fields: ["polityId"] },
   { type: "institution_exists", label: "Institution exists", fields: ["institutionId"] },
   { type: "institution_not_exists", label: "Institution does not exist", fields: ["institutionId"] },
   { type: "institution_has_polity", label: "Polity is in institution", fields: ["institutionId", "polityId"] },
@@ -27,10 +27,10 @@ const CONDITION_DEFINITIONS = [
   { type: "polity_not_subordinate_to", label: "Polity is not subordinate to polity", fields: ["polityId", "overlordId", "kind"] },
   { type: "polity_controls_region", label: "Polity controls region", fields: ["polityId", "regionId", "baseOwner"] },
   { type: "polity_not_controls_region", label: "Polity does not control region", fields: ["polityId", "regionId", "baseOwner"] },
-  { type: "scripted_event_fired", label: "Scripted event happened", fields: ["eventId"] },
-  { type: "scripted_event_skipped", label: "Scripted event did not happen", fields: ["eventId"] },
-  { type: "scripted_outcome_selected", label: "Scripted outcome was selected", fields: ["eventId", "outcomeId"] },
-  { type: "scripted_outcome_not_selected", label: "Scripted outcome was not selected", fields: ["eventId", "outcomeId"] },
+  { type: "scripted_event_fired", label: "Earlier scripted event happened", fields: ["eventId"] },
+  { type: "scripted_event_skipped", label: "Earlier scripted event was skipped", fields: ["eventId"] },
+  { type: "scripted_outcome_selected", label: "Earlier event selected an outcome", fields: ["eventId", "outcomeId"] },
+  { type: "scripted_outcome_not_selected", label: "Earlier event did not select an outcome", fields: ["eventId", "outcomeId"] },
 ];
 
 const CONDITION_BY_TYPE = Object.fromEntries(CONDITION_DEFINITIONS.map((entry) => [entry.type, entry]));
@@ -40,6 +40,7 @@ const makeEvent = () => ({
   id: makeId(),
   date: "",
   text: "",
+  textMode: "generated",
   trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
 });
 const makeCondition = () => ({ type: "polity_exists", polityId: "" });
@@ -120,6 +121,7 @@ const EntityField = ({ ariaLabel, id, options, placeholder, styles, value, onCha
 };
 
 const eventKey = (event, index) => clean(event?.id) || `scripted-row-${index}`;
+const textModeOf = (event) => clean(event?.textMode).toLowerCase() === "exact" ? "exact" : "generated";
 
 const eventTitle = (event) => {
   const text = clean(event?.text);
@@ -132,13 +134,44 @@ const eventRuleSummary = (event) => {
   const rules = rulesFromTrigger(event?.trigger);
   const conditions = array(rules.conditions);
   const percent = Math.max(0, Math.min(100, Number(rules.percent) || 0));
-  if (!conditions.length) return `NO CONDITIONS · ${percent}%`;
-  if (rules.operator === "any") return `ANY · ${conditions.length} CONDITION${conditions.length === 1 ? "" : "S"} · ${percent}%`;
+  const wording = textModeOf(event) === "exact" ? " · EXACT WORDING" : "";
+  if (!conditions.length) return `NO CONDITIONS · ${percent}%${wording}`;
+  if (rules.operator === "any") return `ANY · ${conditions.length} CONDITION${conditions.length === 1 ? "" : "S"} · ${percent}%${wording}`;
   if (rules.operator === "at_least") {
     const required = Math.max(1, Math.min(conditions.length, Number(rules.requiredCount) || 1));
-    return `AT LEAST ${required}/${conditions.length} · ${percent}%`;
+    return `AT LEAST ${required}/${conditions.length} · ${percent}%${wording}`;
   }
-  return `ALL · ${conditions.length} CONDITION${conditions.length === 1 ? "" : "S"} · ${percent}%`;
+  return `ALL · ${conditions.length} CONDITION${conditions.length === 1 ? "" : "S"} · ${percent}%${wording}`;
+};
+
+const outcomeWeight = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : 0;
+};
+
+const outcomeChanceText = (outcomesInput, index) => {
+  const outcomes = array(outcomesInput);
+  const total = outcomes.reduce((sum, outcome) => sum + outcomeWeight(outcome?.weight), 0);
+  const weight = outcomeWeight(outcomes[index]?.weight);
+  if (!(total > 0) || !(weight > 0)) return "0%";
+  const percent = (weight / total) * 100;
+  const rounded = percent >= 10 ? percent.toFixed(0) : percent.toFixed(1);
+  return `${rounded}%`;
+};
+
+const priorScriptedEvents = (eventsInput, currentIndex) => {
+  const events = array(eventsInput);
+  const current = events[currentIndex];
+  const currentDate = clean(current?.date);
+  return events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event, index }) => {
+      if (index === currentIndex) return false;
+      const date = clean(event?.date);
+      if (!currentDate || !date) return index < currentIndex;
+      if (date < currentDate) return true;
+      return date === currentDate && index < currentIndex;
+    });
 };
 
 const cloneScriptedEvent = (event) => ({
@@ -315,6 +348,24 @@ const ScriptedEventsEditor = ({
         </div>
 
         <section style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", minWidth: 0, padding: "0.65rem" }}>
+          <div style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>Event wording</div>
+          <select
+            aria-label="Event wording mode"
+            style={{ ...selectStyle(styles), marginTop: "0.45rem", width: "min(100%, 24rem)" }}
+            value={textModeOf(event)}
+            onChange={(e) => patchEvent(index, { textMode: e.target.value })}
+          >
+            <option style={optionStyle} value="generated">Let the AI write it</option>
+            <option style={optionStyle} value="exact">Use my exact wording</option>
+          </select>
+          <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.7rem", lineHeight: 1.45, marginTop: "0.4rem" }}>
+            {textModeOf(event) === "exact"
+              ? "The timeline body uses these exact words. The AI can still supply canonical consequences such as Political World, map, institution, unit or Stats changes."
+              : "This text tells the simulation what must happen. The AI writes the final timeline event in the campaign's context."}
+          </div>
+        </section>
+
+        <section style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", minWidth: 0, padding: "0.65rem" }}>
           <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem", minWidth: 0 }}>
             <span style={{ color: "rgba(255,255,255,0.64)", fontSize: "0.72rem", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase" }}>Conditions</span>
             <select
@@ -361,9 +412,13 @@ const ScriptedEventsEditor = ({
             )}
           </div>
 
+          <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.72rem", lineHeight: 1.45, marginTop: "0.45rem" }}>
+            Conditions are checked once when this date is reached. If they do not match, this event is skipped permanently rather than waiting for them to become true later.
+          </div>
+
           {conditionMode === "none" ? (
-            <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.72rem", lineHeight: 1.45, marginTop: "0.45rem" }}>
-              No conditions - this event becomes eligible when its date is reached. Chance is still rolled once below.
+            <div style={{ color: "rgba(255,255,255,0.43)", fontSize: "0.72rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+              No conditions - this event becomes eligible as soon as its date is reached. Chance is still rolled once below.
             </div>
           ) : (
             <div style={{ display: "grid", gap: "0.42rem", marginTop: "0.5rem", minWidth: 0 }}>
@@ -389,8 +444,36 @@ const ScriptedEventsEditor = ({
                       )}
                       {definition.fields.includes("regionId") && <input aria-label="Region id" placeholder="Stable region ID" style={flexibleInputStyle(styles)} value={condition?.regionId || ""} onChange={(e) => patchCondition(index, conditionIndex, { regionId: e.target.value })} />}
                       {definition.fields.includes("baseOwner") && <EntityField ariaLabel="Base region owner" id={`${prefix}-base-owner`} options={polityOptions} placeholder="Base owner" styles={styles} value={condition?.baseOwner || ""} onChange={(baseOwner) => patchCondition(index, conditionIndex, { baseOwner })} />}
-                      {definition.fields.includes("eventId") && <select aria-label="Referenced scripted event" style={selectStyle(styles,{flex:"1 1 12rem"})} value={condition?.eventId || ""} onChange={(e) => patchCondition(index, conditionIndex, { eventId: e.target.value, outcomeId: "" })}><option style={optionStyle} value="">Select event</option>{events.filter((_, row) => row !== index).map((candidate) => <option key={candidate.id} style={optionStyle} value={candidate.id}>{eventTitle(candidate)}</option>)}</select>}
-                      {definition.fields.includes("outcomeId") && <select aria-label="Referenced scripted outcome" style={selectStyle(styles,{flex:"1 1 12rem"})} value={condition?.outcomeId || ""} onChange={(e) => patchCondition(index, conditionIndex, { outcomeId: e.target.value })}><option style={optionStyle} value="">Select outcome</option>{array(events.find((candidate) => candidate.id === condition?.eventId)?.outcomes).map((outcome) => <option key={outcome.id} style={optionStyle} value={outcome.id}>{clean(outcome.title || outcome.text || outcome.id)}</option>)}</select>}
+                      {definition.fields.includes("eventId") && (() => {
+                        const prior = priorScriptedEvents(events, index);
+                        const referenced = events.find((candidate) => candidate.id === condition?.eventId);
+                        const isFutureReference = Boolean(referenced) && !prior.some(({ event: candidate }) => candidate.id === referenced.id);
+                        return (
+                          <div style={{ flex: "1 1 14rem", minWidth: 0 }}>
+                            <select aria-label="Referenced scripted event" style={selectStyle(styles,{width:"100%"})} value={condition?.eventId || ""} onChange={(e) => patchCondition(index, conditionIndex, { eventId: e.target.value, outcomeId: "" })}>
+                              <option style={optionStyle} value="">Select earlier event</option>
+                              {isFutureReference && <option style={optionStyle} value={referenced.id}>⚠ {eventTitle(referenced)} (not earlier)</option>}
+                              {prior.map(({ event: candidate }) => <option key={candidate.id} style={optionStyle} value={candidate.id}>{eventTitle(candidate)}</option>)}
+                            </select>
+                            {isFutureReference && <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.2rem" }}>This dependency points to an event that has not resolved yet. Choose an earlier event or this condition will fail when checked.</div>}
+                          </div>
+                        );
+                      })()}
+                      {definition.fields.includes("outcomeId") && (() => {
+                        const referenced = events.find((candidate) => candidate.id === condition?.eventId);
+                        const outcomes = array(referenced?.outcomes);
+                        const missingOutcome = Boolean(clean(condition?.outcomeId)) && !outcomes.some((outcome) => outcome.id === condition.outcomeId);
+                        return (
+                          <div style={{ flex: "1 1 14rem", minWidth: 0 }}>
+                            <select aria-label="Referenced scripted outcome" style={selectStyle(styles,{width:"100%"})} value={condition?.outcomeId || ""} onChange={(e) => patchCondition(index, conditionIndex, { outcomeId: e.target.value })}>
+                              <option style={optionStyle} value="">Select outcome</option>
+                              {missingOutcome && <option style={optionStyle} value={condition.outcomeId}>⚠ Missing outcome: {condition.outcomeId}</option>}
+                              {outcomes.map((outcome) => <option key={outcome.id} style={optionStyle} value={outcome.id}>{clean(outcome.title || outcome.text || outcome.id)}</option>)}
+                            </select>
+                            {missingOutcome && <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.2rem" }}>The referenced outcome no longer exists. Pick another outcome before saving.</div>}
+                          </div>
+                        );
+                      })()}
                       {definition.fields.includes("status") && (
                         <select aria-label="Institution membership status" style={selectStyle(styles, { flex: "0.8 1 9rem", width: "auto" })} value={clean(condition?.status) || "member"} onChange={(e) => patchCondition(index, conditionIndex, { status: e.target.value })}>
                           {INSTITUTION_MEMBER_STATUSES.map((status) => <option key={status} style={optionStyle} value={status}>{titleCase(status)}</option>)}
@@ -414,19 +497,43 @@ const ScriptedEventsEditor = ({
         </section>
 
         <section data-scripted-event-outcomes="true" style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: "12px", marginTop: "0.65rem", padding: "0.65rem" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-            <div><div style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.72rem", fontWeight: 800, textTransform: "uppercase" }}>Mutually exclusive outcomes</div><div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", marginTop: "0.16rem" }}>Optional. When present, native code selects exactly one positive-weight outcome and persists the selection.</div></div>
+          <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "space-between" }}>
+            <div style={{ maxWidth: "48rem" }}>
+              <div style={{ color: "rgba(255,255,255,0.66)", fontSize: "0.72rem", fontWeight: 800, textTransform: "uppercase" }}>Possible outcomes - choose one</div>
+              <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.16rem" }}>
+                Optional. If this event fires, the game picks exactly one outcome and remembers it permanently. Outcomes inherit the event wording mode above. <strong>Weight is relative, not a percentage:</strong> 3 / 1 / 1 means 60% / 20% / 20%.
+              </div>
+            </div>
             <button type="button" className="oh-tap-row" style={buttonStyle(styles)} onClick={() => patchEvent(index, { outcomes: [...array(event?.outcomes), makeOutcome()] })}>+ Add outcome</button>
           </div>
-          {array(event?.outcomes).length ? <div style={{ display: "grid", gap: "0.45rem", marginTop: "0.5rem" }}>
-            {array(event.outcomes).map((outcome, outcomeIndex) => <div key={outcome.id || outcomeIndex} style={{ border: "1px solid rgba(255,255,255,0.06)", borderRadius: "9px", padding: "0.48rem" }}>
-              <div style={{ display: "grid", gap: "0.4rem", gridTemplateColumns: "minmax(9rem, 0.8fr) 6rem auto" }}>
-                <input aria-label="Outcome id" style={styles.inputStyle} value={outcome.id || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,id:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="outcome-id" />
-                <input aria-label="Outcome weight" type="number" min="0" step="0.1" style={styles.inputStyle} value={outcome.weight ?? 1} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,weight:Number(e.target.value)}; patchEvent(index,{outcomes:rows}); }} />
-                <button type="button" className="oh-tap-row" style={buttonStyle(styles,{color:"#fecaca"})} onClick={() => patchEvent(index,{outcomes:array(event.outcomes).filter((_,row)=>row!==outcomeIndex)})}>Remove</button>
-              </div>
-              <textarea aria-label="Outcome text" rows={3} style={{...styles.inputStyle,marginTop:"0.4rem",resize:"vertical",width:"100%"}} value={outcome.text || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,text:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="What happens if this outcome is selected?" />
-            </div>)}
+          {array(event?.outcomes).length ? <div style={{ display: "grid", gap: "0.55rem", marginTop: "0.55rem" }}>
+            {!array(event.outcomes).some((outcome) => outcomeWeight(outcome?.weight) > 0) && (
+              <div style={{ color: "#fbbf24", fontSize: "0.64rem", lineHeight: 1.4 }}>At least one outcome needs a weight above 0. If every weight is 0, this event will be skipped.</div>
+            )}
+            {array(event.outcomes).map((outcome, outcomeIndex) => {
+              const chance = outcomeChanceText(event.outcomes, outcomeIndex);
+              const hasText = Boolean(clean(outcome?.text));
+              return (
+                <div key={outcome.id || outcomeIndex} style={{ border: "1px solid rgba(255,255,255,0.06)", borderRadius: "9px", padding: "0.55rem" }}>
+                  <div style={{ display: "grid", gap: "0.45rem", gridTemplateColumns: "minmax(10rem, 1fr) minmax(7rem, 0.45fr) auto", alignItems: "end" }}>
+                    <div>
+                      <label style={styles.fieldLabelStyle}>Outcome ID <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>(advanced)</span></label>
+                      <input aria-label="Outcome id" style={styles.inputStyle} value={outcome.id || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,id:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="outcome-id" />
+                    </div>
+                    <div>
+                      <label style={styles.fieldLabelStyle}>Weight <span style={{ color: "rgba(255,255,255,0.35)", fontWeight: 500 }}>({chance} chance)</span></label>
+                      <input aria-label="Outcome weight" title="Relative chance compared with the other outcomes. 0 means this outcome can never be selected." type="number" min="0" step="0.1" style={styles.inputStyle} value={outcome.weight ?? 1} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,weight:Number(e.target.value)}; patchEvent(index,{outcomes:rows}); }} />
+                    </div>
+                    <button type="button" className="oh-tap-row" style={buttonStyle(styles,{color:"#fecaca"})} onClick={() => patchEvent(index,{outcomes:array(event.outcomes).filter((_,row)=>row!==outcomeIndex)})}>Remove</button>
+                  </div>
+                  <div style={{ marginTop: "0.45rem" }}>
+                    <label style={styles.fieldLabelStyle}>What happens</label>
+                    <textarea aria-label="Outcome text" rows={3} style={{...styles.inputStyle,resize:"vertical",width:"100%"}} value={outcome.text || ""} onChange={(e) => { const rows=[...array(event.outcomes)]; rows[outcomeIndex]={...outcome,text:e.target.value}; patchEvent(index,{outcomes:rows}); }} placeholder="What happens if this outcome is selected?" />
+                  </div>
+                  {!hasText && <div style={{ color: "#fbbf24", fontSize: "0.62rem", lineHeight: 1.35, marginTop: "0.25rem" }}>Add outcome text before saving. Blank outcomes are discarded.</div>}
+                </div>
+              );
+            })}
           </div> : null}
         </section>
 

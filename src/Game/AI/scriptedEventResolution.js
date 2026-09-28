@@ -461,7 +461,7 @@ export const commitScriptedEventPlan = (resolvedState, plan, { throughDate = "" 
       ...(resolution.effectiveWeights ? { effectiveWeights: resolution.effectiveWeights } : {}),
     };
     state[id] = persisted;
-    if (persisted.outcome === "fired") fired.push(event);
+    if (persisted.outcome === "fired") fired.push(eventWithSelectedOutcome(event, resolution));
     else skipped.push(event);
   }
 

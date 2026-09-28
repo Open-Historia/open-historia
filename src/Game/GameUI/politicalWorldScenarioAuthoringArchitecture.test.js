@@ -30,7 +30,7 @@ test("Scenario Political World authoring uses the canonical trait registry and p
   assert.match(source, /POLITICAL_TRAIT_REGISTRY/);
   assert.match(source, /canonicalPoliticalTraitKey/);
   assert.match(source, /normalizePoliticalTraitValue/);
-  assert.match(source, /Blank means <strong>unset<\/strong>, not 0/);
+  assert.match(source, /Blank means <strong>not specified<\/strong>, not 0/);
   assert.match(source, /politicalActorToEditorState/);
 });
 
@@ -49,4 +49,17 @@ test("editable stable party and bloc IDs are not used as React row keys", () => 
   assert.match(source, /key=\{bloc\._editorKey/);
   assert.doesNotMatch(source, /key=\{party\.id \|\| index\}/);
   assert.doesNotMatch(source, /key=\{bloc\.id \|\| index\}/);
+});
+
+test("Scenario Political World authoring uses player-facing language instead of internal ledger jargon", () => {
+  const source = read("./PoliticalWorldAuthoringPanel.jsx");
+
+  assert.match(source, /starting political facts/);
+  assert.match(source, /Save Political World/);
+  assert.match(source, /Political traits · full supported catalog/);
+  assert.match(source, /Advanced saved state · read-only/);
+  assert.doesNotMatch(source, /canonical world\.politicalActors ledger/);
+  assert.doesNotMatch(source, />Save Political Actor</);
+  assert.doesNotMatch(source, /Political Actor saved to scenario canon/);
+  assert.doesNotMatch(source, /Full saved Political Actor JSON/);
 });

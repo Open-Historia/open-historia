@@ -17,7 +17,8 @@ test("scripted events use a dedicated manager instead of expanding every event i
 
 test("scripted event rule authoring exposes no-conditions and independent writable/draggable chance", () => {
   assert.match(source, /value="none">No conditions<\/option>/);
-  assert.match(source, /No conditions - this event becomes eligible when its date is reached/);
+  assert.match(source, /Conditions are checked once when this date is reached/);
+  assert.match(source, /skipped permanently/);
   assert.match(source, /aria-label="Event chance percent"/);
   assert.match(source, /aria-label="Event chance slider"/);
   assert.match(source, /type="range"/);
@@ -35,14 +36,31 @@ test("all native select options in the manager retain explicit dark popup colors
   }
 });
 
-test("scripted event branching authoring exposes dependency, territory and weighted outcome controls", () => {
+test("scripted event branching authoring explains dependencies and relative outcome weights in player language", () => {
   assert.match(source, /Polity controls region/);
-  assert.match(source, /Scripted event happened/);
-  assert.match(source, /Scripted outcome was selected/);
+  assert.match(source, /Earlier scripted event happened/);
+  assert.match(source, /Earlier event selected an outcome/);
+  assert.match(source, /Select earlier event/);
+  assert.match(source, /dependency points to an event that has not resolved yet/);
   assert.match(source, /aria-label="Referenced scripted event"/);
   assert.match(source, /aria-label="Referenced scripted outcome"/);
   assert.match(source, /data-scripted-event-outcomes="true"/);
-  assert.match(source, /Mutually exclusive outcomes/);
+  assert.match(source, /Possible outcomes - choose one/);
+  assert.match(source, /Weight is relative, not a percentage/);
+  assert.match(source, /3 \/ 1 \/ 1 means 60% \/ 20% \/ 20%/);
+  assert.match(source, /Outcome ID/);
   assert.match(source, /aria-label="Outcome weight"/);
-  assert.match(source, /exactly one positive-weight outcome/);
+  assert.match(source, /0 means this outcome can never be selected/);
+  assert.match(source, /At least one outcome needs a weight above 0/);
+  assert.match(source, /Blank outcomes are discarded/);
+  assert.match(source, /outcomeChanceText/);
+});
+
+test("scripted events let authors choose AI-written or exact visible wording", () => {
+  assert.match(source, /Event wording/);
+  assert.match(source, /aria-label="Event wording mode"/);
+  assert.match(source, /value="generated">Let the AI write it<\/option>/);
+  assert.match(source, /value="exact">Use my exact wording<\/option>/);
+  assert.match(source, /The timeline body uses these exact words/);
+  assert.match(source, /Outcomes inherit the event wording mode above/);
 });

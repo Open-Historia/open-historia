@@ -26,7 +26,7 @@ test("the Features editor delegates scripted event arrays to a dedicated world-a
   assert.match(featuresEditor, /world=\{world\}/);
   assert.match(libraryBar, /world=\{details\?\.data\?\.world \?\? \{\}\}/);
   assert.match(scriptedEditor, /Chance after conditions pass/);
-  assert.match(scriptedEditor, /Political World exists for polity/);
+  assert.match(scriptedEditor, /Polity has Political World data/);
   assert.match(scriptedEditor, /Polity has institution status/);
   assert.match(scriptedEditor, /Polity is subordinate to polity/);
   assert.doesNotMatch(scriptedEditor, /War ID/);

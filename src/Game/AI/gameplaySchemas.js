@@ -1,4 +1,5 @@
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
+import { normalizeEventPresentation } from "../../runtime/eventQuote.js";
 import {
   TERRITORY_BASIS_DESCRIPTION,
   TERRITORY_BASIS_DESCRIPTION_SHORT,
@@ -1044,6 +1045,18 @@ const eventTagsSchema = {
   maxItems: MAX_EVENT_TAGS,
 };
 
+const eventQuoteSchema = {
+  type: "object",
+  description: "Optional quotation shown beneath the event prose. Use this instead of putting a Markdown blockquote in description.",
+  properties: {
+    text: nonEmptyTextSchema("The quotation itself, without surrounding quotation marks."),
+    speaker: textSchema("Speaker name or human-readable attribution, when known."),
+    role: textSchema("Speaker role/title, when known."),
+  },
+  required: ["text"],
+  additionalProperties: false,
+};
+
 const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
@@ -1051,7 +1064,8 @@ const eventSchema = {
     id: textSchema("Optional stable event identifier."),
     date: textSchema("In-game date on which the event occurs."),
     title: textSchema("The headline: one sentence saying what happened."),
-    description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
+    description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again. Do not embed a Markdown blockquote here when quote is available."),
+    quote: eventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
@@ -3622,6 +3636,11 @@ const normalizeEventShape = (entry) => {
     if (event[field] === undefined && aliasValue !== undefined) event[field] = aliasValue;
     for (const alias of fieldAliases) delete event[alias];
   }
+
+  const presentation = normalizeEventPresentation({ description: event.description, quote: event.quote });
+  if (event.description !== undefined || presentation.description) event.description = presentation.description;
+  if (presentation.quote) event.quote = presentation.quote;
+  else delete event.quote;
 
   if (isPlainRecord(event.impacts)) {
     const impacts = flattenImpactWrappers(event.impacts);
