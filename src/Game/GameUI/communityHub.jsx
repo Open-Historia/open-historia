@@ -15,6 +15,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import {
   exportScenarioBundle,
   importScenarioBundle,
+  saveScenario,
   useLibraryState,
 } from "../../runtime/library.js";
 import { enqueueStrings } from "../../runtime/translator.js";
@@ -23,23 +24,25 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
-  embedScenarioBundleImage,
-  embedScenarioBundleVector,
-  resolveScenarioBundleBackground,
   splitScenarioBundleImage,
 } from "../../runtime/communityBasemaps.js";
-import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
-import { unzipBundle, zipBundle } from "../../runtime/bundleZip.js";
+import { splitBundleFiles } from "../../runtime/bundleFiles.js";
+import { zipBundle } from "../../runtime/bundleZip.js";
 import { sha256Hex } from "../../runtime/basemapLibrary.js";
 import { listFlags } from "../../runtime/flagLibrary.js";
+import {
+  HUB_NEW_POST_URL,
+  HUB_URL,
+  SCENARIO_KEY_LINE,
+  downloadHubBundle,
+  fetchHubPosts,
+} from "../../runtime/hubPosts.js";
+import { newPublishKey } from "../../runtime/scenarioSuggestion.js";
 
-// The one and only hub. Not configurable by design.
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_ISSUES = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
-const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
-const CACHE_TTL_MS = 5 * 60 * 1000;
+// Reading the hub (the post list, a post's bundle, a post's comments) lives in
+// src/runtime/hubPosts.js, so the library can use it without this tab. The
+// two functions other modules have always imported from here stay exported.
+export { downloadHubBundle, fetchHubPosts };
 
 // How many of a scenario's custom flags are the author's OWN — i.e. worth
 // advertising to the hub. A flag installed from the Community tab is already
@@ -69,160 +72,6 @@ const countPublishableFlags = async (flagsData) => {
   const hashes = await Promise.all(values.map((value) => sha256Hex(value).catch(() => null)));
   return hashes.filter((hash) => !hash || !communityHashes.has(hash)).length;
 };
-
-// First GitHub-hosted .json (release asset, attachment or raw) link in an issue
-// body = the bundle. Release links come first in official posts so imports go
-// through the download-counted URL; the raw mirror below it serves old clients.
-const BUNDLE_LINK_PATTERN =
-  /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
-
-// First image in the issue body — markdown ![alt](url) or GitHub's own
-// <img src="..."> attachment markup (issue bodies mix both depending on how
-// the image was pasted). Used as the card/detail-view cover; posts with no
-// image simply get coverImageUrl: null (existing text-only card, no error).
-const COVER_IMAGE_PATTERN =
-  /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
-
-let hubCache = { at: 0, posts: null };
-
-
-// Self-hosted import counts (keyed by hub issue number), read back through the
-// server proxy from our own counter Worker. Unlike GitHub's release download
-// counts, this covers EVERY scenario — including attachment posts — and is
-// deduped per person. Empty object if the counter isn't configured/reachable.
-const fetchImportCounts = async () => {
-  try {
-    const response = await fetch("/api/hub/import-counts");
-    if (!response.ok) return {};
-    const data = await response.json();
-    return data && typeof data === "object" ? data : {};
-  } catch {
-    return {};
-  }
-};
-
-// Official = posted by someone with real access to the hub repo, as reported
-// by GitHub itself (author_association). Titles and body text can't fake this.
-const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-const parsePost = (issue, importsById) => {
-  const body = String(issue.body ?? "");
-  const bundleUrl = body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null;
-  // The issue-form body is a series of "### <label>\n<value>" sections. Show only
-  // the author's Description prose: strip the attached-file link and never surface
-  // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
-  // metadata, not copy. Falls back to the whole body for old, non-form posts.
-  const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
-  const description = (descSection ? descSection[1] : body)
-    .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
-    .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
-    .replace(/^Flags-Count:.*$/gim, "")             // flag-pack tag (see communityFlags.js)
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")            // images
-    .replace(/<img[^>]*>/gi, "")
-    .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
-    .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
-    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
-    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
-    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
-    .replace(/\s+/g, " ")
-    .trim();
-  const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
-  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
-  // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
-  // It is deduped per person (an account, or an IP hash) and covers every scenario —
-  // release assets and attachment posts alike. We deliberately do NOT fall back to
-  // GitHub's release download count: that counts every file download, including
-  // repeat downloads by the same person and non-import curiosity clicks, so it both
-  // over-counts and disagrees between posts. One accurate source for all.
-  const installs = importsById?.[String(issue.number)]?.count ?? null;
-  return {
-    id: issue.number,
-    title: String(issue.title ?? "").replace(/^\[Scenario\]\s*/i, "").trim() || `Scenario #${issue.number}`,
-    author: issue.user?.login ?? "unknown",
-    avatarUrl: issue.user?.avatar_url ?? null,
-    url: issue.html_url,
-    createdAt: issue.created_at,
-    // The "pinned" label can only be applied by hub collaborators: GitHub
-    // silently drops labels set by anyone without push access (API, issue
-    // forms and URL params alike), so authors can't pin their own posts.
-    pinned: (issue.labels ?? []).some((label) => (label.name ?? label) === "pinned"),
-    // Verified against GitHub's author_association — only posts actually made
-    // by the hub owner or a repo collaborator count. Writing "official" in a
-    // title does nothing.
-    official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
-    upvotes: issue.reactions?.["+1"] ?? 0,
-    comments: issue.comments ?? 0,
-    description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
-    bundleUrl,
-    installs,
-    coverImageUrl,
-  };
-};
-
-// Exported so the translator can pre-translate the Community tab's posts.
-export const fetchHubPosts = async ({ force = false } = {}) => {
-  if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
-    return hubCache.posts;
-  }
-  const [response, importsById] = await Promise.all([
-    fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
-    fetchImportCounts(),
-  ]);
-  if (!response.ok) {
-    throw new Error(
-      response.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the Scenario Hub (HTTP ${response.status}).`,
-    );
-  }
-  const issues = await response.json();
-  const posts = (Array.isArray(issues) ? issues : [])
-    .filter((issue) => !issue.pull_request)
-    .map((issue) => parsePost(issue, importsById))
-    // The parser already decides whether a post has an importable scenario
-    // bundle. Do not surface malformed or misfiled "scenario" issues whose
-    // Import button would otherwise be disabled.
-    .filter((post) => Boolean(post.bundleUrl));
-  hubCache = { at: Date.now(), posts };
-  return posts;
-};
-
-// Download + assemble a hub post's scenario bundle, ready for import: fetches
-// through the server's allowlisted /api/hub/file proxy, unpacks a .zip (re-
-// embedding the basemap that rides alongside scenario.json), and inlines a
-// referenced community basemap. Shared by the Community tab's Import button and
-// the Scenarios tab's Update button (which lazy-loads this module).
-export const downloadHubBundle = async (bundleUrl) => {
-  const response = await fetch(`/api/hub/file?url=${encodeURIComponent(bundleUrl)}`);
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || `Download failed (HTTP ${response.status}).`);
-  }
-  // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-  // basemap file + preview); everything else is a plain JSON bundle. The basemap
-  // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
-  let bundle;
-  if (/\.zip(\?|$)/i.test(bundleUrl)) {
-    const zip = await unzipBundle(await response.arrayBuffer());
-    const scenarioText = await zip.text("scenario.json");
-    if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-    bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-    const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-    } else {
-      const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-      if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-    }
-  } else {
-    bundle = await response.json();
-  }
-  // A shared scenario may reference a community basemap instead of embedding
-  // it — fetch and inline it before importing so the map isn't blank.
-  await resolveScenarioBundleBackground(bundle);
-  return bundle;
-};
-
 
 // Never wider than the phone it is on: at 320 px a 19rem card pushed the
 // search results sideways off the screen.
@@ -653,9 +502,10 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       const bundle = await downloadHubBundle(post.bundleUrl);
       // Provenance: which post and which exact bundle file this copy came from.
       // The library's Scenarios tab compares this against the post's CURRENT
-      // bundle URL to offer an Update button — and drops it the moment the
-      // scenario is modified locally (see writeScenarioMeta).
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
+      // bundle URL to offer an Update button while the copy is unedited; once
+      // the player edits it the link stays, marked edited, so they can suggest
+      // their changes back to the post (server/hubProvenance.js).
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       const details = await importScenarioBundle(bundle);
       // Best-effort: tell the server this import succeeded so it can count it
       // (once per install) on the hub's self-hosted import counter. Never blocks
@@ -753,14 +603,27 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
       // installable flag pack without downloading every bundle first. Harmless if
       // the scenario form has no such field — GitHub ignores unknown prefills.
       const customFlagCount = await countPublishableFlags(bundle.assets?.flags?.data);
+      // The scenario's publish key, written into the post: finding it there is
+      // how this install later learns which post is its player's own, and so
+      // which posts' comments to read for suggested changes. The same key for
+      // every post made of this scenario; the scenario keeps it.
+      const publishKey = scenario.hubPublished?.key || newPublishKey();
       const technicalLines = [
         ...(split ? [`Basemap-Hash: ${split.hash}`, `Basemap-Kind: ${split.kind}`] : []),
         ...(customFlagCount > 0 ? [`Flags-Count: ${customFlagCount}`] : []),
+        `${SCENARIO_KEY_LINE}: ${publishKey}`,
       ];
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
-        (technicalLines.length ? `&technical=${encodeURIComponent(technicalLines.join("\n"))}` : "");
+        `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
       window.open(scenarioUrl, "_blank", "noopener");
+      // After the page is open: a browser only lets a click open a window for
+      // a moment, and this write is not worth losing the page over.
+      if (!scenario.hubPublished?.key) {
+        saveScenario(scenario.id, {
+          hubPublished: { ...(scenario.hubPublished ?? {}), key: publishKey, publishedAt: new Date().toISOString() },
+        }).catch((nextError) => console.warn("[hub] could not record the publish key:", nextError));
+      }
       setNotice(
         `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
           `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
