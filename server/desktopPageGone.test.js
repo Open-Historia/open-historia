@@ -22,7 +22,8 @@ const start = source.indexOf("const pageGoneWording = ");
 const end = source.indexOf("// --- end of a page that stops");
 assert.ok(start !== -1 && end > start, "could not find the page-stopped handler in electron/main.cjs");
 
-const load = ({ isBeta = false, response = 0 } = {}) => {
+// The name each build calls itself (APP_NAME in electron/main.cjs).
+const load = ({ appName = "Open Historia", response = 0 } = {}) => {
   const logs = [];
   const dialogs = [];
   const quits = [];
@@ -38,10 +39,9 @@ const load = ({ isBeta = false, response = 0 } = {}) => {
     "dialog",
     "logMain",
     "app",
-    "IS_BETA",
-    "BETA_APP_NAME",
+    "APP_NAME",
     `${source.slice(start, end)}\nreturn { handlePageGone };`,
-  )(dialog, logMain, app, isBeta, "Open Historia Beta");
+  )(dialog, logMain, app, appName);
   return { handlePageGone, logs, dialogs, quits };
 };
 
@@ -93,8 +93,15 @@ test("a normal close, the app quitting, or a window already gone is not a crash"
   assert.equal(dialogs.length, 0);
 });
 
+test("the multiplayer build says its own name", () => {
+  const { handlePageGone, dialogs } = load({ appName: "Open Historia Multiplayer" });
+  handlePageGone(makeWindow(), { reason: "oom" });
+  assert.equal(dialogs[0].title, "Open Historia Multiplayer");
+  assert.equal(dialogs[0].message, "Open Historia Multiplayer ran out of memory.");
+});
+
 test("the beta says its own name, and a window closed during the dialog is left alone", async () => {
-  const { handlePageGone, dialogs, quits } = load({ isBeta: true, response: 0 });
+  const { handlePageGone, dialogs, quits } = load({ appName: "Open Historia Beta", response: 0 });
   const win = makeWindow();
   handlePageGone(win, { reason: "oom" });
   assert.equal(dialogs[0].title, "Open Historia Beta");
