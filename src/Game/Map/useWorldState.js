@@ -3,6 +3,7 @@ import { JSON_URLS, readJson, reportPerfOperation } from "../../runtime/assets.j
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { buildOwnerAliasMap, createOwnerResolver } from "../../runtime/ownerNames.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isFictionalWorld } from "../../runtime/scenarioCanon.js";
 
 // Map-facing world store — R5.0 event-driven edition.
 //
@@ -138,6 +139,7 @@ export const withSettledClaims = (claimants, settled) => {
 const deriveMapState = (state) => ({
   worldState: state,
   worldKnown: Boolean(state && Object.keys(state).length > 0),
+  fictionalWorld: isFictionalWorld(state ?? {}),
   customRegions: Boolean(state?.customRegions),
   customGeometry: Boolean(
     state?.customGeometry ??
@@ -172,6 +174,7 @@ const deriveMapState = (state) => ({
 const sameMapState = (prev, next) =>
   Boolean(prev) &&
   prev.worldKnown === next.worldKnown &&
+  prev.fictionalWorld === next.fictionalWorld &&
   prev.customRegions === next.customRegions &&
   prev.customGeometry === next.customGeometry &&
   prev.customCities === next.customCities &&

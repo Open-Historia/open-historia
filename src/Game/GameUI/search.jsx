@@ -167,7 +167,7 @@ const Search = memo(({ mapRef }) => {
   const [status, setStatus] = useState(null);
   const [remote, setRemote] = useState(NO_REMOTE_RESULTS);
   const [selectedIndex, setSelectedIndex] = useState(-1);
-  const { markers, cityRenames, polityOverrides } = useWorldState();
+  const { markers, cityRenames, polityOverrides, fictionalWorld } = useWorldState();
   const placeIndex = useSyncExternalStore(subscribeWorldPlaceIndex, getWorldPlaceIndex, getWorldPlaceIndex);
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
@@ -180,7 +180,9 @@ const Search = memo(({ mapRef }) => {
   }, [expanded]);
 
   useEffect(() => {
-    if (!query.trim() || query.length < 2) {
+    // A fictional world has no real places: asking the geocoder for "Valyria"
+    // only buries the world's own places under towns in Iowa and Ontario.
+    if (fictionalWorld || !query.trim() || query.length < 2) {
       clearTimeout(debounceRef.current);
       searchAbortRef.current?.abort();
       setRemote(NO_REMOTE_RESULTS);
@@ -210,7 +212,7 @@ const Search = memo(({ mapRef }) => {
       clearTimeout(debounceRef.current);
       searchAbortRef.current?.abort();
     };
-  }, [query]);
+  }, [query, fictionalWorld]);
 
   // All in memory already, so no network and no debounce, and only while the bar is open.
   const localPlaces = useMemo(
