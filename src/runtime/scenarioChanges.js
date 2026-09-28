@@ -23,7 +23,6 @@ import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidanc
 import { normalizeGroups } from "./groups.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
-import COUNTRY_NAME_REGISTRY from "./web/generated/countryNames.js";
 import {
   buildOwnerRenameMap,
   buildPolityMapRefs,
@@ -385,7 +384,10 @@ export const migrateBundleOwners = (bundle) => {
   const context = {
     polityOverrides: world.polityOverrides,
     countryNameOverrides: bundle.scenario?.countryNameOverrides,
-    registry: COUNTRY_NAME_REGISTRY,
+    // The committed code -> name table: the same server/country-names.json the
+    // stores migrate with (the web store's generated copy exists only after a
+    // web build, and tests run without one).
+    registry: COUNTRY_NAMES,
     features: regions?.features,
     ownershipOverrides: world.regionOwnershipOverrides,
     sovereigntyOverrides: world.regionSovereigntyOverrides,
