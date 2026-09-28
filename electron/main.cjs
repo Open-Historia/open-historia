@@ -35,6 +35,13 @@ const IS_BETA = CHANNEL === "beta";
 // in electron-builder.beta.yml, because that is the name the player sees, and
 // nothing derives one from the other.
 const BETA_APP_NAME = "Open Historia Beta";
+// The multiplayer build (`npm run dist:win:multiplayer`) is a third application,
+// the same way: its own profile, saves, settings and map folder, beside the
+// official app and the beta, never over them. Matches `productName` in
+// electron-builder.multiplayer.yml (server/multiplayerPackaging.test.js).
+const IS_MULTIPLAYER = CHANNEL === "multiplayer";
+const MULTIPLAYER_APP_NAME = "Open Historia Multiplayer";
+const APP_NAME = IS_BETA ? BETA_APP_NAME : IS_MULTIPLAYER ? MULTIPLAYER_APP_NAME : "Open Historia";
 
 // Electron derives userData — the Chromium profile, and with it the single-instance
 // lock — from the app name, which for both builds would otherwise be package.json's
@@ -44,7 +51,7 @@ const BETA_APP_NAME = "Open Historia Beta";
 // has to happen HERE, before anything reads a path: the installer's productName
 // does NOT reach Electron (it only names the exe, the install folder and the
 // shortcut).
-if (IS_BETA) app.setName(BETA_APP_NAME);
+if (IS_BETA || IS_MULTIPLAYER) app.setName(APP_NAME);
 
 // Where a beta build looks for ITS updates. server.js defaults the desktop track to
 // .../desktop-stable/latest.json, so without this override a tester would be offered
@@ -160,10 +167,17 @@ process.on("unhandledRejection", (reason) => {
 // the update banner can compare it against the published one. Deliberately routed
 // this way rather than through a preload: attaching a preload to the game window is
 // what broke the app last time, and this adds nothing to how the window is created.
+//
+// The multiplayer build has no feed of its own to compare against, and the
+// official one would offer it the stable installer "as an update": a way out of
+// multiplayer, not a newer copy of it. So it never reads a build id, and the
+// banner never shows.
 try {
-  process.env.OH_DESKTOP_BUILD = String(
-    JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
-  );
+  if (!IS_MULTIPLAYER) {
+    process.env.OH_DESKTOP_BUILD = String(
+      JSON.parse(fs.readFileSync(path.join(__dirname, "build-id.json"), "utf8")).build || "",
+    );
+  }
 } catch {
   /* dev build: unstamped, so no update is ever offered */
 }
@@ -186,7 +200,9 @@ try {
 // (CSC_IDENTITY_AUTO_DISCOVERY: false) because there is no Developer ID
 // certificate yet. Attempting it there produces an error and nothing else, so mac
 // keeps the manual download until there is a certificate to sign with.
-const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin";
+//
+// Nor does the multiplayer build update itself: it has no feed (see above).
+const AUTO_UPDATE_SUPPORTED = process.platform !== "darwin" && !IS_MULTIPLAYER;
 
 // What the banner polls. One object, replaced rather than mutated, so a read is
 // always internally consistent.
@@ -530,7 +546,7 @@ const handlePageGone = (win, details, { quitting: isQuitting = false } = {}) => 
   const reason = String(details?.reason || "unknown");
   if (reason === "clean-exit" || isQuitting || !win || win.isDestroyed()) return false;
   logMain("error", "window.pageGone", `The game's page stopped (${reason}).`, { reason, exitCode: details?.exitCode });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const { message, detail } = pageGoneWording(reason, name);
   dialog
     .showMessageBox(win, { type: "error", title: name, message, detail, buttons: ["Reload", "Quit"], defaultId: 0, cancelId: 1, noLink: true })
@@ -553,7 +569,7 @@ const createMainWindow = () => {
     autoHideMenuBar: true,
     backgroundColor: "#131315",
     show: false,
-    title: IS_BETA ? BETA_APP_NAME : "Open Historia",
+    title: APP_NAME,
     // Explicit even though it's already Electron's default — the whole reason
     // this window needs a context menu at all is to surface what this enables.
     webPreferences: { spellcheck: true },
@@ -729,7 +745,7 @@ const boot = async () => {
 const reportFatalBootError = (error) => {
   const message = String((error && error.message) || error || "Unknown error");
   logMain("error", "main.bootFailed", message, { code: error && error.code });
-  const name = IS_BETA ? BETA_APP_NAME : "Open Historia";
+  const name = APP_NAME;
   const portClash = (error && error.code === "EADDRINUSE") || message.includes("EADDRINUSE") || message.startsWith("No free port");
   dialog.showErrorBox(
     `${name} could not start`,
