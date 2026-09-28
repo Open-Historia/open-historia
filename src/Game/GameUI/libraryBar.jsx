@@ -64,6 +64,17 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
+import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
+import {
+  ScenarioCommunityCard,
+  SuggestChangesDialog,
+  SuggestionCountBadge,
+  SuggestionReviewDialog,
+  SuggestionsBanner,
+  openSuggestionsOf,
+} from "./ScenarioSuggestions.jsx";
 
 const UNIT_TYPE_LABELS = {
   infantry: "Infantry",
@@ -808,8 +819,13 @@ const ScenarioCard = ({ onClone, onEdit, onPlay, onSelect, onUpdate, scenario, s
                 </span>
               )}
             </div>
-            <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.74rem" }}>
-              {scenario.gameCount} game{scenario.gameCount === 1 ? "" : "s"}
+            <span style={{ alignItems: "center", display: "inline-flex", gap: "0.45rem" }}>
+              {/* Changes people suggested on the hub post the player made of
+                  this scenario: the editor's Community card lists them. */}
+              <SuggestionCountBadge count={openSuggestionsOf(scenario).length} onClick={() => onEdit(scenario.id)} />
+              <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.74rem" }}>
+                {scenario.gameCount} game{scenario.gameCount === 1 ? "" : "s"}
+              </span>
             </span>
           </div>
           <div style={{ marginTop: "4rem" }}>
@@ -1368,6 +1384,10 @@ const EditorDrawer = ({
   setPromptSectionKey,
   statsValue,
   onStatsChange,
+  // The scenario's place on the community hub (ScenarioSuggestions.jsx), shown
+  // at the top of the Overview, and Suggest changes for a downloaded one.
+  communityCard = null,
+  onSuggestChanges = null,
 }) => {
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
@@ -1436,6 +1456,7 @@ const EditorDrawer = ({
       </div>
 
       <SectionTabs badges={sectionBadges} currentSection={editorSection} sections={visibleSections} setSection={setEditorSection} touch={touch} />
+      {editorSection === "overview" && kind === "scenario" && communityCard}
       {editorSection === "overview" && (
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "18px", marginBottom: "0.95rem", padding: "0.9rem" }}>
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
@@ -1769,6 +1790,17 @@ const EditorDrawer = ({
             🗺️ Open Map Editor
           </button>
         )}
+        {kind === "scenario" && onSuggestChanges && record.hubOrigin && (
+          <button
+            className="oh-tap-row"
+            onClick={onSuggestChanges}
+            title="Send your changes to this community scenario's author, who can accept or reject each one."
+            style={touchFit({ ...actionButtonStyle, background: "rgba(43,193,243,0.18)", borderColor: "rgba(43,193,243,0.45)", color: "#fff" }, touch)}
+            type="button"
+          >
+            Suggest changes
+          </button>
+        )}
         {record.canDelete && (
           <button
             className="oh-tap-row"
@@ -2100,17 +2132,16 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   // Hub update detection: scenarios imported straight from the community tab
-  // (and not modified since) carry hubOrigin. When the Scenarios tab shows any,
-  // fetch the hub posts (lazily — same chunk as the Community tab, and the
-  // module's 5-minute cache dedupes) and compare each post's CURRENT bundle
-  // file against the one imported. A silent failure just means no Update
-  // buttons — offline behaves exactly as before.
+  // carry hubOrigin, and those not modified since (no editedAt) can take the
+  // post's newer file. When the Scenarios tab shows any, fetch the hub posts
+  // (runtime/hubPosts.js; its 5-minute cache dedupes) and compare each post's
+  // CURRENT bundle file against the one imported. A silent failure just means
+  // no Update buttons — offline behaves exactly as before.
   const [hubPostById, setHubPostById] = useState(null);
   useEffect(() => {
-    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin)) return undefined;
+    if (!menuOpen || activeTab !== "scenarios" || !scenarios.some((entry) => entry.hubOrigin && !entry.hubOrigin.editedAt)) return undefined;
     let cancelled = false;
-    import("./communityHub.jsx")
-      .then(({ fetchHubPosts }) => fetchHubPosts())
+    fetchHubPosts()
       .then((posts) => {
         if (cancelled) return;
         const byId = {};
@@ -2123,8 +2154,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     };
   }, [menuOpen, activeTab, scenarios]);
 
+  // An edited copy is never overwritten: its player suggests their changes to
+  // the post instead, and keeps their copy.
   const scenarioUpdateAvailable = (scenario) => Boolean(
     scenario.hubOrigin &&
+    !scenario.hubOrigin.editedAt &&
     hubPostById?.[scenario.hubOrigin.postId]?.bundleUrl &&
     hubPostById[scenario.hubOrigin.postId].bundleUrl !== scenario.hubOrigin.bundleUrl,
   );
@@ -2141,12 +2175,221 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     try {
       const { downloadHubBundle } = await import("./communityHub.jsx");
       const bundle = await downloadHubBundle(post.bundleUrl);
-      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl };
+      bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       await updateScenarioFromBundle(scenario.id, bundle);
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
     } finally {
       setIsBusy(false);
+    }
+  };
+
+  // ---- suggested changes (ScenarioSuggestions.jsx) ---------------------------
+  // A downloaded scenario suggests its changes back to its post; a player's
+  // own post collects the suggestions others leave on it as comments.
+  const [suggestTarget, setSuggestTarget] = useState(null); // scenario id
+  const [reviewTarget, setReviewTarget] = useState(null); // { scenarioId, source: { ref } | { suggestion } }
+  const [communityBusy, setCommunityBusy] = useState(false);
+  const [communityNote, setCommunityNote] = useState("");
+  const scenarioById = (id) => scenarios.find((entry) => entry.id === id) ?? null;
+
+  // A bookkeeping write, shown in the open drawer at once (its form is untouched).
+  const adoptScenarioSummary = (details) => {
+    if (!details?.scenario) return;
+    setEditorDetails((current) => (current?.scenario?.id === details.scenario.id ? { ...current, scenario: details.scenario } : current));
+  };
+
+  // The posts carrying this scenario's key, and the suggestions left on them.
+  const refreshSuggestionsFor = async (scenario, { force = false } = {}) => {
+    if (!scenario?.hubPublished) return null;
+    const posts = await fetchHubPosts({ force });
+    const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, {
+      fetchComments: (postId) => fetchPostComments(postId, { force }),
+    });
+    if (changed) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: published }));
+    return published;
+  };
+
+  // When the menu opens, an author learns of new suggestions on their posts:
+  // one post list (cached five minutes) and a post's comments only when its
+  // comment count moved. Unauthenticated GitHub allows 60 requests an hour.
+  const suggestionsCheckedAtRef = useRef(0);
+  useEffect(() => {
+    if (!menuOpen || !loaded) return;
+    const mine = scenarios.filter((entry) => entry.hubPublished);
+    if (!mine.length || Date.now() - suggestionsCheckedAtRef.current < 5 * 60 * 1000) return;
+    suggestionsCheckedAtRef.current = Date.now();
+    (async () => {
+      try {
+        const posts = await fetchHubPosts();
+        for (const scenario of mine) {
+          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts);
+          if (changed) await saveScenario(scenario.id, { hubPublished: published });
+        }
+      } catch (nextError) {
+        console.warn("[hub] could not check for suggested changes:", nextError?.message || nextError);
+      }
+    })();
+  }, [menuOpen, loaded, scenarios]);
+
+  const handleSuggestChanges = async (scenario) => {
+    // Suggest changes compares what is saved: edits still in the form go in first.
+    if (editorKind === "scenario" && editorDetails?.scenario?.id === scenario.id && editorState
+      && JSON.stringify(editorState) !== JSON.stringify(buildScenarioEditorState(editorDetails))) {
+      if (!window.confirm("Save your changes to this scenario first? Only saved changes can be suggested.")) return;
+      await handleSave();
+    }
+    setSuggestTarget(scenario.id);
+  };
+
+  const handleUnlinkOrigin = async (scenario) => {
+    if (!window.confirm("Unlink this scenario from its community post? It becomes your own scenario: it no longer follows the post, and you can no longer suggest changes to it.")) return;
+    setCommunityBusy(true);
+    try {
+      adoptScenarioSummary(await saveScenario(scenario.id, { hubOrigin: null }));
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleForgetPost = async (scenario) => {
+    if (!window.confirm("Stop looking for suggested changes on your post? The post stays on the hub, and you can link it again later.")) return;
+    setCommunityBusy(true);
+    try {
+      adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: null }));
+      setCommunityNote("");
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleRefreshSuggestions = async (scenario) => {
+    setCommunityBusy(true);
+    setCommunityNote("");
+    try {
+      const published = await refreshSuggestionsFor(scenario, { force: true });
+      const waiting = openSuggestionsOf({ ...scenario, hubPublished: published }).length;
+      setCommunityNote(!published?.postIds?.length
+        ? "Your post is not on the hub yet. If you posted it before this version of the game, link it by its address."
+        : waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Checked just now: no suggested changes waiting.");
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleLinkPost = async (scenario, postId) => {
+    setCommunityBusy(true);
+    setCommunityNote("");
+    try {
+      const current = scenario.hubPublished;
+      const details = await saveScenario(scenario.id, {
+        hubPublished: {
+          ...(current ?? {}),
+          postIds: [postId, ...(current?.postIds ?? []).filter((id) => id !== postId)],
+          publishedAt: current?.publishedAt || new Date().toISOString(),
+        },
+      });
+      adoptScenarioSummary(details);
+      const published = await refreshSuggestionsFor(details.scenario, { force: true });
+      const waiting = openSuggestionsOf({ ...details.scenario, hubPublished: published }).length;
+      setCommunityNote(waiting === 1 ? "1 suggestion waiting." : waiting ? `${waiting} suggestions waiting.` : "Linked. No suggested changes waiting.");
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  // "Reject all from @…", for a contributor flooding a post with bad edits:
+  // everything they suggested goes, on every post this player made, and what
+  // they suggest later is hidden and never stored (server/hubProvenance.js).
+  const handleRejectContributor = async (login) => {
+    if (!window.confirm(`Reject everything @${login} suggested? Their suggestions are put away on all your posts, and anything they suggest later is hidden. You can unblock them in the scenario's Community card.`)) return;
+    setCommunityBusy(true);
+    try {
+      for (const scenario of scenarios.filter((entry) => entry.hubPublished)) {
+        const next = withContributorBlocked(scenario.hubPublished, login, true);
+        if (next) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: next }));
+      }
+      setReviewTarget((current) => (String(current?.source?.ref?.author ?? "").toLowerCase() === login.toLowerCase() ? null : current));
+      setCommunityNote(`Rejected everything from @${login}.`);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleUnblockContributor = async (login) => {
+    setCommunityBusy(true);
+    try {
+      let drawerRecord = null;
+      for (const scenario of scenarios.filter((entry) => isBlockedContributor(entry.hubPublished, login))) {
+        const details = await saveScenario(scenario.id, { hubPublished: withContributorBlocked(scenario.hubPublished, login, false) });
+        adoptScenarioSummary(details);
+        if (details?.scenario?.id === editorDetails?.scenario?.id) drawerRecord = details.scenario;
+      }
+      // Their suggestions come back with the next look at the post's comments.
+      if (drawerRecord) await refreshSuggestionsFor(drawerRecord, { force: true });
+      setCommunityNote(`@${login} is unblocked.`);
+    } catch (nextError) {
+      setCommunityNote(nextError.message);
+    } finally {
+      setCommunityBusy(false);
+    }
+  };
+
+  const handleOpenSuggestionFile = async (scenario, file) => {
+    try {
+      const suggestion = await readSuggestionFile(file);
+      setReviewTarget({ scenarioId: scenario.id, source: { suggestion } });
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
+  };
+
+  // The map's changes open in the Workshop, listed and marked on the map
+  // (src/Editor/SuggestionReviewPanel.jsx). The decisions made there are kept
+  // with the review once the map is saved into the scenario.
+  const openMapReview = async (scenarioId, suggestion, decisions, key) => {
+    try {
+      const details = await loadScenarioDetails(scenarioId);
+      openMapEditorFor(details.scenario, details.data?.world ?? {}, {
+        review: {
+          suggestion,
+          decisions: { accepted: [...decisions.accepted], rejected: [...decisions.rejected] },
+          onSaved: async (mapDecisions) => {
+            const latest = (await loadScenarioDetails(scenarioId)).scenario;
+            const reviews = { ...(latest?.hubReviews ?? {}) };
+            const record = reviews[key] ?? { status: "reviewing", accepted: [], rejected: [] };
+            const accepted = new Set(record.accepted);
+            const rejected = new Set(record.rejected);
+            for (const change of suggestion.changes) {
+              if (change.area !== "map") continue;
+              accepted.delete(change.id);
+              rejected.delete(change.id);
+            }
+            mapDecisions.accepted.forEach((id) => accepted.add(id));
+            mapDecisions.rejected.forEach((id) => rejected.add(id));
+            const everyDecided = suggestion.changes.every((change) => accepted.has(change.id) || rejected.has(change.id));
+            reviews[key] = {
+              status: everyDecided ? "done" : record.status === "dismissed" ? "dismissed" : "reviewing",
+              accepted: [...accepted],
+              rejected: [...rejected],
+              updatedAt: new Date().toISOString(),
+            };
+            await saveScenario(scenarioId, { hubReviews: reviews });
+          },
+        },
+      });
+    } catch (nextError) {
+      setEditorError(nextError.message);
     }
   };
 
@@ -2697,6 +2940,77 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [isMapEditorOpen, setIsMapEditorOpen] = useState(false);
   const [mapEditorScenario, setMapEditorScenario] = useState(null);
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
+  // A suggestion being reviewed in the Workshop (openMapReview), or null.
+  const [mapEditorReview, setMapEditorReview] = useState(null);
+
+  // Open the Workshop on a scenario's CURRENT map (geometry + owners + cities +
+  // palette) so it edits that map instead of the default world. Assets stream
+  // in async; the editor hydrates the moment they arrive. `review` puts a
+  // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
+  const openMapEditorFor = (scenario, world = {}, { review = null } = {}) => {
+    setMapEditorScenario(scenario);
+    setMapEditorSeed(null);
+    setMapEditorReview(review);
+    setIsMapEditorOpen(true);
+    if (!scenario) return;
+    Promise.all([
+      downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
+      downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
+      downloadScenarioJsonAsset(scenario.id, "colors"),
+      // The author-set flags, for the same reason as the background below:
+      // without them the editor opens with none, and Apply & Play cannot
+      // tell "this map has no flags" from "this map never loaded them" —
+      // so it clears the scenario's flags.json and the author's work is gone.
+      downloadScenarioJsonAsset(scenario.id, "flags"),
+      downloadScenarioJsonAsset(scenario.id, "tags"),
+      // The custom map background so re-opening the editor restores it.
+      world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
+    ]).then(([regions, cities, colors, flags, tags, bgData]) => {
+      const bgDesc = world.background;
+      const background =
+        bgDesc?.kind === "image" && bgData?.dataUrl
+          ? { kind: "image", dataUrl: bgData.dataUrl }
+          : bgDesc?.kind === "vector" && bgData?.geojson
+            ? { kind: "vector", geojson: bgData.geojson }
+            : null;
+      setMapEditorSeed({
+        name: scenario.name || "",
+        author: world.author || "",
+        ownershipOverrides: world.regionOwnershipOverrides || {},
+        // The world's disputes, stamped over the map file's as the game
+        // reads them, so the Workshop edits what the game shows.
+        claimOverrides: {
+          claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
+            ? world.regionClaimants
+            : {},
+          settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
+          // Which group's area each region is in; stamped with the disputes.
+          groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
+            ? world.groupAreas
+            : {},
+        },
+        groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
+        regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
+        cities: cities && Array.isArray(cities.features) ? cities : null,
+        colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
+        flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
+        tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
+        polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
+          ? world.polityOverrides
+          : {},
+        background,
+        basemap: world.basemap || null,
+        // Carried like the flags above: a round-trip must not reset it.
+        customCities: Boolean(world.customCities),
+        // The scenario's starting units, so the Units panel edits what the game starts with.
+        units: Array.isArray(world.units) ? world.units : [],
+        // Its structures, edited as map features that are not cities.
+        markers: Array.isArray(world.markers) ? world.markers : [],
+        // Its puppet states, for the Countries panel.
+        puppets: Array.isArray(world.puppets) ? world.puppets : [],
+      });
+    });
+  };
   const [countryPicker, setCountryPicker] = useState(null);
   const [countryOptions, setCountryOptions] = useState([]);
   const [customRegionData, setCustomRegionData] = useState(null);
@@ -3030,10 +3344,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     () => [...scenarios].sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""))),
     [scenarios],
   );
-  // "Yours" uses the same ownership rule the old dedicated shelf used.
+  // "Yours", by the rule the old dedicated shelf used: scenarios the player
+  // made or edited themselves — no hubOrigin (made here, or unlinked), or a
+  // hub import they have edited (editedAt: the link stays, so they can suggest
+  // their changes back). The stock built-in only counts once it has actually
+  // been touched.
   const yourScenarios = useMemo(
     () => scenarios.filter(
-      (scenario) => !scenario.hubOrigin && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
+      (scenario) => (!scenario.hubOrigin || scenario.hubOrigin.editedAt) && (scenario.id !== "default" || scenario.updatedAt !== scenario.createdAt),
     ),
     [scenarios],
   );
@@ -3079,6 +3397,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       return rankA - rankB || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? ""));
     });
   }, [recentScenarios, scenarioSearch, scenarioSort, scenarioView, scenarios, yourScenarioIds]);
+
+  // The scenario open in the drawer as the catalog has it now: every hub
+  // bookkeeping write refreshes the catalog, not the drawer's copy.
+  const drawerScenario = editorKind === "scenario" && editorDetails?.scenario
+    ? (scenarioById(editorDetails.scenario.id) ?? editorDetails.scenario)
+    : null;
 
   // The open tab's own actions: in the bar on a desktop, heading the page on a
   // phone. The Community tab brings its own.
@@ -3185,15 +3509,35 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 setIsMapEditorOpen(false);
                 setMapEditorScenario(null);
                 setMapEditorSeed(null);
+                setMapEditorReview(null);
               }}
               scenarioName={mapEditorScenario?.name}
               initialMap={mapEditorSeed}
+              review={mapEditorReview}
               onApplyToScenario={
                 mapEditorScenario ? (seed, options) => applyMapToScenario(mapEditorScenario, seed, options) : undefined
               }
             />
           </Suspense>
         </div>
+      )}
+
+      {/* Suggested changes: sending one (a downloaded scenario), reviewing one
+          (the author). The review steps aside while its map changes are open
+          in the Workshop, and comes back when the Workshop closes. */}
+      {suggestTarget && scenarioById(suggestTarget) && (
+        <SuggestChangesDialog scenario={scenarioById(suggestTarget)} onClose={() => setSuggestTarget(null)} />
+      )}
+      {reviewTarget && !isMapEditorOpen && scenarioById(reviewTarget.scenarioId) && (
+        <SuggestionReviewDialog
+          key={`${reviewTarget.scenarioId}:${reviewTarget.source?.ref?.id || reviewTarget.source?.suggestion?.id || ""}`}
+          scenario={scenarioById(reviewTarget.scenarioId)}
+          source={reviewTarget.source}
+          onClose={() => setReviewTarget(null)}
+          onLoaded={(suggestion) => setReviewTarget((current) => (current ? { ...current, source: { ...current.source, suggestion } } : current))}
+          onReviewMap={(suggestion, decisions, key) => openMapReview(reviewTarget.scenarioId, suggestion, decisions, key)}
+          onRejectContributor={handleRejectContributor}
+        />
       )}
 
       <Presence open={Boolean(countryPicker)} value={countryPicker}>
@@ -3537,6 +3881,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
                 ))}
               </div>
             )}
+            {activeTab !== "community" && (
+              <SuggestionsBanner scenarios={scenarios} onOpen={(scenario) => openScenarioEditor(scenario.id)} />
+            )}
             {activeTab === "community" ? (
               <Suspense
                 fallback={
@@ -3658,75 +4005,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           setEditorDetails(nextDetails);
           setEditorState((current) => current ? { ...current } : current);
         }}
-        onOpenMapEditor={() => {
-          const scenario = editorDetails?.scenario || null;
-          setMapEditorScenario(scenario);
-          setMapEditorSeed(null);
-          setIsMapEditorOpen(true);
-          // Load the scenario's CURRENT map (geometry + owners + cities + palette)
-          // so the editor opens it instead of the default world. Assets stream in
-          // async; the editor hydrates the moment they arrive.
-          if (scenario) {
-            const world = editorDetails?.data?.world ?? {};
-            Promise.all([
-              downloadScenarioJsonAsset(scenario.id, "regionsGeojson"),
-              downloadScenarioJsonAsset(scenario.id, "citiesGeojson"),
-              downloadScenarioJsonAsset(scenario.id, "colors"),
-              // The author-set flags, for the same reason as the background below:
-              // without them the editor opens with none, and Apply & Play cannot
-              // tell "this map has no flags" from "this map never loaded them" —
-              // so it clears the scenario's flags.json and the author's work is gone.
-              downloadScenarioJsonAsset(scenario.id, "flags"),
-              downloadScenarioJsonAsset(scenario.id, "tags"),
-              // The custom map background so re-opening the editor restores it.
-              world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
-            ]).then(([regions, cities, colors, flags, tags, bgData]) => {
-              const bgDesc = world.background;
-              const background =
-                bgDesc?.kind === "image" && bgData?.dataUrl
-                  ? { kind: "image", dataUrl: bgData.dataUrl }
-                  : bgDesc?.kind === "vector" && bgData?.geojson
-                    ? { kind: "vector", geojson: bgData.geojson }
-                    : null;
-              setMapEditorSeed({
-                name: scenario.name || "",
-                author: world.author || "",
-                ownershipOverrides: world.regionOwnershipOverrides || {},
-                // The world's disputes, stamped over the map file's as the game
-                // reads them, so the Workshop edits what the game shows.
-                claimOverrides: {
-                  claimants: world.regionClaimants && typeof world.regionClaimants === "object" && !Array.isArray(world.regionClaimants)
-                    ? world.regionClaimants
-                    : {},
-                  settled: Array.isArray(world.settledRegionClaims) ? world.settledRegionClaims : [],
-                  // Which group's area each region is in; stamped with the disputes.
-                  groupAreas: world.groupAreas && typeof world.groupAreas === "object" && !Array.isArray(world.groupAreas)
-                    ? world.groupAreas
-                    : {},
-                },
-                groups: world.groups && typeof world.groups === "object" && !Array.isArray(world.groups) ? world.groups : {},
-                regions: regions && Array.isArray(regions.features) && regions.features.length ? regions : null,
-                cities: cities && Array.isArray(cities.features) ? cities : null,
-                colors: colors && typeof colors === "object" && !Array.isArray(colors) ? colors : null,
-                flags: flags && typeof flags === "object" && !Array.isArray(flags) ? flags : null,
-                tags: tags && typeof tags === "object" && !Array.isArray(tags) ? tags : null,
-                polities: world.polityOverrides && typeof world.polityOverrides === "object" && !Array.isArray(world.polityOverrides)
-                  ? world.polityOverrides
-                  : {},
-                background,
-                basemap: world.basemap || null,
-                // Carried like the flags above: a round-trip must not reset it.
-                customCities: Boolean(world.customCities),
-                // The scenario's starting units, so the Units panel edits what the game starts with.
-                units: Array.isArray(world.units) ? world.units : [],
-                // Its structures, edited as map features that are not cities.
-                markers: Array.isArray(world.markers) ? world.markers : [],
-                // Its puppet states, for the Countries panel.
-                puppets: Array.isArray(world.puppets) ? world.puppets : [],
-              });
-            });
-          }
-        }}
+        onOpenMapEditor={() => openMapEditorFor(editorDetails?.scenario || null, editorDetails?.data?.world ?? {})}
+        communityCard={drawerScenario ? (
+          <ScenarioCommunityCard
+            scenario={drawerScenario}
+            busy={communityBusy}
+            refreshNote={communityNote}
+            onSuggest={() => handleSuggestChanges(drawerScenario)}
+            onUnlink={() => handleUnlinkOrigin(drawerScenario)}
+            onReview={(source) => setReviewTarget({ scenarioId: drawerScenario.id, source })}
+            onOpenFile={(file) => handleOpenSuggestionFile(drawerScenario, file)}
+            onRefresh={() => handleRefreshSuggestions(drawerScenario)}
+            onLinkPost={(postId) => handleLinkPost(drawerScenario, postId)}
+            onForgetPost={() => handleForgetPost(drawerScenario)}
+            onRejectContributor={handleRejectContributor}
+            onUnblockContributor={handleUnblockContributor}
+          />
+        ) : null}
+        onSuggestChanges={drawerScenario?.hubOrigin ? () => handleSuggestChanges(drawerScenario) : null}
         onFileSelect={handleEditorAssetSelect}
         onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}
         onSave={handleSave}
