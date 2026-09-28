@@ -135,6 +135,70 @@ const polygonArea = (rings) => (Array.isArray(rings)
   ? rings.reduce((total, ring, index) => total + (index === 0 ? Math.abs(ringArea(ring)) : -Math.abs(ringArea(ring))), 0)
   : 0);
 
+// The border cleanup a Workshop save runs (topologySweep.js) repairs defects up
+// to 500 m wide in the map's projection, 0.0045° at most. On a region the
+// player never touched it fills a crack, trims a sliver, and makes or removes
+// geometry of next to no area: a spike (a vertex the ring runs out to and
+// straight back from), a sliver tip (out and back within the cleanup's width)
+// and a speck (a stray part of a few metres), or a whole stray part that is
+// only a sliver. A spike or a tip moves a bounding box a long way (0.5° on one
+// region), so a region's box is measured without them.
+const CLEANUP_WIDTH = 0.005; // degrees
+const SPECK_AREA = 1e-5; // square degrees, about a tenth of a square kilometre
+const SPIKE_SINE = 0.1; // a turn back within about 6°
+// The ring without its spikes and tips; `collapsed` when nothing but them was
+// left of it (a sliver, not territory).
+const outlinePoints = (ring) => {
+  const points = (Array.isArray(ring) ? ring : [])
+    .map((position) => [Number(position?.[0]), Number(position?.[1])])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+  if (points.length > 1 && points[0][0] === points[points.length - 1][0] && points[0][1] === points[points.length - 1][1]) points.pop();
+  let removed = 0;
+  for (let changed = true; changed && points.length > 3;) {
+    changed = false;
+    for (let i = 0; i < points.length && points.length > 3; i += 1) {
+      const prev = points[(i - 1 + points.length) % points.length];
+      const here = points[i];
+      const next = points[(i + 1) % points.length];
+      const ax = here[0] - prev[0];
+      const ay = here[1] - prev[1];
+      const bx = next[0] - here[0];
+      const by = next[1] - here[1];
+      const la = Math.hypot(ax, ay);
+      const lb = Math.hypot(bx, by);
+      const turnsBack = (ax * bx) + (ay * by) < 0;
+      const spike = turnsBack && Math.abs((ax * by) - (ay * bx)) <= SPIKE_SINE * la * lb;
+      const tip = turnsBack && Math.hypot(next[0] - prev[0], next[1] - prev[1]) <= CLEANUP_WIDTH;
+      if (!la || !lb || spike || tip) {
+        points.splice(i, 1);
+        i -= 1;
+        removed += 1;
+        changed = true;
+      }
+    }
+  }
+  return { points, collapsed: removed > 0 && points.length <= 3 };
+};
+const ringLength = (ring) => {
+  let total = 0;
+  for (let i = 1; i < (Array.isArray(ring) ? ring.length : 0); i += 1) {
+    total += Math.hypot(Number(ring[i][0]) - Number(ring[i - 1][0]), Number(ring[i][1]) - Number(ring[i - 1][1]));
+  }
+  return Number.isFinite(total) ? total : 0;
+};
+const outlineBox = (geometry) => {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : Array.isArray(geometry.coordinates) ? geometry.coordinates : [];
+  const parts = polygons.filter(Array.isArray).map((polygon) => ({ area: Math.abs(polygonArea(polygon)), outline: outlinePoints(polygon[0]) }));
+  const significant = parts.filter((part) => part.area >= SPECK_AREA && !part.outline.collapsed);
+  let box = null;
+  for (const { outline } of significant.length ? significant : parts) {
+    for (const [x, y] of outline.points) {
+      box = box ? [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)] : [x, y, x, y];
+    }
+  }
+  return box;
+};
+
 export const measureGeometry = (geometry) => {
   if (!geometry || !/Polygon$/.test(String(geometry.type))) return null;
   let hash = 0x811c9dc5;
@@ -161,20 +225,26 @@ export const measureGeometry = (geometry) => {
   const area = geometry.type === "Polygon"
     ? polygonArea(geometry.coordinates)
     : (geometry.coordinates || []).reduce((total, polygon) => total + polygonArea(polygon), 0);
-  return { key: `${(hash >>> 0).toString(16)}-${points}`, bbox: [minX, minY, maxX, maxY], area: Math.abs(area) };
+  const perimeter = (geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates || [])
+    .reduce((total, polygon) => total + (Array.isArray(polygon) ? polygon.reduce((sum, ring) => sum + ringLength(ring), 0) : 0), 0);
+  return { key: `${(hash >>> 0).toString(16)}-${points}`, bbox: outlineBox(geometry) ?? [minX, minY, maxX, maxY], area: Math.abs(area), perimeter };
 };
 
-// Two shapes that differ only by what a save does on its own — rounding, the
-// border cleanup closing a crack or trimming a sliver — are the same region to
-// a person. A redrawn border moves far more than this.
+// Two shapes that differ only by what a save does on its own — rounding, and
+// the border cleanup above — are the same region to a person. The area may
+// move by a strip a quarter of the cleanup's width along the whole border (a
+// crack filled along a long border moved one region 0.19%), and the outline by
+// the cleanup's width. A redrawn border moves far more than this.
 const AREA_TOLERANCE = 0.0015;
-const EDGE_TOLERANCE = 0.004; // degrees, about 400 m
 export const sameShape = (a, b) => {
   if (!a || !b) return !a && !b;
   if (a.key === b.key) return true;
-  const larger = Math.max(a.area, b.area);
-  if (larger > 0 && Math.abs(a.area - b.area) / larger > AREA_TOLERANCE) return false;
-  return a.bbox.every((value, index) => Math.abs(value - b.bbox[index]) <= EDGE_TOLERANCE);
+  const allowance = Math.max(
+    Math.max(a.area, b.area) * AREA_TOLERANCE,
+    (CLEANUP_WIDTH / 4) * Math.max(Number(a.perimeter) || 0, Number(b.perimeter) || 0),
+  );
+  if (Math.abs(a.area - b.area) > allowance) return false;
+  return a.bbox.every((value, index) => Math.abs(value - b.bbox[index]) <= CLEANUP_WIDTH);
 };
 
 const bboxUnion = (a, b) => (!a ? b : !b ? a : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])]);

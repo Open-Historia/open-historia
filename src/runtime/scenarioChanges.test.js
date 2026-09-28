@@ -130,6 +130,34 @@ test("a border moved between two regions is one change, and a hairline is none",
   assert.equal(sameShape(measureGeometry(square(0, 0)), measureGeometry(square(0.2, 0))), false);
 });
 
+test("what a save's own border cleanup does to a region is no change", () => {
+  // Every Workshop save runs the cleanup over the whole map (topologySweep.js),
+  // and on a region the player never touched it made each of these.
+  const shape = (geometry) => measureGeometry(geometry);
+  const base = square(0, 0);
+  // A speck: a stray triangle of a few metres, far away.
+  const speck = { type: "MultiPolygon", coordinates: [base.coordinates, [[[3, 3], [3.001, 3], [3.001, 3.001], [3, 3]]]] };
+  assert.equal(sameShape(shape(base), shape(speck)), true);
+  // A spike: half a degree out and straight back.
+  const spike = { type: "Polygon", coordinates: [[[0, 0], [0.5, 0], [0.5005, -0.5], [0.501, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+  assert.equal(sameShape(shape(base), shape(spike)), true);
+  // A stray part that is only a sliver, a few kilometres long.
+  const sliver = { type: "MultiPolygon", coordinates: [base.coordinates, [[[2, 2], [2.02, 2.002], [2.03, 1.95], [2.0245, 2.0015], [2, 2]]]] };
+  assert.equal(sameShape(shape(base), shape(sliver)), true);
+  // A crack filled along the whole south border.
+  const filled = { type: "Polygon", coordinates: [[[0, -0.001], [1, -0.001], [1, 1], [0, 1], [0, -0.001]]] };
+  assert.equal(sameShape(shape(base), shape(filled)), true);
+});
+
+test("a border the player redrew is a change, even a thin corridor out of a large region", () => {
+  const base = square(0, 0, 3);
+  // A corridor about a kilometre wide and half a degree long: next to no area
+  // on a region this size, but the region now reaches much further east.
+  const corridor = { type: "Polygon", coordinates: [[[0, 0], [3, 0], [3, 1.5], [3.5, 1.5], [3.5, 1.51], [3, 1.51], [3, 3], [0, 3], [0, 0]]] };
+  assert.equal(sameShape(measureGeometry(base), measureGeometry(corridor)), false);
+  assert.equal(sameShape(measureGeometry(base), measureGeometry(square(0, 0, 3.1))), false);
+});
+
 test("regions drawn and removed travel whole, with their owner, claims and group", () => {
   const next = clone(baseBundle());
   featuresOf(next).push(region("reg_new", "Gamma", square(20, 20)));

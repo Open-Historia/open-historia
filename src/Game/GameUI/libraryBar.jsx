@@ -64,6 +64,7 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
+import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
@@ -3122,7 +3123,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       },
       game: {
         ...currentGame,
-        country: seed.game?.country || currentGame.country || "",
+        // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
+        country: playerCountryAfterSave(currentGame.country, seed),
         // Guarantee a valid date so the timeline never shows "Invalid Date".
         gameDate:
           currentGame.gameDate || currentGame.startDate || seed.game?.gameDate || seed.game?.startDate || "2016-01-01",
