@@ -12,6 +12,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  DISCORD_APPLICATION_ID,
   MIN_UPDATE_MS,
   OP_CLOSE,
   OP_FRAME,
@@ -255,6 +256,13 @@ test("an application id Discord does not know: stops asking", async () => {
     presence.stop();
     await discord.close();
   }
+});
+
+test("the Open Historia application: a Discord id, so presence is on by default", () => {
+  // Discord's ids are snowflakes: 17 to 20 digits. The application is named
+  // "Open Historia", which is the "Open Historia" in "Playing Open Historia".
+  assert.match(DISCORD_APPLICATION_ID, /^\d{17,20}$/);
+  assert.equal(createDiscordPresence({ enabled: true, connect: () => Promise.reject(new Error("no")), paths: () => [] }).active, true);
 });
 
 test("no application id, or turned off: nothing is attempted", () => {
