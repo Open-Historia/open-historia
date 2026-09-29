@@ -200,3 +200,42 @@ test("an orphaned game exports its own stats sheet", async () => {
   const bundle = ok(await games("GET", `${imported}/export`));
   assert.deepEqual(bundle.data.stats, { rows: ["gdp"] });
 });
+
+const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
+  actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
+  game: { country: "Testland", gameDate, round: 2 },
+  world: { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } },
+  ...extra,
+});
+
+test("a settings change during a turn commit keeps both", async () => {
+  await reset();
+  const id = await newGame("Racing");
+  const cover = new Uint8Array([1, 2, 3]);
+  const [commit, update, upload] = await Promise.all([
+    turnCommit("2016-06-01"),
+    games("PUT", id, { features: { playerFocus: { level: "focused" } } }),
+    store.handleGames({ method: "PUT", segments: [id, "assets", "cover"], rawBody: cover, contentType: "image/png" }),
+  ]);
+  ok(commit);
+  ok(update);
+  assert.equal(upload.status, 200);
+
+  const details = ok(await games("GET", id));
+  assert.equal(details.data.game.gameDate, "2016-06-01", "the turn's new date survived");
+  assert.deepEqual(details.data.events, [{ id: "e-2016-06-01" }]);
+  assert.equal(details.game.features.playerFocus.level, "focused", "the setting survived");
+  assert.equal(details.assetStatus.cover, true, "the cover survived");
+});
+
+test("making a game active from inside a runtime write does not wait on itself", async () => {
+  await reset();
+  const catalog = await library();
+  for (const game of catalog.games) ok(await games("DELETE", game.id));
+  // No active game: the write creates one from the selected scenario, inside the queue.
+  ok(await runtime("PUT", "flags", { Testland: "made.png" }));
+  const after = await library();
+  assert.equal(after.games.length, 1);
+  assert.equal(after.activeGame.playCount, 1);
+  assert.deepEqual(ok(await runtime("GET", "flags")), { Testland: "made.png" });
+});

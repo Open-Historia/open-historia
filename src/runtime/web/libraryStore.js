@@ -86,6 +86,21 @@ const projectGameMeta = (record) => {
 const putScenario = (record) => idbPutPair(STORES.scenarios, record, STORES.scenarioMeta, projectScenarioMeta(record));
 const putGame = (record) => idbPutPair(STORES.games, record, STORES.gameMeta, projectGameMeta(record));
 
+// Every runtime asset of a web game lives in its one record, so any change to a
+// game is a read-modify-write of the whole save. Done outside the write queue, a
+// turn commit that landed between the read and the put was overwritten by the
+// stale copy: changing Player focus while a time skip finished reverted the
+// turn. `mutate` edits the record in place; the read and the put both happen
+// inside the queue (writeQueue.js). Never call this from code already holding
+// the queue — it would wait on itself.
+const mutateGame = (id, mutate) => serializeWrite(async () => {
+  const record = await getGame(id);
+  if (!record) throw new Error(`Game not found: ${id}`);
+  await mutate(record);
+  await putGame(record);
+  return record;
+});
+
 const listScenarioIds = async () => new Set((await idbGetAll(STORES.scenarios)).map((r) => r.id));
 const listGameIds = async () => new Set((await idbGetAll(STORES.games)).map((r) => r.id));
 
@@ -1032,21 +1047,24 @@ const createGame = async (body = {}) => {
     subtitle: trimmed(body.subtitle) || sourceGameSummary?.subtitle || scenarioSummary.subtitle || DEFAULT_GAME_META.subtitle,
     updatedAt: createdAt,
   };
+  // Stamped before the first put rather than through recordGamePlayed: the
+  // runtime writers create a game from inside the write queue, where
+  // recordGamePlayed's queued write would wait on itself.
+  if (body.setActive) stampGamePlayed(record);
   await putGame(record);
   const manifest = await getGameManifest();
   const order = resolveOrderedIds(manifest.order, await listGameIds(), DEFAULT_GAME_ID).filter((e) => e !== id);
   order.unshift(id);
   await saveGameManifest({ activeGameId: body.setActive ? id : manifest.activeGameId, order });
-  if (body.setActive) await recordGamePlayed(id);
+  if (body.setActive) await stampScenarioPlayed(record.meta.scenarioId);
   return getGameDetails(id);
 };
 
 const updateGame = async (id, body = {}) => {
-  const record = await getGame(id);
-  if (!record) throw new Error(`Game not found: ${id}`);
-  writeGameMeta(record, pickMetaUpdates(body));
-  applyJsonMutations(record, body, true, "game");
-  await putGame(record);
+  await mutateGame(id, (record) => {
+    writeGameMeta(record, pickMetaUpdates(body));
+    applyJsonMutations(record, body, true, "game");
+  });
   if (body.setActive) await setActiveGame(id);
   return getGameDetails(id);
 };
@@ -1054,26 +1072,33 @@ const updateGame = async (id, body = {}) => {
 // Play stamps for the main menu's "Last Played"/"Most Played" rows — patches
 // record.meta directly (NOT writeGameMeta/writeScenarioMeta, which stamp
 // updatedAt and mark a hub copy edited; server twin has the same rule).
+const stampGamePlayed = (record) => {
+  record.meta = {
+    ...(record.meta ?? {}),
+    lastPlayedAt: nowIso(),
+    playCount: normalizePlayCount(record.meta?.playCount) + 1,
+  };
+};
+
+const stampScenarioPlayed = async (scenarioId) => {
+  try {
+    const id = String(scenarioId ?? "").trim();
+    const scenario = id ? await getScenario(id) : null;
+    if (!scenario) return;
+    scenario.meta = {
+      ...(scenario.meta ?? {}),
+      playCount: normalizePlayCount(scenario.meta?.playCount) + 1,
+    };
+    await putScenario(scenario);
+  } catch {
+    // Stamping is best-effort — never block activating a game over it.
+  }
+};
+
 const recordGamePlayed = async (gameId) => {
   try {
-    const record = await getGame(gameId);
-    if (!record) return;
-    record.meta = {
-      ...(record.meta ?? {}),
-      lastPlayedAt: nowIso(),
-      playCount: normalizePlayCount(record.meta?.playCount) + 1,
-    };
-    await putGame(record);
-
-    const scenarioId = String(record.meta?.scenarioId ?? "").trim();
-    const scenario = scenarioId ? await getScenario(scenarioId) : null;
-    if (scenario) {
-      scenario.meta = {
-        ...(scenario.meta ?? {}),
-        playCount: normalizePlayCount(scenario.meta?.playCount) + 1,
-      };
-      await putScenario(scenario);
-    }
+    const record = await mutateGame(gameId, stampGamePlayed);
+    await stampScenarioPlayed(record.meta?.scenarioId);
   } catch {
     // Stamping is best-effort — never block activating a game over it.
   }
@@ -1188,21 +1213,19 @@ const scenarioAssetResponse = async (record, key, rangeHeader, { coarse = false 
 };
 
 const uploadGameAsset = async (id, key, bytes, contentType) => {
-  const record = await getGame(id);
-  if (!record) throw new Error(`Game not found: ${id}`);
   if (key !== COVER_IMAGE_ASSET_KEY) throw new Error(`Unsupported asset key: ${key}`);
   const ct = validateImageContentType(contentType);
-  record.cover = { contentType: ct, bytes };
-  writeGameMeta(record, { coverImageContentType: ct });
-  await putGame(record);
+  await mutateGame(id, (record) => {
+    record.cover = { contentType: ct, bytes };
+    writeGameMeta(record, { coverImageContentType: ct });
+  });
   return getGameDetails(id);
 };
 
 const removeGameAsset = async (id, key) => {
-  const record = await getGame(id);
-  if (!record) throw new Error(`Game not found: ${id}`);
-  if (key === COVER_IMAGE_ASSET_KEY) { record.cover = undefined; writeGameMeta(record, { coverImageContentType: null }); }
-  await putGame(record);
+  await mutateGame(id, (record) => {
+    if (key === COVER_IMAGE_ASSET_KEY) { record.cover = undefined; writeGameMeta(record, { coverImageContentType: null }); }
+  });
   return getGameDetails(id);
 };
 
@@ -1416,10 +1439,15 @@ const builtInRevisionOf = (world) => {
 // stay on it — each given copies of the colours, flags, tags or stats sheet it
 // was still reading from the scenario. A copy the player edited is kept, with the
 // campaigns started on it; its world keeps the map's stamp, so it keeps the map.
+// The games made from a scenario, found through the lean catalog rows so that no
+// game's restore points are loaded to read its scenario id.
+const gameIdsOnScenario = async (scenarioId) =>
+  (await readGameMetas())
+    .filter((row) => readGameMeta(row.id, row.meta ?? {}).scenarioId === scenarioId)
+    .map((row) => row.id);
+
 const refreshBuiltInContent = async (current) => {
-  const games = (await idbGetAll(STORES.games)).filter(
-    (game) => readGameMeta(game.id, game.meta ?? {}).scenarioId === DEFAULT_SCENARIO_ID,
-  );
+  const gameIds = await gameIdsOnScenario(DEFAULT_SCENARIO_ID);
   if (current.meta?.updatedAt !== current.meta?.createdAt) {
     const forkId = await ensureUniqueId("modern-day-edited", "scenario");
     const name = current.meta?.name || DEFAULT_SCENARIO_META.name;
@@ -1441,22 +1469,22 @@ const refreshBuiltInContent = async (current) => {
         updatedAt: now,
       },
     });
-    for (const game of games) {
-      writeGameMeta(game, { scenarioId: forkId });
-      await putGame(game);
+    for (const gameId of gameIds) {
+      await mutateGame(gameId, (game) => { writeGameMeta(game, { scenarioId: forkId }); });
     }
     const manifest = await getScenarioManifest();
     const order = manifest.order.filter((entry) => entry !== forkId);
     const at = order.indexOf(DEFAULT_SCENARIO_ID);
     order.splice(at >= 0 ? at + 1 : order.length, 0, forkId);
     await saveScenarioManifest({ order, selectedScenarioId: manifest.selectedScenarioId });
-    console.info(`[built-in scenario] kept the player's edited Modern Day as "${forkId}" for ${games.length} campaign(s)`);
+    console.info(`[built-in scenario] kept the player's edited Modern Day as "${forkId}" for ${gameIds.length} campaign(s)`);
   } else {
-    for (const game of games) {
-      const missing = OPTIONAL_JSON_ASSET_KEYS.filter((key) => game[key] === undefined && current[key] !== undefined);
-      if (!missing.length) continue;
-      for (const key of missing) game[key] = cloneJson(current[key]);
-      await putGame(game);
+    for (const gameId of gameIds) {
+      await mutateGame(gameId, (game) => {
+        for (const key of OPTIONAL_JSON_ASSET_KEYS) {
+          if (game[key] === undefined && current[key] !== undefined) game[key] = cloneJson(current[key]);
+        }
+      });
     }
   }
   await putScenario(await defaultScenarioSeedRecord());
@@ -1472,11 +1500,9 @@ const syncBuiltInScenarioFromSeed = async () => {
     return;
   }
 
-  const games = (await idbGetAll(STORES.games)).filter(
-    (game) => readGameMeta(game.id, game.meta ?? {}).scenarioId === DEFAULT_SCENARIO_ID,
-  );
+  const gameIds = await gameIdsOnScenario(DEFAULT_SCENARIO_ID);
   const touched = current.meta?.updatedAt !== current.meta?.createdAt;
-  if (games.length || touched) {
+  if (gameIds.length || touched) {
     const forkId = await ensureUniqueId("modern-day-classic", "scenario");
     const name = current.meta?.name || DEFAULT_SCENARIO_META.name;
     const now = nowIso();
@@ -1498,16 +1524,15 @@ const syncBuiltInScenarioFromSeed = async () => {
       },
     };
     await putScenario(fork);
-    for (const game of games) {
-      writeGameMeta(game, { scenarioId: forkId });
-      await putGame(game);
+    for (const gameId of gameIds) {
+      await mutateGame(gameId, (game) => { writeGameMeta(game, { scenarioId: forkId }); });
     }
     const manifest = await getScenarioManifest();
     const order = manifest.order.filter((entry) => entry !== forkId);
     const at = order.indexOf(DEFAULT_SCENARIO_ID);
     order.splice(at >= 0 ? at + 1 : order.length, 0, forkId);
     await saveScenarioManifest({ order, selectedScenarioId: manifest.selectedScenarioId });
-    console.info(`[built-in scenario] kept the previous Modern Day as "${forkId}" for ${games.length} campaign(s)${touched ? " and the player's edits" : ""}`);
+    console.info(`[built-in scenario] kept the previous Modern Day as "${forkId}" for ${gameIds.length} campaign(s)${touched ? " and the player's edits" : ""}`);
   }
   const fresh = await defaultScenarioSeedRecord();
   await putScenario(fresh);

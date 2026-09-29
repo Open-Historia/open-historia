@@ -151,6 +151,8 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 `writeRuntimeJsonAsset(key, value)` (`:481`) writes onto the active game (auto-creating one from the selected scenario if none exists), canonicalizing country refs on the way in: `world`→`canonicalizeWorldCountryRefs`, `game`→`canonicalizeGameCountry`, `colors`→`canonicalizeColorKeys`. `flags` are **not** canonicalized (a flag key is always the raw code the editor painted).
 
+Every runtime asset of a game lives in its one record, so every change to a game is a read-modify-write of the whole save. All of them run through one write queue (`writeQueue.js` `serializeWrite`): the turn commit, the runtime JSON writes, and `mutateGame(id, fn)`, which the game routes use (`updateGame`, the play stamp, cover upload and removal, the built-in scenario's fork and refresh). A write outside the queue could read the record before a turn commit and put its stale copy back after it. Code already inside the queue must not call `mutateGame` (it would wait on itself); `createGame`, which the runtime writers call from inside it, stamps its play count before its first put for that reason.
+
 ### Owner-schema migration (`ensureOwnerSchema`, `:357`)
 
 Rewrites a record whose owners are GADM codes into one keyed by country **names**. It *imports* `server/ownerMigration.js` (pure ESM, so Vite bundles it) rather than re-implementing it — one resolver, no drift. Runs lazily on read, once per `kind:id` (`migratedRecords` set), and discards roll-back `snapshots` (they predate the rename and are blind-written back with no staleness marker).
