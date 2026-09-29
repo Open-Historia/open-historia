@@ -808,7 +808,36 @@ const writeRuntimeTurnState = (payload) => serializeWrite(async () => {
 const writeRuntimeJsonAsset = (assetKey, value) =>
   serializeWrite(() => writeRuntimeJsonAssetLocked(assetKey, value));
 
+// Custom region and city geometry belongs to the scenario, and the read resolves
+// it there. The write rejected these keys as unsupported, so on the website a
+// Game Master city edit, or renaming a region on a custom map, failed with a 400
+// and was lost. Server twin: the SCENARIO_GEOJSON_ASSET_FILES branch of
+// writeRuntimeJsonAsset, shape guard included — {} is an object, and writing it
+// would replace a map's whole geometry.
+const writeRuntimeScenarioGeojson = async (assetKey, value) => {
+  const isPlainObject = Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  const needsFeatureCollection = assetKey === "regionsGeojson" || assetKey === "citiesGeojson";
+  const shapeOk = isPlainObject
+    && (!needsFeatureCollection || (value.type === "FeatureCollection" && Array.isArray(value.features)));
+  if (!shapeOk) {
+    throw new Error(`Refusing to write ${assetKey}: expected ${needsFeatureCollection ? "a GeoJSON FeatureCollection" : "an object"}.`);
+  }
+  const activeGame = await getActiveGameRecord();
+  const scenarioId = activeGame ? readGameMeta(activeGame.id, activeGame.meta ?? {}).scenarioId : DEFAULT_SCENARIO_ID;
+  const record = await getScenario(scenarioId);
+  if (!record) {
+    throw new Error(`Scenario not found: ${scenarioId} — this game's scenario is no longer in the library, so its map cannot be edited.`);
+  }
+  // Stored as text, the form an upload stores (uploadScenarioAsset); the new
+  // value also invalidates coarseRegionsCache, which is keyed on it.
+  record.geojson = { ...record.geojson, [assetKey]: JSON.stringify(value) };
+  writeScenarioMeta(record, {});
+  await putScenario(record);
+  return value;
+};
+
 const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
+  if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) return writeRuntimeScenarioGeojson(assetKey, value);
   if (!JSON_ASSET_KEYS.includes(assetKey) && !OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) && !RUNTIME_ONLY_JSON_ASSET_KEYS.includes(assetKey)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
   }

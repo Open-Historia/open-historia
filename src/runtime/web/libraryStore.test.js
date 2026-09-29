@@ -219,6 +219,39 @@ test("a game whose map is not in the library is listed as missing, under the sen
   assert.equal(onDefault.scenarioName, "Modern Day");
 });
 
+test("the running game saves city and region edits to its scenario", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "import", scenarioBundle("Custom Map"))).scenario.id;
+  await newGame("Editing", { scenarioId });
+
+  const cities = { ...CITIES, features: [...CITIES.features, { type: "Feature", properties: { name: "New Town" }, geometry: { type: "Point", coordinates: [5, 6] } }] };
+  assert.deepEqual(ok(await runtime("PUT", "citiesGeojson", cities)), cities);
+  assert.deepEqual(ok(await runtime("GET", "citiesGeojson")), cities);
+  assert.deepEqual(await scenarioAsset(scenarioId, "citiesGeojson"), cities);
+
+  const renamed = { ...REGIONS, features: [{ ...REGIONS.features[0], properties: { ...REGIONS.features[0].properties, name: "Renamed" } }] };
+  ok(await runtime("PUT", "regionsGeojson", renamed));
+  assert.deepEqual(ok(await runtime("GET", "regionsGeojson")), renamed);
+
+  const refused = await runtime("PUT", "regionsGeojson", {});
+  assert.equal(refused.status, 400);
+  assert.deepEqual(ok(await runtime("GET", "regionsGeojson")), renamed, "an empty body never replaces the map");
+});
+
+test("a map edit on a game whose scenario is gone is refused, not written into a new scenario", async () => {
+  await reset();
+  const imported = ok(await games("POST", "import", {
+    schema: "open-historia-game-bundle/1",
+    game: { name: "Mapless" },
+    scenarioRef: { scenarioId: "gone-map" },
+    data: { game: { country: "Testland" }, world: { ownerSchema: 4 } },
+  })).game.id;
+  ok(await games("PUT", "active", { gameId: imported }));
+  const refused = await runtime("PUT", "citiesGeojson", CITIES);
+  assert.equal(refused.status, 400);
+  assert.equal(db.get("scenarios").has("gone-map"), false);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },
