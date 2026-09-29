@@ -59,7 +59,7 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 | `build:web` | seeds, then `vite build --mode web --outDir dist-web` |
 | `build:site` | `build:web` with `--base /play/` + `scripts/assemble-site.mjs` (bolts the marketing `site/` around `/play/`) |
 | `build:android` | `seed-web-defaults.mjs` + `vite build --mode android` → `dist-android/` (the Android app's bundle; `mobile/scripts/stage-www.mjs` adds the map data) |
-| `test` | `node --test server/**/*.test.js` (server unit tests only) |
+| `test` | `node --test "server/**/*.test.js" "src/**/*.test.js"` — server and client tests, each beside its module; a tested module and its imports must load under plain Node (see [conventions](conventions.md) §7) |
 
 ---
 

@@ -190,17 +190,29 @@ Players install the Electron app from the `desktop-stable` release (§2); there 
 
 ```bash
 npm test
-# => node --test "server/**/*.test.js"
+# => node --test "server/**/*.test.js" "src/**/*.test.js"
 ```
 
-Tests use the **built-in Node test runner** (`node --test`) with `node:assert/strict` — **no test framework, no extra deps**. They target the server's pure, dependency-light helpers (they run without booting the server):
+Tests use the **built-in Node test runner** (`node --test`) with `node:assert/strict` — **no test framework, no extra deps**. Both globs run: the server's modules and the client's (`src/`), several hundred test files between them. `.github/workflows/tests.yml` runs the same `npm test` on every pull request into `beta` or `main` and every push to `beta`, and `desktop-beta.yml` runs it before it builds. A test sits **beside its module** as `<module>.test.js` (or `<module>.<topic>.test.js`), and the globs pick it up automatically. For example:
 
 | Test file | Covers |
 |-----------|--------|
 | `server/security.test.js` | Path containment, the CSRF/origin guard, HTTP range parsing, the hub host allowlist (`server/security.js`). |
 | `server/ownerMigration.test.js` | The owner-code → owner-name resolver, with fixtures transcribed from real shipped scenario data (`server/ownerMigration.js`). |
+| `src/Game/AI/turnReview.test.js` | The after-skip review prompt and the answer taken apart (`turnReview.js`). |
+| `src/Game/AI/repairCall.test.js` | The world-repair call's time limits (`repairCall.js`, which imports `idleDeadline.js`). |
+| `src/runtime/gameState.unitMotion.test.js` | How far a unit moves in a turn (`gameState.js` + `unitMotion.js`). |
 
-Convention when adding tests: colocate a `*.test.js` next to the module under `server/`, keep the tested functions **pure** so they need no server, and prefer real transcribed fixtures over invented ones (`server/ownerMigration.test.js:3-7`). The `server/**/*.test.js` glob picks them up automatically. The client (`src/`) has no automated test suite; render-path changes are verified by actually booting the app.
+**The rule every test depends on: a tested module, and everything it imports, must load under plain Node.** No bundler runs first, so a test cannot import, directly or through another module:
+
+- `src/Game/AI/gameplay.js` or `src/Game/AI/main.jsx` (JSX, and the whole game behind them);
+- any `.jsx` file;
+- a module that reads `import.meta.env.X` unguarded when it loads — `import.meta.env` exists only under Vite, so such a module must read it as `import.meta.env?.X`, as `promptContext.js` does for `CITY_SEED_URL`;
+- anything under `src/runtime/web/generated/`, which is gitignored build output.
+
+Importing other plain modules is fine: `repairCall.js` imports `idleDeadline.js`, and `gameState.js` imports many other runtime modules. So logic that needs a test belongs in a plain module the big file imports (as `turnReview.js`, `nativeUnitDirector.js` or `runtime/territoryBasis.js` are for `gameplay.js`), not inside `gameplay.js` itself. Keep the tested functions **pure** where you can, so they need no server and no browser, and prefer real transcribed fixtures over invented ones (`server/ownerMigration.test.js`).
+
+Some tests read a source file as text and match it (`fs.readFileSync(... "gameplay.js")` and a regex) to guard an architectural rule, such as "server/ never imports src/" (`server/serverImports.test.js`). Those pin the shape of the code, not what it does; they do not replace a behavioural test that calls the function. Render-path changes still have to be checked by booting the app.
 
 ---
 
