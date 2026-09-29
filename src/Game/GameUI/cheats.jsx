@@ -61,6 +61,8 @@ import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/
 import { polityNameInUse } from "../../runtime/gmPolityNames.js";
 import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
 import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
+// The feature types, with the glyph the map draws for each (mapFeatureKinds.js).
+import { GM_MAP_FEATURE_KINDS as MAP_FEATURE_KINDS } from "./mapFeatureKinds.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -553,20 +555,6 @@ const cleanEditorNumber = (value) => {
     const rounded = Math.round(number * 1000) / 1000;
     return String(rounded);
 };
-
-const MAP_FEATURE_KINDS = [
-    { id: "city", label: "City / town", icon: "■" },
-    { id: "landmark", label: "Landmark", icon: "◆" },
-    { id: "military hq", label: "Military HQ", icon: "⌂" },
-    { id: "military base", label: "Military Base", icon: "⚔" },
-    { id: "fortress", label: "Fortification", icon: "▣" },
-    { id: "port", label: "Port", icon: "⚓" },
-    { id: "airfield", label: "Airfield", icon: "✈" },
-    { id: "industrial plant", label: "Industrial Site", icon: "⚙" },
-    { id: "embassy", label: "Embassy", icon: "◇" },
-    { id: "temporary marker", label: "Temporary", icon: "⌖" },
-    { id: "other", label: "Other", icon: "+" },
-];
 
 const MAP_FEATURE_STATUS_META = {
     planned: { label: "Planned", color: "#e4e4e7" },
@@ -5002,7 +4990,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                                     <label style={labelStyle}>Feature type</label>
                                     {/* Two across on a phone, where a third of the card could
-                                        not hold "Fortification" or "Industrial Site". */}
+                                        not hold "Research facility" or "Industrial plant". */}
                                     <div style={{ display: "grid", gap: "0.28rem", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "repeat(3, minmax(0, 1fr))" }}>
                                     {MAP_FEATURE_KINDS.map((kind) => (
                                         <button key={kind.id} type="button" className="oh-tap-row" onClick={() => setFields({ ...fields, kind: kind.id })} style={choiceButton(fields.kind === kind.id)}>

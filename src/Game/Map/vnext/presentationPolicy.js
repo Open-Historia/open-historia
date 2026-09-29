@@ -40,7 +40,7 @@ const FAMILY_RULES = [
   },
   {
     family: MARKER_FAMILY.resource,
-    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oilfield|gas field|coalfield|ore field|quarry|well)\b/,
+    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oilfield|oil field|gas field|coalfield|ore field|quarry|well)\b/,
     glyph: "◆",
     priority: 70,
   },
