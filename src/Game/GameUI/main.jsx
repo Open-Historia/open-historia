@@ -230,6 +230,8 @@ const Main = ({
   // Consumed (cleared) once the drawer's Stats pane has taken it, so the flag
   // button still opens the drawer on the player's own country.
   const [pendingCountryTarget, setPendingCountryTarget] = useState("");
+  // Stable, so the memoized StatsPane still skips this component's re-renders.
+  const consumeCountryTarget = useCallback(() => setPendingCountryTarget(""), []);
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
@@ -586,7 +588,7 @@ const Main = ({
             open={isCountryOpen}
             onClose={() => setIsCountryOpen(false)}
             requestedTarget={pendingCountryTarget}
-            onConsumeTarget={() => setPendingCountryTarget("")}
+            onConsumeTarget={consumeCountryTarget}
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizeEnd={handleAdvisorResizeEnd}
