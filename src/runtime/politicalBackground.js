@@ -105,18 +105,11 @@ export const advancePoliticalBackgroundSimulation = async ({
     };
   }
 
-  const dispositionApply = applyPoliticalActorOperations(nextWorld, computed?.dispositionOperations || []);
-  if (dispositionApply.failed) {
-    return {
-      world: inputWorld,
-      skipped: true,
-      reason: "disposition-commit-failed",
-      plan,
-      pressureChangedPolities: 0,
-      responseChangedEntities: 0,
-      errors: dispositionApply.results.filter((entry) => entry.error).map((entry) => entry.error),
-    };
-  }
+  // Dispositions are derived per polity from the state committed above, so one
+  // bad disposition op skips only itself instead of discarding every pressure
+  // and response change for the whole world.
+  const dispositionApply = applyPoliticalActorOperations(nextWorld, computed?.dispositionOperations || [], { stopOnError: false });
+  const dispositionErrors = dispositionApply.results.filter((entry) => entry.error).map((entry) => entry.error);
 
   nextWorld.politicalSimulation = plan.nextClock;
   return {
@@ -131,5 +124,6 @@ export const advancePoliticalBackgroundSimulation = async ({
     committedResponseEntities: responseApply.applied,
     dispositionChangedPolities: Number(computed?.dispositionChangedPolities) || 0,
     committedDispositions: dispositionApply.applied,
+    ...(dispositionErrors.length ? { dispositionErrors } : {}),
   };
 };

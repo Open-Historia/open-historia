@@ -264,7 +264,11 @@ export const validatePoliticalActorOperationShape = (operation, { allowNativeDer
   } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_PRESSURES) {
     if (!objectPatch(operation.state || operation.pressures)) return "set-political-pressures requires a state/pressures object.";
   } else if (op === POLITICAL_ACTOR_OPS.SET_BEHAVIORAL_DISPOSITION) {
-    if (!objectPatch(operation.state || operation.disposition)) return "set-behavioral-disposition requires a state/disposition object.";
+    // An explicit null clears a disposition whose inputs have run out; the apply
+    // branch below deletes it.
+    const clears = (hasOwn(operation, "state") && operation.state === null)
+      || (!hasOwn(operation, "state") && hasOwn(operation, "disposition") && operation.disposition === null);
+    if (!clears && !objectPatch(operation.state || operation.disposition)) return "set-behavioral-disposition requires a state/disposition object (or null to clear it).";
   } else if (op === POLITICAL_ACTOR_OPS.SET_POLITICAL_SYSTEM) {
     const patch = objectPatch(operation.patch) || objectPatch(operation.system);
     if (!patch || !Object.keys(patch).length) return "set-political-system requires a non-empty patch/system object.";

@@ -65,6 +65,43 @@ test("generated ops cannot write native-derived pressure/disposition state", () 
   assert.match(error, /native-derived/i);
 });
 
+test("a native null disposition clears the stale disposition instead of failing validation", () => {
+  assert.equal(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: null,
+  }), "");
+  assert.equal(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    disposition: null,
+  }), "");
+  assert.match(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+  }), /state\/disposition object/i);
+  assert.match(validatePoliticalActorOperationShape({
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: "calm",
+  }), /state\/disposition object/i);
+
+  const world = {
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        Ruritania: { polityKey: "Ruritania", behavioralDisposition: { threatPerception: 80, updatedAt: "2014-03-01" } },
+      },
+    }),
+  };
+  const outcome = applyPoliticalActorOperation(world, {
+    op: "set-behavioral-disposition",
+    polityKey: "Ruritania",
+    state: null,
+  });
+  assert.equal(outcome.applied, true, outcome.error);
+  assert.equal(getPoliticalProfile(world, "Ruritania").behavioralDisposition, undefined);
+});
+
 
 test("every provider-writable political operation has one prompt example that passes native shape validation", () => {
   const nativeOnly = new Set([

@@ -109,3 +109,56 @@ test("no Political Actors means no generation side effect; the clock simply anch
   assert.deepEqual(result.world.politicalActors.byPolity, {});
   assert.equal(result.world.politicalSimulation.lastProcessedDate, "2067-02-01");
 });
+
+test("a disposition whose inputs have run out is cleared and the rest of the background still commits", async () => {
+  const world = {
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        A: { polityKey: "A", behavioralDisposition: { threatPerception: 70, updatedAt: "2014-03-01" } },
+        B: { polityKey: "B", parties: [{ id: "b1", name: "B Party", support: { percent: 40 } }] },
+      },
+    }),
+    politicalSimulation: {},
+    countryStats: { B: { stability: 60, economy: { inflation: 14, unemployment: 5, gdpGrowth: 1 } } },
+    relations: [],
+    wars: [],
+  };
+  const result = await advancePoliticalBackgroundSimulation({
+    world,
+    fromDate: "2014-03-22",
+    toDate: "2014-04-22",
+    round: 2,
+    backgroundAdvance,
+  });
+  assert.equal(result.skipped, false, result.reason);
+  assert.equal(result.world.politicalActors.byPolity.A.behavioralDisposition, undefined);
+  assert.ok(result.world.politicalActors.byPolity.B.politicalPressures.issues.cost_of_living);
+  assert.equal(result.world.politicalSimulation.lastProcessedDate, "2014-04-22");
+  assert.equal(result.dispositionErrors, undefined);
+});
+
+test("one failed disposition op is reported without discarding pressures, responses or the clock", async () => {
+  const world = makeWorld();
+  const result = await advancePoliticalBackgroundSimulation({
+    world,
+    fromDate: "2014-03-22",
+    toDate: "2014-04-22",
+    round: 2,
+    backgroundAdvance: async (payload) => {
+      const computed = advancePoliticalBackgroundKernel(payload);
+      return {
+        ...computed,
+        dispositionOperations: [
+          { op: "set-behavioral-disposition", polityKey: "Nowhere", state: { threatPerception: 50 } },
+          ...computed.dispositionOperations,
+        ],
+      };
+    },
+  });
+  assert.equal(result.skipped, false);
+  assert.equal(result.dispositionErrors.length, 1);
+  assert.match(result.dispositionErrors[0], /Nowhere/);
+  assert.ok(result.world.politicalActors.byPolity.A.politicalPressures.issues.cost_of_living);
+  assert.ok(result.world.politicalActors.byPolity.A.behavioralDisposition);
+  assert.equal(result.world.politicalSimulation.lastProcessedDate, "2014-04-22");
+});
