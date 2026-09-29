@@ -4,7 +4,7 @@
 // bundled into the web build (dynamically imported behind import.meta.env.VITE_OH_WEB).
 
 const DB_NAME = "open-historia-web";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 // Object stores mirror the server's on-disk stores (see server/libraryStore.js,
 // mapEditorStore.js, basemapStore.js, flagStore.js). "kv" holds the small
@@ -30,6 +30,9 @@ export const STORES = {
   // self-healing, never a source of truth — see libraryStore.js catalog builders.
   scenarioMeta: "scenarioMeta",
   gameMeta: "gameMeta",
+  // The same for Workshop documents: the eight-field summary the Documents menu
+  // lists, so opening it never loads a whole saved map (one shipped map is 54 MB).
+  mapeditorMeta: "mapeditorMeta",
 };
 
 let dbPromise = null;
@@ -125,6 +128,42 @@ export const idbPutPair = (storeA, valueA, storeB, valueB) =>
 
 export const idbDelete = (store, key) =>
   runTx(store, "readwrite", (tx) => promisifyRequest(tx.objectStore(store).delete(key)));
+
+// Delete one key from a record store and its index store in ONE transaction.
+export const idbDeletePair = (storeA, storeB, key) =>
+  runTx([storeA, storeB], "readwrite", (tx) =>
+    Promise.all([
+      promisifyRequest(tx.objectStore(storeA).delete(key)),
+      promisifyRequest(tx.objectStore(storeB).delete(key)),
+    ]));
+
+// Reconcile a lean index store against its real store WITHOUT structured-cloning
+// the records: getAllKeys is keys-only (cheap even for rows embedding 100MB
+// binaries). Backfill any record missing from the index — an existing store on its
+// first build after its index shipped, or a record written without its index row —
+// by loading it ONE AT A TIME (peak = a single record, not the whole store at once,
+// which is the OOM), and drop index rows whose record was deleted out-of-band.
+// After the first build the index is populated, so a listing loads NO full records.
+// Returns the index rows in key order.
+export const reconcileMetaIndex = async (recordStore, metaStore, project) => {
+  const [keys, metas] = await Promise.all([idbGetAllKeys(recordStore), idbGetAll(metaStore)]);
+  const byId = new Map(metas.map((m) => [m.id, m]));
+  const live = new Set(keys);
+  for (const id of keys) {
+    if (byId.has(id)) continue;
+    const record = await idbGet(recordStore, id); // released before the next iteration
+    if (!record) continue;
+    const proj = project(record);
+    try { await idbPut(metaStore, proj); } catch { /* self-heals next build */ }
+    byId.set(id, proj);
+  }
+  for (const m of metas) {
+    if (live.has(m.id)) continue;
+    try { await idbDelete(metaStore, m.id); } catch { /* self-heals next build */ }
+    byId.delete(m.id);
+  }
+  return [...byId.values()];
+};
 
 // kv helpers: values are wrapped as { key, value }.
 export const kvGet = async (key, fallback = null) => {

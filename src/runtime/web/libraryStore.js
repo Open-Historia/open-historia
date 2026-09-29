@@ -5,7 +5,7 @@
 // (src/runtime/library.js, assets.js) works exactly as against the real server.
 // Web build only.
 
-import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPut, idbPutPair, idbDelete, kvGet, kvPut } from "./idb.js";
+import { STORES, idbGet, idbGetAll, idbPut, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
 import { serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
 import {
@@ -205,34 +205,10 @@ const ensureUniqueId = async (requested, kind) => {
 
 // --- Catalog composition (mirror getScenarioCatalog/getGameCatalog/getLibraryCatalog) ---
 
-// Reconcile a lean *Meta index against its real store WITHOUT structured-cloning the
-// records: getAllKeys is keys-only (cheap even for rows embedding 100MB binaries).
-// Backfill any record missing from the index — an existing library on its first build
-// after this ships, or a record written by something that bypassed putScenario/putGame —
-// by loading it ONE AT A TIME (peak = a single record, not the whole store at once,
-// which is the OOM), and drop index rows whose record was deleted out-of-band. After
-// the first build the index is populated, so the menu loads NO full records at all.
-const reconcileMeta = async (recordStore, metaStore, project) => {
-  const [keys, metas] = await Promise.all([idbGetAllKeys(recordStore), idbGetAll(metaStore)]);
-  const byId = new Map(metas.map((m) => [m.id, m]));
-  const live = new Set(keys);
-  for (const id of keys) {
-    if (byId.has(id)) continue;
-    const record = await idbGet(recordStore, id); // released before the next iteration
-    if (!record) continue;
-    const proj = project(record);
-    try { await idbPut(metaStore, proj); } catch { /* self-heals next build */ }
-    byId.set(id, proj);
-  }
-  for (const m of metas) {
-    if (live.has(m.id)) continue;
-    try { await idbDelete(metaStore, m.id); } catch { /* self-heals next build */ }
-    byId.delete(m.id);
-  }
-  return [...byId.values()];
-};
-const readScenarioMetas = () => reconcileMeta(STORES.scenarios, STORES.scenarioMeta, projectScenarioMeta);
-const readGameMetas = () => reconcileMeta(STORES.games, STORES.gameMeta, projectGameMeta);
+// The lean *Meta indexes, reconciled against their real stores (idb.js): after the
+// first build the menu loads no full records at all.
+const readScenarioMetas = () => reconcileMetaIndex(STORES.scenarios, STORES.scenarioMeta, projectScenarioMeta);
+const readGameMetas = () => reconcileMetaIndex(STORES.games, STORES.gameMeta, projectGameMeta);
 
 const getScenarioCatalog = async (scenarioMetas, gameMetas) => {
   const manifest = await getScenarioManifest();

@@ -93,7 +93,7 @@ There is no Express server. `installWebApiRouter()` (`router.js:138`) replaces `
 
 ## 4. IndexedDB layer (`idb.js`)
 
-A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 3`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
+A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 4`. Adding a store means bumping the version; `onupgradeneeded` creates only what is missing (additive — nobody's data is touched). An `onversionchange` handler closes this connection when another tab opens a newer version, so a second tab's upgrade isn't blocked.
 
 | Store (`STORES`) | keyPath | Mirrors server on-disk store |
 |---|---|---|
@@ -106,8 +106,9 @@ A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 3
 | `kv` | `key` | small singletons (manifests, ui-settings, `seeded`) |
 | `scenarioMeta` | `id` | lean projection of each scenario (meta, cover, asset status) that the library menu is built from — no geometry or tiles |
 | `gameMeta` | `id` | lean projection of each game (meta, cover, country, date, round, counts) — no snapshots or full JSON |
+| `mapeditorMeta` | `id` | the eight-field summary of each map-editor document the Documents menu lists (the desktop store's `.summary.json`) |
 
-Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbPut`, `idbPutPair` (a record and its lean index row in one transaction), `idbDelete`, and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
+Helpers: `idbGet`, `idbGetAll`, `idbGetAllKeys` (keys only, never the values), `idbPut`, `idbPutPair` / `idbDeletePair` (a record and its lean index row in one transaction), `idbDelete`, `reconcileMetaIndex` (build a listing from an index store, backfilling a missing row one record at a time and dropping orphans), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
 
 ---
 
@@ -281,7 +282,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 
 | Domain | Handler | Notes |
 |---|---|---|
-| `mapeditor/*` | `handleMapEditor` (`editorStore.js`) | map-editor documents in the `mapeditorDocs` store |
+| `mapeditor/*` | `handleMapEditor` (`editorStore.js`) | map-editor documents in the `mapeditorDocs` store; each write also writes its summary to `mapeditorMeta`, and the list is built from those summaries, so opening the Documents menu never loads a whole map |
 | `basemaps/*` | `handleBasemaps` (`basemapStore.js`) | basemap meta + payload (two stores) |
 | `flags/*` | `handleFlags` (`flagStore.js`) | flag records |
 | `ui-settings/*` | `handleUiSettings` (`settingsStore.js:82`) | UI settings persisted in `kv` |

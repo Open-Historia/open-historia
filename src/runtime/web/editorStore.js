@@ -3,7 +3,7 @@
 // /api/mapeditor/documents* in web mode. Faithful to the server's id/merge
 // semantics and summary projection (see the spec in mapEditorStore.js).
 
-import { STORES, idbGet, idbGetAll, idbPut, idbDelete, kvGet, kvUpdate } from "./idb.js";
+import { STORES, idbGet, idbGetAllKeys, idbPutPair, idbDeletePair, kvGet, kvUpdate, reconcileMetaIndex } from "./idb.js";
 import { cloneJson, nowIso, normalizeId, ensureUniqueId, jsonResponse, errorResponse } from "./util.js";
 import { applyRegionDelta, isRegionDelta } from "../../../server/regionDelta.js";
 
@@ -26,10 +26,17 @@ const summarize = (doc) => ({
   createdAt: doc.createdAt,
 });
 
+// A document and its summary row commit together (idb.js), so the Documents menu
+// lists from the summaries and never loads a whole map. The desktop store keeps a
+// summary file beside each document for the same reason.
+const putDocument = (doc) => idbPutPair(STORES.mapeditorDocs, doc, STORES.mapeditorMeta, summarize(doc));
+
 const listDocuments = async () => {
   const manifest = await getManifest();
-  const all = await idbGetAll(STORES.mapeditorDocs);
-  const byId = new Map(all.map((doc) => [doc.id, doc]));
+  // Summaries only. A document saved before the index existed is summarised once,
+  // one at a time, and its row kept from then on.
+  const all = await reconcileMetaIndex(STORES.mapeditorDocs, STORES.mapeditorMeta, summarize);
+  const byId = new Map(all.map((summary) => [summary.id, summary]));
   const ordered = [];
   const seen = new Set();
   for (const id of manifest.order) {
@@ -38,16 +45,17 @@ const listDocuments = async () => {
       seen.add(id);
     }
   }
-  for (const doc of all) {
-    if (!seen.has(doc.id)) ordered.push(doc);
+  for (const summary of all) {
+    if (!seen.has(summary.id)) ordered.push(summary);
   }
-  return ordered.map(summarize);
+  return ordered;
 };
 
 const createDocument = async (body = {}) => {
   const name = String(body.name || body.metadata?.name || "Untitled Map").trim() || "Untitled Map";
   const requested = normalizeId(body.id || name, "map", 48);
-  const id = await ensureUniqueId(requested, async (candidate) => Boolean(await idbGet(STORES.mapeditorDocs, candidate)));
+  const taken = new Set(await idbGetAllKeys(STORES.mapeditorDocs)); // keys only, not the maps
+  const id = await ensureUniqueId(requested, async (candidate) => taken.has(candidate));
   const timestamp = nowIso();
   const doc = {
     id,
@@ -70,7 +78,7 @@ const createDocument = async (body = {}) => {
     createdAt: timestamp,
     updatedAt: timestamp,
   };
-  await idbPut(STORES.mapeditorDocs, doc);
+  await putDocument(doc);
   await kvUpdate(MANIFEST_KEY, (current) => {
     const order = current && Array.isArray(current.order) ? current.order.filter((entry) => entry !== id) : [];
     return { version: 1, order: [id, ...order] };
@@ -103,7 +111,7 @@ const updateDocument = async (id, updates = {}) => {
     metadata: { ...existing.metadata, ...(fields.metadata && typeof fields.metadata === "object" ? fields.metadata : {}) },
     updatedAt: nowIso(),
   };
-  await idbPut(STORES.mapeditorDocs, next);
+  await putDocument(next);
   await kvUpdate(MANIFEST_KEY, (current) => {
     const order = current && Array.isArray(current.order) ? current.order : [];
     return order.includes(id) ? { version: 1, order } : { version: 1, order: [...order, id] };
@@ -112,7 +120,7 @@ const updateDocument = async (id, updates = {}) => {
 };
 
 const deleteDocument = async (id) => {
-  await idbDelete(STORES.mapeditorDocs, id);
+  await idbDeletePair(STORES.mapeditorDocs, STORES.mapeditorMeta, id);
   await kvUpdate(MANIFEST_KEY, (current) => {
     const order = current && Array.isArray(current.order) ? current.order.filter((entry) => entry !== id) : [];
     return { version: 1, order };

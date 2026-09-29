@@ -380,7 +380,7 @@ Boolean ops run directly on OL geometries in EPSG:3857 via `polygon-clipping` (n
 
 ## 17. Persistence (`documentIO.js`, save flow)
 
-Server REST at `/api/mapeditor/documents` (web build routes through `runtime/web/editorStore.js`): `GET` list, `GET /:id`, `POST` create, `PUT /:id` update, `DELETE /:id`. `downloadJson` writes a local `.json`.
+Server REST at `/api/mapeditor/documents` (web build routes through `runtime/web/editorStore.js`): `GET` list, `GET /:id`, `POST` create, `PUT /:id` update, `DELETE /:id`. The list is built from a summary kept beside each document (a `.summary.json` file on desktop, the `mapeditorMeta` IndexedDB store on the web build), never by loading the documents. `downloadJson` writes a local `.json`.
 
 `buildDocumentFields()` (`MapEditor.jsx`) is a **strict whitelist** — `name, metadata, types, features, colorOverrides, flags, tags, polities, ownerSchema`. **Anything not named here is silently dropped on save**; a new document field appears to work until the first reload. `buildPayload(regions?)` adds the map to it, for an export or a full save.
 
