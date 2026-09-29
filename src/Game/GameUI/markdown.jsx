@@ -170,7 +170,9 @@ const markdownStyles = `
    still hard to read even when nothing is truncated. */
 .oh-md-table-wrap th:first-child, .oh-md-table-wrap td:first-child { min-width: 5.5rem; }
 .oh-md-table-wrap thead th {
-    background: color-mix(in srgb, var(--oh-md-accent) 16%, rgba(255,255,255,0.05));
+    /* The fallback is for a bare body (no .oh-md, so no accent set), where an
+       unset variable would drop the header's background altogether. */
+    background: color-mix(in srgb, var(--oh-md-accent, #3b82f6) 16%, rgba(255,255,255,0.05));
     color: rgba(255,255,255,0.95);
     font-weight: 700;
     letter-spacing: 0.02em;
