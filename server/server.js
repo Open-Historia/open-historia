@@ -131,6 +131,12 @@ const writeNetworkSettings = (settings) => {
 const HOST_FROM_ENV = process.env.OH_HOST || "";
 let HOST = HOST_FROM_ENV || (readNetworkSettings().lanAccess ? ALL_INTERFACES_HOST : LOOPBACK_HOST);
 let LAN_ENABLED = isLanHost(HOST);
+// What the toggle last asked for. HOST only changes once a rebind has landed,
+// a moment after the reply, so a second flip compared against HOST saw the old
+// binding, matched it and did nothing: on-then-off left the switch showing Off
+// and network-settings.json saying on while the server went to 0.0.0.0.
+let requestedHost = HOST;
+let rebindTimer = null;
 
 // The addresses a phone or another computer would actually type in. Doing this
 // here is the difference between "enable LAN play" being a setting and being a
@@ -1224,14 +1230,13 @@ app.post("/api/server/network", jsonParser, (req, res) => {
 
   const lanEnabled = req.body?.lanEnabled === true;
   const nextHost = lanEnabled ? ALL_INTERFACES_HOST : LOOPBACK_HOST;
-  if (nextHost === HOST) {
-    return res.json({ lanEnabled: LAN_ENABLED, host: HOST, port: Number(PORT), lockedByEnv: false, addresses: lanAddresses() });
-  }
-
-  try {
-    writeNetworkSettings({ lanAccess: lanEnabled });
-  } catch (error) {
-    return sendError(res, 500, error);
+  if (nextHost !== requestedHost) {
+    try {
+      writeNetworkSettings({ lanAccess: lanEnabled });
+    } catch (error) {
+      return sendError(res, 500, error);
+    }
+    requestedHost = nextHost;
   }
 
   // Answer BEFORE rebinding: the reply travels over a connection this is about
@@ -1245,8 +1250,24 @@ app.post("/api/server/network", jsonParser, (req, res) => {
     lockedByEnv: false,
     addresses: lanEnabled ? lanAddresses() : [],
   });
-  setTimeout(() => rebindListener(nextHost), 250);
+  scheduleRebind();
 });
+
+// Moves the listener to requestedHost a moment after the reply has gone. A
+// later flip restarts the wait, so a double click settles on its last answer,
+// and one that lands while a rebind is still in flight waits for it to finish
+// and then looks again.
+const scheduleRebind = () => {
+  clearTimeout(rebindTimer);
+  rebindTimer = setTimeout(() => {
+    rebindTimer = null;
+    if (rebinding) {
+      scheduleRebind();
+      return;
+    }
+    if (requestedHost !== HOST) rebindListener(requestedHost);
+  }, 250);
+};
 
 // Shut the server down from the UI (the ⏻ button in the top bar) — handy on
 // phones/Termux and headless installs where no terminal is in sight. Responds
@@ -1591,6 +1612,7 @@ const rebindListener = (nextHost) => {
     httpServer.removeListener("error", onError);
     HOST = previousHost;
     LAN_ENABLED = isLanHost(HOST);
+    requestedHost = HOST;
     try {
       writeNetworkSettings({ lanAccess: LAN_ENABLED });
     } catch { /* the binding is what matters; the file is a hint for next boot */ }

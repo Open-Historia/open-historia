@@ -9,7 +9,7 @@
 // is what should stop them.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import os from "node:os";
@@ -174,6 +174,41 @@ describe("LAN sharing", () => {
     if (lan) {
       assert.equal(await reachable(lan, port), false);
     }
+  });
+
+  // The rebind lands 250 ms after the reply. A second flip inside that window
+  // used to compare itself with the binding that had not moved yet, match it
+  // and do nothing — so on-then-off showed Off while the server went to
+  // 0.0.0.0 and the saved setting said on.
+  test("flipping the switch twice in a row settles on the last answer", async () => {
+    const flip = async (lanEnabled) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/server/network`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}` },
+        body: JSON.stringify({ lanEnabled }),
+      });
+      return (await response.json()).lanEnabled;
+    };
+    const settle = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+      const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+      const saved = JSON.parse(readFileSync(path.join(dataDir, "network-settings.json"), "utf8"));
+      return { lanEnabled: state.lanEnabled, saved: saved.lanAccess };
+    };
+    const lan = lanAddress();
+
+    assert.equal(await flip(true), true);
+    assert.equal(await flip(false), false);
+    assert.deepEqual(await settle(), { lanEnabled: false, saved: false });
+    if (lan) assert.equal(await reachable(lan, port), false, "the network must not be let in");
+
+    assert.equal(await flip(true), true);
+    assert.equal(await flip(false), false);
+    assert.equal(await flip(true), true);
+    assert.deepEqual(await settle(), { lanEnabled: true, saved: true });
+    if (lan) assert.equal(await reachable(lan, port), true);
+
+    await setLan(port, false);
   });
 
   test("the setting survives a restart", async () => {
