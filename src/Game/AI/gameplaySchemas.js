@@ -1,3 +1,4 @@
+import { DEMAND_CHECK_OUTCOMES } from "../../runtime/demandCheck.js";
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
 import {
   TERRITORY_BASIS_DESCRIPTION,
@@ -1589,7 +1590,7 @@ export const DEMAND_CHECK_SCHEMA = {
   properties: {
     outcome: {
       type: "string",
-      enum: ["none", "demand", "accepts_alternative", "accepted", "refused", "alternative"],
+      enum: [...DEMAND_CHECK_OUTCOMES],
       description: "Exactly one of the outcomes the request lists for this reply.",
     },
     summary: textSchema("One line: what is demanded (for demand) or what is offered instead (for alternative). Empty for any other outcome."),
