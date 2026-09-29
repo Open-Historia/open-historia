@@ -1819,7 +1819,10 @@ const StatsPaneBody = ({ active, requestedTarget = "", onConsumeTarget }) => {
             if (!force) {
                 const pending = await pendingCountryStatSheet(code).catch(() => null);
                 if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
-                if (pending && isValidStatSheet(pending, statSheetDefinition)) {
+                const pendingUsable = pending &&
+                    isValidStatSheet(pending, statSheetDefinition) &&
+                    (statSheetDefinition.custom || (!needsLegacyComponentCapAudit(pending) && !needsStartPopulationCalibrationAudit(pending, player)));
+                if (pendingUsable) {
                     const sheet = finalizeCountryStatSheet(pending);
                     rememberSheet(cacheKey, { date: player.date, sheet });
                     setState((current) => (targetCountry === code ? { status: "ready", sheet, error: "" } : current));
