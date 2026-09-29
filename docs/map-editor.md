@@ -326,7 +326,7 @@ One style function for all regions, memoised per `typeId|owner|selected|zoomBand
 A full-screen overlay (community-hub purple, not editor blue) mounted at `MapEditor`'s root — **not** inside the inspector, because the panel's `backdrop-filter` makes a containing block that would trap a `position:fixed` overlay (`FlagPicker.jsx:31`). Opened via `flagPickerFor` state, wired to `d.setFlag(flagPickerFor, value)`.
 
 Tabs:
-- **In the game** — *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`listBuiltInFlags()`).
+- **In the game** — *Suggested* (the built-in flag for the polity the picker is open for, when that polity is a standard country — `resolveStockCountryCode`, the recognition **Fill standard flags** uses; hidden while searching), *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`builtInFlagChoices()` in `builtInFlags.js`: `listBuiltInFlags()` titled with the country name and sorted by it, the ISO3 code underneath; search matches the name, the code, the alpha-2 code, or an official full name such as "Russian Federation").
 - **Community** — fetched via the hub proxy; a single flag installs as a data URL, a scenario **flag pack** (`fromScenario`) installs wholesale into My flags (dedup by content hash).
 
 Upload (`fileToFlagDataUrl`, `FLAG_ACCEPT`) saves to the library first, then applies. **Remove** re-selects the standard code-derived flag (`pick(null)`). Values stored in `doc.flags` are downscaled PNG data URLs.

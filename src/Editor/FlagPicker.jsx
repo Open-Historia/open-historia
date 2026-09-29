@@ -12,7 +12,7 @@
 // the editor's) is what makes the two pickers look like siblings.
 
 import { useEffect, useMemo, useState } from "react";
-import { listBuiltInFlags } from "../runtime/countryFlags.js";
+import { builtInFlagChoices, filterBuiltInFlags, suggestedBuiltInFlag } from "./builtInFlags.js";
 import {
   communityFlagsHubUrl,
   fetchCommunityFlags,
@@ -183,7 +183,9 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
   // the same promise "Your basemaps" makes.
   const [mine, setMine] = useState([]);
 
-  const builtIn = useMemo(() => listBuiltInFlags(), []);
+  // By country name, not ISO3 code: owners are names now (builtInFlags.js).
+  const builtIn = useMemo(() => builtInFlagChoices(), []);
+  const suggested = useMemo(() => suggestedBuiltInFlag(builtIn, ownerCode), [builtIn, ownerCode]);
   // Flags already placed on this map — the fastest way to reuse one across countries.
   const inThisMap = useMemo(
     () => Object.entries(mapFlags || {}).map(([code, dataUrl]) => ({ code, dataUrl })),
@@ -218,7 +220,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
   if (!open) return null;
 
   const q = query.trim().toLowerCase();
-  const filteredBuiltIn = q ? builtIn.filter((f) => f.code.toLowerCase().includes(q) || f.alpha2.includes(q)) : builtIn;
+  const filteredBuiltIn = filterBuiltInFlags(builtIn, q);
   const filteredCommunity = q
     ? community.filter((p) => `${p.title} ${p.author} ${p.code || ""}`.toLowerCase().includes(q))
     : community;
@@ -361,6 +363,21 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
 
           {tab === "mine" ? (
             <>
+              {suggested && !q && (
+                <>
+                  <div style={rowTitle}>Suggested</div>
+                  <div style={{ ...grid, marginBottom: "1rem" }}>
+                    <FlagCard
+                      title={suggested.name}
+                      subtitle={suggested.code}
+                      imageUrl={suggested.imageUrl}
+                      active={currentFlag === suggested.imageUrl}
+                      onClick={() => pick(suggested.imageUrl)}
+                    />
+                  </div>
+                </>
+              )}
+
               {inThisMap.length > 0 && (
                 <>
                   <div style={rowTitle}>Already on this map</div>
@@ -410,8 +427,8 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                   {filteredBuiltIn.map((f) => (
                     <FlagCard
                       key={f.code}
-                      title={f.code}
-                      subtitle={f.alpha2.toUpperCase()}
+                      title={f.name}
+                      subtitle={f.code}
                       imageUrl={f.imageUrl}
                       active={currentFlag === f.imageUrl}
                       onClick={() => pick(f.imageUrl)}
