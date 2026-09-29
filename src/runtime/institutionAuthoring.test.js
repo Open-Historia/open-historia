@@ -6,6 +6,7 @@ import {
   institutionAuthoringId,
   institutionAuthoringRows,
   institutionMemberNames,
+  removeScenarioInstitution,
   upsertScenarioInstitution,
 } from "./institutionAuthoring.js";
 
@@ -120,4 +121,23 @@ test("the member list splits on lines only", () => {
     institutionMemberNames("Bonaire, Sint Eustatius and Saba\r\n  Latvia \n\nLatvia\nSaint Helena; Ascension"),
     ["Bonaire, Sint Eustatius and Saba", "Latvia", "Saint Helena; Ascension"],
   );
+});
+
+test("removing an authored institution takes it out of canon and leaves the others", () => {
+  const source = world();
+  source.institutions.byId.league = { id: "league", name: "Southern League", shortName: "SL", kind: "regional_bloc", members: [{ polity: "Chile", status: "member" }] };
+  const result = removeScenarioInstitution(source, "council");
+  assert.equal(result.error, "");
+  assert.equal(result.institution.name, "Northern Council");
+  assert.deepEqual(Object.keys(result.world.institutions.byId), ["league"]);
+  assert.equal(result.world.institutions.ledgerVersion, 7);
+  assert.ok(source.institutions.byId.council, "the world passed in is left as it was");
+});
+
+test("removing an institution the scenario does not have is refused", () => {
+  const source = world();
+  const result = removeScenarioInstitution(source, "missing");
+  assert.match(result.error, /not in this scenario/);
+  assert.equal(result.world, source);
+  assert.equal(removeScenarioInstitution(source, "").institution, null);
 });

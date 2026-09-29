@@ -144,3 +144,20 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
     error: "",
   };
 };
+
+// Takes an institution out of the scenario's canon, members, proposals and
+// history with it. The uploaded logo lives in a separate scenario asset, which
+// the Politics tab clears on its own.
+export const removeScenarioInstitution = (world = {}, institutionId = "") => {
+  const institutions = normalizeInstitutions(world?.institutions, world);
+  const id = clean(institutionId);
+  const existing = id && Object.hasOwn(institutions.byId || {}, id) ? institutions.byId[id] : null;
+  if (!existing) return { world, institution: null, error: "That institution is not in this scenario." };
+  const byId = { ...(institutions.byId || {}) };
+  delete byId[id];
+  return {
+    world: { ...world, institutions: { ...institutions, byId } },
+    institution: existing,
+    error: "",
+  };
+};

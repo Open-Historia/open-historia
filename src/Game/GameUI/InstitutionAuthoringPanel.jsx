@@ -9,6 +9,7 @@ import {
   institutionAuthoringDraft,
   institutionAuthoringRows,
   institutionMemberNames,
+  removeScenarioInstitution,
   upsertScenarioInstitution,
 } from "../../runtime/institutionAuthoring.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
@@ -178,6 +179,45 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
       setMessage("Institution saved to scenario canon.");
     } catch (error) {
       setMessage(error?.message || "Could not save institution.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedInstitution = rows.find((entry) => entry.id === selectedId) || null;
+
+  const deleteInstitution = async () => {
+    if (!details?.scenario?.id || busy || !selectedInstitution) return;
+    const label = selectedInstitution.name || selectedInstitution.id;
+    if (!window.confirm(`Delete ${label} from this scenario? Its members, history and logo go with it.`)) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = removeScenarioInstitution(world, selectedInstitution.id);
+      if (result.error) throw new Error(result.error);
+
+      const storedLogos = await downloadScenarioJsonAsset(details.scenario.id, "institutionLogos") || {};
+      if (storedLogos && typeof storedLogos === "object" && !Array.isArray(storedLogos) && Object.hasOwn(storedLogos, selectedInstitution.id)) {
+        const nextStoredLogos = { ...storedLogos };
+        delete nextStoredLogos[selectedInstitution.id];
+        await uploadScenarioAsset(
+          details.scenario.id,
+          "institutionLogos",
+          new Blob([JSON.stringify(nextStoredLogos)], { type: "application/json" }),
+        );
+      }
+
+      const nextDetails = await saveScenario(details.scenario.id, {
+        worldPatch: { institutions: result.world.institutions },
+      });
+      onDetailsChange?.(nextDetails);
+      setSelectedId("");
+      setPendingLogoDataUrl("");
+      setMemberEntry("");
+      setDirty(false);
+      setMessage(`${label} deleted from the scenario.`);
+    } catch (error) {
+      setMessage(error?.message || "Could not delete the institution.");
     } finally {
       setBusy(false);
     }
@@ -390,12 +430,17 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
           </details>
 
           {message && (
-            <div style={{ background: /saved/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.65rem", padding: "0.55rem 0.65rem" }}>
+            <div style={{ background: /saved|deleted from/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved|deleted from/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved|deleted from/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.65rem", padding: "0.55rem 0.65rem" }}>
               {message}
             </div>
           )}
 
           <div style={{ display: "flex", gap: "0.45rem", justifyContent: "flex-end", marginTop: "0.75rem" }}>
+            {selectedInstitution && (
+              <button disabled={busy} onClick={deleteInstitution} style={{ ...actionButtonStyle, background: "rgba(248,113,113,0.08)", borderColor: "rgba(248,113,113,0.3)", color: "#fecaca", marginRight: "auto" }} type="button">
+                Delete institution
+              </button>
+            )}
             <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: dirty ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.035)", borderColor: dirty ? "rgba(139,92,246,0.45)" : "rgba(255,255,255,0.07)", color: dirty ? "#fff" : "rgba(255,255,255,0.35)" }} type="button">
               {busy ? "Saving..." : "Save institution"}
             </button>
