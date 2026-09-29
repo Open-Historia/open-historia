@@ -414,8 +414,10 @@ const buildGameEditorState = (details) => {
 // Historia in the Android app. (The copy that lived here revoked the object URL in the
 // same task as the click, which Firefox treats as a cancelled download.)
 
-const saveJsonBundleToDisk = (bundle, fileName) => {
-  saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
+// Every save here is awaited: in the Android app the Downloads write and the
+// share-sheet fallback can both fail, and the caller's catch has to see it.
+const saveJsonBundleToDisk = async (bundle, fileName) => {
+  await saveBlobToDisk(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }), fileName);
 };
 
 // Prompt-pack files intentionally contain only scenario-author editable guidance.
@@ -2498,10 +2500,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           `so this export carries everything except the map. Send the scenario separately from the Scenarios tab.`,
         );
       }
-      // The deferred-revoke saver, NOT the saveBlobToDisk defined above: that one
-      // revokes the object URL in the same task as the click, which Firefox treats
-      // as a cancelled download.
-      saveGameZipToDisk(blob, `${game.id}-game.zip`);
+      // Awaited, so a failed write (the Android app's Downloads or share sheet)
+      // reaches the catch below and the card stays busy until the file is out.
+      await saveGameZipToDisk(blob, `${game.id}-game.zip`);
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2633,7 +2634,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     });
   };
 
-  const handleExportPrompts = () => {
+  const handleExportPrompts = async () => {
     if (editorKind !== "scenario" || !editorState || !editorDetails?.scenario) return;
     const scenario = editorDetails.scenario;
     const bundle = {
@@ -2643,10 +2644,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       scenario: { id: scenario.id, name: scenario.name },
       prompts: materializePromptPack(editorState.prompts),
     };
-    saveGameZipToDisk(
-      new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }),
-      `${scenario.id}-prompts.json`,
-    );
+    setEditorError(null);
+    try {
+      await saveJsonBundleToDisk(bundle, `${scenario.id}-prompts.json`);
+    } catch (nextError) {
+      setEditorError(nextError.message);
+    }
   };
 
   const handleImportPrompts = (rawPromptPack) => {
@@ -2874,9 +2877,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         const lifted = splitBundleFiles(bundle);
         Object.assign(files, lifted.files);
         files["scenario.json"] = JSON.stringify(lifted.bundle);
-        saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
+        await saveBlobToDisk(await zipBundle(files), `${id}-scenario.zip`);
       } else {
-        saveJsonBundleToDisk(bundle, `${id}-scenario.json`);
+        await saveJsonBundleToDisk(bundle, `${id}-scenario.json`);
       }
     } catch (nextError) {
       setEditorError(nextError.message);
