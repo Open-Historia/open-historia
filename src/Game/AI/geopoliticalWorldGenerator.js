@@ -1,6 +1,7 @@
 /*! Open Historia Continuum — universal geopolitical substrate generator */
 
 import { callAI } from "./main.jsx";
+import { checkGeneratedAgreementDates } from "./geopoliticalAgreementDates.js";
 import { parseGeopoliticalArrayText } from "./geopoliticalJsonTransport.js";
 import { resolveGeopoliticalMembershipCoverage } from "./geopoliticalMembershipCoverage.js";
 import { resolveScenarioInstitutionReferenceCatalog } from "./institutionReferenceCatalogs.js";
@@ -156,20 +157,6 @@ const canonicalPolity = (value, world, allowedByLower) => {
   });
   const canonical = clean(resolved?.resolved);
   return allowedByLower.get(lower(canonical)) || "";
-};
-
-const dateKey = (value, edge = "start") => {
-  const text = clean(value);
-  const match = text.match(/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = match[2] ? Number(match[2]) : (edge === "end" ? 12 : 1);
-  if (!Number.isInteger(year) || year < 1 || month < 1 || month > 12) return null;
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const day = match[3] ? Number(match[3]) : (edge === "end" ? monthDays[month - 1] : 1);
-  if (day < 1 || day > monthDays[month - 1]) return null;
-  return year * 10000 + month * 100 + day;
 };
 
 const actorSummary = (world, polity) => {
@@ -330,27 +317,27 @@ const normalizeAgreement = (value, world, allowedByLower, scenarioDate, warnings
   const allowedTypes = ["alliance", "mutual_defense", "guarantee", "non_aggression", "friendship_consultation", "trade_economic", "military_cooperation", "military_access", "neutrality", "peace_settlement", "other"];
   const id = slug(value.id || value.title || uniqueParties.join("-"));
   if (!id || !allowedTypes.includes(type)) return null;
-  const startedDate = clean(value.startedDate || value.startDate || value.effectiveDate);
-  const endedDate = clean(value.endedDate || value.endDate || value.expiredDate);
-  const scenarioKey = dateKey(scenarioDate, "start");
-  const startedKey = dateKey(startedDate, "start");
-  const endedKey = dateKey(endedDate, "end");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(startedDate) || !startedKey) {
+  const rawStartedDate = clean(value.startedDate || value.startDate || value.effectiveDate);
+  const rawEndedDate = clean(value.endedDate || value.endDate || value.expiredDate);
+  // Game dates, BC included (runtime/gameDates.js), stored in canonical form.
+  const dates = checkGeneratedAgreementDates({ startedDate: rawStartedDate, endedDate: rawEndedDate, scenarioDate });
+  if (dates.problem === "start") {
     warnings.push(`${clean(value.title || id)}: dropped generated agreement without an exact YYYY-MM-DD startedDate.`);
     return null;
   }
-  if (endedDate && (!/^\d{4}-\d{2}-\d{2}$/.test(endedDate) || !endedKey)) {
-    warnings.push(`${clean(value.title || id)}: dropped generated agreement with unusable endedDate ${endedDate}.`);
+  if (dates.problem === "end") {
+    warnings.push(`${clean(value.title || id)}: dropped generated agreement with unusable endedDate ${rawEndedDate}.`);
     return null;
   }
-  if (scenarioKey && startedKey > scenarioKey) {
+  if (dates.problem === "not-yet") {
     warnings.push(`${clean(value.title || id)}: dropped generated agreement that starts after ${scenarioDate}.`);
     return null;
   }
-  if (scenarioKey && endedKey && scenarioKey >= endedKey) {
+  if (dates.problem === "ended") {
     warnings.push(`${clean(value.title || id)}: dropped generated agreement already ended by ${scenarioDate}.`);
     return null;
   }
+  const { startedDate, endedDate } = dates;
   return {
     id,
     op: "start",
@@ -525,7 +512,7 @@ governanceJson = [{"institutionId":"EXACT id","votingRule":{"type":"unspecified|
 });
 
 const buildAgreementsPrompt = ({ scenarioDate, historyAuthority = null, scenarioContext, allPolityKeys, catalog }) => ({
-  systemPrompt: `You initialize strategically important ACTIVE FORMAL AGREEMENTS at OpenHistoria Round Zero.\n\n${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Do not include agreements not yet effective or already ended on the TARGET WORLD DATE. Do not duplicate anything represented by formal institution membership in the fixed institution catalog. Include only agreements that materially constrain defense, military access, guarantees, non-aggression, peace, or major economic/strategic behavior; omit routine low-impact treaties.\n\nEvery agreement requires exact YYYY-MM-DD startedDate. endedDate is blank if still active. Use exact canonical polity keys. No prose outside the tool.`,
+  systemPrompt: `You initialize strategically important ACTIVE FORMAL AGREEMENTS at OpenHistoria Round Zero.\n\n${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Do not include agreements not yet effective or already ended on the TARGET WORLD DATE. Do not duplicate anything represented by formal institution membership in the fixed institution catalog. Include only agreements that materially constrain defense, military access, guarantees, non-aggression, peace, or major economic/strategic behavior; omit routine low-impact treaties.\n\nEvery agreement requires exact YYYY-MM-DD startedDate (a year before AD 1 takes a leading minus, as the target world date does). endedDate is blank if still active. Use exact canonical polity keys. No prose outside the tool.`,
   userMessage: `Scenario context:\n${clean(scenarioContext).slice(0, 5000) || "(none)"}\n\nFixed formal institutions (do not duplicate as agreements):\n${catalogSummary(catalog) || "(none)"}\n\nCanonical polity keys:\n${allPolityKeys.join(" | ").slice(0, 16000)}\n\nagreementsJson = [{"id":"stable id","type":"alliance|mutual_defense|guarantee|non_aggression|friendship_consultation|trade_economic|military_cooperation|military_access|neutrality|peace_settlement|other","parties":["exact keys"],"title":"","terms":"","startedDate":"YYYY-MM-DD","endedDate":""}]. Use [] if none qualify.`,
 });
 
