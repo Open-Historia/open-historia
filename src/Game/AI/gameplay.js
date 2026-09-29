@@ -10079,7 +10079,18 @@ const sanitizeTrackedStatsPatch = (value, statIndexRows = DEFAULT_STAT_INDEX_ROW
   return Object.keys(patch).length ? patch : null;
 };
 
-const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {}) => {
+// The tracked Stats refresh's one request asks the time skip it rides on first
+// (createJumpRequests), on both paths — the standard sheet and a scenario's own.
+// Refused, the refresh stays due for the next skip. No skip, no budget.
+const trackedStatsPutOff = (requests, due) => {
+  if (!requests || requests.budget.take("stats")) return false;
+  logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
+    countries: due.map((entry) => entry.polity),
+  });
+  return true;
+};
+
+const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requests = null } = {}) => {
   const game = normalizeGameData(bundle?.game);
   let world = normalizeWorldState(bundle?.world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);
@@ -10127,6 +10138,7 @@ const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition } = {
     pendingBaselinePolities: pendingBaseline,
   }, { playerCountry: game?.country });
   if (!due.length) return world;
+  if (trackedStatsPutOff(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic scenario-defined National Stats auditor.
 
@@ -10163,6 +10175,7 @@ For each country include only values that genuinely changed.`;
         signal,
         reasoningEnabled: false,
         taskKey: "countryStatSheet",
+        ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
         ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? { deadline: Date.now() + 90000 } : {}),
       },
     );
@@ -10224,7 +10237,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   if (!parseIsoDate(currentDate)) return world;
   const statSheetDefinition = await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }));
   if (statSheetDefinition.custom) {
-    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition });
+    return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition, requests });
   }
   const statIndexDefinition = await loadStatIndexDefinition().catch(() => ({ custom: false, rows: DEFAULT_STAT_INDEX_ROWS }));
   const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
@@ -10290,12 +10303,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   }, { playerCountry: game?.country });
 
   if (!due.length) return world;
-  if (requests && !requests.budget.take("stats")) {
-    logDebugEvent("turn", `Tracked Stats refresh put off: this time skip has used its ${requests.budget.cap} requests. It is due again next skip.`, {
-      countries: due.map((entry) => entry.polity),
-    });
-    return world;
-  }
+  if (trackedStatsPutOff(requests, due)) return world;
 
   const systemPrompt = `You are Open Historia's bounded periodic national-statistics auditor.
 
@@ -11206,6 +11214,11 @@ const generateScenarioCustomStatSheet = async ({
   target,
   worldAtStart,
   signal,
+  // As generateCountryStatSheet's: a first reading nobody asked for is
+  // BACKGROUND_REQUEST, and a skip's refresh asks its budget.
+  requestKind,
+  budget = null,
+  onRequest,
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
@@ -11221,6 +11234,9 @@ const generateScenarioCustomStatSheet = async ({
   const { payload } = await runJsonTask("countryStatSheet", {
     lookups: buildTaskLookups(bundle),
     signal,
+    ...(requestKind ? { requestKind } : {}),
+    ...(budget ? { budget, spender: "stats" } : {}),
+    ...(typeof onRequest === "function" ? { onRequest } : {}),
     userMessage: [
       `Compile the complete scenario-defined National Stats sheet for ${target}${statCode ? ` (canonical polity ${statCode})` : ""}.`,
       normalizeString(bundle?.world?.simulationRules) ? `ERA & WORLD RULES:
@@ -11329,6 +11345,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       target,
       worldAtStart,
       signal,
+      requestKind,
+      budget,
+      onRequest,
     });
   }
 
