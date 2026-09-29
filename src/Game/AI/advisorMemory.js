@@ -19,11 +19,15 @@
 
 export const ADVISOR_MEMORY_MAX_CHARS = 1200;
 
-const MEMORY_LINE = /^[ \t]*ADVISOR_MEMORY[ \t]*:[ \t]*(.*)(?:\n|$)/gim;
+// The label is found wherever the model put it: on a line of its own, dressed
+// in markdown ("**ADVISOR_MEMORY:** …"), or run on after the last sentence
+// ("Good luck. ADVISOR_MEMORY: …"). Any of those left in place would show the
+// player the memory, and lose it. The prose before it on the line is kept.
+const MEMORY_LINE = /^([^\n]*?)[*_`]*ADVISOR_MEMORY[*_`]*[ \t]*:[*_` \t]*(.*)(?:\n|$)/gim;
 
 // A reply still streaming can end in the first letters of the label; they are
 // not shown either.
-const PARTIAL_LABEL = /\n[ \t]*ADVISOR_(?:M(?:E(?:M(?:O(?:R(?:Y)?)?)?)?)?)?[ \t]*$/;
+const PARTIAL_LABEL = /(?:^|\n|[ \t])[ \t>*_`#-]*ADVISOR_(?:M(?:E(?:M(?:O(?:R(?:Y)?)?)?)?)?)?[*_`]*[ \t]*$/;
 
 const clip = (value) => {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
@@ -36,9 +40,10 @@ export const splitAdvisorMemory = (raw) => {
   const source = String(raw ?? "");
   let memory = "";
   const reply = source
-    .replace(MEMORY_LINE, (_line, value) => {
-      memory = clip(value) || memory;
-      return "";
+    .replace(MEMORY_LINE, (_line, before, value) => {
+      memory = clip(value.replace(/[*_`\s]+$/, "")) || memory;
+      const kept = before.replace(/[ \t>#*_`-]+$/, "");
+      return kept ? `${kept}\n` : "";
     })
     .replace(PARTIAL_LABEL, "")
     .replace(/\n{3,}/g, "\n\n")

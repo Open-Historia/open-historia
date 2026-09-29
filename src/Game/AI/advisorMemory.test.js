@@ -40,6 +40,21 @@ test("the last of two memory lines wins, and neither is shown", () => {
   assert.equal(reply, "Text.\nMore text.");
 });
 
+// A label in bold, or run on after the last sentence, is still the memory:
+// left in place it would be shown to the player, and lost.
+test("a label dressed in markdown or run on after the prose still comes off", () => {
+  assert.deepEqual(
+    splitAdvisorMemory("Hold the river.\n**ADVISOR_MEMORY:** Player prefers defence.**"),
+    { reply: "Hold the river.", memory: "Player prefers defence." },
+  );
+  assert.deepEqual(
+    splitAdvisorMemory("Hold the river. ADVISOR_MEMORY: Player prefers defence."),
+    { reply: "Hold the river.", memory: "Player prefers defence." },
+  );
+  assert.equal(stripAdvisorMemory("Hold the river.\n**ADVISOR_MEM"), "Hold the river.");
+  assert.equal(stripAdvisorMemory("Hold the river. ADVISOR_"), "Hold the river.");
+});
+
 test("a memory longer than the cap is cut", () => {
   const { memory } = splitAdvisorMemory(`Text.\nADVISOR_MEMORY: ${"x".repeat(3000)}`);
   assert.equal(memory.length, ADVISOR_MEMORY_MAX_CHARS);
