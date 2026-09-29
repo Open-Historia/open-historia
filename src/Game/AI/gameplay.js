@@ -6727,12 +6727,19 @@ export const rollBackToSnapshot = async (index = 0) => {
     if (snapshotIntercepts || reconciledIntercepts !== filedIntercepts) {
       await writeInterceptsState(reconciledIntercepts);
     }
-    // The flags as they were, when the turn renamed a polity and moved its flag.
-    // Without them an undone rename left the country with no flag, and Intervene
-    // re-ran the rename against flags that had already moved.
-    if (s.flags && typeof s.flags === "object" && !Array.isArray(s.flags)) {
+    // The flags as they were, when an undone turn renamed a polity and moved its
+    // flag. Without them an undone rename left the country with no flag, and
+    // Intervene re-ran the rename against flags that had already moved. Every
+    // turn from this restore point to the newest is undone, and only a turn
+    // that renamed kept its flags, so the oldest of those is the one to restore:
+    // undoing two turns at once whose older one renamed still puts it back.
+    const undoneFlags = snapshots.slice(0, index + 1)
+      .map((entry) => entry?.state?.flags)
+      .filter((flags) => flags && typeof flags === "object" && !Array.isArray(flags))
+      .at(-1);
+    if (undoneFlags) {
       try {
-        await writeJson(JSON_URLS.flags, s.flags, { pretty: true });
+        await writeJson(JSON_URLS.flags, cloneValue(undoneFlags), { pretty: true });
       } catch (error) {
         console.warn("[rollback] the flags could not be restored:", error?.message || error);
       }
