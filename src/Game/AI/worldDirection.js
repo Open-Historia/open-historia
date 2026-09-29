@@ -110,20 +110,52 @@ const dayNumber = (iso) => {
     return Number.isFinite(value) ? value : null;
 };
 
+// One line: null for a blank line or a # comment, { beat } for a beat, and
+// { problem } ("no-date" | "no-text") for a line the engine will not use.
+const readScriptedLine = (rawLine) => {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) return null;
+    const match = DATE_AT_START.exec(line);
+    if (!match || dateKey(match[1]) === null) return { problem: "no-date" };
+    const body = asText(match[2]);
+    if (!body) return { problem: "no-text" };
+    // The title is the first sentence, or the whole beat when it is one.
+    const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
+    return { beat: { date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body } };
+};
+
 export const parseScriptedEvents = (text) => {
     const beats = [];
     for (const rawLine of asText(text).split(/\r?\n/)) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith("#")) continue;
-        const match = DATE_AT_START.exec(line);
-        if (!match || dateKey(match[1]) === null) continue;
-        const body = asText(match[2]);
-        if (!body) continue;
-        // The title is the first sentence, or the whole beat when it is one.
-        const sentence = /^(.{12,140}?[.!?])\s/.exec(`${body} `);
-        beats.push({ date: match[1], title: (sentence ? sentence[1] : body).slice(0, 140).replace(/[.!?]$/, ""), text: body });
+        const read = readScriptedLine(rawLine);
+        if (read?.beat) beats.push(read.beat);
     }
     return beats.sort((a, b) => dateKey(a.date) - dateKey(b.date));
+};
+
+// What the editor shows under the setting: how many beats the engine will
+// use, and every line it will not, as the author typed it. "passed" is a beat
+// no skip will reach: dated on or before `currentDate` (the game's date, or
+// the scenario's start), except that the day itself still counts while
+// `includeOrigin` (a game's first skip covers it). The same rule
+// scriptedBeatsInSpan applies when the skip runs.
+export const reviewScriptedEvents = (text, { currentDate = "", includeOrigin = false } = {}) => {
+    let count = 0;
+    const ignored = [];
+    const dated = dateKey(currentDate) !== null;
+    for (const rawLine of asText(text).split(/\r?\n/)) {
+        const read = readScriptedLine(rawLine);
+        if (!read) continue;
+        if (read.problem) {
+            ignored.push({ line: rawLine.trim(), problem: read.problem });
+            continue;
+        }
+        const reachable = !dated
+            || scriptedBeatsInSpan([read.beat], { originDate: currentDate, targetDate: "9999-12-31", includeOrigin }).length > 0;
+        if (reachable) count += 1;
+        else ignored.push({ line: rawLine.trim(), problem: "passed" });
+    }
+    return { count, ignored };
 };
 
 // The beats a period covers: after its origin (the day itself belongs to the

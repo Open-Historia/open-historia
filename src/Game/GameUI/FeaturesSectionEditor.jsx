@@ -6,13 +6,48 @@ import {
   normalizeFeatureSettings,
   resolveFeatures,
 } from "../../runtime/gameFeatures.js";
+import { reviewScriptedEvents } from "../AI/worldDirection.js";
+
+const IGNORED_LINE_REASONS = {
+  "no-date": "No date at the start of this line (YYYY-MM-DD), so it is ignored.",
+  "no-text": "This line has a date but nothing after it, so it is ignored.",
+};
+
+// Under the Scripted events box: how many beats the engine will use, and each
+// line it will not, so a mistyped date is not lost without anyone knowing.
+const ScriptedEventsCheck = ({ text, currentDate, includeOrigin, isGame }) => {
+  const { count, ignored } = reviewScriptedEvents(text, { currentDate, includeOrigin });
+  if (!count && !ignored.length) return null;
+  const passedReason = isGame
+    ? "This date has already passed in this game, so no time skip will reach it."
+    : "This date is before the scenario starts, so no time skip will reach it.";
+  return (
+    <div style={{ display: "grid", gap: "0.3rem", marginTop: "0.35rem" }}>
+      <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.74rem" }}>
+        {count === 1 ? "1 beat recognised" : `${count} beats recognised`}
+      </div>
+      {ignored.map((entry, index) => (
+        <div key={`${index}:${entry.line}`} style={{ borderLeft: "2px solid rgba(251,191,36,0.6)", paddingLeft: "0.5rem" }}>
+          <div style={{ color: "#fde68a", fontSize: "0.72rem" }}>
+            {entry.problem === "passed" ? passedReason : IGNORED_LINE_REASONS[entry.problem]}
+          </div>
+          <div data-no-translate style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", overflowWrap: "anywhere" }}>{entry.line}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
 
 // A scenario edits its complete configuration: what every game made from it
 // starts with. A game edits only overrides: each control has a "Scenario
 // default" state that keeps following the scenario, including changes made to
 // the scenario later. `features` is therefore the complete object for a
 // scenario and the sparse override object for a game.
-const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, styles }) => {
+//
+// `currentDate` is the game's date (the scenario's start in its own editor),
+// and `firstSkipAhead` says the next skip is the game's first, which covers
+// that day too: what the Scripted events check measures a beat against.
+const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, styles, currentDate = "", firstSkipAhead = true }) => {
   const isGame = kind === "game";
   const base = normalizeFeatureSettings(scenarioFeatures);
   const effective = isGame ? resolveFeatures(scenarioFeatures, features) : normalizeFeatureSettings(features);
@@ -155,6 +190,14 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                                 </button>
                               )}
                             </div>
+                          )}
+                          {definition.key === "direction" && setting.key === "scriptedEvents" && (
+                            <ScriptedEventsCheck
+                              text={shown || (isGame ? scenarioText : "")}
+                              currentDate={currentDate}
+                              includeOrigin={firstSkipAhead}
+                              isGame={isGame}
+                            />
                           )}
                           <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.3rem" }}>{setting.description}</div>
                         </div>

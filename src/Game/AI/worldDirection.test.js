@@ -19,6 +19,7 @@ import {
     dateKey,
     ensureScriptedEvents,
     parseScriptedEvents,
+    reviewScriptedEvents,
     scriptedBeatsInSpan,
     territoryTempoAllowance,
     WORLD_SHARE_MIN_EVENTS,
@@ -156,6 +157,46 @@ test("a period covers the beats after its origin up to its target; the first ski
     assert.deepEqual(scriptedBeatsInSpan(beats, span).map((beat) => beat.text), ["B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { ...span, includeOrigin: true }).map((beat) => beat.text), ["A", "B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { originDate: "bad", targetDate: "2014-05-21" }), []);
+});
+
+test("the editor's check counts the beats and names every line the engine will not use", () => {
+    const text = [
+        "# a comment is not a problem",
+        "1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.",
+        "28/07/1914 Austria-Hungary declares war on Serbia",
+        "1914-08-01",
+        "  1914-8-3 Germany declares war on France",
+        "",
+        "1914-08-04 Britain declares war on Germany.",
+    ].join("\n");
+    const review = reviewScriptedEvents(text, { currentDate: "1914-01-01" });
+    assert.equal(review.count, 2);
+    assert.deepEqual(review.ignored, [
+        { line: "28/07/1914 Austria-Hungary declares war on Serbia", problem: "no-date" },
+        { line: "1914-08-01", problem: "no-text" },
+        { line: "1914-8-3 Germany declares war on France", problem: "no-date" },
+    ]);
+    // The same beats the engine parses.
+    assert.equal(parseScriptedEvents(text).length, review.count);
+    assert.deepEqual(reviewScriptedEvents("", { currentDate: "1914-01-01" }), { count: 0, ignored: [] });
+});
+
+test("a beat no skip will reach is flagged; the first skip still covers the day itself", () => {
+    const text = "1914-06-28 Sarajevo.\n1914-07-28 Vienna declares war.\n1914-08-01 Berlin declares war.";
+    const later = reviewScriptedEvents(text, { currentDate: "1914-07-28" });
+    assert.equal(later.count, 1);
+    assert.deepEqual(later.ignored.map((entry) => [entry.line, entry.problem]), [
+        ["1914-06-28 Sarajevo.", "passed"],
+        ["1914-07-28 Vienna declares war.", "passed"],
+    ]);
+    const first = reviewScriptedEvents(text, { currentDate: "1914-07-28", includeOrigin: true });
+    assert.equal(first.count, 2);
+    assert.deepEqual(first.ignored.map((entry) => entry.line), ["1914-06-28 Sarajevo."]);
+    // Years before AD 1 compare as the engine compares them (scriptedBeatsInSpan).
+    assert.equal(reviewScriptedEvents("-0216-08-02 Cannae.", { currentDate: "-0218-03-01" }).count, 1);
+    assert.equal(reviewScriptedEvents("-0219-12-01 Too early.", { currentDate: "-0218-03-01" }).ignored[0]?.problem, "passed");
+    // No usable date to measure against: nothing is called passed.
+    assert.equal(reviewScriptedEvents(text, { currentDate: "" }).count, 3);
 });
 
 test("a beat is written when an event near its date shares its particular words", () => {

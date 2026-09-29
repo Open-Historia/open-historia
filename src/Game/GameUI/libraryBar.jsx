@@ -1587,6 +1587,8 @@ const EditorDrawer = ({
           scenarioFeatures={kind === "scenario" ? formState.features : formState.scenarioFeatures}
           onChange={(next) => onChange("features", next)}
           styles={{ actionButtonStyle, fieldLabelStyle, inputStyle }}
+          currentDate={formState.gameDate}
+          firstSkipAhead={kind === "scenario" || !(details?.data?.world?.simulationHistory?.length > 0)}
         />
       )}
 
