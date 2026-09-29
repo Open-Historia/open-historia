@@ -34,7 +34,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "../../runtime/scenarioSuggestion.js";
-import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
+import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailStatuses, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
 import { openHubSuggestions } from "../../../server/hubProvenance.js";
 import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
 import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
@@ -589,7 +589,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
         snapshotRef.current = snapshot;
         coverRef.current = snapshot.cover ? { base64: snapshot.cover.base64, contentType: snapshot.cover.contentType, hash: snapshot.cover.hash } : null;
         setSuggestion(next);
-        setStatuses(Object.fromEntries(next.changes.filter((change) => change.area === "details").map((change) => [change.id, detailChangeStatus(change, snapshot)])));
+        setStatuses(detailStatuses(next.changes, snapshot));
         setPhase("ready");
       } catch (nextError) {
         if (!alive) return;

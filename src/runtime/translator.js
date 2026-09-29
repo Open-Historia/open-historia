@@ -86,7 +86,6 @@ let learned = new Map();
 let pending = new Set();
 const missing = new Set();
 let inFlight = false;
-let stopped = false;
 let cooldownUntil = 0;
 let failureCount = 0;
 let observer = null;
@@ -362,7 +361,7 @@ const walkSubtree = (root) => {
 };
 
 const scan = () => {
-  if (stopped || !document.body) {
+  if (!document.body) {
     return;
   }
 
@@ -373,10 +372,6 @@ const scan = () => {
 };
 
 const scheduleScan = () => {
-  if (stopped) {
-    return;
-  }
-
   clearTimeout(scanTimer);
   scanTimer = setTimeout(scan, SCAN_DEBOUNCE_MS);
 };
@@ -385,7 +380,6 @@ const scheduleScan = () => {
 // panels open translated instead of flashing English; only new content waits
 // for the debounced scan and the AI round-trip.
 const handleMutations = (mutations) => {
-  if (stopped) return;
   runsThisPass.clear();
   for (const mutation of mutations) {
     if (mutation.type === "characterData") {
@@ -484,13 +478,13 @@ export const planTranslationBatch = (strings, { maxStrings = BATCH_MAX_STRINGS, 
 let batchStrings = BATCH_MAX_STRINGS;
 
 const processQueue = async () => {
-  if (inFlight || stopped || pending.size === 0 || Date.now() < cooldownUntil) {
+  if (inFlight || pending.size === 0 || Date.now() < cooldownUntil) {
     return;
   }
 
   inFlight = true;
   try {
-    while (pending.size > 0 && !stopped && Date.now() >= cooldownUntil) {
+    while (pending.size > 0 && Date.now() >= cooldownUntil) {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
       const batch = planTranslationBatch(pending, { maxStrings: batchStrings });
@@ -634,7 +628,6 @@ const collectContentStrings = async () => {
 
 const collectAndTranslate = async () => {
   await collectContentStrings();
-  if (stopped) return;
   if (pending.size > 10) {
     showProgress();
     updateProgress();
@@ -798,7 +791,6 @@ export const startTranslator = () => {
     // Server pack first (cheap, instant), then wait out the loading screen.
     await loadServerPack();
     await whenStartupScreenGone();
-    if (stopped) return;
 
     translatorActive = true;
     observer = new MutationObserver(handleMutations);
@@ -822,11 +814,3 @@ export const startTranslator = () => {
   })();
 };
 
-export const stopTranslator = () => {
-  stopped = true;
-  translatorActive = false;
-  observer?.disconnect();
-  clearTimeout(scanTimer);
-  progressEl?.remove();
-  progressEl = null;
-};

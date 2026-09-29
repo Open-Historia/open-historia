@@ -67,8 +67,6 @@ export const loadStatIndexDefinition = async (options) => {
   return { custom: rows.length > 0, rows };
 };
 
-export const loadStatIndexRows = async (options) => (await loadStatIndexDefinition(options)).rows;
-
 export {
   describeStatIndexRows,
   describeStatSheetDefinition,

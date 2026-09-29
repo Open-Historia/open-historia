@@ -242,7 +242,7 @@ const installListeners = () => {
   }
 };
 
-export const getRuntimeValue = (key) => (entries.has(key) ? entries.get(key).value : undefined);
+const getRuntimeValue = (key) => (entries.has(key) ? entries.get(key).value : undefined);
 
 export const getRuntimeSlice = (key, select) => {
   const value = getRuntimeValue(key);

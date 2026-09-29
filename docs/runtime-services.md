@@ -191,7 +191,6 @@ Puts the running game into the player's language. The full design (the three kin
 | Export | Purpose |
 |---|---|
 | `startTranslator()` | Called once from `src/main.jsx:24`. Syncs language from server (reload if changed), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
-| `stopTranslator()` | Disconnects the observer, clears timers, removes the progress pill |
 
 Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on change) → bail if `en` → `loadPromptTranslations()` (pack languages) → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectContentStrings()` (again on `oh:active-game-changed`) → show progress if >10 pending → `processQueue()`.
 
