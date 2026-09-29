@@ -57,6 +57,7 @@ import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimelin
 import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
+import { regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -4165,19 +4166,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     || COUNTRY_NAMES[clickedGid0]
                                     || clickedGid0;
                                 if (!source || source === owner) return;
-                                const catalog = await loadRegionCatalog();
-                                let count = 0;
-                                for (const region of catalog) {
-                                    const code = String(region.countryCode || "");
-                                    const effective = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
-                                    if (effective === source) {
-                                        overrides[region.id] = owner;
-                                        count += 1;
-                                    }
+                                // Each region's owner as the map shows it
+                                // (runtime/gmAnnex.js): a hand-drawn region carries
+                                // its owner by name and no country code, so the code
+                                // alone matched nothing and reported success.
+                                const held = regionsHeldBy(await loadRegionCatalog(), overrides, source);
+                                const count = held.length;
+                                if (count === 0) {
+                                    setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`);
+                                    return;
                                 }
-                                for (const [regionId, code] of Object.entries(world.regionOwnershipOverrides)) {
-                                    if (code === source) overrides[regionId] = owner;
-                                }
+                                for (const region of held) overrides[region.id] = owner;
                                 await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
                                 setStatus(`${nameOf(source)} annexed into ${nameOf(owner)} (${count} regions). The map updates within a few seconds.`);
