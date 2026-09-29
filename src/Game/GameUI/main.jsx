@@ -337,10 +337,6 @@ const Main = ({
     if (isCountryOpen) setShouldLoadCountry(true);
   }, [isCountryOpen]);
 
-  useEffect(() => {
-    localStorage.setItem("Fullscreen", JSON.stringify(isFullscreenEnabled));
-  }, [isFullscreenEnabled]);
-
   // The report header names the top of the Fallback list from the moment the
   // game loads; every later change to the list keeps it in step.
   useEffect(() => {

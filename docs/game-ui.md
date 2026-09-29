@@ -29,7 +29,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `advisorWidth` | `readAdvisorWidth()` | Drawer width in px, persisted (see [§5.1](#51-advisor-width-state)) |
 | `isForcesOpen` | `false` | Forces panel open (also opened from the Cheats panel) |
 | `activeBottomPanel` | `null` | Which bottom panel (`"chat"`, `"actions"`, `"skip"`, `"history"`) is open — single-slot, so opening one closes another |
-| `isFullscreenEnabled` | `false` | Mirrors the Fullscreen API state; persisted `localStorage["Fullscreen"]` |
+| `isFullscreenEnabled` | `false` | Mirrors the Fullscreen API state; not persisted, so a game always opens windowed |
 | `showWebGLWarning` | `false` | Set true if `checkWebGL()` fails on mount → renders `WebGLWarningPopup` |
 | `aiSetup` | `readAiSetup()` | `{ ready, provider }`: whether the Fallback list has an entry its provider can call, and the top entry's provider for the start-of-game prompt. Re-read on `ai:fallback-changed` |
 | `{ games, loaded }` | `useLibraryState()` | `hasNoGames = loaded && games.length === 0` gates the idle-diplomacy timer |
@@ -41,7 +41,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | WebGL probe | On mount, `checkWebGL()`; on failure shows the popup | `src/Game/GameUI/main.jsx:55` |
 | **Idle diplomacy drip** | Every 60 s, if the tab is visible and a game exists, lazy-imports `../AI/gameplay.js` and calls `maybeSendIdleDiplomacy()` | `src/Game/AI/gameplay.js`; drops a message into the diplomatic chat store unprompted |
 | Advisor lazy-load latch | `isAdvisorOpen` → `setShouldLoadAdvisor(true)` (one-way) | Keeps the Chart.js/markdown chunk out of first paint |
-| Fullscreen persist + sync | Writes `localStorage["Fullscreen"]`; listens `fullscreenchange`/`webkitfullscreenchange` | `toggleFullscreen()` probes prefixed APIs (mobile Safari safe) |
+| Fullscreen sync | Listens `fullscreenchange`/`webkitfullscreenchange` | `toggleFullscreen()` probes prefixed APIs (mobile Safari safe) |
 | AI header + setup | `syncAiDebugContext()` on mount; re-reads `aiSetup` whenever the Fallback list or a Connection changes | `src/Game/AI/providerConfig.js` |
 | Advisor-width resize guard | On window `resize`, re-clamps `advisorWidth` so a shrunk window never leaves the drawer wider than the viewport | — |
 
