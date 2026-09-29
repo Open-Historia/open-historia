@@ -45,6 +45,7 @@ import { groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtim
 import FeaturesSectionEditor from "./FeaturesSectionEditor.jsx";
 import StatsSheetEditor, { normalizeStatsEditorValue } from "./StatsSheetEditor.jsx";
 import InstitutionAuthoringPanel from "./InstitutionAuthoringPanel.jsx";
+import PrehistoryPanel from "./PrehistoryPanel.jsx";
 const PoliticalWorldGenerationPanel = lazy(() => import("./PoliticalWorldGenerationPanel.jsx"));
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../runtime/gameFeatures.js";
 import { flattenStatSheetRows, normalizeStatSheetDefinition, serializeStatSheet } from "../../runtime/statIndexDefinitions.js";
@@ -344,6 +345,7 @@ const editorSectionLabels = {
   assets: "Assets",
   bundles: "Bundles",
   features: "Features",
+  history: "Pre-history",
   overview: "Overview",
   politics: "Politics",
   prompts: "Prompts",
@@ -1348,7 +1350,7 @@ const EditorDrawer = ({
   const record = kind === "scenario" ? details.scenario : details.game;
   const visibleSections =
     kind === "scenario"
-      ? ["overview", "world", "politics", "stats", "features", "prompts", "assets", "bundles"]
+      ? ["overview", "world", "history", "politics", "stats", "features", "prompts", "assets", "bundles"]
       : ["overview", "world", "features", "prompts", "assets"];
   // Two fields to a row leave a phone under 140 px for each, too narrow for a
   // date or a font name, so there the fields stack.
@@ -1546,6 +1548,13 @@ const EditorDrawer = ({
             </div>
           </div>
         </div>
+      )}
+
+      {editorSection === "history" && kind === "scenario" && (
+        <PrehistoryPanel
+          details={details}
+          onDetailsChange={onDetailsChange}
+        />
       )}
 
       {editorSection === "politics" && kind === "scenario" && (

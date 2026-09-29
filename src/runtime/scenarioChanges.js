@@ -22,6 +22,7 @@ import { FEATURE_DEFINITIONS, normalizeFeatureSettings } from "../../server/game
 import { PROMPT_GUIDANCE, normalizePackGuidance } from "../Game/AI/promptGuidance.js";
 import { normalizeGroups } from "./groups.js";
 import { isCurrentCanonWorld } from "./scenarioCanon.js";
+import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { DEFAULT_SCENARIO_META, accentOrDefault } from "./web/storeConstants.js";
 import {
@@ -546,6 +547,9 @@ export const buildScenarioSnapshot = (bundle) => {
     prompts: flattenGuidance(data.prompts),
     stats: bundleAssetJson(assets.stats) ?? null,
     institutionLogos: bundleAssetJson(assets.institutionLogos) ?? null,
+    // The pre-history (scenarioPrehistory.js), or null when the scenario keeps
+    // none — which is not the same as an empty one: its games ask for none.
+    history: normalizeScenarioPrehistory(world.prehistory),
     cover: bundleAssetBinary(assets.cover),
     map: {
       regions,
@@ -673,6 +677,35 @@ const diffPolitics = (field, from, to, changes) => {
   }
 };
 
+// The pre-history: each event added, changed or removed is its own change,
+// found by its id; the summary, the prompt it was generated from and the Day-one
+// facts are one more, since they were written together and are read together.
+export const historySetupOf = (history) => (history
+  ? { prompt: history.prompt, summary: history.summary, updates: history.updates }
+  : null);
+const diffHistory = (from, to, changes) => {
+  if (!from && !to) return;
+  const before = new Map((from?.events ?? []).map((event) => [event.id, event]));
+  const after = new Map((to?.events ?? []).map((event) => [event.id, event]));
+  const push = (key, op, event, a, b) => changes.push({
+    id: `history:event:${key}`, area: "details", kind: "history", part: "event", entry: key, label: clean(event?.title) || key, op, from: a, to: b,
+  });
+  for (const [key, event] of after) {
+    if (!before.has(key)) push(key, "add", event, null, event);
+    else if (!sameValue(before.get(key), event)) push(key, "change", event, before.get(key), event);
+  }
+  for (const [key, event] of before) {
+    if (!after.has(key)) push(key, "remove", event, event, null);
+  }
+  const setupFrom = historySetupOf(from);
+  const setupTo = historySetupOf(to);
+  // A record appearing is a change even when it is empty: its games stop
+  // asking for a backstory.
+  if (Boolean(setupFrom) !== Boolean(setupTo) || canonicalJson(setupFrom) !== canonicalJson(setupTo)) {
+    changes.push({ id: "history:setup", area: "details", kind: "history", part: "setup", entry: null, from: setupFrom, to: setupTo });
+  }
+};
+
 const diffDetails = (base, next, changes) => {
   for (const key of META_FIELDS) {
     if (!sameValue(base.meta[key], next.meta[key])) {
@@ -715,6 +748,7 @@ const diffDetails = (base, next, changes) => {
     }
   }
   for (const field of POLITICS_FIELDS) diffPolitics(field, base.politics[field], next.politics[field], changes);
+  diffHistory(base.history, next.history, changes);
   if (!sameValue(base.stats, next.stats)) {
     changes.push({ id: "stats", area: "details", kind: "stats", from: base.stats, to: next.stats });
   }
@@ -1152,6 +1186,9 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   if (fields.length > 6) lines.push(`${fields.length - 6} more settings changed`);
   const politics = list.filter((change) => change.kind === "politics").length;
   if (politics) lines.push(`${plural(politics, "Politics entry", "Politics entries")} changed`);
+  const historyEvents = list.filter((change) => change.kind === "history" && change.part === "event").length;
+  if (historyEvents) lines.push(`${plural(historyEvents, "pre-history event", "pre-history events")} changed`);
+  if (list.some((change) => change.kind === "history" && change.part === "setup")) lines.push("Pre-history summary or Day-one facts changed");
   if (byKind.stats) lines.push("Stats sheet changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);

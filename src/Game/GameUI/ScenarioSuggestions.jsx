@@ -163,6 +163,11 @@ export const describeDetailChange = (change) => {
     return { tab: area === "meta" ? "Overview" : "World", title: DETAIL_FIELD_LABELS[key] || rest[0], detail: "" };
   }
   if (change.kind === "politics") return { tab: "Politics", title: POLITICS_FIELD_LABELS[change.field] || change.field, detail: change.label || "" };
+  if (change.kind === "history") {
+    return change.part === "setup"
+      ? { tab: "Pre-history", title: "Summary and Day-one facts", detail: "" }
+      : { tab: "Pre-history", title: "Pre-history event", detail: change.label || "" };
+  }
   if (change.kind === "stats") return { tab: "Stats", title: "National Stats sheet", detail: "" };
   if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
   if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
@@ -287,7 +292,7 @@ const DetailValue = ({ change, coverBefore }) => {
   if (change.kind === "stats") {
     return <div style={quietTextStyle}>{statsSummary(change.from)} → {statsSummary(change.to)}</div>;
   }
-  if (change.kind === "politics") {
+  if (change.kind === "politics" || change.kind === "history") {
     const text = change.op === "add" ? "Added" : change.op === "remove" ? "Removed" : "Changed";
     // Which fields of the entry changed, the way tracked changes show a word;
     // for a value changed whole (the canon context), its fields, a new one's

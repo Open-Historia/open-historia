@@ -93,6 +93,9 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "regionSovereigntyOverrides",
   "simulationRules",
   "startingTimelineText",
+  // The scenario's pre-history (src/runtime/scenarioPrehistory.js): applied by
+  // the game the first time it is opened, then dropped from its world.
+  "prehistory",
 ];
 
 export const SUPPORTED_IMAGE_CONTENT_TYPES = new Set([

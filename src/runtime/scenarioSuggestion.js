@@ -41,7 +41,7 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
 const KNOWN_KINDS = new Set([
-  "field", "politics", "stats", "institutionLogos", "cover",
+  "field", "politics", "history", "stats", "institutionLogos", "cover",
   "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
   "group-add", "group-remove", "group-change",
@@ -65,6 +65,7 @@ const validChange = (change) => isRecord(change)
   && (change.area === "details" || change.area === "map")
   && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
   && (change.kind !== "politics" || validPoliticsChange(change))
+  && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && validPoliticsChange({ entry: change.entry })))
   && (change.kind !== "borders" || Array.isArray(change.regions));
 
 export const normalizeSuggestion = (raw) => {

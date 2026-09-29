@@ -1525,7 +1525,9 @@ export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames
 // `regionListsViaTools`: the task has the lookup functions (lookupTools.js),
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
-export const buildWorldSummary = async (bundle, regionCatalog = null, { regionListsViaTools = false } = {}) => {
+// `nationTags`: the map's own tags, for a map that is not the active game's
+// (buildPromptContext's mapSource).
+export const buildWorldSummary = async (bundle, regionCatalog = null, { regionListsViaTools = false, nationTags = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
@@ -1563,7 +1565,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
   // without any rule saying so. Capped at 40 countries for prompt budget; drop
   // whole countries rather than truncate one list, since "- SOV: socialist," reads
   // as corrupt data to the model.
-  const baseTags = await getNationTags().catch(() => ({}));
+  const baseTags = nationTags ?? await getNationTags().catch(() => ({}));
   const tagged = resolveAllCountryTags(baseTags, world);
   const taggedCodes = Object.keys(tagged);
   const tagSummary = taggedCodes.length === 0
@@ -1669,6 +1671,9 @@ export const buildPromptContext = async (bundle, {
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
+  // A map that is not the active game's — a scenario's, in the Workshop
+  // (gameplay.js generateScenarioPrehistory): { regionCatalog, nationTags }.
+  mapSource = null,
   requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
@@ -1701,11 +1706,11 @@ export const buildPromptContext = async (bundle, {
     "playerPolityRegions",
     "numberOfRegions",
   );
-  const regionCatalog = needsRegionCatalog ? await loadRegions() : [];
+  const regionCatalog = needsRegionCatalog ? (mapSource?.regionCatalog ?? await loadRegions()) : [];
 
   let worldSummary = "";
   if (wants("worldSummary", "worldSummaryNoCity")) {
-    worldSummary = await buildWorldSummary(bundle, regionCatalog, { regionListsViaTools: lookups });
+    worldSummary = await buildWorldSummary(bundle, regionCatalog, { regionListsViaTools: lookups, nationTags: mapSource?.nationTags ?? null });
   }
 
   if (wants("citiesSummary")) {

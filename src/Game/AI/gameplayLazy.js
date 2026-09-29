@@ -34,6 +34,7 @@ export const simulateAutoJump = async (...args) => (await gameplay()).simulateAu
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
 export const maybeGeneratePregameHistory = async (...args) => (await gameplay()).maybeGeneratePregameHistory(...args);
+export const generateScenarioPrehistory = async (...args) => (await gameplay()).generateScenarioPrehistory(...args);
 
 // --- Rollback ---------------------------------------------------------------
 export const loadRollbackSnapshots = async (...args) => (await gameplay()).loadRollbackSnapshots(...args);

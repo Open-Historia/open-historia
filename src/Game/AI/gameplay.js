@@ -4,6 +4,12 @@ import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
+import {
+  normalizePrehistoryEvent,
+  normalizeScenarioPrehistory,
+  prehistoryPayload,
+  PREHISTORY_UPDATE_FAMILIES,
+} from "../../runtime/scenarioPrehistory.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
 import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { PLAYER_GROUP_JUMP_RULE, describeGroupsForPrompt, describePlayerGroupForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
@@ -182,6 +188,7 @@ import {
   loadCountryNames,
   loadRegionCatalog,
   loadScenarioRegionCatalog,
+  buildRegionCatalogForMap,
   primeCustomRegionCatalog,
   primeCustomRegionCatalogEntries,
   readJson,
@@ -1553,21 +1560,21 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
 // is, and the regions it controls, by name with the id a groupOps entry copies.
 // Empty when the world has none, so a game without groups pays nothing.
-const buildGroupsContext = async (worldLike) => {
+const buildGroupsContext = async (worldLike, { regionCatalog = null } = {}) => {
   if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
   const world = normalizeWorldState(worldLike);
   if (!Object.keys(world.groups).length) return "";
-  const catalog = await loadRegionCatalog().catch(() => []);
+  const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
   const names = new Map(catalog.map((region) => [region.id, region.name]));
   return describeGroupsForPrompt(world, { regionName: (id) => names.get(id) || id });
 };
 
 // When the player leads a group rather than a country (runtime/groups.js
 // playerGroupKey): what it is, where it holds. Empty for a country.
-const buildPlayerGroupContext = async (worldLike, playerName) => {
+const buildPlayerGroupContext = async (worldLike, playerName, { regionCatalog = null } = {}) => {
   if (!worldLike?.groups || !normalizeString(playerName)) return "";
   const world = normalizeWorldState(worldLike);
-  const catalog = await loadRegionCatalog().catch(() => []);
+  const catalog = regionCatalog ?? await loadRegionCatalog().catch(() => []);
   const names = new Map(catalog.map((region) => [region.id, region.name]));
   return describePlayerGroupForPrompt(world, playerName, { regionName: (id) => names.get(id) || id });
 };
@@ -1696,7 +1703,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   let demand = null;
   if (explicitRequiredKeys == null && taskKey) {
     try {
-      const prompts = await loadPromptCatalog();
+      const prompts = options?.promptPack ?? await loadPromptCatalog();
       const promptTemplate = taskKey === "gameMaster" ? NATIVE_GAME_MASTER_PROMPT : prompts.tasks[taskKey];
       if (promptTemplate) {
         demand = resolveTemplateVariableDemand({
@@ -1745,8 +1752,8 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
-  variables.groupsContext = await buildGroupsContext(bundle.world);
-  variables.playerGroupContext = await buildPlayerGroupContext(bundle.world, bundle.game?.country);
+  variables.groupsContext = await buildGroupsContext(bundle.world, { regionCatalog: options?.mapSource?.regionCatalog });
+  variables.playerGroupContext = await buildPlayerGroupContext(bundle.world, bundle.game?.country, { regionCatalog: options?.mapSource?.regionCatalog });
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -1882,9 +1889,9 @@ const lookupFunctionsEnabled = () => !savingRequests() && getMapSettingDefaultOn
 // default, and it is passed on explicitly rather than left to a blank. A surface
 // that speaks AS a polity must pass a viewer here: chat_history, spy_network and
 // list_projects answer from material a government keeps to itself.
-const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE } = {}) => {
+const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE, mapSource = null } = {}) => {
   if (!lookupFunctionsEnabled()) return null;
-  const context = lazyLookupContext(bundle, { audience });
+  const context = lazyLookupContext(bundle, { audience, mapSource });
   return {
     tools: LOOKUP_TOOLS,
     ...(Number.isInteger(maxRounds) ? { maxRounds } : {}),
@@ -1896,7 +1903,9 @@ const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE } 
 // buildLookupContext), built on first use. The lookup functions answer from it
 // when the model asks; placesNamedIn answers from it before anyone has to — which
 // is the only way it is used while requests are being saved.
-function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
+// `mapSource`: a map that is not the active game's ({ regionCatalog,
+// regionsGeojson, citiesGeojson }), for a scenario in the Workshop.
+function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, mapSource = null } = {}) {
   let contextPromise = null;
   return () => {
     if (!contextPromise) {
@@ -1906,11 +1915,13 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
         // the rendered geojson (already parsed once for the map, shared here
         // rather than cloned) adds the polygons that place cities and, failing
         // declared adjacencies, find neighbours.
-        const [catalogRows, renderedGeojson, citiesGeojson] = await Promise.all([
-          loadRegionCatalog().catch(() => []),
-          readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null),
-          readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null),
-        ]);
+        const [catalogRows, renderedGeojson, citiesGeojson] = mapSource
+          ? [normalizeArray(mapSource.regionCatalog), mapSource.regionsGeojson ?? null, mapSource.citiesGeojson ?? null]
+          : await Promise.all([
+            loadRegionCatalog().catch(() => []),
+            readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null),
+            readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null),
+          ]);
         const geometryById = new Map();
         for (const feature of normalizeArray(renderedGeojson?.features)) {
           const props = feature?.properties ?? {};
@@ -2489,8 +2500,8 @@ const PLAYER_GROUP_TASKS = new Set([
   "interactiveSummary", "idleDiplomacy", "gameMaster",
 ]);
 
-const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true } = {}) => {
-  const prompts = await loadPromptCatalog();
+const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true, promptPack = null } = {}) => {
+  const prompts = promptPack ?? await loadPromptCatalog();
   const statSheetDefinition = STAT_INDEX_CONTEXT_TASKS.has(taskKey)
     ? await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }))
     : null;
@@ -3047,8 +3058,11 @@ const runJsonTask = async (taskKey, {
   // gameplay leaves both unset.
   forceEntryId = "",
   capture = null,
+  // The prompt pack, when it is not the active game's: a scenario's, for a task
+  // run in the Workshop (generateScenarioPrehistory).
+  promptPack = null,
 }) => {
-  const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups });
+  const { prompts, promptTemplate, staticPromptPrefix, systemPrompt, statContract } = await buildTaskSystemPrompt(taskKey, { variables, lookups, promptPack });
   const { customFullStatSheet, customStatRows, statIndexRows, statIndexKeys, customStatIndices } = statContract;
   if (capture && typeof capture === "object") {
     capture.taskKey = taskKey;
@@ -13277,7 +13291,6 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             requests: state.requests,
             actions: bundle.actions,
             playerCountry: bundle.game.country,
-            actions: bundle.actions,
           });
           if (worldChangeError) return worldChangeError;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
@@ -16282,7 +16295,9 @@ const validatePregameEvents = (candidate, { startDate, strict }) => {
 // ---- Round-zero ledger bootstrap --------------------------------------------
 // The polities the pre-game bootstrap may name in structured ledger records:
 // every current owner on the map plus every registered polity, canonicalised.
-const buildCurrentCanonicalPolityVocabulary = async (world) => {
+// `regionsGeojson`: a map's own regions file, when it is not the active game's
+// (null: the map has none, and the stock catalog is read).
+const buildCurrentCanonicalPolityVocabulary = async (world, { regionsGeojson } = {}) => {
   const normalizedWorld = normalizeWorldState(world);
   const tokens = new Set();
   const collect = (token) => {
@@ -16298,7 +16313,9 @@ const buildCurrentCanonicalPolityVocabulary = async (world) => {
   for (const owner of Object.values(normalizedWorld.regionOwnershipOverrides || {})) collect(owner);
   for (const owner of Object.values(normalizedWorld.regionSovereigntyOverrides || {})) collect(owner);
 
-  const scenarioRegions = await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
+  const scenarioRegions = regionsGeojson !== undefined
+    ? regionsGeojson
+    : await readJson(JSON_URLS.regionsGeojson, { defaultValue: null }).catch(() => null);
   const scenarioFeatures = normalizeArray(scenarioRegions?.features);
   if (scenarioFeatures.length > 0) {
     for (const feature of scenarioFeatures) {
@@ -16627,13 +16644,74 @@ const validatePregameCanonicalBootstrap = (
   });
 };
 
-// A fresh game whose scenario wrote a "World Before Round One" briefing gets
-// its backstory generated once, the first time the player opens it: the
-// briefing (plus rules and map) becomes real timeline events dated before the
-// start. Deliberately NOT applySimulationResult — the clock must stay at the
-// start date, round must stay 1, and backstory events carry no impacts (the
-// scenario's world already reflects them). The simulationHistory entry it
-// writes doubles as the done-marker, so it can never run twice.
+// The request a pre-game history is: the backstory before the start date and
+// the Round-One bootstrap of the war and diplomacy ledgers, in one validated
+// answer. Asked by a game whose scenario has no pre-history of its own (made
+// before scenarios kept one), and by the Workshop for a scenario
+// (generateScenarioPrehistory), which passes the scenario's prompt pack, its
+// map (mapSource) and the designer's prompt.
+const requestPregameHistoryPayload = async (bundle, {
+  startDate,
+  promptPack = null,
+  mapSource = null,
+  designerPrompt = "",
+  signal,
+} = {}) => {
+  // The backstory now doubles as the round-zero bootstrap of the war and
+  // diplomacy ledgers: a campaign that opens mid-war starts with that war on
+  // the books, and a standing alliance is a fact from day one.
+  const canonicalPolities = await buildCurrentCanonicalPolityVocabulary(bundle.world, mapSource ? { regionsGeojson: mapSource.regionsGeojson ?? null } : {});
+  const variables = {
+    ...(await buildTemplateVariables(bundle, {
+      lookups: true,
+      // The Workshop builds only what the task's template reads, from the
+      // scenario's own pack; a game builds the whole context, as it always has.
+      ...(promptPack ? { taskKey: "pregameHistory", promptPack } : {}),
+      ...(mapSource ? { mapSource } : {}),
+    })),
+    pregameStartDate: startDate,
+    pregameCanonicalPolityVocabulary: canonicalPolities.length
+      ? canonicalPolities.map((name) => `- ${name}`).join("\n")
+      : "No current polity vocabulary was available.",
+  };
+  const designer = normalizeString(designerPrompt);
+  const { payload } = await runJsonTask("pregameHistory", {
+    lookups: buildTaskLookups(bundle, mapSource ? { mapSource } : {}),
+    // Asked once per campaign, and every ledger the campaign runs on is seeded
+    // from it: a bootstrap that left out a war is worth one more request to get
+    // right, where a single turn is not (requestBudget.js).
+    strictFirst: true,
+    ...(promptPack ? { promptPack } : {}),
+    ...(signal ? { signal } : {}),
+    userMessage: `Write the pre-game historical timeline AND the canonical Round-One bootstrap for ${startDate} as JSON only. ` +
+      "Put every war, bilateral relation, formal agreement and unresolved non-war storyline already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
+      "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A relation or standing agreement does NOT need its own event card merely to exist; include historical events because they are important timeline anchors, not as bookkeeping padding." +
+      (designer
+        ? `\n\nThe scenario designer's instructions for this backstory — follow them wherever they do not break the rules above: ${designer}`
+        : ""),
+    validatePayload: (candidate, { finalAttempt } = {}) =>
+      validatePregameCanonicalBootstrap(candidate, {
+        world: bundle.world,
+        startDate,
+        strict: !finalAttempt,
+        canonicalPolities,
+      }),
+    variables,
+  });
+  return payload;
+};
+
+// A fresh game's backstory, once, the first time the player opens it: real
+// timeline events dated before the start, and the Round-One wars, relations,
+// agreements, subordinations and storylines. It comes from the scenario
+// (world.prehistory, runtime/scenarioPrehistory.js), written or generated in
+// the Workshop, and costs no request; a game whose scenario has none — one made
+// before scenarios kept a pre-history — but wrote a "World Before Round One"
+// briefing asks the model for it, as every game used to. Deliberately NOT
+// applySimulationResult — the clock must stay at the start date, round must
+// stay 1, and backstory events carry no impacts (the scenario's world already
+// reflects them). The simulationHistory entry it writes doubles as the
+// done-marker, so it can never run twice.
 export const maybeGeneratePregameHistory = async () => {
   if (isSimulationBusy()) return null;
   // Issue #724: take the lock before the first read, not after it. It used to
@@ -16645,42 +16723,26 @@ export const maybeGeneratePregameHistory = async () => {
   beginSimulation();
   try {
     const bundle = await readGameStateBundle({ force: true });
+    // The scenario's own, when it kept one: even an empty one is the
+    // designer's choice of no backstory, and nothing is asked for.
+    const stored = normalizeScenarioPrehistory(bundle.world.prehistory);
     const briefing = normalizeString(bundle.world.startingTimelineText);
-    if (!briefing) return null;
+    if (!stored && !briefing) return null;
     if (normalizeEvents(bundle.events).length > 0) return null;
     if ((normalizeWorldState(bundle.world).simulationHistory ?? []).length > 0) return null;
     const startDate = normalizeString(bundle.game.startDate || bundle.game.gameDate);
     if (!startDate) return null;
 
-    // The backstory now doubles as the round-zero bootstrap of the war and
-    // diplomacy ledgers: a campaign that opens mid-war starts with that war on
-    // the books, and a standing alliance is a fact from day one.
-    const canonicalPolities = await buildCurrentCanonicalPolityVocabulary(bundle.world);
-    const variables = {
-      ...(await buildTemplateVariables(bundle, { lookups: true })),
-      pregameStartDate: startDate,
-      pregameCanonicalPolityVocabulary: canonicalPolities.length
-        ? canonicalPolities.map((name) => `- ${name}`).join("\n")
-        : "No current polity vocabulary was available.",
-    };
-    const { payload } = await runJsonTask("pregameHistory", {
-      lookups: buildTaskLookups(bundle),
-      // Asked once per campaign, and every ledger the campaign runs on is seeded
-      // from it: a bootstrap that left out a war is worth one more request to get
-      // right, where a single turn is not (requestBudget.js).
-      strictFirst: true,
-      userMessage: `Write the pre-game historical timeline AND the canonical Round-One bootstrap for ${startDate} as JSON only. ` +
-        "Put every war, bilateral relation, formal agreement and unresolved non-war storyline already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
-        "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A relation or standing agreement does NOT need its own event card merely to exist; include historical events because they are important timeline anchors, not as bookkeeping padding.",
-      validatePayload: (candidate, { finalAttempt } = {}) =>
-        validatePregameCanonicalBootstrap(candidate, {
-          world: bundle.world,
-          startDate,
-          strict: !finalAttempt,
-          canonicalPolities,
-        }),
-      variables,
-    });
+    let payload;
+    let source;
+    if (stored) {
+      payload = prehistoryPayload(stored, { startDate });
+      if (!payload) return null;
+      source = "scenario";
+    } else {
+      payload = await requestPregameHistoryPayload(bundle, { startDate });
+      source = "ai";
+    }
 
     // The player may have switched games while this generated — the runtime
     // endpoints follow the ACTIVE game, so re-verify the same fresh game is
@@ -16699,7 +16761,8 @@ export const maybeGeneratePregameHistory = async () => {
       .map((entry, index) =>
         normalizeGeneratedEvent({ ...entry, impacts: undefined, source: "pregame" }, index))
       .filter(Boolean);
-    if (generatedEvents.length === 0) return null;
+    // A scenario's pre-history may be Day-one facts alone; an answer never is.
+    if (generatedEvents.length === 0 && source !== "scenario") return null;
 
     // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
     // backstory events and merge them into the world the game starts on. The
@@ -16757,11 +16820,15 @@ export const maybeGeneratePregameHistory = async () => {
         plannedActions: [],
         round: 1,
         summary,
-        source: "ai",
+        source,
         storylineIds: [...storylineMerge.appliedIds],
         toDate: startDate,
       },
     ];
+    // The scenario's record has done its work: the events and the ledgers are
+    // the game's now, and the world file every panel polls need not carry a
+    // second copy of them.
+    delete bootstrapWorld.prehistory;
     await Promise.all([
       writeEventsState(bootstrapEvents),
       writeWorldState(bootstrapWorld),
@@ -16774,6 +16841,56 @@ export const maybeGeneratePregameHistory = async () => {
   } finally {
     endSimulation();
   }
+};
+
+// A scenario's pre-history, generated in the Workshop's Pre-history tab from
+// the designer's prompt (runtime/scenarioPrehistory.js): the same task and
+// validator a game used to run when it opened, against the scenario rather than
+// the active game — its world, start date and prompt pack, and its own map
+// (the assets the tab downloads: regions, cities, tags). Nothing is written;
+// the tab shows the result to edit and saves it. One request, two when the
+// strict first answer is refused.
+export const generateScenarioPrehistory = async ({
+  details,
+  prompt = "",
+  assets = {},
+  signal,
+} = {}) => {
+  const world = details?.data?.world && typeof details.data.world === "object" ? details.data.world : {};
+  const game = details?.data?.game && typeof details.data.game === "object" ? details.data.game : {};
+  const startDate = normalizeString(game.startDate || game.gameDate);
+  if (!parseIsoDate(startDate)) throw new Error("The scenario needs a start date before its pre-history can be generated.");
+  const regionsGeojson = assets?.regionsGeojson && Array.isArray(assets.regionsGeojson.features) ? assets.regionsGeojson : null;
+  const mapSource = {
+    regionCatalog: await buildRegionCatalogForMap(regionsGeojson),
+    regionsGeojson,
+    citiesGeojson: assets?.citiesGeojson && Array.isArray(assets.citiesGeojson.features) ? assets.citiesGeojson : null,
+    nationTags: assets?.tags && typeof assets.tags === "object" && !Array.isArray(assets.tags) ? assets.tags : {},
+  };
+  // The scenario as a game would open on it: round one, no events, no chats.
+  const scenarioWorld = { ...world };
+  delete scenarioWorld.prehistory;
+  const bundle = {
+    actions: [],
+    chats: [],
+    events: [],
+    game: { ...game, gameDate: startDate, startDate, round: 1 },
+    world: scenarioWorld,
+  };
+  const payload = await requestPregameHistoryPayload(bundle, {
+    startDate,
+    promptPack: normalizePromptPack(details?.data?.prompts ?? {}),
+    mapSource,
+    designerPrompt: prompt,
+    signal,
+  });
+  return normalizeScenarioPrehistory({
+    prompt,
+    summary: normalizeString(payload?.summary),
+    generatedAt: new Date().toISOString(),
+    events: normalizeArray(payload?.events).map((entry) => normalizePrehistoryEvent(entry)).filter(Boolean),
+    updates: Object.fromEntries(PREHISTORY_UPDATE_FAMILIES.map((family) => [family, normalizeArray(payload?.[family])])),
+  });
 };
 
 // ---- Idle diplomacy drip ----------------------------------------------------
