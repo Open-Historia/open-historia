@@ -92,7 +92,7 @@ const route = async (request, url) => {
     }));
   }
 
-  const ctx = { method, url, segments, query: url.searchParams, rangeHeader, ...(await readBody(request, isAssetUpload(domain, segments, method))) };
+  const ctx = { method, url, segments, query: url.searchParams, rangeHeader, prefer: request.headers.get("Prefer"), ...(await readBody(request, isAssetUpload(domain, segments, method))) };
 
   if (domain === "mapeditor") {
     const response = await handleMapEditor(ctx);

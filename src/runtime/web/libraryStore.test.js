@@ -358,6 +358,30 @@ test("writing game.json keeps a polity key that looks like a stock country code"
   assert.deepEqual(ok(await runtime("GET", "colors")), { USA: [4, 5, 6] });
 });
 
+test("a runtime read or write never rebuilds the library catalogs", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "import", scenarioBundle("Own Map"))).scenario.id;
+  await newGame("Quiet", { scenarioId });
+  getAllLog.length = 0;
+  ok(await runtime("GET", "world"));
+  ok(await runtime("GET", "regionsGeojson"));
+  const echoed = ok(await runtime("PUT", "world", { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } }));
+  assert.equal(echoed.customRegions, true, "the echo is still the served, normalised world");
+  assert.deepEqual(getAllLog, []);
+});
+
+test("a runtime write that asks for no reply gets none", async () => {
+  await reset();
+  await newGame("Minimal");
+  const response = await store.handleRuntimeJson({
+    method: "PUT", segments: ["json", "snapshots"], body: [SNAPSHOT], prefer: "return=minimal",
+  });
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("Preference-Applied"), "return=minimal");
+  assert.equal(await response.text(), "");
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },

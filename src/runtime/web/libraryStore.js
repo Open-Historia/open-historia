@@ -437,7 +437,15 @@ const getGameDetails = async (id) => {
 };
 
 // --- Active-game / scenario resolution (runtime) --------------------------
+// Straight from the manifest when it names a game that exists: one kv read and
+// one record read. Building the game catalog to learn the id rebuilt both
+// catalogs (meta reconcile, usage counts, cover URLs) on every runtime read and
+// write. The catalog is only the fallback, for a manifest naming nothing; it
+// picks the same game and repairs the manifest.
 const getActiveGameRecord = async () => {
+  const { activeGameId } = await getGameManifest();
+  const record = activeGameId ? await getGame(activeGameId) : null;
+  if (record) return record;
   const catalog = await getGameCatalog();
   const id = catalog.games.find((g) => g.id === catalog.activeGameId)?.id ?? catalog.games[0]?.id;
   return id ? getGame(id) : null;
@@ -447,8 +455,10 @@ const getSelectedScenarioRecord = async () => {
   const id = catalog.scenarios.find((s) => s.id === catalog.selectedScenarioId)?.id ?? catalog.scenarios[0]?.id;
   return id ? getScenario(id) : null;
 };
-const getActiveRuntimeScenarioRecord = async () => {
-  const activeGame = await getActiveGameRecord();
+// `known`: the active game record when the caller already holds it (null for
+// "there is none"), so it is not loaded again.
+const getActiveRuntimeScenarioRecord = async (known) => {
+  const activeGame = known === undefined ? await getActiveGameRecord() : known;
   const scenarioId = activeGame ? readGameMeta(activeGame.id, activeGame.meta).scenarioId : DEFAULT_SCENARIO_ID;
   return (await getScenario(scenarioId)) ?? (await getScenario(DEFAULT_SCENARIO_ID));
 };
@@ -601,15 +611,18 @@ const ensureOwnerSchema = (record, kind) => {
 };
 
 // --- Runtime JSON read/write (mirror readRuntimeJsonAsset/writeRuntimeJsonAsset) ---
-const readRuntimeJsonAsset = async (assetKey) => {
+// The active game is loaded once per read and handed down: it can hold a dozen
+// full-world restore points, and each load deserialises all of them. `known` is
+// the record when the caller already holds it (the write path, which just put it).
+const readRuntimeJsonAsset = async (assetKey, known) => {
+  const activeGame = (known === undefined ? await getActiveGameRecord() : known) ?? null;
   // Above the geojson branch: it returns before anything else runs, and it is the
   // branch that serves the file `owner` physically lives in.
-  const activeForMigration = await getActiveGameRecord();
-  if (activeForMigration && ensureOwnerSchema(activeForMigration, "game")) {
-    await idbPut(STORES.games, activeForMigration);
+  if (activeGame && ensureOwnerSchema(activeGame, "game")) {
+    await idbPut(STORES.games, activeGame);
   }
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) {
-    const scenario = await getActiveRuntimeScenarioRecord();
+    const scenario = await getActiveRuntimeScenarioRecord(activeGame);
     // The scenario owns its geometry; migrate it as its OWN record.
     if (scenario && ensureOwnerSchema(scenario, "scenario")) await idbPut(STORES.scenarios, scenario);
     let value = scenario?.geojson?.[assetKey];
@@ -643,8 +656,6 @@ const readRuntimeJsonAsset = async (assetKey) => {
     return parseJsonValue(value, cloneJson(EMPTY_FEATURE_COLLECTION));
   }
 
-  const activeGame = await getActiveGameRecord();
-
   // Scenario-authored Stats sheet definitions are canonical while the linked
   // scenario exists. Games own the generated VALUES (world.countryStats and
   // customStats), not the schema that says which rows the scenario tracks.
@@ -664,13 +675,13 @@ const readRuntimeJsonAsset = async (assetKey) => {
     const value = coerceRuntimeValue(assetKey, gameValue);
     let scenarioCustomGeometry;
     if (assetKey === "world" && value?.customGeometry == null) {
-      const scenario = await getActiveRuntimeScenarioRecord();
+      const scenario = await getActiveRuntimeScenarioRecord(activeGame);
       scenarioCustomGeometry = scenario?.json?.world?.customGeometry ?? inferRecordCustomGeometry(scenario);
     }
     return normalizeRuntimeWorld(assetKey, value, scenarioCustomGeometry);
   }
 
-  const scenario = await getActiveRuntimeScenarioRecord();
+  const scenario = await getActiveRuntimeScenarioRecord(activeGame);
   const scenarioValue = scenario ? runtimeValueFromRecord(scenario, assetKey, /*scenarioScope*/ true) : undefined;
   if (scenarioValue !== undefined) {
     const value = coerceRuntimeValue(assetKey, scenarioValue);
@@ -808,8 +819,8 @@ const writeRuntimeTurnState = (payload) => serializeWrite(async () => {
 // concurrently they each read the record before any has written, and the last to
 // finish restores its stale copy of the other five — which is how the new game
 // date got reverted on the website but never in the app. See writeQueue.js.
-const writeRuntimeJsonAsset = (assetKey, value) =>
-  serializeWrite(() => writeRuntimeJsonAssetLocked(assetKey, value));
+const writeRuntimeJsonAsset = (assetKey, value, options) =>
+  serializeWrite(() => writeRuntimeJsonAssetLocked(assetKey, value, options));
 
 // Custom region and city geometry belongs to the scenario, and the read resolves
 // it there. The write rejected these keys as unsupported, so on the website a
@@ -849,7 +860,7 @@ const runtimeWorldOf = async (activeGame) => {
   return scenario?.json?.world ?? null;
 };
 
-const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
+const writeRuntimeJsonAssetLocked = async (assetKey, value, { readBack = true } = {}) => {
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) return writeRuntimeScenarioGeojson(assetKey, value);
   if (!JSON_ASSET_KEYS.includes(assetKey) && !OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) && !RUNTIME_ONLY_JSON_ASSET_KEYS.includes(assetKey)) {
     throw new Error(`Unsupported JSON asset key: ${assetKey}`);
@@ -872,7 +883,9 @@ const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
   else activeGame.json = { ...activeGame.json, [assetKey]: canonical };
   writeGameMeta(activeGame, {});
   await putGame(activeGame);
-  return readRuntimeJsonAsset(assetKey);
+  // The reply is read from the record just put rather than loaded again, and not
+  // built at all when the writer asked for none (see handleRuntimeJson).
+  return readBack ? readRuntimeJsonAsset(assetKey, activeGame) : null;
 };
 
 // --- Scenario mutations ---------------------------------------------------
@@ -1960,12 +1973,21 @@ export const handleRuntimeTurnCommit = async ({ method, body }) => {
   }
 };
 
-export const handleRuntimeJson = async ({ method, segments, body }) => {
+export const handleRuntimeJson = async ({ method, segments, body, prefer }) => {
   const key = segments[1] ? decodeURIComponent(segments[1]) : null;
   if (!key) return null;
   try {
     if (method === "GET") return jsonResponse(await readRuntimeJsonAsset(key));
-    if (method === "PUT") return jsonResponse(await writeRuntimeJsonAsset(key, body ?? {}));
+    if (method === "PUT") {
+      // Prefer: return=minimal (RFC 7240), as server.js honours it: the rollback
+      // archive is written whole every turn and nothing needs it echoed, so do
+      // not read it back and serialise it only for the page to discard.
+      if (/\breturn=minimal\b/i.test(String(prefer ?? ""))) {
+        await writeRuntimeJsonAsset(key, body ?? {}, { readBack: false });
+        return new Response(null, { status: 204, headers: { "Cache-Control": "no-store", "Preference-Applied": "return=minimal" } });
+      }
+      return jsonResponse(await writeRuntimeJsonAsset(key, body ?? {}));
+    }
     return null;
   } catch (error) {
     return errorResponse(error.message, method === "GET" ? 404 : 400);
