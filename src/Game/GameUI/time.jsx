@@ -2568,7 +2568,7 @@ const DateWidget = ({
     // and the ones after it, the board call, or the failed checks. What was
     // already generated is not regenerated — on a slow model that is the
     // difference between seconds and minutes. `withoutFailedChecks` (checks
-    // only) takes the turn as the failed checks left it, asking nothing again.
+    // only) takes the turn as the failed checks left it, asking no check again.
     const retryHeld = async ({ withoutFailedChecks = false } = {}) => {
         if (isRetryingHeld || !held) return;
         const { kind } = held;

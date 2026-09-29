@@ -4,7 +4,7 @@
 // Runs without node_modules: turnChecks.js imports nothing.
 //
 // What the player is promised when a check fails: the turn waits, Retry asks
-// only what failed, and Continue asks nothing. Each of those is a request that
+// only what failed, and Continue asks no check again. Each of those is a request that
 // is or is not made, so the count of asks is what is pinned.
 
 import test from "node:test";
@@ -54,7 +54,7 @@ test("a retry asks again only the checks that failed", async () => {
     assert.equal(checksHoldTurn(checks), false);
 });
 
-test("continuing without asks nothing, and gives the failed answer back", async () => {
+test("continuing without asks no check again, and gives the failed answer back", async () => {
     const checks = createTurnChecks();
     const units = counted([fallback("timeout")]);
     await checks.run("units", units.ask, fellBack);

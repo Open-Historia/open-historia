@@ -14936,7 +14936,9 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
 
 // Finish a turn held on a failed check (turnChecks.js). `withoutFailedChecks` takes
 // the turn as the failed checks left it — each leaves the turn as written, as a
-// failed check always did — and asks nothing. Otherwise only the failed checks
+// failed check always did — and asks no check again (what a turn asks after it
+// is written, the agents' reports and the institutions' votes, still runs).
+// Otherwise only the failed checks
 // are asked again: the segments are in hand and are not regenerated, and a
 // check that answered keeps its answer. Re-holds itself on another failure.
 export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailedChecks = false } = {}) => {

@@ -8,15 +8,16 @@
 // none of it done and no word to the player. Now a failed check holds the turn,
 // unwritten, and the player retries, continues without, or discards.
 //
-// This is what makes the retry cheap and "continue without" free: every check's
+// This is what makes the retry cheap and "continue without" ask no check again: every check's
 // answer is kept for the held turn, by the check and what it was asked about. A
 // retry runs the turn's finish again, and a check asked the same thing is given
 // its answer back rather than asked again; only the ones that failed are asked.
 // A check asked about something different (the timeline clean-up, shown events
 // a retried search produced afresh) is asked, never handed an answer about
-// other events. Once the player continues
-// without, the failed answers are given back as they are (the fail-open
-// fallback) and nothing is asked at all.
+// other events. Once the player continues without, the failed answers are given
+// back as they are (the fail-open fallback) and no check is asked again. What a
+// turn asks after it is written is not a check and still runs: with Save AI
+// requests off the agents' reports, and the institutions' votes.
 //
 // A check that answered with nothing to change has answered. Failure is the
 // request failing or its answer not being usable — the caller says which.
