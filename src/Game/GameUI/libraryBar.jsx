@@ -2210,6 +2210,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const posts = await fetchHubPosts({ force });
     const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, {
       fetchComments: (postId) => fetchPostComments(postId, { force }),
+      reviews: scenario.hubReviews,
     });
     if (changed) adoptScenarioSummary(await saveScenario(scenario.id, { hubPublished: published }));
     return published;
@@ -2228,7 +2229,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       try {
         const posts = await fetchHubPosts();
         for (const scenario of mine) {
-          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts);
+          const { published, changed } = await refreshPublishedRecord(scenario.hubPublished, posts, { reviews: scenario.hubReviews });
           if (changed) await saveScenario(scenario.id, { hubPublished: published });
         }
       } catch (nextError) {

@@ -96,6 +96,30 @@ test("the author's own posts are found by key, and comments read only when the c
   assert.deepEqual(guarded.published.suggestions.map((ref) => ref.author), ["bob"]);
 });
 
+test("a post with more than fifty suggestions keeps the new ones, leaving out reviewed ones first", async () => {
+  const key = newPublishKey();
+  const comment = (id, login = "bob") => ({
+    id,
+    user: { login },
+    created_at: new Date(Date.UTC(2026, 8, 1, 0, id)).toISOString(),
+    body: `[s${id}-suggestion.zip](https://github.com/user-attachments/files/${id}/s${id}-suggestion.zip)`,
+  });
+  const oldComments = Array.from({ length: 50 }, (_, index) => comment(index + 1));
+  const post = { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 50 };
+  const first = await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, [post], { fetchComments: async () => oldComments });
+  assert.equal(first.published.suggestions.length, 50);
+
+  // Two of the old ones were reviewed; five new comments arrive.
+  const reviews = { c3: { status: "done" }, c40: { status: "dismissed" } };
+  const all = [...oldComments, ...Array.from({ length: 5 }, (_, index) => comment(51 + index, "carl"))];
+  const later = await refreshPublishedRecord(first.published, [{ ...post, comments: 55 }], { fetchComments: async () => all, reviews });
+  const ids = later.published.suggestions.map((ref) => ref.id);
+  assert.equal(ids.length, 50);
+  for (const id of ["c51", "c52", "c53", "c54", "c55"]) assert.ok(ids.includes(id), `${id} is kept`);
+  for (const id of ["c3", "c40", "c1", "c2", "c4"]) assert.ok(!ids.includes(id), `${id} makes room`);
+  assert.equal(later.published.commentCounts[12], 55);
+});
+
 const bundle = () => ({
   schema: "pax-historia-scenario-bundle/2",
   scenario: { name: "Old World", description: "A world.", features: {} },

@@ -80,6 +80,14 @@ test("the player's own post record keeps only what it can trust", () => {
   assert.deepEqual(published.suggestions.map((ref) => ref.id), ["c1"], "no duplicate, and nothing hosted off GitHub");
   assert.deepEqual(published.commentCounts, { 12: 4 }, "counts only for this scenario's posts");
   assert.ok(normalizeHubPublished({ postIds: [7] }), "a post linked by hand needs no key");
+  const many = normalizeHubPublished({
+    key: "oh-3f2a9c1e-77",
+    postIds: [12],
+    suggestions: Array.from({ length: 55 }, (_, index) => ({ id: `c${index + 1}`, postId: 12, zipUrl: `https://github.com/user-attachments/files/${index + 1}/x-suggestion.zip` })),
+  });
+  assert.equal(many.suggestions.length, 50);
+  assert.equal(many.suggestions[0].id, "c6", "past fifty the newest are kept, not the oldest");
+  assert.equal(many.suggestions.at(-1).id, "c55");
 });
 
 test("a review is accepted or rejected per change, and the open suggestions are the ones not finished", () => {

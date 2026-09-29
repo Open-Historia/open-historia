@@ -26,7 +26,7 @@
 //   { [suggestionId]: { status, accepted[], rejected[], updatedAt } }
 
 const MAX_POST_IDS = 10;
-const MAX_SUGGESTIONS = 50;
+export const MAX_HUB_SUGGESTIONS = 50;
 const MAX_REVIEWS = 60;
 const MAX_DECISIONS = 5000;
 
@@ -161,8 +161,9 @@ export const normalizeHubPublished = (raw) => {
     if (!ref || seen.has(ref.id) || isBlockedContributor({ blocked }, ref.author)) continue;
     seen.add(ref.id);
     suggestions.push(ref);
-    if (suggestions.length >= MAX_SUGGESTIONS) break;
   }
+  // The newest are kept: a check adds what it finds after what was there.
+  suggestions.splice(0, Math.max(0, suggestions.length - MAX_HUB_SUGGESTIONS));
   const commentCounts = {};
   if (raw.commentCounts && typeof raw.commentCounts === "object") {
     for (const [postId, count] of Object.entries(raw.commentCounts)) {

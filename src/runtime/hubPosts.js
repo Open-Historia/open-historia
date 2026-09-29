@@ -16,7 +16,13 @@ import {
   embedScenarioBundleVector,
   resolveScenarioBundleBackground,
 } from "./communityBasemaps.js";
-import { normalizeHubKey, normalizeHubPublished, normalizeHubSuggestionRef } from "../../server/hubProvenance.js";
+import {
+  MAX_HUB_SUGGESTIONS,
+  isBlockedContributor,
+  normalizeHubKey,
+  normalizeHubPublished,
+  normalizeHubSuggestionRef,
+} from "../../server/hubProvenance.js";
 import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues } from "./hubIssues.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
@@ -247,12 +253,28 @@ export const fetchPostComments = async (postId, { force = false } = {}) => {
   return list;
 };
 
+// A record keeps at most MAX_HUB_SUGGESTIONS. Past that, the ones the author
+// already reviewed or dismissed (`reviews`, the scenario's hubReviews) go
+// first, then the oldest, so a new suggestion is never the one left out.
+export const trimSuggestions = (list, reviews = {}) => {
+  if (list.length <= MAX_HUB_SUGGESTIONS) return list;
+  const settled = (ref) => (["done", "dismissed"].includes(reviews?.[ref.id]?.status) ? 1 : 0);
+  const drop = new Set(list
+    .map((ref, index) => ({ ref, index }))
+    .sort((a, b) => settled(b.ref) - settled(a.ref)
+      || String(a.ref.createdAt ?? "").localeCompare(String(b.ref.createdAt ?? ""))
+      || a.index - b.index)
+    .slice(0, list.length - MAX_HUB_SUGGESTIONS)
+    .map((entry) => entry.ref.id));
+  return list.filter((ref) => !drop.has(ref.id));
+};
+
 // A player's own post record brought up to date from the hub: the posts that
 // carry its key (new ones found, the author and title read from them), and the
 // suggestions on those posts. Comments are read only for a post whose comment
 // count moved since the last look, so an unchanged post costs nothing but its
 // share of the one post list. Returns { published, changed }.
-export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments } = {}) => {
+export const refreshPublishedRecord = async (published, posts, { fetchComments = fetchPostComments, reviews = {} } = {}) => {
   const current = normalizeHubPublished(published);
   if (!current) return { published: null, changed: false };
   const list = Array.isArray(posts) ? posts : [];
@@ -279,7 +301,7 @@ export const refreshPublishedRecord = async (published, posts, { fetchComments =
     ...current,
     postIds,
     ...(newest ? { author: newest.author, title: newest.title } : {}),
-    suggestions,
+    suggestions: trimSuggestions(suggestions.filter((ref) => !isBlockedContributor(current, ref.author)), reviews),
     commentCounts,
     ...(fetchedAny || matched.length ? { checkedAt: new Date().toISOString() } : {}),
   });
