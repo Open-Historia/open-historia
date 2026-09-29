@@ -266,7 +266,7 @@ export const buildEventHistoryText = (
 
       if (event.impacts.polityChanges.length > 0) {
         impactNotes.push(
-          `Polity changes:${event.impacts.polityChanges
+          `Polity changes: ${event.impacts.polityChanges
             .map((entry) => `${entry.code}${entry.name ? ` renamed to ${entry.name}` : ""}${entry.color ? ` color ${entry.color}` : ""}`)
             .join(", ")}`,
         );

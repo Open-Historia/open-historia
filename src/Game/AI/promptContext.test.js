@@ -152,6 +152,12 @@ test("recent events note occupations and groups, not only sovereignty transfers"
   const text = buildEventHistoryText([occupationAndGroup()]);
   assert.match(text, /Control: Kharkiv -> Russian Federation \(from Ukraine\), Luhansk contested by Russian Federation \(held by Ukraine\)/);
   assert.match(text, /Groups: Kharkiv Partisans founded in 2 regions/);
+
+  const renamed = buildEventHistoryText([{
+    ...occupationAndGroup(),
+    impacts: { polityChanges: [{ code: "Slavonia", name: "Greater Slavonia" }] },
+  }]);
+  assert.match(renamed, /Polity changes: Slavonia renamed to Greater Slavonia/, "the older notes keep their wording");
 });
 
 test("a group founding or an occupation is a durable anchor for a long campaign", () => {
