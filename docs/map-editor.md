@@ -155,7 +155,7 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `zoomToRegion(id)` / `zoomToSelection(ids)` | Fit to one/many. |
 | `setRegionAttrs(ids, patch)` | Patch `owner` / `typeId` / `name` / `claimants` on many regions at once, undoably. The workhorse behind the inspector. |
 | `deleteRegions(ids)` | Remove regions. |
-| `mergeRegions(ids)` | Union ≥2 regions into the first; others removed. Uses `unionGeoms` (`geometry.js`). |
+| `mergeRegions(ids)` | Union ≥2 regions into the first, which is marked `edited`; others removed. One undo step that also restores the survivor's `edited` flag (`mergeRegionFeatures`, `shapeEdits.js`). |
 | `copyRegions(ids)` | Duplicate with a view-scaled offset; new ids, `" copy"` name, carries typeId/owner/gid0/claimants. |
 | `exportRegions(ids)` | The regions as a GeoJSON FC (EPSG:4326, 5 decimals, ids in the properties) for the region clipboard (§9c). |
 | `pasteRegions(fc)` | Adds regions copied from another map, carving each one's land out of whatever already covers it (`overlaps` + `subtractFrom`, the Draw tool's rule: a bite, a hole, or the region beneath removed, survivors marked `edited`). A pasted region keeps its id when the target has none by that id, else gets a fresh `reg_` id, and is always marked `edited`. Selects the pasted regions; returns `{ added, trimmed, removed }`; one undo step. |
@@ -190,16 +190,16 @@ The strip sits in a band between the documents chip and the Save / Apply / Close
 | Pan | `pan` | No interaction added; default map drag. |
 | Draw region | `draw` | `Draw` (Polygon, `trace:true`, `traceSource:source`) + `Snap`. Clicking a border traces along it. **On `drawend` the new polygon is carved OUT of every region it overlaps** (`subtractFrom`, R-tree extent query for candidates) so no ground is owned twice; carved neighbours get `edited:true` (`:889`). Inside → hole; across an edge → bite; fully over → deletes the underlying region. |
 | Edit vertices | `modify` | `Modify` + `Snap`. On `modifyend` sets `edited:true` on dragged features (`:963`). |
-| Move | `move` | `Translate` on the region layer. |
+| Move | `move` | `Translate` on the region layer. A moved region is marked `edited`, and each move is one undo step (`trackMove`, `shapeEdits.js`); a click that moves nothing records nothing. |
 | Delete | `delete` | Click removes a region (a city hit under the cursor wins). |
-| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one (`:428`). |
+| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one, marking the survivor `edited` (`mergeRegionFeatures`, `shapeEdits.js`). |
 | Paint owner | `paint` | Click stamps the current **Paint owner** value (a country NAME, trimmed, never case-folded) onto the clicked region (`:394`). A floating owner input + swatch appears at the top (`MapEditor.jsx:553`). |
 | City tool | `feature` | Click empty map → `onFeatureCreate` (drops a city + opens `CityPopup`); click a city → `onFeatureEdit`. Carries the underlying region's owner/regionId (`:410`). |
 | Unit tool | `unit` | Click empty map → `onUnitCreate` (drops a starting unit owned by the region's owner and opens `UnitPopup`); click a unit → `onUnitEdit`. The Delete tool removes a unit under the cursor. See §9b. |
 | Box-select features | `feature-box` | Drag a rectangle (`DragBox`) over cities and features → `onFeatureSelectionChange(ids)`; Shift adds to the selection. Selected features draw a yellow ring, and the Features panel's selection bar tags or deletes them together (§9). |
 | Undo / Redo / Fit | — | Toolbar buttons wired to `api.undo/redo/fitToData`. |
 
-The **`edited` flag** is the linchpin of tier-2 correctness: a reshaped GADM region's true geometry now lives in the exported GeoJSON while the stock tiles still hold its original shape. The exporter carries `edited:true` into the game so `Nations.jsx` renders it from the GeoJSON and excludes it from the stock-tile fill (otherwise the original shape repaints on top, darker — the "edited-region shade" bug).
+The **`edited` flag** is the linchpin of tier-2 correctness, and every tool that changes a region's shape sets it — Draw (the carved neighbours), Edit vertices, Shared border, Move, Merge, Delete border, the topology repairs and Paste — and its undo puts the old flag back (`shapeEdits.test.js`): a reshaped GADM region's true geometry now lives in the exported GeoJSON while the stock tiles still hold its original shape. The exporter carries `edited:true` into the game so `Nations.jsx` renders it from the GeoJSON and excludes it from the stock-tile fill (otherwise the original shape repaints on top, darker — the "edited-region shade" bug).
 
 ---
 

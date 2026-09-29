@@ -52,6 +52,7 @@ import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAr
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
+import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
 import {
   unionGeoms,
   translatedClone,
@@ -957,23 +958,13 @@ const OlMap = ({
           if (f && f !== hit) { neighbor = f; break; }
         }
         if (!neighbor) return;
-        const oldGeom = hit.getGeometry().clone();
-        try {
-          hit.setGeometry(unionGeoms([hit.getGeometry(), neighbor.getGeometry()]));
-        } catch (e) {
-          console.warn("[editor] dissolve failed:", e);
-          return;
-        }
-        regionSource.removeFeature(neighbor);
+        const cmd = mergeRegionFeatures(regionSource, [hit, neighbor]);
+        if (!cmd) return;
         regionLayer.changed();
         labelLayer.changed();
         onSelectionRef.current?.([hit.getId()]);
         notifyRegions();
-        const mergedGeom = hit.getGeometry().clone();
-        pushCmd({
-          undo: () => { hit.setGeometry(oldGeom.clone()); regionSource.addFeature(neighbor); },
-          redo: () => { hit.setGeometry(mergedGeom.clone()); regionSource.removeFeature(neighbor); },
-        });
+        pushCmd(cmd);
         return;
       }
       const hitId = hit ? hit.getId() : null;
@@ -1842,32 +1833,13 @@ const OlMap = ({
       mergeRegions: (ids) => {
         const feats = ids.map((id) => regionSource.getFeatureById(id)).filter(Boolean);
         if (feats.length < 2) return;
-        const target = feats[0];
-        const oldGeom = target.getGeometry().clone();
-        const removed = feats.slice(1);
-        let mergedGeom;
-        try {
-          mergedGeom = unionGeoms(feats.map((f) => f.getGeometry()));
-          target.setGeometry(mergedGeom);
-        } catch (e) {
-          console.warn("[editor] merge failed:", e);
-          return;
-        }
-        removed.forEach((f) => regionSource.removeFeature(f));
+        const cmd = mergeRegionFeatures(regionSource, feats);
+        if (!cmd) return;
         regionLayer.changed();
         labelLayer.changed();
-        onSelectionRef.current?.([target.getId()]);
+        onSelectionRef.current?.([feats[0].getId()]);
         notifyRegions();
-        pushCmd({
-          undo: () => {
-            target.setGeometry(oldGeom.clone());
-            removed.forEach((f) => regionSource.addFeature(f));
-          },
-          redo: () => {
-            target.setGeometry(mergedGeom.clone());
-            removed.forEach((f) => regionSource.removeFeature(f));
-          },
-        });
+        pushCmd(cmd);
       },
       copyRegions: (ids) => {
         const res = map.getView().getResolution() || 1;
@@ -2987,8 +2959,16 @@ const OlMap = ({
         });
       }
     } else if (activeTool === "move") {
+      // A moved region is reshaped as far as the stock tiles know, so it is
+      // marked edited, and the move is one undo step (shapeEdits.js).
       const translate = new Translate({ layers: [layer], hitTolerance: 2 });
-      translate.on("translateend", notifyRegions);
+      const move = trackMove();
+      translate.on("translatestart", (e) => move.start(e.features.getArray(), e.startCoordinate));
+      translate.on("translateend", (e) => {
+        const cmd = move.end(e.features.getArray(), e.coordinate);
+        if (cmd) pushCmd(cmd);
+        notifyRegions();
+      });
       added.push(translate);
     } else if (activeTool === "lasso") {
       // freehand circle/lasso: drag to enclose an area, release to select the
