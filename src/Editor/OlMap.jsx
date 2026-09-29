@@ -1722,18 +1722,26 @@ const OlMap = ({
         }
         map.getView().fit(ext, { padding: [80, 80, 80, 80], duration: 350, maxZoom: 8 });
       },
+      // `patch.claimants` may be a function of the region's own list, so one
+      // edit over a selection with differing claims keeps each region's rest.
       setRegionAttrs: (ids, patch) => {
         const undos = [];
         for (const id of ids) {
           const f = regionSource.getFeatureById(id);
           if (!f) continue;
           const before = {};
+          let claimants;
           if ("owner" in patch) { before.owner = f.get("owner") || null; f.set("owner", patch.owner || null); }
           if ("typeId" in patch) { before.typeId = f.get("typeId"); f.set("typeId", patch.typeId); }
           if ("name" in patch) { before.name = f.get("name"); f.set("name", patch.name); }
-          if ("claimants" in patch) { before.claimants = f.get("claimants") || null; f.set("claimants", patch.claimants?.length ? patch.claimants : null); }
+          if ("claimants" in patch) {
+            before.claimants = f.get("claimants") || null;
+            claimants = typeof patch.claimants === "function" ? patch.claimants(before.claimants || []) : patch.claimants;
+            claimants = claimants?.length ? claimants : null;
+            f.set("claimants", claimants);
+          }
           if ("group" in patch) { before.group = f.get("group") || null; f.set("group", patch.group || null); }
-          undos.push([f, before]);
+          undos.push([f, before, claimants]);
         }
         regionLayer.changed();
         labelLayer.changed();
@@ -1742,11 +1750,11 @@ const OlMap = ({
           const after = { ...patch };
           pushCmd({
             undo: () => undos.forEach(([f, b]) => Object.keys(b).forEach((k) => f.set(k, b[k]))),
-            redo: () => undos.forEach(([f]) => {
+            redo: () => undos.forEach(([f, , claimants]) => {
               if ("owner" in after) f.set("owner", after.owner || null);
               if ("typeId" in after) f.set("typeId", after.typeId);
               if ("name" in after) f.set("name", after.name);
-              if ("claimants" in after) f.set("claimants", after.claimants?.length ? after.claimants : null);
+              if ("claimants" in after) f.set("claimants", claimants);
               if ("group" in after) f.set("group", after.group || null);
             }),
           });

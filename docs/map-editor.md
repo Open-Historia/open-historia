@@ -212,11 +212,11 @@ Shown whenever ≥1 region is selected. Writes go straight through `api.setRegio
 | **Name** (single only) | `{ name }` | The region label. |
 | **Type** | `{ typeId }` | `— mixed —` shown when a multi-selection disagrees. |
 | **Polity** (owner) | `{ owner: key \| null }` | Free text over the polity registry, backed by a `<datalist>` of existing polities (registry entries plus `listOwners()`), shown by display name. An existing polity is matched by its stable key or display name without regard to case and its key is stored unchanged, so "france" cannot fork a second France. **A name nobody has yet becomes a new polity** — `upsertPolity` writes the same record the Polities panel creates (`name`, `code`, `aliases`, `status`) and the selection is assigned to it — but only on **Enter** or the **Create “…”** button that appears under the field; leaving the field assigns only an existing match, and Escape reverts, so a half-typed name never mints a one-province country by accident. Blanking the field offers **Make unowned**. |
-| **Disputed by** (claimants) | `{ claimants }` | `TagField` of claimant names. Any claimant makes the region render **striped** (owner colour + each claimant's), here and in-game. |
+| **Disputed by** (claimants) | `{ claimants }` | `TagField` of claimant names. Any claimant makes the region render **striped** (owner colour + each claimant's), here and in-game. When a multi-selection's lists differ the field shows only the claims every region shares ("mixed" placeholder), and an edit is applied per region against its own list (`claimantEdits.js`; `setRegionAttrs` takes `claimants` as a function of the region's list): an added claimant joins every list, a removed one leaves every list, and the claims only some regions carry are kept. Identical lists are replaced whole. |
 | **Controlled by group** | `{ group }` | Which group's area the regions are in (§24b), or none. The group's tint shows on the region at once; **Groups…** opens the Groups panel. |
 | **Colour** | `setColorOverride(owner, rgb)` | Only shown with an owner. **Reset** appears when an override exists (`colorOverrides[owner]`). |
 | **Flag** | opens `FlagPicker` via `onOpenFlagPicker(owner)` | Renders current flag thumbnail. |
-| **Tags** | `setTags(owner, next)` | `TagField` with `TAG_SUGGESTIONS`; free vocabulary. |
+| **Tags** | `setTags(owner, next)` | `TagField` with `TAG_SUGGESTIONS`; free vocabulary. Each `TagField` owns its datalist (`useId()`), so the Tags box never offers the Disputed-by polity names. |
 
 Footer buttons: **Clear country** (`owner:null`), **Merge** (≥2), **Duplicate** (`copyRegions`, a copy beside the original on this map), **Copy to clipboard** (§9c), **Zoom**, **Delete**.
 
