@@ -293,9 +293,9 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 | Data | `generateCountryStatSheet({code, name})` (AI), validated by `validateGameplayPayload("countryStatSheet", …)` | `src/Game/AI/gameplay.js`, `gameplaySchemas.js` |
 | Caching | Per `gameKey:code`, keyed by game date; memory + `localStorage["oh-stat-sheets"]` (cap 60); regenerated when the date moves; ↻ forces regen | — |
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |
-| Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`); it shows only a flag chosen for it, from `flags.json` or its record (`resolveChosenPolityFlag`, `polityFlags.js`), so a new faction or group shows the flag the player picked | `src/runtime/countryFlags.js` |
+| Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`); it shows only a flag chosen for it, from `flags.json` or its record, so a new faction or group shows the flag the player picked | `src/runtime/countryFlags.js` |
 
-`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because the date widget already shows the country). It polls `JSON_URLS.game` + world every 5 s and applies the same landless-suppression logic; falls back emoji → `FallbackBadge` initials for non-ISO polities.
+`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because the date widget already shows the country). It polls `JSON_URLS.game` + world every 5 s and applies the same landless-suppression logic (for a landless player, `resolveChosenPolityFlag` in `polityFlags.js`: a flag from `flags.json` or the polity's record, never a map-ref or stock one); falls back emoji → `FallbackBadge` initials for non-ISO polities.
 
 ---
 
