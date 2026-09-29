@@ -47,13 +47,14 @@ const readTags = (props) => {
   return joined ? [...new Set(joined.split(/[,;|]/).map((entry) => entry.trim()).filter(Boolean))] : [];
 };
 
-// A row of a Workshop document (it has `coord`) is one of the editor's own
-// features. A base, a port or a landmark (mapFeatures.js) keeps its kind,
-// state, note, holder and the marker it came from: without its kind it came
-// back as a city label, and its state and note were gone. Other files keep
-// their `kind` as a tag only (readTags), so a GeoJSON of towns stays cities.
+// A row of a Workshop document (it has `coord` and the editor's type
+// "Coordinate") is one of the editor's own features. A base, a port or a
+// landmark (mapFeatures.js) keeps its kind, state, note, holder and the marker
+// it came from: without its kind it came back as a city label, and its state
+// and note were gone. Other files keep their `kind` as a tag only (readTags),
+// so a GeoJSON or a list of rows of towns stays cities.
 const workshopFields = (props) => {
-  if (!Array.isArray(props.coord)) return {};
+  if (!Array.isArray(props.coord) || props.type !== "Coordinate") return {};
   const kind = text(props.kind);
   if (!kind) return {};
   return {

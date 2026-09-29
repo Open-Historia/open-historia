@@ -39,6 +39,14 @@ test("a GeoJSON 'kind' is only a tag: a file of towns imports as cities", () => 
   assert.equal(features[0].tier, 2);
 });
 
+test("a list of rows with `coord` and a 'kind' is not taken for a Workshop document: its towns import as cities", () => {
+  const { features, format } = parseFeatureImport([{ name: "Arles", coord: [4.63, 43.68], kind: "town" }]);
+  assert.equal(format, "rows");
+  assert.deepEqual(features[0].tags, ["town"]);
+  assert.equal(features[0].kind, undefined);
+  assert.equal(isMapFeature(features[0]), false);
+});
+
 test("GeoJSON points become features; other geometries are counted as skipped", () => {
   const { features, skipped, format } = parseFeatureImport(JSON.stringify({
     type: "FeatureCollection",
