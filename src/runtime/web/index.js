@@ -4,7 +4,8 @@
 //
 // Accounts and encrypted sync used to be wired up here. The project no longer
 // stores player saves — games live in this browser and in the desktop app's own
-// data dir — so there is nothing to sign in to and nothing to sync.
+// data dir — so there is nothing to sign in to and nothing to sync. A sign-in
+// left over from before is dropped at boot (retiredAccount.js).
 // Dynamically imported behind import.meta.env.VITE_OH_WEB, so none of this — nor
 // the stores it pulls in — is bundled into the local download.
 
@@ -13,6 +14,7 @@ import { ensureSeeded } from "./libraryStore.js";
 import { markEntered, showHomePage, shouldShowHome } from "./homePage.js";
 import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp, showNativeBoot } from "./nativeBoot.js";
+import { forgetRetiredAccount } from "./retiredAccount.js";
 
 // Everything the player owns lives in this origin's storage: the games and
 // scenarios in IndexedDB, and — on the website — the ~215MB of map archives in
@@ -51,6 +53,7 @@ export const installWebBackend = async () => {
   }
   installWebApiRouter();
   requestPersistentStorage();
+  forgetRetiredAccount();
 
   // Home page: connect to the best content node on entry.
   // Once the player has entered this tab session, just connect in the background.

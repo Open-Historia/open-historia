@@ -1,8 +1,8 @@
 /*! Open Historia — web-mode home / connect screen © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // The website's entry screen: it automatically connects the player to the best
-// available content node (lowest latency + free capacity), lets them sign in
-// (Google), and enters the game. Injected as a full-screen overlay over the (already-mounted) game; web
-// build only, never in the local download.
+// available content node (lowest latency + free capacity) and enters the game.
+// Injected as a full-screen overlay over the (already-mounted) game; web build
+// only, never in the local download.
 
 import { connectBestNode } from "./nodeConnect.js";
 import { isNativeApp } from "./nativeBoot.js";
@@ -72,11 +72,7 @@ const css = `
     .oh-bar>i{display:block;height:100%;background:var(--grad-gold);width:0;transition:width .5s ease}
     .oh-conn-sub{color:var(--sepia);font-size:.92rem;margin-top:12px;font-style:italic}
 
-    /* account + buttons */
-    .oh-acct{margin-top:20px;text-align:left}
-    .oh-h4{font-family:var(--display);font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--bronze);margin:0 0 10px;text-align:center}
-    .oh-gbtn{display:flex;justify-content:center;min-height:44px}
-    .oh-msg{color:var(--sepia);font-size:.9rem;margin:9px 0 0;text-align:center}
+    /* buttons */
     .oh-btn{width:100%;font-family:var(--display);font-size:.9rem;letter-spacing:.06em;text-transform:uppercase;font-weight:700;
       cursor:pointer;border-radius:11px;padding:14px 20px;border:1px solid transparent;transition:transform .12s ease,box-shadow .2s,background .2s}
       .oh-btn:hover{transform:translateY(-2px)}

@@ -208,7 +208,7 @@ const ensureUniqueId = async (requested, kind) => {
 // Reconcile a lean *Meta index against its real store WITHOUT structured-cloning the
 // records: getAllKeys is keys-only (cheap even for rows embedding 100MB binaries).
 // Backfill any record missing from the index — an existing library on its first build
-// after this ships, or a record written by sync (which bypasses putScenario/putGame) —
+// after this ships, or a record written by something that bypassed putScenario/putGame —
 // by loading it ONE AT A TIME (peak = a single record, not the whole store at once,
 // which is the OOM), and drop index rows whose record was deleted out-of-band. After
 // the first build the index is populated, so the menu loads NO full records at all.

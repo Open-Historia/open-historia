@@ -44,8 +44,8 @@ The whole web branch hinges on one boolean literal, injected by Vite's `define`:
 'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web')   // vite.config.ts:75
 ```
 
-- `vite build` (any mode ≠ `web`) → `VITE_OH_WEB` is `false`. Rollup dead-code-eliminates every `if (import.meta.env.VITE_OH_WEB)` branch **and the dynamically-imported web backend** (`src/runtime/web/*`), so the desktop/Android bundle never pulls in IndexedDB stores, accounts, or the web-only generated seed files. This is why a fresh desktop extract (which has never run a web build) still builds and boots.
-- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_PMTILES_URL`, `VITE_OH_HUB_URL`, `VITE_OH_ACCOUNT_URL`, `VITE_OH_DIRECTORY_URL`, `VITE_OH_GOOGLE_CLIENT_ID`). See [Web build & accounts](web-build.md).
+- `vite build` (any mode ≠ `web`) → `VITE_OH_WEB` is `false`. Rollup dead-code-eliminates every `if (import.meta.env.VITE_OH_WEB)` branch **and the dynamically-imported web backend** (`src/runtime/web/*`), so the desktop bundle never pulls in IndexedDB stores or the web-only generated seed files. This is why a fresh desktop extract (which has never run a web build) still builds and boots.
+- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_PMTILES_URL`, `VITE_OH_HUB_URL`, `VITE_OH_DIRECTORY_URL`). See [Web build](web-build.md).
 
 The one place the flag is read at boot is `src/main.jsx:28` (below). Because the web backend is behind a **dynamic `import()`**, the desktop build never even references the module.
 
@@ -134,7 +134,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `src/Game/Selection/` | Click-target popups: `Regions.jsx`, `CountryPanel.jsx`, `Units.jsx`, `Features.jsx` | [Selection & popups](game-ui.md) |
 | `src/Game/AI/` | AI turn engine: `main.jsx` (provider chat), `gameplay.js`, `gameplayPrompts.js`, `gameplaySchemas.js`, `promptContext.js`, `providerConfig.js`, `defaultPrompts.json` | [AI system](ai-overview.md) |
 | `src/runtime/` | Client "kernel": asset/endpoint layer, game/world state, library catalog, preload, i18n, startup UI | below |
-| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, accounts, sync, nodes, home page | [Web build & accounts](web-build.md) |
+| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, nodes, home page | [Web build](web-build.md) |
 | `src/Editor/` | OpenLayers map editor (author custom maps) | [Map editor](map-editor.md) |
 
 ### `src/runtime/` (the client kernel)
@@ -235,7 +235,7 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
 | **Content nodes** | `server/node.js` — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest | [Content nodes](assets-and-data.md) |
-| **Web accounts + sync** | Google sign-in + E2E-encrypted game/scenario sync against the registry Worker (web build only) | [Web build & accounts](web-build.md) |
+| **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
 ---

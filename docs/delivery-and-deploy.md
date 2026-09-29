@@ -235,7 +235,7 @@ A tiny Worker that counts community-scenario imports. The game server pings it o
 
 ### 7.2 Node registry — `open-historia-admin/registry/`
 
-The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`.
+The web-mode control plane (source of truth: the admin repo). Serves the signed node directory, proxies map content, and hosts hub + accounts. Worker name `open-historia-registry`. The game itself no longer calls the account, sync or presence routes: accounts were removed from the web build (see [web-build.md §10](web-build.md#10-accounts-and-sync-removed)).
 
 | Binding | Kind | Purpose |
 |---|---|---|
@@ -253,8 +253,7 @@ The web game points at the registry through build-time env (`.env.web`):
 | `VITE_OH_WEB` | `1` | The compile-time web/desktop switch |
 | `VITE_OH_PMTILES_URL` | `…workers.dev/content` | Map tiles served/proxied by the registry |
 | `VITE_OH_DIRECTORY_URL` | `…/node-directory.json` | The signed content-node directory |
-| `VITE_OH_HUB_URL` / `VITE_OH_ACCOUNT_URL` | `…workers.dev` | Scenario hub + magic-link accounts/sync |
-| `VITE_OH_GOOGLE_CLIENT_ID` | *(client id)* | Google sign-in |
+| `VITE_OH_HUB_URL` | `…workers.dev` | Scenario hub proxy |
 
 ---
 

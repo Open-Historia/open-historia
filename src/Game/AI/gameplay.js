@@ -7945,13 +7945,6 @@ const applySimulationResult = async ({
     }
   }
 
-  // The turn's new state is now persisted. Web-mode encrypted sync listens for this
-  // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
-  // where nothing listens. Firing here — the single choke point every turn type runs
-  // through (jump, auto-jump, interactive event, game-master) — means the sync's full scan
-  // sees the committed round.
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
-
   // The agents' file before this turn files anything into it, kept with the
   // restore point below so an undo takes the turn's reports and stolen copies
   // back with everything else.
@@ -15896,8 +15889,8 @@ export const applyGameMasterPreview = async (preview) => {
       at: auditRecord.appliedAt,
     });
 
-    // Canonical persistence only. Deliberately omit actions/game writes, rollback
-    // snapshots and oh:turn-complete: a GM edit is administrative authority, not a turn.
+    // Canonical persistence only. Deliberately omit actions/game writes and rollback
+    // snapshots: a GM edit is administrative authority, not a turn.
     // Avoid rewriting unrelated assets when this transaction did not touch them.
     const touchedEvents = events.length > 0;
     const touchedChats = generatedChats.length > 0 || Boolean(renamedChats);
