@@ -23,7 +23,9 @@ test("saving a restore point is announced after the write, not before", () => {
 });
 
 test("the Rollback count and the Intervene check both re-read on it", () => {
-    // Both read the newest restore point, so both listen.
-    const listeners = time.match(/addEventListener\("oh:restore-point-saved", refresh\)/g) ?? [];
-    assert.equal(listeners.length, 2);
+    // Both read the newest restore point, so both go through the reading that
+    // listens for it.
+    assert.match(time, /addEventListener\("oh:restore-point-saved", refresh\)/);
+    assert.match(time, /useRestorePointReading\(loadRollbackSnapshotCount, 0, \[gameData\?\.round\]\)/);
+    assert.match(time, /useRestorePointReading\(\s*async \(\) => Boolean\(await canInterveneInLastTurn\(\)\)/);
 });

@@ -1359,6 +1359,32 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard })
     );
 };
 
+// A value read from the turn's restore points: read now, again whenever `deps`
+// change, and again when a restore point is saved (gameplay.js
+// captureRollbackSnapshot). That last is what the round alone missed: the
+// restore point is saved after the turn's round has changed, so the newest turn
+// could not be rolled back from here while the cheats menu, which reads when
+// opened, could. A failed read gives `initial` back. Returns [value, setValue].
+const useRestorePointReading = (read, initial, deps) => {
+    const [value, setValue] = useState(initial);
+    useEffect(() => {
+        let active = true;
+        const refresh = () => Promise.resolve()
+            .then(read)
+            .then((next) => { if (active) setValue(next); })
+            .catch(() => { if (active) setValue(initial); });
+        refresh();
+        window.addEventListener("oh:restore-point-saved", refresh);
+        return () => {
+            active = false;
+            window.removeEventListener("oh:restore-point-saved", refresh);
+        };
+        // The caller's deps, by design: `read` and `initial` are fixed per use.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, deps);
+    return [value, setValue];
+};
+
 const TimelineSkipPanel = ({
     canUndo,
     currentDate,
@@ -2159,7 +2185,10 @@ const DateWidget = ({
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
-    const [undoCount, setUndoCount] = useState(0);
+    // How many turns can be undone (a restore point is captured at the start of
+    // each turn). The index, not the snapshots: the full list carries every
+    // prior world.
+    const [undoCount, setUndoCount] = useRestorePointReading(loadRollbackSnapshotCount, 0, [gameData?.round]);
     const openPanel = typeof onSetPanel === "function" ? activePanel : localOpenPanel;
     const isMobile = useIsMobile();
     // Wherever the « » are finger-sized (a touch screen, a phone either way
@@ -2558,25 +2587,6 @@ const DateWidget = ({
         setModeSuggestion(null);
     };
 
-    // How many turns can be undone (a restore point is captured at the start of
-    // each turn). Re-checked whenever the round changes — after a jump or undo —
-    // and when a restore point is saved, which is after the round has changed:
-    // counted on the round alone, the newest turn could never be rolled back
-    // from here, though the cheats menu (which reads when opened) could.
-    useEffect(() => {
-        let active = true;
-        // The index, not the snapshots: the full list carries every prior world.
-        const refresh = () => loadRollbackSnapshotCount().then((count) => {
-            if (active) setUndoCount(count);
-        });
-        refresh();
-        window.addEventListener("oh:restore-point-saved", refresh);
-        return () => {
-            active = false;
-            window.removeEventListener("oh:restore-point-saved", refresh);
-        };
-    }, [gameData?.round]);
-
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
     // which lives in the history panel — yanking that panel away mid-undo would
     // hide the very thing the player just acted on. The Timeline panel's own
@@ -2617,23 +2627,14 @@ const DateWidget = ({
     };
 
     // Intervene (AI/intervene.js): whether the newest turn carries the journal
-    // it needs, re-checked with the round like the undo count. Cleared while a
-    // jump runs so a half-revealed turn is never stopped under a new one.
-    const [canInterveneTurn, setCanInterveneTurn] = useState(false);
+    // it needs, re-checked like the undo count. Cleared while a jump runs so a
+    // half-revealed turn is never stopped under a new one.
     const latestTurnDate = worldState?.simulationHistory?.[0]?.date ?? "";
-    // Also on a saved restore point, for the reason the undo count is.
-    useEffect(() => {
-        let active = true;
-        const refresh = () => canInterveneInLastTurn()
-            .then((can) => { if (active) setCanInterveneTurn(Boolean(can)); })
-            .catch(() => { if (active) setCanInterveneTurn(false); });
-        refresh();
-        window.addEventListener("oh:restore-point-saved", refresh);
-        return () => {
-            active = false;
-            window.removeEventListener("oh:restore-point-saved", refresh);
-        };
-    }, [gameData?.round, latestTurnDate]);
+    const [canInterveneTurn] = useRestorePointReading(
+        async () => Boolean(await canInterveneInLastTurn()),
+        false,
+        [gameData?.round, latestTurnDate],
+    );
 
     // Stop the round after the events revealed so far. The engine rolls back to
     // the turn's snapshot and applies the kept prefix again, without a request;
