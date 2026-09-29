@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildForcePostureText, createTerritoryIndex } from "./forcePosture.js";
+import { buildForcePostureText, createTerritoryIndex, outlinesFromGeojson, selectTerritoryOutlines } from "./forcePosture.js";
 
 const unit = (over = {}) => ({
   id: "u1",
@@ -258,4 +258,68 @@ test("with none of its owners indexed, a point on land is still inside its count
   assert.deepEqual(territories.owners, []);
   assert.equal(territories.locate({ lng: 5, lat: 5 }).inside, "Eastland");
   assert.equal(territories.locate({ lng: 50, lat: 50 }), null);
+});
+
+// ---- selectTerritoryOutlines -------------------------------------------------
+// Which geometry the index is built from: the map's own.
+
+const polygon = (west, south, east, north) => ({ type: "Polygon", coordinates: [square(west, south, east, north)] });
+const feature = (id, owner, geometry) => ({ type: "Feature", properties: { id, owner }, geometry });
+
+// A hand-drawn world: two regions keyed "0" and "1", drawn nowhere near the
+// real countries that share their owners' names.
+const drawn = { type: "FeatureCollection", features: [feature("0", "Westland", polygon(100, 0, 110, 10)), feature("1", "Eastland", polygon(110, 0, 120, 10))] };
+
+// The stock tile, keyed by GADM ids.
+const stockOutlines = new Map([
+  ["WST.1_1", { country: "Westland", countryCode: "WST", rings: [square(-10, 0, 0, 10)] }],
+  ["EST.1_1", { country: "Eastland", countryCode: "EST", rings: [square(0, 0, 10, 10)] }],
+]);
+const stockLoader = () => {
+  const calls = [];
+  return { calls, load: async () => { calls.push(1); return stockOutlines; } };
+};
+
+test("a scenario's GeoJSON becomes outlines keyed by its own ids, outer rings only", () => {
+  const holed = { type: "Polygon", coordinates: [square(0, 0, 10, 10), square(4, 4, 6, 6)] };
+  const multi = { type: "MultiPolygon", coordinates: [[square(0, 0, 1, 1)], [square(2, 2, 3, 3)]] };
+  const read = outlinesFromGeojson({ features: [feature("7", "Westland", holed), feature("8", "Eastland", multi), feature("9", "Nobody", null)] });
+  assert.deepEqual([...read.keys()], ["7", "8"]);
+  assert.equal(read.get("7").rings.length, 1);
+  assert.equal(read.get("7").country, "Westland");
+  assert.equal(read.get("8").rings.length, 2);
+  assert.equal(outlinesFromGeojson(null).size, 0);
+});
+
+test("a hand-drawn world is measured against its own regions, and its conquests count", async () => {
+  const stock = stockLoader();
+  const world = { regionOwnershipOverrides: { 0: "Westland", 1: "Westland" } };
+  const chosen = await selectTerritoryOutlines({ world, scenarioOutlines: outlinesFromGeojson(drawn), loadStockOutlines: stock.load });
+  assert.deepEqual([...chosen.keys()], ["0", "1"]);
+  assert.equal(stock.calls.length, 0, "the stock tile is never read for a hand-drawn world");
+  const territories = createTerritoryIndex(chosen, world, { owners: ["Westland", "Eastland"] });
+  assert.equal(territories.locate({ lng: 115, lat: 5 }).inside, "Westland");
+  // Where the stock map would put Eastland, this map has nothing.
+  assert.equal(territories.locate({ lng: 5, lat: 5 }), null);
+});
+
+test("a hand-drawn world whose geometry is unavailable gets no place clauses, never stock borders", async () => {
+  const stock = stockLoader();
+  for (const world of [{ customGeometry: true }, { regionOwnershipOverrides: { 0: "Westland" } }]) {
+    assert.equal(await selectTerritoryOutlines({ world, scenarioOutlines: new Map(), loadStockOutlines: stock.load }), null);
+  }
+  assert.equal(stock.calls.length, 0);
+});
+
+test("a hybrid map takes the stock outline only for the stock regions it lists", async () => {
+  const stock = stockLoader();
+  const world = { regionOwnershipOverrides: { 0: "Westland", "EST.1_1": "Westland" } };
+  const chosen = await selectTerritoryOutlines({ world, scenarioOutlines: outlinesFromGeojson(drawn), loadStockOutlines: stock.load });
+  assert.deepEqual([...chosen.keys()].sort(), ["0", "1", "EST.1_1"]);
+});
+
+test("a stock world keeps the stock outlines", async () => {
+  const stock = stockLoader();
+  const chosen = await selectTerritoryOutlines({ world: { regionOwnershipOverrides: { "EST.1_1": "Westland" } }, scenarioOutlines: new Map(), loadStockOutlines: stock.load });
+  assert.equal(chosen, stockOutlines);
 });
