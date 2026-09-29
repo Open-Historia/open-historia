@@ -1,5 +1,7 @@
 /*! Open Historia — native political background clock (Continuum) */
 
+import { gameDateDayNumber, normalizeGameDate } from "./gameDates.js";
+
 export const POLITICAL_SIMULATION_CLOCK_VERSION = 1;
 export const MAX_POLITICAL_RESPONSE_TICKS_PER_ADVANCE = 24;
 const AVERAGE_MONTH_DAYS = 365.2425 / 12;
@@ -8,18 +10,12 @@ const clean = (value) => String(value ?? "").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const round4 = (value) => Math.round(Number(value) * 10000) / 10000;
 
+// A game date in any year, BC included (runtime/gameDates.js): its canonical
+// text and its time in milliseconds, or null.
 const parseDateParts = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(clean(value));
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || year < 1 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const date = new Date(0);
-  date.setUTCHours(0, 0, 0, 0);
-  date.setUTCFullYear(year, month - 1, day);
-  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  return { text: `${match[1]}-${match[2]}-${match[3]}`, time: date.getTime() };
+  const dayNumber = gameDateDayNumber(clean(value));
+  if (dayNumber === null) return null;
+  return { text: normalizeGameDate(clean(value)), time: dayNumber * 86400000 };
 };
 
 export const politicalDaysBetween = (fromDate, toDate) => {

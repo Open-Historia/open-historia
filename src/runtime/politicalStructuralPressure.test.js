@@ -97,3 +97,32 @@ test("economic structural pressure prefers recent deterioration over modern-era 
   assert.ok(issues.has("cost_of_living"));
   assert.ok(issues.has("unemployment"));
 });
+
+test("a BC war ages by the calendar and brings war weariness", () => {
+  const world = baseWorld();
+  world.wars = [{
+    id: "war-ab",
+    status: "active",
+    sideA: ["A"],
+    sideB: ["B"],
+    startedDate: "-0219-01-01",
+  }];
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "-0218-04-22" });
+  for (const polity of ["A", "B"]) assert.ok(issuesFor(result, polity).has("war_weariness"));
+});
+
+test("in a BC scenario the previous Stats sample is the latest one before the turn", () => {
+  const world = baseWorld();
+  world.countryStats.A = { stability: 60, economy: { inflation: 6, unemployment: 8, gdpGrowth: 1 } };
+  world.countryStatsHistory = {
+    A: [
+      { date: "-0219-06-01", inflation: 9, unemployment: 12, stability: 50 },
+      { date: "-0219-12-01", inflation: 2, unemployment: 5, stability: 70 },
+      { date: "-0217-01-01", inflation: 6, unemployment: 8, stability: 60 },
+    ],
+  };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "-0218-02-01" });
+  const issues = issuesFor(result, "A");
+  assert.ok(issues.has("cost_of_living"), "compared with December 219 BC, not June 219 BC or a sample from 217 BC");
+  assert.ok(issues.has("unemployment"));
+});

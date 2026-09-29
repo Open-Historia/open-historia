@@ -1,6 +1,7 @@
 /*! Open Historia — structural world-to-politics pressure derivation (Continuum) */
 
 import { getPoliticalProfileKey } from "./politicalActors.js";
+import { compareGameDates, compareGameDatesNewestFirst, diffGameDays } from "./gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -55,8 +56,8 @@ const previousStatsSample = (world, statsKey, updatedAt) => {
   const cutoff = clean(updatedAt);
   const candidates = series
     .filter((entry) => entry && typeof entry === "object")
-    .filter((entry) => !cutoff || !clean(entry.date) || clean(entry.date) < cutoff)
-    .sort((left, right) => clean(right?.date).localeCompare(clean(left?.date)));
+    .filter((entry) => !cutoff || !clean(entry.date) || compareGameDates(clean(entry.date), cutoff) < 0)
+    .sort((left, right) => compareGameDatesNewestFirst(clean(left?.date), clean(right?.date)));
   return candidates[0] || null;
 };
 
@@ -173,16 +174,10 @@ const relationSignals = ({ world, months, updatedAt, signalsByPolity }) => {
 
 const warSignals = ({ world, months, updatedAt, signalsByPolity }) => {
   const byPolity = new Map();
-  const toTime = /^\d{4}-\d{2}-\d{2}$/.test(clean(updatedAt)) ? new Date(`${updatedAt}T00:00:00Z`).getTime() : NaN;
-
   for (const war of asArray(world?.wars)) {
     if (clean(war?.status).toLowerCase() !== "active") continue;
-    const startedTime = /^\d{4}-\d{2}-\d{2}$/.test(clean(war?.startedDate))
-      ? new Date(`${war.startedDate}T00:00:00Z`).getTime()
-      : NaN;
-    const ageDays = Number.isFinite(toTime) && Number.isFinite(startedTime)
-      ? Math.max(0, Math.round((toTime - startedTime) / 86400000))
-      : 0;
+    // Game dates, BC included (runtime/gameDates.js); 0 when either is unreadable.
+    const ageDays = Math.max(0, diffGameDays(clean(war?.startedDate), clean(updatedAt)) ?? 0);
 
     const participants = [...asArray(war?.sideA), ...asArray(war?.sideB)];
     for (const token of participants) {
