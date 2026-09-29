@@ -211,6 +211,45 @@ export const consumeInstitutionResolutionAuthority = (worldInput = {}, {
   return { world, consumed: true, authority, proposal };
 };
 
+// The mandate refs one accepted event carries: its canonical-process authority
+// and any sovereign row's. Storyline, war and project refs share the field, so
+// only institution-resolution refs are taken.
+const INSTITUTION_RESOLUTION_REF_PREFIX = "institution-resolution:";
+const eventMandateRefs = (event = {}) => {
+  const agency = event?.agency && typeof event.agency === "object" ? event.agency : {};
+  const refs = [agency.authorityRef, ...list(agency.sovereignActors).map((row) => row?.authorityRef)]
+    .map(clean)
+    .filter((ref) => ref.startsWith(INSTITUTION_RESOLUTION_REF_PREFIX));
+  return [...new Set(refs)];
+};
+
+// After a time skip's events are accepted: each event the binder tied to a
+// passed resolution's open mandate (nativeWorldIntegrity.js) carries it out,
+// under the event's final id and date. A mandate is used once, by the first
+// event in the list that cites it; a later citation of the same mandate finds
+// it completed and consumes nothing (skipped, with the reason).
+export const consumeEventInstitutionMandates = (worldInput = {}, events = [], { date = "" } = {}) => {
+  let world = worldInput;
+  const consumed = [];
+  const skipped = [];
+  for (const event of list(events)) {
+    for (const authorityRef of eventMandateRefs(event)) {
+      const result = consumeInstitutionResolutionAuthority(world, {
+        authorityRef,
+        eventId: clean(event?.id),
+        date: clean(event?.date) || clean(date),
+      });
+      if (result.consumed) {
+        world = result.world;
+        consumed.push({ authorityRef, eventId: clean(event?.id) });
+      } else {
+        skipped.push({ authorityRef, eventId: clean(event?.id), reason: result.reason });
+      }
+    }
+  }
+  return { world, consumed, skipped };
+};
+
 export const buildInstitutionResolutionAuthorityContext = (world = {}, focusPolities = [], { maxMandates = 8 } = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   const focus = new Set(list(focusPolities).map((value) => lower(value)).filter(Boolean));
@@ -226,4 +265,17 @@ export const buildInstitutionResolutionAuthorityContext = (world = {}, focusPoli
     const note = clean(row.consequenceNote || row.proposalTitle).slice(0, 320);
     return `- ${row.institutionName}: ${row.proposalTitle} [${row.consequenceKind}]${note ? ` — ${note}` : ""}`;
   }).join("\n");
+};
+
+// The time skip's block of passed resolutions still waiting to be carried out,
+// or "" when there are none. Without it the skip learns of a mandate only when
+// an event happens to match one after the fact.
+export const buildOpenInstitutionalMandatesBlock = (world = {}, focusPolities = []) => {
+  const mandates = buildInstitutionResolutionAuthorityContext(world, focusPolities);
+  if (!mandates) return "";
+  return [
+    "[Open Institutional Mandates]",
+    "Resolutions an institution has passed that authorise a deployment, sanctions or funding not yet carried out. When the members act on one in this period, write it as the institution's doing, naming the institution and the resolution; each mandate is carried out once. None has to be acted on.",
+    mandates,
+  ].join("\n");
 };

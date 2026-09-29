@@ -331,6 +331,7 @@ import {
   commitInstitutionLifecycleChatBatch,
 } from "../../runtime/institutionLifecycle.js";
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
+import { buildOpenInstitutionalMandatesBlock, consumeEventInstitutionMandates } from "../../runtime/institutionalAuthority.js";
 import { gmChangesForRound, normalizeReminders, recordGmChange, renderGmChangeNarration, renderReminders } from "../../runtime/gmChanges.js";
 import { describeGoalForSimulation, describeGoalForSuggestions, playerGoalOf } from "../../runtime/playerGoal.js";
 import { createSkipPhases, describeReviewJobs, formatSkipPhases } from "./skipPhases.js";
@@ -2401,6 +2402,10 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
 What earlier chats agreed, promised, threatened or declared, and what still binds. Carry each through when its time comes: an agreed meeting, withdrawal or hand-over happens on its date, or an event says why it did not; a declared intention is acted on or visibly dropped; a credible threat is answered by the power it threatens, before its deadline. Where a summary and the exact words differ, follow the words, and a later pleasantry does not cancel an earlier threat or promise. A proposal nobody accepted is not an agreement.
 ${continuity}`);
   }
+
+  // Passed resolutions still to be carried out (runtime/institutionalAuthority.js).
+  const mandates = buildOpenInstitutionalMandatesBlock(world);
+  if (mandates) blocks.push(mandates);
 
   const reputation = normalizeString(variables.playerPolityReputationContext);
   const intelligence = normalizeString(variables.playerPolityIntelligenceContext);
@@ -7466,6 +7471,14 @@ const applySimulationResult = async ({
     round: nextGame.round,
   });
   worldWithImpacts = storylineMerge.world;
+  // An event bound to a passed resolution's deployment, sanctions or funding
+  // mandate (nativeWorldIntegrity.js) carries it out: the resolution records it
+  // as applied, and the mandate cannot be cited again.
+  const mandateUse = consumeEventInstitutionMandates(worldWithImpacts, freshEvents, { date: nextGame.gameDate });
+  worldWithImpacts = mandateUse.world;
+  if (mandateUse.consumed.length || mandateUse.skipped.length) {
+    logDebugEvent("turn", `Institutional mandates carried out: ${mandateUse.consumed.length}; citations not applied: ${mandateUse.skipped.length}.`, mandateUse, { verbose: true });
+  }
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
