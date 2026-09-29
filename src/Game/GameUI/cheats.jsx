@@ -58,6 +58,7 @@ import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
+import { polityNameInUse } from "../../runtime/gmPolityNames.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -4233,19 +4234,22 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
     }
 
     if (tool === "add-country") {
-        const adding = true;
-        const applyCountry = () => runBusy(async () => {
-            const name = (fields.name ?? "").trim();
+        const createCountry = () => runBusy(async () => {
             // One naming scheme, no codes: the country's NAME is its identifier.
-            const code = adding ? name : (target || "").trim();
+            const code = (fields.name ?? "").trim();
             const colorHex = (fields.color ?? "").trim();
-            if (!code) throw new Error(adding ? "Give the country a name." : "Pick a country first.");
+            if (!code) throw new Error("Give the country a name.");
+            // A name in use anywhere — an override, a map owner, a stock
+            // country on the map — is refused, not merged into (gmPolityNames.js):
+            // changing a country is the Country Editor's job.
+            const { polities: mapPolities } = await loadPolities();
             const world = await readWorldState({ force: true });
-            const existing = world.polityOverrides?.[code] ?? {};
+            if (polityNameInUse(world, code, mapPolities)) {
+                throw new Error(`${code} already exists. Use the Country Editor to change it.`);
+            }
             const nextOverride = {
-                ...existing,
                 code,
-                name: name || existing.name || code,
+                name: code,
                 ...(hexToRgb(colorHex) ? { color: colorHex.startsWith("#") ? colorHex : `#${colorHex}` } : null),
             };
             await writeWorldState({
@@ -4257,27 +4261,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 const colors = await readJson(JSON_URLS.colors, { defaultValue: {}, force: true });
                 await writeJson(JSON_URLS.colors, { ...colors, [code]: rgb }, { pretty: true });
             }
-            if (adding && !world.polityOverrides?.[code]) {
-                await noteGmChange("polity", `Created the polity ${nextOverride.name} by hand; it holds no land until it is given some.`);
-            }
+            await noteGmChange("polity", `Created the polity ${nextOverride.name} by hand; it holds no land until it is given some.`);
             await refresh();
-            return adding
-                ? `${nextOverride.name} created. Use Annex Country or Annex Regions to give it territory.`
-                : `${nextOverride.name} updated. The map picks up colors within a few seconds.`;
+            return `${nextOverride.name} created. Use Annex Country or Annex Regions to give it territory.`;
         });
 
         return (
             <>
             {header(meta.title, meta.subtitle)}
             <div style={{ overflowY: "auto" }}>
-            {!adding && (
-                <>
-                <label style={labelStyle}>Country</label>
-                <PolitySelect polities={polities} value={target} onChange={(code) => { setTarget(code); setFields({}); }} />
-                </>
-            )}
             <label style={labelStyle}>Name</label>
-            <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} placeholder={adding ? "Atlantis" : nameOf(target)} />
+            <input style={inputStyle} value={fields.name ?? ""} onChange={(event) => setFields({ ...fields, name: event.target.value })} placeholder="Atlantis" />
             <label style={labelStyle}>Color (hex)</label>
             <div style={{ alignItems: "center", display: "flex", gap: "0.45rem" }}>
             <input style={{ ...inputStyle, width: "8rem" }} value={fields.color ?? ""} onChange={(event) => setFields({ ...fields, color: event.target.value })} placeholder="#a1a1aa" />
@@ -4289,8 +4283,8 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             style={{ background: "none", border: "none", cursor: "pointer", height: "2.1rem", padding: 0, width: "2.6rem" }}
             />
             </div>
-            <button type="button" className="oh-tap-row" disabled={busy} onClick={applyCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
-            {adding ? "Create country" : "Save changes"}
+            <button type="button" className="oh-tap-row" disabled={busy} onClick={createCountry} style={{ ...primaryButtonStyle, marginTop: "0.7rem", width: "100%" }}>
+            Create country
             </button>
             {statusLine}
             </div>
