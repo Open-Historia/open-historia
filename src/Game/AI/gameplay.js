@@ -381,6 +381,7 @@ import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normali
 import {
   HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
+  attemptHeldTurn,
   beginSimulation,
   discardHeldTurns,
   endSimulation,
@@ -4166,19 +4167,18 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
   const { applyArgs } = heldProjectsJump;
   beginSimulation();
   try {
-    // Released BEFORE the attempt, so a turn can never be applied twice, and
-    // re-held only if the BOARD fails again — a failure after that point is a
-    // different situation and must not pretend otherwise.
-    holdTurn(HELD_TURN.board, null);
     // The RETRY's signal, not the held turn's — that one belongs to a request
     // that already finished, and if the player cancelled it this call would abort
     // before it started.
     applyArgs.projects = { ...applyArgs.projects, signal };
+    // Released BEFORE the attempt (attemptHeldTurn), and re-held only if the
+    // BOARD fails again or the player cancels — a failure after that point is
+    // a different situation and must not pretend otherwise.
     // Re-running the whole apply is safe and is why this is one call rather than
     // a second code path to keep in step: it is pure until its final writes, and
     // every step in between is deterministic — espionage included, since its rolls
     // are seeded on the round.
-    return await applySimulationResult(applyArgs);
+    return await attemptHeldTurn(HELD_TURN.board, heldProjectsJump, () => applySimulationResult(applyArgs), { signal });
   } catch (error) {
     if (error?.heldKind === HELD_TURN.board) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
@@ -14857,9 +14857,11 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
     // A retry is timed on its own, and tells the panel that asked for it.
     state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
     // Re-holds itself on another failure, so the player can retry again or
-    // discard — exactly as they could the first time.
-    await runJumpSegments({ context, onEvents, onProgress, signal, state });
-    return await finishTimelineJump({ context, signal, state });
+    // discard — exactly as they could the first time — and on a Cancel.
+    return await attemptHeldTurn(HELD_TURN.segment, heldSegment, async () => {
+      await runJumpSegments({ context, onEvents, onProgress, signal, state });
+      return finishTimelineJump({ context, signal, state });
+    }, { signal });
   } finally {
     endSimulation();
   }
@@ -14872,14 +14874,13 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
 // check that answered keeps its answer. Re-holds itself on another failure.
 export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailedChecks = false } = {}) => {
   const held = getHeldTurn(HELD_TURN.checks);
-  if (!held) throw new Error("There is no turn waiting on its review.");
+  if (!held) throw new Error("There is no turn waiting on its checks.");
   const { context, state } = held;
   beginSimulation();
   try {
-    // Released before the attempt, so a turn can never be applied twice.
-    holdTurn(HELD_TURN.checks, null);
     // The checks that answered are given their answers back either way; the
-    // failed ones are asked again, or taken as they failed.
+    // failed ones are asked again, or taken as they failed. A cancelled
+    // Continue takes that back: the turn is held as it was.
     if (withoutFailedChecks) state.checks?.accept();
     // A fresh decision to spend, as a segment retry is: the held attempt spent
     // the budget's review request, and the apply still asks for its own.
@@ -14893,7 +14894,10 @@ export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailed
       refused: spentSoFar.refused,
     };
     state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
-    return await finishTimelineJump({ context, signal, state });
+    return await attemptHeldTurn(HELD_TURN.checks, held, () => finishTimelineJump({ context, signal, state }), {
+      signal,
+      onCancel: () => { if (withoutFailedChecks) state.checks?.accept(false); },
+    });
   } finally {
     endSimulation();
   }

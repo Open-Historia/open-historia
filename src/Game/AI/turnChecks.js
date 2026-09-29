@@ -51,8 +51,9 @@ export const createTurnChecks = () => {
         failures: () => [...answers.entries()]
             .filter(([, entry]) => entry.reason)
             .map(([key, entry]) => ({ key, reason: entry.reason })),
-        // The player chose to go on without the checks that failed.
-        accept: () => { accepted = true; },
+        // The player chose to go on without the checks that failed; false
+        // takes that back (a cancelled Continue).
+        accept: (on = true) => { accepted = on === true; },
         get accepted() { return accepted; },
     };
 };

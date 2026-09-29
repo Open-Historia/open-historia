@@ -81,6 +81,24 @@ export const isChatGenerationLikely = () => chatGenerationInFlight;
 // Android app rests in the background on this (runtime/native/backgroundPause.js).
 export const isGenerating = () => activeSimulations > 0 || chatGenerationInFlight;
 
+// A retry takes its held turn out before the attempt, so a turn can never be
+// applied twice. A Cancel must put it back: the notice stays up offering Retry,
+// and without the turn behind it the next press found nothing ("There is no
+// turn waiting…") and the turn was lost. A failure that holds the turn again
+// holds it itself; anything else is an ordinary failure and the turn is gone.
+export const attemptHeldTurn = async (kind, held, attempt, { signal = null, onCancel = null } = {}) => {
+  heldTurns.delete(kind);
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!error?.heldKind && (signal?.aborted || error?.name === "AbortError")) {
+      onCancel?.();
+      heldTurns.set(kind, held);
+    }
+    throw error;
+  }
+};
+
 // Discards stay synchronous: time.jsx fires them next to a setState, and an
 // async one would leave isSimulationBusy() true for a tick afterwards. Nothing
 // was written either way, so there is nothing to undo.

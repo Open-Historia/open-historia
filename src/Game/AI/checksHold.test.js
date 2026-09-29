@@ -58,7 +58,7 @@ test("a failed check made inside the apply holds the turn at the last point befo
 
 test("Continue accepts the failed checks; Retry keeps the answers that came back", () => {
     const retry = body(gameplay, "export const retryPendingChecksJump = async");
-    assert.match(retry, /holdTurn\(HELD_TURN\.checks, null\)[\s\S]*finishTimelineJump\(/, "released before the attempt, so a turn is never applied twice");
+    assert.match(retry, /attemptHeldTurn\(HELD_TURN\.checks, held, \(\) => finishTimelineJump\(/, "released for the attempt, so a turn is never applied twice");
     assert.match(retry, /if \(withoutFailedChecks\) state\.checks\?\.accept\(\)/);
 });
 
@@ -92,4 +92,44 @@ test("a held turn of any kind keeps the idle pulse from writing, until discarded
         assert.equal(isSimulationBusy(), false);
         assert.equal(getHeldTurn(kind), null);
     }
+});
+
+// ---- A cancelled retry ----------------------------------------------------------
+// The notice stays up after a Cancel, so the turn has to be behind it still.
+
+test("every retry releases its turn through attemptHeldTurn", () => {
+    for (const [name, kind] of [["retryPendingJumpSegment", "segment"], ["retryPendingProjectsJump", "board"], ["retryPendingChecksJump", "checks"]]) {
+        assert.ok(body(gameplay, `export const ${name} = async`).includes(`attemptHeldTurn(HELD_TURN.${kind}, `), name);
+    }
+});
+
+test("a cancelled retry puts the held turn back", async () => {
+    const { HELD_TURN, attemptHeldTurn, discardHeldTurns, getHeldTurn, holdTurn } = await import("./simulationStatus.js");
+    const held = { context: "c", state: "s" };
+    holdTurn(HELD_TURN.checks, held);
+    const controller = new AbortController();
+    let cancelled = false;
+    await assert.rejects(attemptHeldTurn(HELD_TURN.checks, held, async () => {
+        assert.equal(getHeldTurn(HELD_TURN.checks), null, "released during the attempt");
+        controller.abort();
+        throw new DOMException("cancelled", "AbortError");
+    }, { signal: controller.signal, onCancel: () => { cancelled = true; } }));
+    assert.equal(getHeldTurn(HELD_TURN.checks), held);
+    assert.equal(cancelled, true);
+    discardHeldTurns();
+});
+
+test("a retry held again, or failed outright, is not put back as it was", async () => {
+    const { HELD_TURN, attemptHeldTurn, discardHeldTurns, getHeldTurn, holdTurn } = await import("./simulationStatus.js");
+    const held = { state: "old" };
+    holdTurn(HELD_TURN.checks, held);
+    await assert.rejects(attemptHeldTurn(HELD_TURN.checks, held, async () => {
+        holdTurn(HELD_TURN.checks, { state: "new" });
+        throw Object.assign(new Error("held again"), { heldKind: HELD_TURN.checks });
+    }));
+    assert.deepEqual(getHeldTurn(HELD_TURN.checks), { state: "new" });
+    holdTurn(HELD_TURN.checks, held);
+    await assert.rejects(attemptHeldTurn(HELD_TURN.checks, held, async () => { throw new Error("the write failed"); }));
+    assert.equal(getHeldTurn(HELD_TURN.checks), null);
+    discardHeldTurns();
 });

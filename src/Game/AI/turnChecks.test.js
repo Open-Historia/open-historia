@@ -83,3 +83,12 @@ test("numbered checks are named by what they are", () => {
     assert.equal(describeCheck("timeline#1"), "the timeline clean-up");
     assert.equal(describeCheck("review"), "the turn review");
 });
+
+test("a cancelled Continue is taken back: the failed checks hold the turn again", async () => {
+    const checks = createTurnChecks();
+    await checks.run("units", async () => fallback("timeout"), fellBack);
+    checks.accept();
+    assert.equal(checksHoldTurn(checks), false);
+    checks.accept(false);
+    assert.equal(checksHoldTurn(checks), true);
+});
