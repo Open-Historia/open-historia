@@ -263,7 +263,7 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 export const JUMP_SPENDERS = Object.freeze([
     "jump",          // the time skip itself
     "jumpRetry",     // asked again, only when the first answer could not be used at all
-    "review",        // units, territory, timeline, board and agents, in one request
+    "review",        // units, territory, structures, timeline, board and agents, in one request
     "history",       // folding old events into the history document, when due
     "repair",        // a second search when the skip came back thin
     "institutionBallots", // unresolved NPC formal ballots after the new turn is canonical

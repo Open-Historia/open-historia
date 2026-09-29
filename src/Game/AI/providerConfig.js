@@ -193,9 +193,9 @@ export const AI_TASK_ROUTING = [
     { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     // While AI requests are being saved (requestBudget.js) this ONE task does the
-    // work of the curator, both directors, the projects pass and every spy
+    // work of the curator, the three directors, the projects pass and every spy
     // intercept below, and their own picks are not used.
-    { key: "turnReview", label: "After-skip checks", hint: "Strong mid-tier: units, territory, timeline, board and agents in one request", group: "Simulation" },
+    { key: "turnReview", label: "After-skip checks", hint: "Strong mid-tier: units, territory, structures, timeline, board and agents in one request", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
     { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
