@@ -13,7 +13,7 @@ import {
   normalizeWorldState,
 } from "../../runtime/gameState.js";
 import { buildRegionOwnershipText, regionOwnerName } from "./regionVocab.js";
-import { selectFocusPowers } from "./regionFocus.js";
+import { isPendingAction, selectFocusPowers } from "./regionFocus.js";
 import { filterChatsVisibleTo } from "./chatVisibility.js";
 import { buildForcePostureText } from "./forcePosture.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
@@ -1030,7 +1030,9 @@ const buildMarkerAttentionEvidence = (bundle, { chat = null } = {}) => {
       ...normalizeArray(war.sideB).slice(0, 8).map(normalizeString),
     );
   }
-  for (const action of normalizeActions(bundle.actions).filter((entry) => !entry?.resolved).slice(-10)) {
+  // Queued orders only: an answered one is status "resolved", and ten of those
+  // would otherwise fill the window ahead of the fortress still being built.
+  for (const action of normalizeActions(bundle.actions).filter(isPendingAction).slice(-10)) {
     pieces.push(
       normalizeString(action.title),
       compactMarkerNote(action.description || action.rawInput || action.text, 320),
