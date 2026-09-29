@@ -130,15 +130,10 @@ test("PTR GPU resources are uploaded lazily in bounded batches", () => {
 });
 
 test("WebGL context loss remains instrumented for freeze diagnostics", () => {
-  assert.match(world, /webglcontextlost/);
-  assert.match(world, /webglcontextrestored/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-lost"/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-released"/);
-  assert.match(world, /mapInstance\?\._removed \|\| !canvas\.isConnected/);
-  assert.match(world, /setTimeout\(\(\) => \{/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-restored"/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextlost", onLost\)/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
+  // The listeners themselves are covered by mapInstrumentation.test.js; World
+  // attaches them to every map instance it mounts.
+  assert.match(world, /attachMapInstrumentation\(\{/);
+  assert.match(world, /\}, \[handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast\]\);/);
 });
 
 test("country fills are written again when MapLibre rebuilds the sources holding their feature-state", () => {

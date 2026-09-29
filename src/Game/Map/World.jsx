@@ -6,7 +6,8 @@ import { useCustomBackground } from "./useCustomBackground.js";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
-import { recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
+import { isMapPerfVerbose, recordMapFreeze, recordMapTrace } from "../../runtime/mapPerfTrace.js";
+import { attachMapInstrumentation } from "./mapInstrumentation.js";
 import {
   DEFAULT_BASEMAP_ID,
   TERRAIN_TILE_TEMPLATE,
@@ -474,10 +475,14 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   return style;
 };
 
+// How long basemap tiles must keep loading before "Loading tiles…" shows.
+const LOADING_TOAST_DELAY_MS = 700;
+
 function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   const hasReportedInitialIdleRef = useRef(false);
   const [loading, setLoading] = useState(false);
   const loadTimerRef = useRef(null);
+  const loadingPendingRef = useRef(false);
   const [basemapTransition, setBasemapTransition] = useState({
     active: false,
     progress: 0,
@@ -717,20 +722,15 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         : null,
     [terrainEnabled, effectiveCustomBg, effectiveBgDeclared],
   );
-  // R5.1: use one renderer density for the entire session.
-  // R5.0 switched between 1x and native DPR around z4.5/z5.0.
-  // MapLibre setPixelRatio() rebuilds its render targets, producing a
-  // catastrophic hitch exactly when the player zooms through that boundary.
-  // The low-zoom live test showed the 1x framebuffer performs well, so keep it
-  // fixed instead of reallocating the renderer during navigation.
-  const fixedPixelRatioAppliedRef = useRef(false);
-  const applyFixedPixelRatio = useCallback(() => {
-    if (fixedPixelRatioAppliedRef.current) return;
-    const mapInstance = mapRef?.current?.getMap?.();
-    if (!mapInstance || typeof mapInstance.setPixelRatio !== "function") return;
-    fixedPixelRatioAppliedRef.current = true;
-    mapInstance.setPixelRatio(1);
-  }, [mapRef]);
+  // The basemap's own style sources, which the "Loading tiles…" toast watches.
+  const basemapSourceIds = useMemo(
+    () => new Set(Object.keys(worldStyle?.sources ?? {})),
+    [worldStyle],
+  );
+  const basemapSourceIdsRef = useRef(basemapSourceIds);
+  useEffect(() => {
+    basemapSourceIdsRef.current = basemapSourceIds;
+  }, [basemapSourceIds]);
 
   const emitMapMotion = useCallback((active) => {
     if (typeof window === "undefined") return;
@@ -742,6 +742,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   }, []);
   const handleMoveStart = useCallback(() => {
     emitMapMotion(true);
+    // The frame sampler (and the freeze detector inside it) is a debugging
+    // aid: it costs a callback on every frame of every pan.
+    if (!isMapPerfVerbose()) return;
     const perf = dragPerfRef.current;
     if (perf.raf) cancelAnimationFrame(perf.raf);
     perf.active = true;
@@ -849,17 +852,15 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
       + `${summary.longFrames100ms} frame(s) >=100ms. Full object: window.__OH_LAST_MAP_PERF__`,
     );
   }, [emitMapMotion]);
-  const handleSourceData = useCallback((event) => {
-    const sourceId = String(event?.sourceId ?? event?.source?.id ?? "");
-    if (!sourceId) return;
-    recordMapTrace("map:sourcedata", {
-      sourceId,
-      sourceDataType: event?.sourceDataType ?? "",
-      loaded: event?.isSourceLoaded === true,
-    });
-    if (sourceReadyRef.current.has(sourceId) || event?.isSourceLoaded !== true) return;
+  const handleSourceLoaded = useCallback((sourceId) => {
+    if (sourceReadyRef.current.has(sourceId)) return;
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     sourceReadyRef.current.set(sourceId, Math.round((now - mapMountedAtRef.current) * 10) / 10);
+  }, []);
+  const stopLoadingToast = useCallback(() => {
+    loadingPendingRef.current = false;
+    clearTimeout(loadTimerRef.current);
+    setLoading(false);
   }, []);
   const handleIdle = useCallback(() => {
     recordMapTrace("map:idle");
@@ -867,7 +868,6 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     // waits for the one that follows the polity layers (mapReadiness.js).
     markMapIdle();
     emitMapMotion(false);
-    applyFixedPixelRatio();
 
     const transition = basemapTransitionRef.current;
     if (transition.active) {
@@ -896,28 +896,37 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     }
 
     if (hasReportedInitialIdleRef.current) {
-      setLoading(false);
+      stopLoadingToast();
       return;
     }
     hasReportedInitialIdleRef.current = true;
     onInitialIdle?.();
-    setLoading(false);
+    stopLoadingToast();
   }, [
-    applyFixedPixelRatio,
     emitMapMotion,
     finishBasemapTransition,
     natGeoDarkActive,
     natGeoDarkStyle,
     noteBasemapTransitionProgress,
     onInitialIdle,
+    stopLoadingToast,
   ]);
-  const handleLoading = useCallback(() => {
+  // A basemap tile started loading (mapInstrumentation.js filters out the
+  // game's own sources). This fires per tile, so it touches React state only
+  // once per loading spell, and the toast shows only when tiles are still
+  // loading LOADING_TOAST_DELAY_MS later: local tiles land before then, so a
+  // pan does not flash it. The next idle hides it; the 8 s timer is the backstop.
+  const handleBasemapTileLoading = useCallback(() => {
+    if (basemapTransitionRef.current.active) noteBasemapTransitionProgress(68);
+    if (loadingPendingRef.current) return;
+    loadingPendingRef.current = true;
     recordMapTrace("map:loading");
-    setLoading(true);
-    noteBasemapTransitionProgress(68);
     clearTimeout(loadTimerRef.current);
-    loadTimerRef.current = setTimeout(() => setLoading(false), 8000);
-  }, [noteBasemapTransitionProgress]);
+    loadTimerRef.current = setTimeout(() => {
+      setLoading(true);
+      loadTimerRef.current = setTimeout(stopLoadingToast, 8000);
+    }, LOADING_TOAST_DELAY_MS);
+  }, [noteBasemapTransitionProgress, stopLoadingToast]);
   const handleMapLoad = useCallback(() => {
     recordMapTrace("map:load");
     noteBasemapTransitionProgress(84);
@@ -934,123 +943,41 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
     perf.raf = 0;
   }, [emitMapMotion]);
 
+  // Keyed on the map instance, not only the projection: a basemap or
+  // background change remounts <Map> (mapInstanceKey) with the projection
+  // unchanged, and the listeners have to move to the new instance.
   React.useEffect(() => {
-    fixedPixelRatioAppliedRef.current = false;
     let disposed = false;
     let frame = 0;
-    let canvas = null;
-    let mapInstance = null;
+    let detach = null;
 
     const attach = () => {
       if (disposed) return;
-      mapInstance = mapRef?.current?.getMap?.() || null;
-      canvas = mapInstance?.getCanvas?.() || null;
-      if (!canvas || !mapInstance) {
+      const mapInstance = mapRef?.current?.getMap?.() || null;
+      const canvas = mapInstance?.getCanvas?.() || null;
+      if (!canvas || !mapInstance || mapInstance._removed) {
         frame = requestAnimationFrame(attach);
         return;
       }
-
-      const perf = dragPerfRef.current;
-      const noteSource = (event) => {
-        if (perf.active) {
-          perf.sourceEvents += 1;
-          if (event?.sourceDataType === "content" || event?.sourceDataType === "metadata") {
-            perf.sourceLoads += 1;
-          }
-          if (event?.isSourceLoaded === true) perf.sourceLoaded += 1;
-        }
-        const sourceId = String(event?.sourceId ?? "");
-        if (sourceId) {
-          recordMapTrace("map:source-event", {
-            sourceId,
-            sourceDataType: event?.sourceDataType ?? "",
-            loaded: event?.isSourceLoaded === true,
-          });
-        }
-      };
-      const noteData = () => {
-        if (perf.active) perf.dataEvents += 1;
-      };
-      const noteStyle = () => {
-        if (perf.active) perf.styleEvents += 1;
-        recordMapTrace("map:styledata");
-      };
-      const noteStyleLoading = () => {
-        if (perf.active) perf.styleLoadingEvents += 1;
-        recordMapTrace("map:styledataloading");
-      };
-      const noteRender = () => {
-        if (perf.active) perf.renders += 1;
-      };
-      const noteIdle = () => {
-        if (perf.active) perf.idles += 1;
-        recordMapTrace("map:idle-event");
-      };
-      const noteZoomStart = () => {
-        if (perf.active) perf.zoomStarts += 1;
-        recordMapTrace("camera:zoom-start", { zoom: mapInstance.getZoom?.() ?? 0 });
-      };
-      const noteZoomEnd = () => {
-        if (perf.active) perf.zoomEnds += 1;
-        recordMapTrace("camera:zoom-end", { zoom: mapInstance.getZoom?.() ?? 0 });
-      };
-      const onLost = (event) => {
-        // map.remove() loses its own context on purpose — every game switch and
-        // every unmount does — and MapLibre marks the map removed only after.
-        // That is teardown, not the GPU dropping the map, and it was logged as a
-        // warning for every game a player opened. Decided a task later, once the
-        // removal has finished.
-        const status = event?.statusMessage ?? "";
-        setTimeout(() => {
-          if (mapInstance?._removed || !canvas.isConnected) {
-            recordMapTrace("gpu:webgl-released", { status });
-            return;
-          }
-          if (perf.active) perf.webglLosses += 1;
-          recordMapTrace("gpu:webgl-lost", { status });
-          console.warn(`[OH PERF GPU] WebGL context lost${status ? ` · ${status}` : ""}`);
-        }, 0);
-      };
-      const onRestored = () => {
-        recordMapTrace("gpu:webgl-restored");
-        console.warn("[OH PERF GPU] WebGL context restored");
-      };
-
-      canvas.addEventListener("webglcontextlost", onLost);
-      canvas.addEventListener("webglcontextrestored", onRestored);
-      mapInstance.on?.("sourcedata", noteSource);
-      mapInstance.on?.("data", noteData);
-      mapInstance.on?.("styledata", noteStyle);
-      mapInstance.on?.("styledataloading", noteStyleLoading);
-      mapInstance.on?.("render", noteRender);
-      mapInstance.on?.("idle", noteIdle);
-      mapInstance.on?.("zoomstart", noteZoomStart);
-      mapInstance.on?.("zoomend", noteZoomEnd);
-
-      recordMapTrace("map:instrumentation-attached");
-
-      canvas.__ohPerfGpuCleanup = () => {
-        canvas.removeEventListener("webglcontextlost", onLost);
-        canvas.removeEventListener("webglcontextrestored", onRestored);
-        mapInstance?.off?.("sourcedata", noteSource);
-        mapInstance?.off?.("data", noteData);
-        mapInstance?.off?.("styledata", noteStyle);
-        mapInstance?.off?.("styledataloading", noteStyleLoading);
-        mapInstance?.off?.("render", noteRender);
-        mapInstance?.off?.("idle", noteIdle);
-        mapInstance?.off?.("zoomstart", noteZoomStart);
-        mapInstance?.off?.("zoomend", noteZoomEnd);
-      };
+      detach = attachMapInstrumentation({
+        map: mapInstance,
+        canvas,
+        perf: dragPerfRef.current,
+        verbose: isMapPerfVerbose(),
+        onSourceLoaded: handleSourceLoaded,
+        onBasemapTileLoading: handleBasemapTileLoading,
+        basemapSourceIds: () => basemapSourceIdsRef.current,
+      });
     };
 
     attach();
     return () => {
       disposed = true;
       if (frame) cancelAnimationFrame(frame);
-      canvas?.__ohPerfGpuCleanup?.();
-      if (canvas) delete canvas.__ohPerfGpuCleanup;
+      detach?.();
+      stopLoadingToast();
     };
-  }, [mapRef, projection]);
+  }, [handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast]);
 
 
   return (
@@ -1132,16 +1059,23 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
         // structure and are never evicted by this, so it never re-fetches what's on
         // screen. Orthogonal to the fixed R5.1 framebuffer density.
         maxTileCacheSize={256}
+        // R5.1: one renderer density for the whole session. R5.0 switched
+        // between 1x and native DPR around z4.5/z5.0, and setPixelRatio()
+        // rebuilds the render targets: a hitch exactly as the player zoomed
+        // through that boundary. The 1x framebuffer performs well, and on a
+        // 2x-3x phone screen native density is 4-9 times the pixels (heat,
+        // RAM). A constructor option, so every instance starts at 1x: a
+        // basemap or background change remounts the map, and a ratio set
+        // after the first mount's idle was lost with that instance.
+        pixelRatio={1}
         projection={mapProjection}
         terrain={terrain}
         mapStyle={worldStyle}
         onLoad={handleMapLoad}
         onIdle={handleIdle}
-        onLoading={handleLoading}
         onMoveStart={handleMoveStart}
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
-        onSourceData={handleSourceData}
       >
         <MapScene isGlobe={isGlobe} />
       </Map>
