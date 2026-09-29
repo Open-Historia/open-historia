@@ -1579,6 +1579,12 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
     return null;
   } catch (error) {
     // Reads (GET details/asset) → 404; every mutation → 400 (mirrors server.js).
+    // A read that failed for any other reason than the thing not being there
+    // (a record too big to serialise on a phone) is a 500, never a 404: a
+    // client takes a 404 asset as "none", and saved the default over it.
+    if (method === "GET" && !/not found|unsupported asset key/i.test(String(error?.message ?? ""))) {
+      return errorResponse(error.message, 500);
+    }
     return errorResponse(error.message, method === "GET" ? 404 : 400);
   }
 };

@@ -1800,6 +1800,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
   const [editorStats, setEditorStats] = useState(() => normalizeStatsEditorValue(null));
+  // The open scenario's Stats sheet failed to download: Save leaves it alone.
+  const [editorStatsFailed, setEditorStatsFailed] = useState(false);
   const [editorError, setEditorError] = useState(null);
   const [editorSection, setEditorSection] = useState("overview");
   const [promptSectionKey, setPromptSectionKey] = useState("leader");
@@ -1821,6 +1823,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorDetails(null);
     setEditorState(null);
     setEditorStats(normalizeStatsEditorValue(null));
+    setEditorStatsFailed(false);
     setEditorError(null);
     setEditorSection("overview");
     setPromptSectionKey("leader");
@@ -1831,14 +1834,23 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
+      // A Stats sheet that failed to download (rather than one the scenario
+      // does not have) must not read as "the standard sheet": Save would then
+      // delete the author's custom one. It is left out of Save instead.
+      let statsFailed = false;
       const [details, statsAsset] = await Promise.all([
         loadScenarioDetails(scenarioId),
-        downloadScenarioJsonAsset(scenarioId, "stats"),
+        downloadScenarioJsonAsset(scenarioId, "stats").catch(() => {
+          statsFailed = true;
+          return null;
+        }),
       ]);
       setEditorKind("scenario");
       setEditorDetails(details);
       setEditorState(buildScenarioEditorState(details));
       setEditorStats(normalizeStatsEditorValue(statsAsset));
+      setEditorStatsFailed(statsFailed);
+      if (statsFailed) setEditorError("This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.");
       setEditorSection("overview");
       setPromptSectionKey("leader");
     } catch (nextError) {
@@ -2710,7 +2722,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
             startingTimelineText: editorState.startingTimelineText,
           },
         });
-        if (editorStats.custom) {
+        if (editorStatsFailed) {
+          // Never loaded, so never written: see openScenarioEditor.
+        } else if (editorStats.custom) {
           if ((editorStats.sections || []).some((section) => !Array.isArray(section?.stats) || section.stats.length === 0)) {
             throw new Error("Each custom Stats section needs at least one statistic before saving.");
           }
@@ -3024,6 +3038,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         // Its puppet states, for the Countries panel.
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
       });
+    }).catch((error) => {
+      // A piece that failed to download is not a piece the map lacks: seeded
+      // without it, the Workshop's save would clear the flags, tags and
+      // background and write the stock world over the geometry. So the
+      // Workshop closes before anything can be saved, and the drawer says why.
+      console.warn("[editor] the scenario's map could not be loaded:", error);
+      setIsMapEditorOpen(false);
+      setMapEditorScenario(null);
+      setMapEditorSeed(null);
+      setMapEditorReview(null);
+      setEditorError(`The map editor was closed because this scenario's map could not be loaded, so nothing was saved over it. ${error?.message || error}`);
     });
   };
   const [countryPicker, setCountryPicker] = useState(null);

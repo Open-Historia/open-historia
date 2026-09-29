@@ -451,7 +451,7 @@ In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEdit
 | `cities` | `citiesGeojson` | always written |
 | `backgroundData` | `backgroundData` | `clearScenarioAsset` when null |
 
-The `null`-means-clear contract is why hydration (§20) must reload the scenario's existing flags/tags/background — otherwise a round-trip that "loaded none" would clear the author's work. Finally it creates + activates a fresh game so the running map reflects the edit.
+The `null`-means-clear contract is why hydration (§20) must reload the scenario's existing flags/tags/background — otherwise a round-trip that "loaded none" would clear the author's work. For the same reason a piece that fails to download (rather than one the scenario lacks: `downloadScenarioJsonAsset` throws for anything but a 404) closes the Workshop before it can save, with the reason shown in the scenario drawer. Finally it creates + activates a fresh game so the running map reflects the edit.
 
 ---
 

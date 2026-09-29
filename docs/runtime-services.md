@@ -72,7 +72,7 @@ All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws 
 | `saveScenario(id, payload)` | PUT | `/api/scenarios/:id` | Same translate-on-save + force refresh |
 | `selectScenario(id)` | PUT | `/api/scenarios/selected` | Body `{ scenarioId }`; applies returned catalog |
 | `removeScenario(id)` | DELETE | `/api/scenarios/:id` | Applies returned catalog |
-| `downloadScenarioJsonAsset(id, key)` | GET | `/api/scenarios/:id/assets/:key` | Returns `null` on 404/throw (missing = "use default") |
+| `downloadScenarioJsonAsset(id, key)` | GET | `/api/scenarios/:id/assets/:key` | Returns `null` on 404 only (missing = "use default"); any other failure, a parse included, throws, so a caller never saves the default over an asset it failed to read. The web store answers 500, not 404, for a read that failed |
 | `uploadScenarioAsset(id, key, file)` | PUT | `/api/scenarios/:id/assets/:key` | Raw body via `toUploadBuffer`; force refresh |
 | `clearScenarioAsset(id, key)` | DELETE | `/api/scenarios/:id/assets/:key` | Force refresh |
 | `exportScenarioBundle(id, mode="light")` | GET | `/api/scenarios/:id/export?mode=` | Returns bundle JSON |

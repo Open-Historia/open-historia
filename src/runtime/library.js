@@ -326,20 +326,20 @@ const toUploadBuffer = async (file) => {
 };
 
 // Fetch a scenario's JSON asset (regions/cities geojson, colors). Returns null
-// when the scenario has no such asset (404) instead of throwing — callers treat
-// a missing asset as "use the default".
+// when the scenario has no such asset (404) — callers treat a missing asset as
+// "use the default". Any other failure THROWS: a download that failed, or a
+// file too big to parse on a phone, is not an absent asset, and a caller that
+// took it for one wrote the default back over the author's flags, tags,
+// background and geometry on the next save.
 // `coarse` asks for the regions coarsened for a zoomed-out preview (the
 // country picker) instead of the full-resolution file: a few MB, not 221.
 export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse = false } = {}) => {
-  try {
-    const response = await fetch(
-      `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
-    );
-    if (!response.ok) return null;
-    return await response.json();
-  } catch {
-    return null;
-  }
+  const response = await fetch(
+    `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}${coarse ? "?coarse=1" : ""}`,
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`One of this scenario's files could not be loaded (HTTP ${response.status}).`);
+  return response.json();
 };
 
 export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
