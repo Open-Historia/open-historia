@@ -39,7 +39,8 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | Effect | Behavior | Connects to |
 |---|---|---|
 | WebGL probe | On mount, `checkWebGL()`; on failure shows the popup | `src/Game/GameUI/main.jsx:55` |
-| **Idle diplomacy drip** | Every 60 s, if the tab is visible and a game exists, lazy-imports `../AI/gameplay.js` and calls `maybeSendIdleDiplomacy()` | `src/Game/AI/gameplay.js`; drops a message into the diplomatic chat store unprompted |
+| **Idle diplomacy drip** | Every 60 s, if the tab is visible, a game exists and the main menu (and the Workshop over it) is closed, lazy-imports `../AI/gameplay.js` and calls `maybeSendIdleDiplomacy()` | `src/Game/AI/gameplay.js`; drops a message into the diplomatic chat store unprompted |
+| **Spy report timer** | Every 60 s, on the same guards, calls `maybeGatherIntelligence()`: roughly one report every twenty minutes per deployed agent, each an AI request, so none while the player is in the main menu or the Workshop | `src/Game/AI/gameplay.js`; writes the intercepts asset |
 | Advisor lazy-load latch | `isAdvisorOpen` → `setShouldLoadAdvisor(true)` (one-way) | Keeps the Chart.js/markdown chunk out of first paint |
 | Fullscreen persist + sync | Writes `localStorage["Fullscreen"]`; listens `fullscreenchange`/`webkitfullscreenchange` | `toggleFullscreen()` probes prefixed APIs (mobile Safari safe) |
 | AI header + setup | `syncAiDebugContext()` on mount; re-reads `aiSetup` whenever the Fallback list or a Connection changes | `src/Game/AI/providerConfig.js` |

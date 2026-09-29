@@ -318,8 +318,10 @@ const Main = ({
   // time skip (refreshSpyIntercepts, in the jump itself); this is what makes
   // them tick while the player is simply playing, and it is why there is no
   // Gather button — an agent is a trickle of intelligence, not a thing to farm.
+  // Not in the main menu or the Workshop: each report is an AI request, spent
+  // on a campaign the player has not entered.
   useEffect(() => {
-    if (hasNoGames) return undefined;
+    if (hasNoGames || mainMenuOpen) return undefined;
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
       import("../AI/gameplay.js")
@@ -327,7 +329,7 @@ const Main = ({
         .catch(() => {});
     }, 60000);
     return () => clearInterval(iv);
-  }, [hasNoGames]);
+  }, [hasNoGames, mainMenuOpen]);
 
   useEffect(() => {
     if (isAdvisorOpen) setShouldLoadAdvisor(true);
