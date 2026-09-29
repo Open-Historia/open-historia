@@ -290,8 +290,10 @@ The Android app has no server of its own: it is the `--mode android` web bundle,
 | Output | Content |
 |---|---|
 | `defaultScenario.js` | `{ meta, cover (base64), colors, data{game,prompts,world,actions,advisor,chat,events} }` |
-| `countryNames.js` | Canonical code→name registry, mirroring `server/country-names.json` (used by `canonicalizeCountryRef`) |
+| `defaultScenarioMeta.js` | the built-in map's stamp, revision and asset URL |
 | `fallbackColors.js` | App-level default palette from `public/assets/colors.json`, immutable & scenario-independent |
+
+The code→name country registry is not among them: the web store (`src/runtime/web/models.js`) reads the committed `src/runtime/generated/countryNames.js` that `scripts/generate-country-tables.mjs` writes from `server/country-names.json`, the same table the map editor uses.
 
 It reads only from `server/seed/default`, which **is** committed (map included) — so the website build (including CI) needs nothing from the `map-data` Release.
 

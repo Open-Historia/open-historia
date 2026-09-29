@@ -33,14 +33,21 @@ import {
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 const SERVER_STORE = readFileSync(path.join(HERE, "..", "..", "server", "libraryStore.js"), "utf-8");
 
-test("the web constants load without a web build", () => {
-  // This file imported web/models.js once, which imports the web build's
+test("the web store's constants and models load without a web build", async () => {
+  // This file imported web/models.js once, which imported the web build's
   // generated country table. It passed on every machine that had run a web build
   // and failed on CI's clean checkout, where the tests run before any build, so
-  // the beta installers stopped building. storeConstants.js is what a Node test
-  // can import, and only while it imports nothing itself.
-  const constants = readFileSync(path.join(HERE, "web", "storeConstants.js"), "utf-8");
-  assert.equal(/^\s*(import[\s{*"']|export\s*[*{])/m.test(constants), false, "storeConstants.js imports nothing");
+  // the beta installers stopped building. models.js now reads the committed
+  // table (src/runtime/generated/countryNames.js), so neither it nor
+  // storeConstants.js may import anything from the gitignored web/generated/.
+  for (const file of ["storeConstants.js", "models.js"]) {
+    const source = readFileSync(path.join(HERE, "web", file), "utf-8");
+    assert.equal(/from\s+["']\.\/generated\//.test(source), false, `${file} imports nothing from web/generated/`);
+  }
+  const models = await import("./web/models.js");
+  const registry = JSON.parse(readFileSync(path.join(HERE, "..", "..", "server", "country-names.json"), "utf-8"));
+  assert.deepEqual(models.COUNTRY_NAME_REGISTRY, registry, "the web store resolves owners by the same table as the server");
+  assert.equal(models.resolveOwnerRef("RUS", {}), registry.RUS);
 });
 
 // The server's copies are module-private, as they should be — read them out of
