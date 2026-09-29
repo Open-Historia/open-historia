@@ -185,6 +185,7 @@ Defined at `server/libraryStore.js:240-324`. These maps drive every read/write/s
 
 ### Manifests & catalog cache
 - A **scenario/game manifest** is `{ order: id[], selected/active, version:2 }`. `resolveOrderedIds` (`server/libraryStore.js:1097`) reconciles the manifest order against directories actually present on disk, so a hand-added or hand-deleted directory self-heals.
+- Every JSON file the store writes is **compact** except the four a person might open by hand — `scenario.json`, `game-instance.json` and the two manifests (`INDENTED_JSON_FILES`, `serializeJsonFile`). Worlds, events, chat, restore points and the turn journal used to be indented, which added a large share of whitespace to every write, fsync and parse.
 - `getScenarioCatalog`/`getGameCatalog` are **memoized** (`scenarioCatalogCache`, `gameCatalogCache`, `server/libraryStore.js:427-433`). A catalog build walks every directory and parses each meta file — the 5 s `world.json` poll used to cost ~139 sync file ops just to learn the active game. The cache is invalidated wholesale inside `writeJsonFile` (`server/libraryStore.js:408-416`), the single choke point every meta/manifest write passes through, so no call site has to remember to invalidate.
 
 ### First-run seeding

@@ -579,9 +579,23 @@ const readJsonFile = (targetPath, fallback = null) => {
   }
 };
 
+// Only the small files a person might open and edit by hand are indented. The
+// rest — worlds, events, chat, restore points (8-21 MB on a long game), the
+// turn journal — are written compact: indenting deeply nested state added a
+// large share of whitespace to every write, fsync and parse.
+const INDENTED_JSON_FILES = new Set([
+  "scenario.json",
+  "game-instance.json",
+  "scenario-manifest.json",
+  "game-manifest.json",
+]);
+
+const serializeJsonFile = (targetPath, value) =>
+  (INDENTED_JSON_FILES.has(path.basename(targetPath)) ? JSON.stringify(value, null, 2) : JSON.stringify(value));
+
 const writeJsonFile = (targetPath, value) => {
   ensureDirectory(path.dirname(targetPath));
-  fs.writeFileSync(targetPath, JSON.stringify(value, null, 2), "utf-8");
+  fs.writeFileSync(targetPath, serializeJsonFile(targetPath, value), "utf-8");
   // Any write can change what the catalogs describe, so drop them. This is the
   // one choke point every meta and manifest write goes through — including
   // create and delete, which rewrite the manifest — so hooking it here is what
@@ -600,7 +614,7 @@ const writeJsonFileAtomic = (targetPath, value) => {
   let fd = null;
   try {
     fd = fs.openSync(tempPath, "w");
-    fs.writeFileSync(fd, JSON.stringify(value, null, 2), "utf-8");
+    fs.writeFileSync(fd, serializeJsonFile(targetPath, value), "utf-8");
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = null;
