@@ -1409,6 +1409,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const addTurnEvents = (reveal, newEvents, { cursors = null, onScreen = true } = {}) => {
             if (campaignChanged(reveal.campaignId, activeCampaignNow())) return false;
             const live = chatRef.current;
+            // A committed turn (a Council's, a hearing's) was saved whole with
+            // its governance before it came back: a step is only shown. Writing
+            // it again would put the thread back to this step, and a cut-in
+            // would then erase the committed lines after it.
+            if (reveal.committed) {
+                reveal.events = [...reveal.events, ...newEvents];
+                if (onScreen && String(live?.id) === String(reveal.chatId)) setMessages(viewMessagesOf(projectChatThread(reveal.events)));
+                return true;
+            }
             const events = [
                 ...logForNextStep({ turnLog: reveal.events, wroteAny: reveal.written, chatId: reveal.chatId, liveChatId: live?.id, liveLog: live?.events }),
                 ...newEvents,
@@ -1450,6 +1459,12 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const reveal = revealRef.current;
             const unsaid = reveal?.controller?.stop() ?? [];
             if (!unsaid.length) return;
+            // A committed turn has been said, and saved, in full: the rest of it
+            // is shown at once rather than dropped.
+            if (reveal.committed) {
+                addTurnEvents(reveal, unsaid.flatMap((step) => step.events));
+                return;
+            }
             const note = describeChatCutIn({ player: playerCountry, steps: unsaid });
             if (note) actionFeedbackRef.current = [actionFeedbackRef.current, note].filter(Boolean).join("\n\n");
             logDebugEvent("diplomacy",
@@ -1608,15 +1623,33 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         })).catch((error) => logDebugEvent("diplomacy", `Automatic accession ballot failed to start for ${chat.lifecycleInstitutionId}/${openedVote.id}.`, error, { problem: true }));
                     }
                 } else {
+                    // Any other committed turn is presented the same way: the
+                    // thread takes the committed log at once, unsaved again, and
+                    // only the screen follows the reveal.
+                    const committed = outcome.committed === true;
+                    if (committed) {
+                        const projected = projectChatThread(outcome.events);
+                        onThreadUpdate?.(chat.id, {
+                            events: outcome.events,
+                            countries: projected.countries,
+                            title: projected.title,
+                            polls: projected.polls,
+                            demands: projected.demands,
+                            cursors: outcome.cursors,
+                            committed: true,
+                        });
+                        messagesRef.current = viewMessagesOf(projected);
+                    }
                     const [first, ...later] = planChatReveal(newEvents);
                     const reveal = {
                         chatId: chat.id,
                         campaignId,
                         events: outcome.events.slice(0, outcome.events.length - newEvents.length),
                         written: false,
+                        committed,
                         controller: null,
                     };
-                    if (!addTurnEvents(reveal, first.events, { cursors: outcome.cursors })) {
+                    if (!addTurnEvents(reveal, first.events, committed ? {} : { cursors: outcome.cursors })) {
                         logDebugEvent("diplomacy", `Chat #${chat.id}: the campaign changed while the table was answering; nothing was written.`, undefined, { problem: true });
                         return true;
                     }
