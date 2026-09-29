@@ -41,7 +41,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `FeatureManager.jsx` | City/point-feature list; bulk import from the seed, or from the author's own file (`featureImport.js`). |
 | `CityPopup.jsx` | Inline city editor anchored at the click. |
 | `SearchBar.jsx` | Unified place search (this map's cities, regions, ~70k world places). |
-| `LayersPanel.jsx` | Region / label layer visibility toggles. |
+| `LayersPanel.jsx` | Visibility toggles for regions, region labels, group outlines, cities and map features, and starting units. Reads each toggle's state from the map when it opens. |
 | `ReferencePanel.jsx` | Tracing-image upload/opacity/placement (session-only). |
 | `BasemapPicker.jsx` | Overlay to choose a built-in ESRI basemap, a saved basemap, upload, or a community one. |
 | `FlagPicker.jsx` | Overlay to choose a country flag (My flags / built-in / community). |
@@ -163,7 +163,7 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `listOwners()` | Sorted unique owner names — backs the Country field's suggestions so re-owning offers existing names (avoids near-miss forks). |
 | `queryRegions(text, limit=200)` | Search id/name/owner. |
 | `countByType()` | Region count per typeId (Type Manager usage). |
-| `setLayerVisibility(key, visible)` | `regions` \| `labels` \| `features`. |
+| `setLayerVisibility(key, visible)`, `getLayerVisibility(key)` | `regions` \| `labels` \| `groups` \| `features` (cities and map features) \| `units`. |
 | `locateFeature(coord)` | Fly to a lon/lat. |
 | `serializeRegions()` | Region geometry → GeoJSON FC (EPSG:4326, 5 decimals). Used on save/export. |
 | `loadRegions(fc)` | Replace the source from a FeatureCollection (ids pulled from `properties.id`). |

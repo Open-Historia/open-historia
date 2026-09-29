@@ -829,6 +829,8 @@ const OlMap = ({
     borderAssistSourceRef.current = borderAssistSource;
     borderAssistLayerRef.current = borderAssistLayer;
     mapRef.current = map;
+    // "features" is every point marker: cities and map features alike.
+    const toggleableLayers = { regions: regionLayer, labels: labelLayer, features: pointLayer, units: unitLayer, groups: groupOutlineLayer };
     requestAnimationFrame(() => map.updateSize());
     if (typeof window !== "undefined") window.__editorMap = map;
 
@@ -2242,11 +2244,12 @@ const OlMap = ({
         }
         return m;
       },
+      // The Layers panel's toggles. It reads the state back when it opens, so
+      // a layer hidden earlier does not show as on.
       setLayerVisibility: (key, visible) => {
-        if (key === "regions") regionLayer.setVisible(visible);
-        else if (key === "labels") labelLayer.setVisible(visible);
-        else if (key === "features") pointLayer.setVisible(visible);
+        toggleableLayers[key]?.setVisible(visible);
       },
+      getLayerVisibility: (key) => toggleableLayers[key]?.getVisible() ?? true,
       locateFeature: (coord) => {
         if (Array.isArray(coord)) map.getView().animate({ center: fromLonLat(coord), zoom: 6, duration: 350 });
       },
