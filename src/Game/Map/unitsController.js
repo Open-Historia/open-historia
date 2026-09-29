@@ -403,6 +403,8 @@ export const placeUnitAdmin = async (unitId, lng, lat) => {
 // AI's picture of the war would drift apart without a word.
 export const ORDER_NOT_SAVED = "The order could not be saved; the next time skip would not see it. Try again.";
 export const UNIT_TYPE_NOT_ALLOWED = "This scenario does not allow that kind of unit.";
+// The Force Manager's edits are not orders, so the next skip is not involved.
+export const UNIT_NOT_SAVED = "The unit could not be saved. Try again.";
 
 // unitRevert records how to undo the order if the player deletes the queued
 // action before the next jump (#368): without it, a manual move stayed on the

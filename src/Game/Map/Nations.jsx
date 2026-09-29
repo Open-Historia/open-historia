@@ -11,6 +11,7 @@ import {
   clearInteractionMode,
   deployUnit,
   placeUnitAdmin,
+  UNIT_NOT_SAVED,
 } from "./unitsController.js";
 import { recordMapTrace, recordMapWork } from "../../runtime/mapPerfTrace.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -1213,8 +1214,14 @@ const WorldMap = ({ isGlobe = false }) => {
     const mode = getInteractionMode();
 
     if (mode.kind === "admin-place") {
-      placeUnitAdmin(mode.unitId, event.lngLat.lng, event.lngLat.lat);
       clearInteractionMode();
+      // The Force Manager's hand placement (forces.jsx): one that could not be
+      // saved stays armed and says so, as a deploy does.
+      // A click on a world copy east or west of the first is wrapped back into it.
+      const at = typeof event.lngLat.wrap === "function" ? event.lngLat.wrap() : event.lngLat;
+      void placeUnitAdmin(mode.unitId, at.lng, at.lat).then((unit) => {
+        if (!unit && getInteractionMode().kind === "idle") setInteractionMode({ ...mode, error: UNIT_NOT_SAVED });
+      });
       return;
     }
 

@@ -322,7 +322,7 @@ Player deploy is purely local **and** queues a machine-readable `action` so the 
 
 The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMode()`:
 
-- **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`; the admin placement tool (`placeUnitAdmin`) rides the same dispatcher.
+- **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`; the Force Manager's **Move on map** (`admin-place`, `placeUnitAdmin`, the click wrapped into the first world copy) rides the same dispatcher. Either one that fails to save is armed again with the reason in `mode.error`, which the Forces banner shows.
 - **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`/`cities-labels`) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
 
 The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system).

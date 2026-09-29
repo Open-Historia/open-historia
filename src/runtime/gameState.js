@@ -255,7 +255,8 @@ export const WORLD_DEFAULTS = {
 export const UNIT_TYPES = ["infantry", "armor", "air", "naval", "artillery", "garrison"];
 const UNIT_TYPE_SET = new Set(UNIT_TYPES);
 // "pending" = a player deployment awaiting AI resolution (rendered translucent).
-const UNIT_STATUS_SET = new Set(["idle", "moving", "engaged", "defeated", "pending"]);
+export const UNIT_STATUSES = ["idle", "moving", "engaged", "defeated", "pending"];
+const UNIT_STATUS_SET = new Set(UNIT_STATUSES);
 const UNIT_SOURCE_SET = new Set(["player", "ai", "scenario"]);
 // What a formation is DOING, as distinct from `status`, which is its lifecycle.
 // Posture is what makes the map readable at a glance — "massing" on a border and

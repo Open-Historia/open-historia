@@ -397,13 +397,14 @@ Two authors create the board's entries (the player only sets a priority or aband
 
 ## 8. Forces panel — `src/Game/GameUI/forces.jsx`
 
-`ForcesPanel` (`forces.jsx:85`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now primarily from the Cheats panel's "Manual force deployment"). Manual troop control is treated as a cheat.
+`ForcesPanel` (`forces.jsx:85`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now only from the Cheats panel's **Force Manager**, "Deploy, inspect, edit, and repair forces on the map"). Manual troop control is treated as a cheat.
 
 | Element | Behavior | Connects to |
 |---|---|---|
 | Unit list | `subscribeUnits`/`getUnits`; split into "Your units" (`getPlayerCode`) and dimmed "Other forces". Clicking a unit `flyTo`s it | `src/Game/Map/unitsController.js` |
+| ✎ beside each unit | The Force Manager's repair form (`UnitEditor`): name, type (any), strength, status and note, saved straight to the unit with `updateUnitAdmin` (no order, no AI step); **Move on map** arms `setInteractionMode({kind:"admin-place", unitId})` and closes the panel, and the next map click places the unit there (`placeUnitAdmin`, which moves a patrol's station with it). A failed save says "The unit could not be saved. Try again." | unitsController |
 | Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–1000), optional name → `setInteractionMode({kind:"deploy", params})` then closes the panel | unitsController |
-| **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy) + Cancel (`clearInteractionMode`) | interaction-mode state |
+| **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy, admin-place) + Cancel (`clearInteractionMode`). A placement whose save failed stays armed and the banner says why (`mode.error`) | interaction-mode state |
 
 Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re-renders once the lookup warms). `TYPE_GLYPH`/`TYPE_LABEL` map unit types to icons/labels; strength color-codes >600 green / >250 amber / else red.
 

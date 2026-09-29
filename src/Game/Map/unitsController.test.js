@@ -25,6 +25,8 @@ import {
   UNIT_TYPE_NOT_ALLOWED,
   getInteractionMode,
   setInteractionMode,
+  placeUnitAdmin,
+  updateUnitAdmin,
 } from "./unitsController.js";
 
 // The local server's JSON routes, in memory, with a switch to fail a write.
@@ -145,6 +147,20 @@ test("a deploy of a type the scenario does not allow is refused, whoever asks", 
   assert.deepEqual(await deployUnit({ ...deployment, type: "air", name: "1st Air Wing" }), { ok: false, error: UNIT_TYPE_NOT_ALLOWED });
   assert.deepEqual(savedActions(), []);
   assert.equal(savedUnits().some((entry) => entry.name === "1st Air Wing"), false);
+});
+
+test("the Force Manager's edits and hand placements say whether they were saved", async () => {
+  await reset();
+  const edited = await updateUnitAdmin("fleet-1", { name: "Home Fleet (repaired)", strength: 100, status: "idle", note: "Refitted at Rosyth" });
+  assert.equal(edited?.name, "Home Fleet (repaired)");
+  assert.equal(savedUnits()[0].note, "Refitted at Rosyth");
+  assert.deepEqual(savedActions(), [], "an edit is not an order");
+  assert.deepEqual([(await placeUnitAdmin("fleet-1", -1.5, 55))?.lng, savedUnits()[0].lat], [-1.5, 55]);
+
+  failing.add("world");
+  assert.equal(await updateUnitAdmin("fleet-1", { name: "Lost" }), null);
+  assert.equal(await placeUnitAdmin("fleet-1", 0, 50), null);
+  assert.equal(savedUnits()[0].name, "Home Fleet (repaired)");
 });
 
 // Last: it stops the controller's sync.
