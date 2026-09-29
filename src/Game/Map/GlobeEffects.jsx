@@ -194,7 +194,10 @@ const GlobeEffects = ({ active }) => {
             height,
             opacity: projectionTransition,
             terrainRadii: terrainSurfaceRadii(mapInstance),
-            immediate: autoRotationActive || mapInstance.isMoving(),
+            // Main thread only for a camera that is being moved; the idle
+            // spin goes to the lighting worker at the interactive size.
+            immediate: !autoRotationActive && mapInstance.isMoving(),
+            interactive: autoRotationActive || mapInstance.isMoving(),
           });
         } else if (!lightingTimer) {
           lightingTimer = window.setTimeout(() => {
