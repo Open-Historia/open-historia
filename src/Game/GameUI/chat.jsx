@@ -42,6 +42,7 @@ import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/pup
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
+import { chatTextDirection } from "../../runtime/i18n.js";
 import { compareGameDates, formatGameDateReadable, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -814,7 +815,11 @@ const MessageBubble = ({ msg, onRetry, compact = false, showTime = true }) => {
         <div onMouseEnter={canHover ? () => setHovered(true) : undefined} onMouseLeave={canHover ? () => setHovered(false) : undefined}
             onClick={canHover || isError ? undefined : (event) => { if (!event.target.closest?.("a, button")) setHovered((shown) => !shown); }}
             style={{ position: "relative" }}>
-            <div data-no-translate={isPlayer ? "" : undefined} style={{
+            {/* The player's words and the leaders' replies (written in the chat
+                language) stay as written under the interface translator, which
+                would otherwise put a reply into the interface language at the
+                cost of a request; only an error is interface text. */}
+            <div data-no-translate={isError ? undefined : ""} dir={isPlayer || isError ? undefined : chatTextDirection()} style={{
                 padding: ".62rem .82rem",
                 borderRadius: isPlayer ? "13px 13px 3px 13px" : "13px 13px 13px 3px",
                 backgroundColor: isPlayer ? "rgba(59,130,246,.92)" : isError ? "rgba(239,68,68,0.16)" : `color-mix(in srgb, ${accentColor} 4%, rgba(35,35,39,0.96))`,

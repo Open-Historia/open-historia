@@ -193,11 +193,12 @@ export const MarkdownStyleInjector = () => {
 };
 
 // `className` picks the accent (advisor-markdown / chat-markdown); everything
-// else comes from the shared sheet above.
-const Markdown = ({ children, className }) => {
+// else comes from the shared sheet above. `written`: text the AI wrote in the
+// player's language, which the interface translator must leave alone.
+const Markdown = ({ children, className, written = false }) => {
     const text = useMemo(() => normalizeMarkdown(children), [children]);
     return (
-        <div className={className ? `oh-md ${className}` : "oh-md"}>
+        <div className={className ? `oh-md ${className}` : "oh-md"} data-no-translate={written ? "" : undefined}>
         <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>{text}</ReactMarkdown>
         </div>
     );

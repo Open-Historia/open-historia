@@ -181,6 +181,15 @@ export const chatLanguageDiffersFromUi = () => resolveChatLanguage() !== getStor
 
 export const isRtlLanguage = (code) => RTL_LANGUAGES.has(code);
 
+// The text direction of a reply written in the chat language (the advisor's,
+// a leader's), when that is not the interface's: under an Arabic interface an
+// English reply still reads left to right, and the other way round.
+// undefined: the interface's own direction applies.
+export const chatTextDirection = () => {
+  if (!chatLanguageDiffersFromUi()) return undefined;
+  return isRtlLanguage(resolveChatLanguage()) ? "rtl" : "ltr";
+};
+
 // Appended to every AI system prompt (see callAI) so replies arrive in the
 // player's language natively instead of being machine-translated after.
 export const languageDirective = (code = getStoredLanguage(), { force = false } = {}) => {

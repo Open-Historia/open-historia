@@ -8,7 +8,7 @@ import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
-import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
+import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
@@ -721,9 +721,12 @@ const loadMessages = async () => {
 //
 // A reply with no drafts renders as ONE markdown block, exactly as before: the
 // split is only worth its cost when there is something to interleave.
-const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
+// `written`: the advisor's own words, in the player's language already, so the
+// interface translator leaves them alone (the draft buttons between them are
+// interface, and are translated).
+const AdvisorReplyBody = ({ text, drafts, onDraftMessage, written = false }) => {
     if (!drafts || drafts.length === 0) {
-        return <Markdown className="advisor-markdown">{text}</Markdown>;
+        return <Markdown className="advisor-markdown" written={written}>{text}</Markdown>;
     }
 
     const byQuote = new Map();
@@ -747,7 +750,7 @@ const AdvisorReplyBody = ({ text, drafts, onDraftMessage }) => {
     const segments = splitAtBlockquotes(text);
     const rendered = segments.map((segment, index) => (
         <React.Fragment key={index}>
-        <Markdown className="advisor-markdown">{segment.content}</Markdown>
+        <Markdown className="advisor-markdown" written={written}>{segment.content}</Markdown>
         {segment.type === "quote" && (byQuote.get(segment.quoteIndex) ?? []).map(button)}
         </React.Fragment>
     ));
@@ -871,6 +874,7 @@ const AdvisorMessageRow = React.memo(({ msg, msgIndex, chatDiffers, chatDir, onO
         {msg.role === "user" ? text : (
             <AdvisorReplyBody
             text={text}
+            written={msg.role === "advisor"}
             drafts={messageDrafts}
             onDraftMessage={onDraftMessage}
             />
@@ -1081,7 +1085,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();
-    const chatDir = chatDiffers && isRtlLanguage(resolveChatLanguage()) ? "rtl" : undefined;
+    const chatDir = chatTextDirection();
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);

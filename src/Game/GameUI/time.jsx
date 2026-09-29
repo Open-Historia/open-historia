@@ -30,6 +30,7 @@ import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { normalizeMarkdown } from "./markdownText.js";
+import { isAuthoredEvent } from "../../runtime/translationRules.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
@@ -860,6 +861,10 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
     const heldAbove = typeof onToggleMapChanges === "function";
     const showMapChanges = heldAbove ? Boolean(openMapChanges) : ownMapChanges;
     const toggleMapChanges = () => (heldAbove ? onToggleMapChanges() : setOwnMapChanges((open) => !open));
+    // The AI writes its events in the player's language: the interface
+    // translator leaves them alone. A scenario's own events are content, and
+    // are translated (runtime/translator.js).
+    const written = isAuthoredEvent(event) ? undefined : "";
 
     return (
         <div
@@ -920,12 +925,12 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             </div>
         )}
 
-        <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        <div data-no-translate={written} style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.82rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>
         {event.title}
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            <div className="timeline-markdown" data-no-translate={written} style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
             <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
             </div>
         )}
