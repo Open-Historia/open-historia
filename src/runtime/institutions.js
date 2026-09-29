@@ -2,6 +2,7 @@
 
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { formatGameDate, gameDateDayNumber, gameDateDaysInMonth, parseGameDate } from "./gameDates.js";
 
 export const INSTITUTIONS_SCHEMA_VERSION = 1;
 export const INSTITUTION_LEDGER_VERSION = 1;
@@ -34,19 +35,26 @@ const unique = (values, limit = 128) => {
   return out;
 };
 
-const DATEISH_RE = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/;
-const comparableDate = (value, edge = "start") => {
+// An institution date as its calendar parts, BC included (runtime/gameDates.js):
+// a full game date, or a bare year or year-month (a founding is often known
+// only to the year), padded to its first day, or its last for an end edge.
+const DATEISH_RE = /^(-?\d{4,6})(?:-(\d{2}))?$/;
+const dateishParts = (value, edge = "start") => {
   const text = clean(value);
+  const exact = parseGameDate(text);
+  if (exact) return exact;
   const match = text.match(DATEISH_RE);
   if (!match) return null;
   const year = Number(match[1]);
   const month = match[2] ? Number(match[2]) : (edge === "end" ? 12 : 1);
-  if (!Number.isInteger(year) || year < 1 || month < 1 || month > 12) return null;
-  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const monthDays = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  const day = match[3] ? Number(match[3]) : (edge === "end" ? monthDays[month - 1] : 1);
-  if (day < 1 || day > monthDays[month - 1]) return null;
-  return year * 10000 + month * 100 + day;
+  if (!Number.isInteger(year) || year === 0 || month < 1 || month > 12) return null;
+  return { year, month, day: edge === "end" ? gameDateDaysInMonth(year, month) : 1 };
+};
+// A day number that orders by the calendar, or null. Zero is a date
+// (1970-01-01): test for null, never for truth.
+const comparableDate = (value, edge = "start") => {
+  const parts = dateishParts(value, edge);
+  return parts ? gameDateDayNumber(formatGameDate(parts)) : null;
 };
 
 export const institutionIdentityTokens = (value = {}) => [
@@ -126,7 +134,7 @@ const membershipContinuityWindows = (institution = {}) => normalizeInstitutionPr
     startKey: comparableDate(entry.foundedDate, "start"),
     endKey: comparableDate(entry.dissolvedDate, "end"),
   }))
-  .filter((entry) => entry.startKey)
+  .filter((entry) => entry.startKey !== null)
   .sort((a, b) => a.startKey - b.startKey);
 
 export const validateInstitutionTemporalBaseline = ({
@@ -152,7 +160,7 @@ export const validateInstitutionTemporalBaseline = ({
   const scenarioKey = comparableDate(scenarioDate, "start");
   const foundedDate = clean(institution.foundedDate);
   const dissolvedDate = clean(institution.dissolvedDate);
-  if (!scenarioKey) return { valid: true, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "" };
+  if (scenarioKey === null) return { valid: true, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "" };
 
   const foundedKey = comparableDate(foundedDate, "start");
   const dissolvedKey = comparableDate(dissolvedDate, "end");
@@ -171,28 +179,28 @@ export const validateInstitutionTemporalBaseline = ({
   // Generated institutions must describe their own temporal truth. Optional
   // scenario/reference data or the generated catalog may also describe generic
   // predecessor lineage; no named institution is special-cased here.
-  if (!foundedKey) {
+  if (foundedKey === null) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: "generated institution is missing a usable foundedDate" };
   }
   if (scenarioKey < foundedKey) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `institution was not founded until ${foundedDate}` };
   }
-  if (dissolvedKey && scenarioKey >= dissolvedKey) {
+  if (dissolvedKey !== null && scenarioKey >= dissolvedKey) {
     return { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `institution was already dissolved by ${dissolvedDate}` };
   }
-  if (membershipDate && !memberKey) {
+  if (membershipDate && memberKey === null) {
     return preserveMembershipWithUnknownDate("the supplied accession date is not a usable scenario date")
       || { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `membership date ${membershipDate} is not a usable historical date` };
   }
-  if (memberKey && memberKey > scenarioKey) {
+  if (memberKey !== null && memberKey > scenarioKey) {
     return preserveMembershipWithUnknownDate(`the supplied accession date is after scenario date ${scenarioDate}`)
       || { valid: false, foundedDate, dissolvedDate, membershipDate: clean(membershipDate), reason: `membership does not begin until ${membershipDate}` };
   }
-  if (memberKey && memberKey < foundedKey) {
+  if (memberKey !== null && memberKey < foundedKey) {
     const continuity = membershipContinuityWindows(institution);
     const matchingWindow = continuity.find((entry) => (
       memberKey >= entry.startKey
-      && (!entry.endKey || memberKey < entry.endKey)
+      && (entry.endKey === null || memberKey < entry.endKey)
     ));
     if (matchingWindow) {
       return {
@@ -211,8 +219,8 @@ export const validateInstitutionTemporalBaseline = ({
     const earliest = continuity[0] || null;
     if (
       earliest
-      && clean(membershipDate).slice(0, 4)
-      && clean(membershipDate).slice(0, 4) === clean(earliest.foundedDate).slice(0, 4)
+      && dateishParts(membershipDate)?.year !== undefined
+      && dateishParts(membershipDate)?.year === dateishParts(earliest.foundedDate)?.year
     ) {
       return {
         valid: true,
@@ -1265,7 +1273,7 @@ export const validateInstitutionUpdates = (updatesInput, {
     if (enforceTemporalBaseline && op === "join" && clean(update.sinceDate)) {
       const joined = comparableDate(update.sinceDate, "start");
       const baseline = comparableDate(baselineDate, "start");
-      if (!joined || (baseline && joined > baseline)) {
+      if (joined === null || (baseline !== null && joined > baseline)) {
         return `$.institutionUpdates record ${index + 1} has membership date ${clean(update.sinceDate) || "<blank>"} after/invalid for baseline ${clean(baselineDate)}.`;
       }
     }

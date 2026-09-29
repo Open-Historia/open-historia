@@ -21,6 +21,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
+import { addGameDays, compareGameDates, compareGameDatesNewestFirst } from "./gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -495,7 +496,7 @@ export const institutionLifecycleCasesForPolity = (world = {}, polityInput = "",
       rows.push({ institution, case: entry });
     }
   }
-  return rows.sort((a, b) => clean(b.case.updatedDate || b.case.createdDate).localeCompare(clean(a.case.updatedDate || a.case.createdDate)));
+  return rows.sort((a, b) => compareGameDatesNewestFirst(clean(a.case.updatedDate || a.case.createdDate), clean(b.case.updatedDate || b.case.createdDate)));
 };
 
 export const institutionPortfolioForPolity = (world = {}, polityInput = "", { viewerPolity = "", includePrivate = false } = {}) => {
@@ -813,9 +814,8 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     const noticeDays = mode === "notice" ? Number(baseInstitution.charter?.lifecycle?.withdrawal?.noticeDays || 0) : 0;
     if (noticeDays > 0) {
-      const effective = new Date(`${clean(date)}T00:00:00Z`);
-      if (!Number.isNaN(effective.getTime())) effective.setUTCDate(effective.getUTCDate() + noticeDays);
-      const effectiveDate = Number.isNaN(effective.getTime()) ? clean(date) : effective.toISOString().slice(0, 10);
+      // Game dates, BC included (runtime/gameDates.js).
+      const effectiveDate = addGameDays(clean(date), noticeDays) || clean(date);
       const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
         const lifecycleCase = setCase(institution, { id: lifecycleCaseId(institution.id, "withdrawal", polity, date), kind: "withdrawal", status: "pending", polity, initiatedBy: polity, requestedStatus: member.status, createdDate: date, updatedDate: date, effectiveDate, reason: clean(command.reason) }, localWorld);
         return { lifecycleCase };
@@ -1019,7 +1019,7 @@ export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date =
   const applied = [];
   for (const institution of Object.values(institutions.byId)) {
     for (const lifecycleCase of institutionPendingLifecycleCases(institution)) {
-      if (lifecycleCase.kind !== "withdrawal" || !lifecycleCase.effectiveDate || clean(lifecycleCase.effectiveDate) > clean(date)) continue;
+      if (lifecycleCase.kind !== "withdrawal" || !lifecycleCase.effectiveDate || compareGameDates(clean(lifecycleCase.effectiveDate), clean(date)) > 0) continue;
       const result = applyInstitutionMembershipResolution({ world: { ...world, institutions }, institutionId: institution.id, op: "leave", polity: lifecycleCase.polity, date: lifecycleCase.effectiveDate, note: lifecycleCase.reason || "Withdrawal notice became effective." });
       if (result.error) continue;
       world = result.world;

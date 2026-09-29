@@ -450,3 +450,20 @@ test("a founding negotiation is response-complete after every invitee accepts or
   });
   assert.equal(context.text, "");
 });
+
+test("a BC notice withdrawal takes effect after its notice period, across the year", async () => {
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "-0218-03-01",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "-0218-12-15",
+    command: { type: "withdraw", institutionId: founded.institution.id, polity: "Republic of Latvia", authority: "player" },
+  });
+  assert.equal(notice.lifecycleCase.effectiveDate, "-0217-01-14");
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const early = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0218-12-31", playerCountry: "Republic of Latvia" });
+  assert.equal(early.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), true);
+  const due = advanceInstitutionLifecycleCore({ world: early.world, date: "-0217-01-14", playerCountry: "Republic of Latvia" });
+  assert.equal(due.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), false);
+});
