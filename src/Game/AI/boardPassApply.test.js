@@ -97,4 +97,18 @@ test("a Hidden event that moves an entry is counted", () => {
   });
   assert.equal(pass.hiddenEventsThatMoved, 1);
   assert.equal(pass.movedByHidden.size, 1);
+  assert.equal(pass.world.projects[0].status, "complete");
+  assert.equal(pass.world.projects[0].eventIds.includes("hidden-1"), false, "a Hidden event is never stamped into an entry's activity");
+});
+
+test("a timeline event's ops are stamped into the entry's activity", () => {
+  const pass = applyBoardCarriers({
+    world: worldWith(null),
+    colors: {},
+    carriers: [completing()],
+    visibleEvents: events,
+    date: "1871-01-18",
+    round: 4,
+  });
+  assert.equal(pass.world.projects[0].eventIds.includes("event-1"), true);
 });
