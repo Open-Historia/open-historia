@@ -37,7 +37,7 @@ import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { readChatsState, writeChatsState, readGameData, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
 import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
@@ -1100,7 +1100,7 @@ const useTouchDisarm = (armed, setArmed) => {
     }, [armed, canHover, setArmed]);
 };
 
-const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
+const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete, onBack, onMessagesUpdate, onThreadUpdate, unread = false, onToggleRead, draft = "", onDraftApplied, onInstitutionNavigate, onLifecycleResult, onInstitutionBusinessOpened, embeddedInstitution = false, puppetMarkers = {} }) => {    // Two-step delete, matching the list row. Disarms on blur so a half-pressed
     // delete never sits waiting to catch a later click.
     const [confirmingDelete, setConfirmingDelete] = useState(false);
     useTouchDisarm(confirmingDelete, setConfirmingDelete);
@@ -1218,8 +1218,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // Overlord or Puppet (runtime/demandCheck.js). What the other side is to the
     // player, from the same shared rule as the list's markers.
     const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
-    const puppetRelations = usePuppetMarkers();
-    const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
+    const theyAre = !isGroup ? puppetMarkers[countries[0]?.name]?.theyAre ?? "" : "";
     // The composer offers "make this a demand" only to an Overlord writing to
     // its own Puppet; an Overlord's demands of the player arrive on their own.
     const canDemand = theyAre === "puppet";
@@ -2486,55 +2485,21 @@ const GeneratingBanner = () => (
 //
 // The answer comes from runtime/puppets.js, like the country panel's and the
 // map overlay's, so the three cannot disagree about the player's own empire.
-const usePuppetMarkers = () => {
-    const [markers, setMarkers] = React.useState({});
-    React.useEffect(() => {
-        let cancelled = false;
-        let shown = "";
-        const load = async () => {
-            // A hidden tab has no list to decorate; it catches up when shown.
-            if (typeof document !== "undefined" && document.hidden) return;
-            try {
-                // The cached view, not a forced re-read: this decorates a list
-                // row, and forcing world.json off the server every 15 s for the
-                // life of the panel is a lot of traffic for a label.
-                const [world, game] = await Promise.all([
-                    readWorldStateView().catch(() => ({})),
-                    readGameData().catch(() => ({})),
-                ]);
-                if (cancelled) return;
-                // Per counterpart: the label, and what THEY are to the player —
-                // the demand card and the composer's "make this a demand" need
-                // the relationship itself, not a label to parse.
-                const next = {};
-                for (const row of livePuppetsFor(world, game?.country || "")) {
-                    describeRole(row, {
-                        puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
-                        overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
-                        foreign: () => {},
-                    });
-                }
-                // Every 15 s the same labels, as a new object: re-rendering the
-                // whole list for that is the work this skips.
-                const key = JSON.stringify(next);
-                if (key === shown) return;
-                shown = key;
-                setMarkers(next);
-            } catch { /* a marker is decoration; never break the list for it */ }
-        };
-        load();
-        const timer = setInterval(load, 15000);
-        const onVisible = () => {
-            if (!document.hidden) load();
-        };
-        document.addEventListener("visibilitychange", onVisible);
-        return () => {
-            cancelled = true;
-            clearInterval(timer);
-            document.removeEventListener("visibilitychange", onVisible);
-        };
-    }, []);
-    return markers;
+// Worked out once, in ChatPanel, from the runtime store's world (below), and
+// handed to the conversation: it follows a world write rather than a poll.
+const puppetMarkersFor = (world, player) => {
+    // Per counterpart: the label, and what THEY are to the player — the demand
+    // card and the composer's "make this a demand" need the relationship
+    // itself, not a label to parse.
+    const next = {};
+    for (const row of livePuppetsFor(world, player || "")) {
+        describeRole(row, {
+            puppet: () => { next[row.overlord] = { label: "YOUR OVERLORD", theyAre: "overlord" }; },
+            overlord: () => { next[row.puppet] = { label: `YOUR ${puppetKindLabel(row.kind).toUpperCase()}`, theyAre: "puppet" }; },
+            foreign: () => {},
+        });
+    }
+    return next;
 };
 
 const ChatListItem = ({ chat, playerCountry, onClick, onDelete, onToggleRead, unread = false, puppetMarkers = {} }) => {
@@ -3173,7 +3138,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     // or this game's own override); a view left on it shows the diplomacy list.
     const espionageOn = useActiveFeatures().espionage?.enabled !== false;
     const currentView = view === "spy" && !espionageOn ? "chats" : view;
-    const puppetMarkers = usePuppetMarkers();
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     const [countries, setCountries]               = useState([]);
     const [loadingCountries, setLoadingCountries] = useState(true);
     const [playerCountry, setPlayerCountry]       = useState("your nation");
@@ -3388,6 +3353,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
     const worldSnapshot = useRuntimeState("world", (world) => world || {});
     const identity = useRuntimeState("game", selectGameIdentity);
+    // Who is the player's Overlord or Puppet, for the list's markers and a
+    // thread's demands: from the world this panel already holds, so it moves
+    // when the world is written, and nothing at all while the system is off.
+    const puppetMarkers = useMemo(
+        () => (puppetStatesOn ? puppetMarkersFor(worldSnapshot, identity.country) : {}),
+        [puppetStatesOn, worldSnapshot, identity.country],
+    );
     useEffect(() => {
         if (!isOpen) return;
         if (identity.country) setPlayerCountry(identity.country);
@@ -3787,7 +3759,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView key={String(activeChat.id)} chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView key={String(activeChat.id)} chat={activeChat} puppetMarkers={puppetMarkers} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={sameChatId(composerDraft?.chatId, activeChat.id) ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
@@ -3843,6 +3815,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                             <ConversationView
                                 key={String(channel.id)}
                                 chat={channel}
+                                puppetMarkers={puppetMarkers}
                                 playerCountry={playerCountry}
                                 gameDate={gameDate}
                                 world={worldSnapshot}
