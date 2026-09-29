@@ -2752,6 +2752,46 @@ test("future scenarios skip real-history verification even when production verif
   assert.match(result.historicalVerification.skippedReason, /future scenario date/);
 });
 
+test("a universe with no reference authority spends no requests on timeline verification", async () => {
+  const historyAuthority = { referenceAllowed: false, referenceAuthority: "none", cutoffDate: "" };
+  const proposal = {
+    polityKey: "Crown of Aster",
+    actorPatchJson: JSON.stringify({
+      politicalSystem: { type: "absolute_monarchy", representation: "none" },
+      government: { form: "Absolute monarchy", headOfState: "Queen Ilse" },
+    }),
+  };
+  const calls = [];
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "1900-01-01",
+    historyAuthority,
+    polities: ["Crown of Aster"],
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: true,
+    callModel: async (_system, _history, opts) => {
+      calls.push(opts.taskKey);
+      return { toolInput: { proposals: [proposal] } };
+    },
+  });
+  assert.deepEqual(calls, ["politicalWorldGeneration"]);
+  assert.equal(result.generatedPolities, 1);
+  assert.equal(result.historicalVerification.enabled, false);
+  assert.match(result.historicalVerification.skippedReason, /no reference authority/);
+
+  const rechecked = await reverifyPoliticalWorldProposalsCore({
+    result,
+    scenarioDate: "1900-01-01",
+    historyAuthority,
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    callModel: async () => { throw new Error("no verification call expected"); },
+  });
+  assert.equal(rechecked.historicalVerification.enabled, false);
+  assert.match(rechecked.historicalVerification.skippedReason, /no reference authority/);
+});
+
 
 test("historical roster corrections preserve existing response profiles for retained entity ids", async () => {
   const result = await generatePoliticalWorldProposalsCore({

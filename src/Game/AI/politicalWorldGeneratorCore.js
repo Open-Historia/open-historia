@@ -2090,10 +2090,20 @@ const temporalAuthorityVerificationAllowed = (scenarioDate, generatedAt, history
   // start-world date is in the future: the verifier is explicitly forbidden
   // from snapping target-date state to remembered post-boundary chronology.
   if (contract.mode === "exclusive") return true;
-  // No-reference worlds are normally not scheduled for this expensive pass at
-  // all. If a legacy/manual caller requests it, keep the old future safeguard.
+  // A universe with no reference authority has no external timeline to check
+  // against, so Pass A, the sentinel and adjudication would only spend requests
+  // (roughly 13 to 26 for 50 polities). v2 already skips it. A game with no
+  // authority object at all is "legacy" and keeps its checks.
+  if (contract.mode === "none") return false;
+  // If a legacy/manual caller requests it, keep the old future safeguard.
   return scenarioDateIsNotFuture(scenarioDate, generatedAt);
 };
+
+const temporalVerificationSkippedReason = (scenarioDate, historyAuthority) => (
+  historyAuthorityPromptContract(historyAuthority, scenarioDate).mode === "none"
+    ? "no reference authority; the scenario has no external timeline to verify against"
+    : "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology"
+);
 
 export const validateHistoricalVerificationPayload = ({ payload, entries, context }) => {
   const rawVerifications = Array.isArray(payload?.verifications) ? payload.verifications : [];
@@ -3956,7 +3966,7 @@ export const generatePoliticalWorldProposalsCore = async ({
   } else if (verifyHistoricalIdentity && !verificationCandidates.length) {
     historicalVerification = { ...historicalVerification, skippedReason: "no generated date-sensitive identity fields" };
   } else if (verifyHistoricalIdentity && !temporalAuthorityVerificationAllowed(plan.scenarioDate, runTimestamp, historyAuthority)) {
-    historicalVerification = { ...historicalVerification, skippedReason: "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology" };
+    historicalVerification = { ...historicalVerification, skippedReason: temporalVerificationSkippedReason(plan.scenarioDate, historyAuthority) };
   }
 
   return {
@@ -4016,7 +4026,7 @@ export const reverifyPoliticalWorldProposalsCore = async ({
       historicalVerification: {
         enabled: false,
         recheckOnly: true,
-        skippedReason: "future scenario date with inclusive reference authority; authored/future canon must not be snapped to external chronology",
+        skippedReason: temporalVerificationSkippedReason(startDate, historyAuthority),
         requested: 0,
         confirmed: 0,
         corrected: 0,
