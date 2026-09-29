@@ -321,7 +321,6 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
   gameMaster: Object.freeze(["gameMasterMode", "territorialControlContext"]),
   idleDiplomacy: Object.freeze([
     "playerPolity",
-    "idleChatAllowed",
     "canonicalDiplomaticContext",
     "eventDiplomaticReactionContext",
     "unitsSummary",

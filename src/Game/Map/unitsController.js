@@ -484,12 +484,3 @@ export const getGameDate = () => gameDate;
 
 export const removeUnit = async (unitId) =>
   commit((list) => list.filter((u) => u.id !== unitId));
-
-export const disbandUnit = async (unitId) => {
-  const unit = getUnitById(unitId);
-  if (!unit) return;
-  await commit((list) => list.filter((u) => u.id !== unitId));
-  await queueOrder(
-    `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`,
-  );
-};

@@ -1653,19 +1653,3 @@ export const institutionMembershipBadge = (institution, member) => {
   if (status === "suspended") return `${root}-suspended`;
   return "";
 };
-
-export const buildInstitutionContext = (world, focusPolities = [], { maxInstitutions = 14 } = {}) => {
-  const focus = new Set(array(focusPolities).map((polity) => lower(canonicalPolity(polity, world))).filter(Boolean));
-  const institutions = normalizeInstitutions(world?.institutions, world);
-  const rows = Object.values(institutions.byId)
-    .filter((institution) => institution.status !== "dissolved")
-    .filter((institution) => !focus.size || array(institution.members).some((member) => focus.has(lower(member.polity))))
-    .sort((a, b) => institutionStrategicPriority(b) - institutionStrategicPriority(a))
-    .slice(0, Math.max(1, maxInstitutions));
-  return rows.map((institution) => {
-    const members = array(institution.members)
-      .filter((member) => !focus.size || focus.has(lower(member.polity)))
-      .map((member) => `${member.polity} (${member.status}${member.role !== "member" ? `, ${member.role}` : ""})`);
-    return `- ${institution.name} [${institution.id}; ${institution.kind}]${members.length ? `: ${members.join(", ")}` : ""}`;
-  }).join("\n");
-};

@@ -914,14 +914,6 @@ const reconcileModernChatForPlayer = (entry, world, playerCountry = "", identity
   }, desiredCountries, world, index);
 };
 
-export const reconcileChatsForWorld = (chats, world) =>
-  normalizeChats(chats).map((chat) => {
-    const institutionId = normalizeOptionalString(chat?.institutionId || chat?.channelInstitutionId);
-    if (!institutionId) return chat;
-    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
-    return canonicalId ? { ...chat, institutionId: canonicalId } : chat;
-  });
-
 const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", identityIndex = null) => {
   const left = reconcileModernChatForPlayer(primary, world, playerCountry, identityIndex);
   const right = reconcileModernChatForPlayer(incoming, world, playerCountry, identityIndex);
@@ -979,9 +971,6 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   }
   return output.filter(Boolean);
 };
-
-export const mergeIncomingChats = (existing, incoming, world, { playerCountry = "" } = {}) =>
-  reconcileChatsForPlayer([...normalizeArray(existing), ...normalizeArray(incoming)], world, playerCountry);
 
 const normalizeRegionTransfer = (entry) => {
   if (!entry || typeof entry !== "object") {

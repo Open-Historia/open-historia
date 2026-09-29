@@ -310,7 +310,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.6 `eventConsolidator` — compress history
 - **Purpose:** Fold a batch of events + closed chats into one continuity summary (~≤360 words) so old detail leaves the context window without losing map/diplomacy facts.
-- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (`535`, auto-run by `compactHistoryIfNeeded` `554` after jumps) and `consolidateRecentHistory({limit})`.
+- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch`, run by `compactHistoryIfNeeded` after jumps and by `consolidateHistoryNow` (Cheats → History Document).
 - **Tool/schema:** `submit_event_consolidation` / `EVENT_CONSOLIDATOR_SCHEMA`: `{ summary }`.
 - **Fallback:** concatenate raw event lines + `buildChatSummaryText`. Triggers: `CONSOLIDATION_*` thresholds (`gameplay.js`).
 
@@ -337,7 +337,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.11 `gameMaster` — direct map/state cheat
 - **Purpose:** Apply an explicit player/GM request to the map/world; never argue or refuse.
-- **Prompt:** `tasks.gameMaster`. **Entry:** `applyGameMasterCommand(requestText)` `gameplay.js` (passes `gameMasterRequest`).
+- **Prompt:** `tasks.gameMaster`. **Entry:** `previewGameMasterCommand(requestText, { mode })` `gameplay.js` (passes `gameMasterRequest`); the console then applies that exact preview with `applyGameMasterPreview(preview)`. There is no direct execution path.
 - **Tool/schema:** `submit_game_master` / `GAME_MASTER_SCHEMA`: `{ summary, impacts { regionTransfers, polityChanges, markerOps } }`.
 - **Validation:** `validateGeneratedWorldChanges` (strict on attempt 1). **Fallback:** empty impacts + neutral summary. Wrapped as a "Game master intervention" event.
 
@@ -379,7 +379,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.13 `idleDiplomacy` — unprompted note drip
 - **Purpose:** Between jumps, on each real-minute tick, a small chance a single polity sends the player a short note; usually the answer is silence (`chat: null`).
-- **Prompt:** `tasks.idleDiplomacy` (uses lowercase `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`). **Entry:** `maybeSendIdleDiplomacy({chance})` in `gameplay.js`, rolled once a visible minute by `GameUI/main.jsx`. It is **background AI**: it does nothing while the player has Background AI turned off (Settings → AI → AI requests; on by default) or has reached that day's cap, and its calls are counted as background ([the request budget](ai-overview.md#the-request-budget)). Its one cadence is the game's Idle diplomacy feature — one attempt every N minutes, 8 by default, zero when the feature is off — and the same request also asks whether any forces would visibly move. It used to run at least one roll in four regardless of the feature, so that the map "breathed"; that floor is gone. Suspended by the simulation busy-lock.
+- **Prompt:** `tasks.idleDiplomacy` (uses lowercase `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`). **Entry:** `maybeSendIdleDiplomacy()` in `gameplay.js`, rolled once a visible minute by `GameUI/main.jsx`. It is **background AI**: it does nothing while the player has Background AI turned off (Settings → AI → AI requests; on by default) or has reached that day's cap, and its calls are counted as background ([the request budget](ai-overview.md#the-request-budget)). Its one cadence is the game's Idle diplomacy feature — one attempt every N minutes, 8 by default, zero when the feature is off — and the same request also asks whether any forces would visibly move. It used to run at least one roll in four regardless of the feature, so that the map "breathed"; that floor is gone. Suspended by the simulation busy-lock.
 - **Tool/schema:** `submit_idle_diplomacy` / `IDLE_DIPLOMACY_SCHEMA`: `{ chat: null | createdChat }`. No editor section; no canned fallback (silent). A note from a country the player already 1:1s with lands in that thread.
 
 ### 7.17 `projects` — the Projects & Operations board

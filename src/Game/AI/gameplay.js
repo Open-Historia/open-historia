@@ -2277,7 +2277,7 @@ ${HIGH_PRIORITY_ASSESSMENT_RULE} A project marked low priority may be left drift
   // whose stored idleDiplomacy prompt predates any of this.
   if (taskKey === "idleDiplomacy") {
     const playerName = normalizeString(variables.playerPolity) || "the player's polity";
-    systemPrompt = `${systemPrompt}\n\n[World Pulse]\nOnly minutes of real time have passed and the game date has NOT advanced, so any movement is a step, never a redeployment. Return at most two unitOps, and an empty list is the normal answer. Move only what already has a reason to move: a war under way, a crisis already named in recent events, a border already tense, a fleet already at sea. Never invent a new conflict here.\nPrefer moving or re-posturing an EXISTING unit over spawning one. Prefer movement ${playerName} can actually see - near their borders, waters, allies and rivals; a division shuffling across the far side of the world is invisible and not worth an operation. Never move a garrison, and never touch a unit owned by ${playerName}.\nWrite composition and a one-sentence note on anything you spawn, and set posture on anything you touch. Return a sighting ONLY when the movement is inside or near ${playerName}'s sphere and their services would plausibly have seen it; otherwise sighting is null and the movement is silent.\n${normalizeString(variables.idleChatAllowed) === "no" ? "This pulse is MOVEMENT ONLY: return chat as null." : ""}
+    systemPrompt = `${systemPrompt}\n\n[World Pulse]\nOnly minutes of real time have passed and the game date has NOT advanced, so any movement is a step, never a redeployment. Return at most two unitOps, and an empty list is the normal answer. Move only what already has a reason to move: a war under way, a crisis already named in recent events, a border already tense, a fleet already at sea. Never invent a new conflict here.\nPrefer moving or re-posturing an EXISTING unit over spawning one. Prefer movement ${playerName} can actually see - near their borders, waters, allies and rivals; a division shuffling across the far side of the world is invisible and not worth an operation. Never move a garrison, and never touch a unit owned by ${playerName}.\nWrite composition and a one-sentence note on anything you spawn, and set posture on anything you touch. Return a sighting ONLY when the movement is inside or near ${playerName}'s sphere and their services would plausibly have seen it; otherwise sighting is null and the movement is silent.\n
 
 [What the Sender Knows]
 You are shown every chat in the campaign so you can judge WHO would plausibly speak and about what. The polity you then write as does NOT share that view. It knows only: the chats it was itself a participant in, whatever is public knowledge in the events above, and what ${playerName} has told it directly. It has NOT read ${playerName}'s correspondence with anyone else.
@@ -6658,9 +6658,9 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
 //
 // Everything the board could need is settled by then and nothing is written yet,
 // so a failure still means "nothing happened" and the turn can be held and
-// retried. Callers that own the board through their own impacts
-// (applyGameMasterCommand) or have no board story (advanceActiveInteractive)
-// simply omit it and are unchanged.
+// retried. Callers with no board story (advanceActiveInteractive) simply omit
+// it and are unchanged; the GM console never comes through here
+// (applyGameMasterPreview writes its own previewed transaction).
 // Ledger records reference the events that caused them by id. When a
 // post-processor drops an event, every record bound only to it is dropped too;
 // a record bound to no event at all (a baseline row) stays.
@@ -12327,14 +12327,6 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
   return events;
 };
 
-export const consolidateRecentHistory = async ({ limit = 12 } = {}) => {
-  const bundle = await readGameStateBundle({ force: true });
-  const events = getUnconsolidatedEvents(bundle.events, bundle.world).slice(0, limit);
-  const chats = normalizeChats(bundle.chats).filter((chat) => chat.status === "closed").slice(0, limit);
-  const { summary } = await consolidateHistoryBatch(bundle, events, chats);
-  return summary;
-};
-
 // Cheats → History Document: fold the older unconsolidated history now —
 // everything but the retained tail, one batch — regardless of the round and
 // size thresholds, and write the pass and the revised document. Refused while
@@ -14308,7 +14300,7 @@ const gameMasterRequestDateFromParts = (yearValue, monthValue, dayValue) => {
   );
 };
 
-export const extractExplicitGameMasterRequestDates = (requestText) => {
+const extractExplicitGameMasterRequestDates = (requestText) => {
   const request = normalizeString(requestText);
   if (!request) return [];
   const dates = new Set();
@@ -15353,12 +15345,6 @@ export const applyGameMasterPreview = async (preview) => {
   }
 };
 
-// Kept for stale callers, but direct prose execution remains forbidden. The UI must
-// always generate and expose a preview before any canonical write can happen.
-export const applyGameMasterCommand = async () => {
-  throw new Error("Direct GM execution is disabled. Generate a preview and apply that exact transaction through the GM Console.");
-};
-
 // ---- Event Editor diplomatic reaction queue ---------------------------------
 // A manually-authored event can optionally invite ONE autonomous NPC reaction.
 // The editor commits the event immediately, then stores a real-time grace deadline
@@ -15499,7 +15485,6 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
     const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet);
     const variables = {
       ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true })),
-      idleChatAllowed: "yes",
       eventDiplomaticReactionContext: eventReactionPromptText(event, bundle.game?.country),
     };
 
@@ -16258,41 +16243,31 @@ const appendSightingEvent = async (bundle, sighting, unitOps) => {
   await writeEventsState(next);
 };
 
-export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
+export const maybeSendIdleDiplomacy = async () => {
   if (idleDiplomacyInFlight || isSimulationBusy()) return null;
   // Nobody pressed anything, so this is background AI (requestBudget.js): it
   // stops at its daily cap, and spends nothing once the player turns it off.
   if (!backgroundAiAllowance().allowed) return null;
-  // One cadence, the feature's own (see the comment above idleDiplomacyInFlight);
-  // zero when idle diplomacy is off for this game, and then nothing runs. An
-  // explicit `chance` is a caller's own roll (the tests, a debug trigger).
-  const chatChance = idleDiplomacyChancePerMinute();
-  const pulseChance = chance ?? chatChance;
+  // One cadence, the feature's own (see the comment above idleDiplomacyInFlight),
+  // for the whole pulse: zero when idle diplomacy is off for this game, and then
+  // nothing runs, movement included.
+  const pulseChance = idleDiplomacyChancePerMinute();
   if (!(pulseChance > 0)) return null;
   const roll = Math.random();
   if (roll >= pulseChance) return null;
   if (await revealInProgress()) return null;
   // One call, both halves: whether a polity would write, and whether any forces
-  // would visibly move. A caller's own roll does not switch on notes the game has
-  // switched off.
-  const allowChat = chatChance > 0;
+  // would visibly move.
   idleDiplomacyInFlight = true;
-  setChatGenerationInFlight(allowChat);
+  setChatGenerationInFlight(true);
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
-    const variables = {
-      ...(await buildTemplateVariables(bundle, { lookups: true })),
-      idleChatAllowed: allowChat ? "yes" : "no",
-    };
+    const variables = await buildTemplateVariables(bundle, { lookups: true });
     const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
-    const institutionRoutingContext = allowChat
-      ? buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country)
-      : "";
-    const politicalDecisionSet = allowChat
-      ? buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 6 })
-      : buildBoundedPoliticalDecisionContextSet(bundle.world, { actorPolities: [], maxActors: 0 });
-    const politicalDecisionContext = allowChat ? idleDiplomacyPoliticalContextText(politicalDecisionSet) : "";
+    const institutionRoutingContext = buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country);
+    const politicalDecisionSet = buildIdleDiplomacyPoliticalDecisionSet(bundle, { maxActors: 6 });
+    const politicalDecisionContext = idleDiplomacyPoliticalContextText(politicalDecisionSet);
     // Lifecycle accession/founding negotiations are excluded on purpose. A
     // background diplomatic note is conversation, not legal membership state,
     // and must never look like a canonical acceptance/rejection inside that
@@ -16320,13 +16295,11 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     const { payload } = await runJsonTask("idleDiplomacy", {
       lookups: buildTaskLookups(bundle),
       requestKind: BACKGROUND_REQUEST,
-      userMessage: allowChat
-        ? "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
-          + conversationContext
-          + (institutionRoutingContext ? `\n\n${institutionRoutingContext}` : "")
-          + (politicalDecisionContext ? `\n\n${politicalDecisionContext}` : "")
-          + "\n\nReturn JSON only."
-        : "A quiet moment between rounds. Decide whether any forces would visibly move right now. Return chat as null. Return JSON only.",
+      userMessage: "A quiet moment between rounds. Decide whether any single polity would send the player a short diplomatic note right now, and whether any forces would visibly move."
+        + conversationContext
+        + (institutionRoutingContext ? `\n\n${institutionRoutingContext}` : "")
+        + (politicalDecisionContext ? `\n\n${politicalDecisionContext}` : "")
+        + "\n\nReturn JSON only.",
       validatePayload: async (candidate, { finalAttempt } = {}) => {
         if (candidate?.chat == null) return "";
         const countries = await resolveInvitees(candidate.chat.countries, bundle.world);
@@ -16385,7 +16358,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     }
 
     // --- diplomacy --------------------------------------------------------
-    if (!allowChat || !payload.chat) return null;
+    if (!payload.chat) return null;
     // A jump may have started while the model was thinking; its state bundle
     // predates our write, so drop the note rather than race the save.
     if (isSimulationBusy()) return null;
@@ -16446,7 +16419,3 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     setChatGenerationInFlight(false);
   }
 };
-
-// Clearer name for what this now does. The old export stays because main.jsx
-// imports it dynamically and the docs reference it by name.
-export const maybeRunIdlePulse = maybeSendIdleDiplomacy;

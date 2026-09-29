@@ -227,7 +227,7 @@ Two shapes of call sit on the transport.
 
 ```
 UI control (e.g. "Jump forward", GM console, "Suggest actions")
-  → gameplay.js exported fn (simulateTimelineJump / applyGameMasterCommand / …)
+  → gameplay.js exported fn (simulateTimelineJump / previewGameMasterCommand / …)
      → readGameStateBundle() + buildTemplateVariables()      [read world/events/actions/chats]
      → runJsonTask(taskKey, { userMessage, variables, validatePayload, fallback, … })
         → renderTemplate(promptPack.tasks[taskKey], vars) + difficulty/agency/map-truth/reputation directives
@@ -615,11 +615,11 @@ A model knows that a tank army is "massing east of Kharkiv"; it does not know th
 | `autoJumpForward` | `submit_jump_result` | `simulateAutoJump` | Advance to the next notable moment. |
 | `actions` | `submit_actions` | `generateActionSuggestions` | Strategic suggestion topics for the player. |
 | `descriptionToAction` | `submit_description_to_action` | `refinePlayerAction` | Freeform intent → structured action/chat. |
-| `eventConsolidator` | `submit_event_consolidation` | auto `compactHistoryIfNeeded` (a turn), `consolidateHistoryNow` (Cheats → History Document), `consolidateRecentHistory` | Fold old events/chats/orders into the campaign's living history document (`world.historyDocument`): the first pass writes it, later passes rewrite it, condensing unimportant older material to stay near 1,500 words; the events themselves stay in the log. |
+| `eventConsolidator` | `submit_event_consolidation` | auto `compactHistoryIfNeeded` (a turn), `consolidateHistoryNow` (Cheats → History Document) | Fold old events/chats/orders into the campaign's living history document (`world.historyDocument`): the first pass writes it, later passes rewrite it, condensing unimportant older material to stay near 1,500 words; the events themselves stay in the log. |
 | `interactiveCreation` | `submit_interactive_creation` | `createInteractive({ eventId, angle })` | Open the scene of the interactive event a skip offered, from the player's angle when they gave one. |
 | `interactiveExecutor` | `submit_interactive_execution` | `advanceActiveInteractive` (and `rewindActiveInteractive` with a choice) | Play one move of the scene. |
 | `interactiveSummary` | `submit_interactive_summary` | the scene resolving, or `endActiveInteractive` | The scene written into the record as one event. |
-| `gameMaster` | `submit_game_master` | `applyGameMasterCommand` | GM console: apply free‑text world/map edits. |
+| `gameMaster` | `submit_game_master` | `previewGameMasterCommand` → `applyGameMasterPreview` | GM console: plan a free‑text world/map edit as a previewed transaction, then apply exactly that preview. |
 | `countryStatSheet` | `submit_country_stat_sheet` | `generateCountryStatSheet` / `generateCountryStats` | National statistics sheet. |
 | `timelineCurator` | `submit_timeline_curator` | `curateGeneratedEvents` (`nativeTimelineCurator.js`, from `applySimulationResult`) | Judges each fresh event against recent canon before it persists; deterministic gates (hard impacts, retrieved prior matches, saturation) decide what may be dropped, default KEEP. |
 | `unitDirector` | `submit_unit_director` | `directGeneratedUnitOps` (`nativeUnitDirector.js`, from `finishTimelineJump`) | Keeps existing NPC formations coherent with the turn's military events: proposes spawn/move/strength/remove ops that native rules sanitize before they ride the normal unitOps path. |
@@ -682,7 +682,7 @@ Only a jump writes one. `selectLastJumpRecord` steps over Game Master, interacti
 Once a payload is accepted (region ids already canonicalized in place), the exported task functions write it back:
 
 - **Jumps**: `applySimulationResult` (`gameplay.js`) normalizes events, advances `gameDate`/`round`, resolves planned actions to `resolved`, runs `applyEventImpactsToWorld` (from `runtime/gameState.js` — region ownership, polity changes, units, markers, colors), builds chats from `impacts.createdChats` + top‑level `diplomaticOutreach` via `buildGeneratedChat` (`gameplay.js`), optionally consolidates history, writes all state slices, and captures a rollback snapshot (`loadRollbackSnapshots`/`rollBackToSnapshot`, `gameplay.js`).
-- **GM command**: `applyGameMasterCommand` (`gameplay.js`) turns the payload into a single GM event and applies its impacts the same way.
+- **GM command**: `previewGameMasterCommand` (`gameplay.js`) plans the request into a transaction the console shows; `applyGameMasterPreview` re-validates that exact transaction against a fresh world (failing closed if the state fingerprint changed) and applies its impacts the same way.
 - The `generation` object (`{ source: "ai" | "fallback", fallbackReason }`) rides along into `simulationHistory` so the UI can show whether a turn was AI‑ or fallback‑generated.
 
 See [World state](world-state.md) for the shape of what these writers touch, and [Game state persistence](world-state.md) for the read/write bundle helpers.
@@ -713,5 +713,5 @@ See [World state](world-state.md) for the shape of what these writers touch, and
 | `runJsonTask(taskKey, opts)` | `gameplay.js` | Structured task runner (2 attempts, validate/salvage, fallback; `lookups` declares the lookup functions). |
 | `LOOKUP_TOOLS`, `LOOKUP_DIRECTIVE`, `buildLookupContext`, `executeLookup` | `lookupTools.js` | The lookup functions and their executor (see [Lookup functions](#lookup-functions-the-campaign-behind-function-calls)). |
 | `appendLookupRound`, `geminiContentsFromHistory`, `openAiMessagesFromHistory`, `anthropicMessagesFromHistory`, `lookupCallsFrom*` | `toolTurns.js` | A lookup round stored once, rendered and read per provider. |
-| `simulateTimelineJump`, `applyGameMasterCommand`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |
+| `simulateTimelineJump`, `previewGameMasterCommand`, `applyGameMasterPreview`, `generateActionSuggestions`, … | `gameplay.js` | Task entry points (see [catalog](#task-catalog)). |
 | `getGameplayTool`, `validateGameplayPayload` | `gameplaySchemas.js` | taskKey → tool, payload schema check. See [AI schemas](ai-schemas.md). |
