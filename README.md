@@ -172,7 +172,7 @@ OH_HOST=192.168.1.20 node server/server.js # one interface only
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `OH_HOST` | unset | Which interface to listen on. Overrides the Settings toggle and locks it. Anything but loopback puts the API on your network. |
-| `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. |
+| `OH_ALLOW_REMOTE_RELAY` | off | Lets other devices use this server's AI relay. Off means the relay only answers this machine, so it can't be used as a proxy by anyone else on the network. The same switch is in Settings → Advanced → Network ("Let other devices send AI calls through this server", shown while sharing is on); this variable overrides it and locks it. |
 | `OH_RATE_LIMIT` | `1200` | Requests per minute per network client (loopback is exempt). |
 
 > [!TIP]

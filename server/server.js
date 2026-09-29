@@ -122,16 +122,20 @@ const ALL_INTERFACES_HOST = "0.0.0.0";
 
 const isLanHost = (host) => host !== LOOPBACK_HOST && host !== "localhost" && host !== "::1";
 
+// lanAccess: the listener's binding. relayForLan: whether the AI relay answers
+// other devices too (see ALLOW_REMOTE_RELAY by the relay).
 const readNetworkSettings = () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(NETWORK_SETTINGS_FILE, "utf8"));
-    return { lanAccess: parsed?.lanAccess === true };
+    return { lanAccess: parsed?.lanAccess === true, relayForLan: parsed?.relayForLan === true };
   } catch {
-    return { lanAccess: false };
+    return { lanAccess: false, relayForLan: false };
   }
 };
 
-const writeNetworkSettings = (settings) => {
+// Merged into what is saved, so changing one setting keeps the other.
+const writeNetworkSettings = (changes) => {
+  const settings = { ...readNetworkSettings(), ...changes };
   fs.mkdirSync(path.dirname(NETWORK_SETTINGS_FILE), { recursive: true });
   fs.writeFileSync(NETWORK_SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
 };
@@ -1044,9 +1048,12 @@ const setHubFileGuards = (res) => {
 // fenced in three other ways instead:
 //   1. LOOPBACK ONLY by default. A relay reachable from the network is an open
 //      proxy for everyone on it. The desktop app, Termux-on-the-same-phone and a
-//      browser on the host all come from loopback and are unaffected; a phone
-//      talking to a desktop needs OH_ALLOW_REMOTE_RELAY=1, which is a deliberate
-//      "yes, proxy for my LAN" and is stated as such.
+//      browser on the host all come from loopback and are unaffected; a browser
+//      on another device needs the player to say "yes, proxy for my LAN":
+//      Settings → Network → "Let other devices send AI calls through this
+//      server" (relayForLan in network-settings.json, applied at once), or
+//      OH_ALLOW_REMOTE_RELAY=1, which wins and locks that switch. The Android
+//      app never needs it: it calls the model natively, with no relay.
 //   2. Cloud metadata endpoints refused (relayTargetAllowed on the URL, and
 //      relayLookup on where a name resolves) — never an AI endpoint, always
 //      credentials.
@@ -1054,6 +1061,14 @@ const setHubFileGuards = (res) => {
 //      bounded, so it cannot be aimed at an internal service and used to walk a
 //      redirect chain or stream something unbounded back.
 const ALLOW_REMOTE_RELAY = process.env.OH_ALLOW_REMOTE_RELAY === "1";
+let RELAY_FOR_LAN = readNetworkSettings().relayForLan;
+const relaySettingState = () => ({
+  relayForLan: ALLOW_REMOTE_RELAY || RELAY_FOR_LAN,
+  relayLockedByEnv: ALLOW_REMOTE_RELAY,
+});
+// Marks the relay's own refusal, so the page can tell it from an AI endpoint
+// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal).
+const RELAY_REFUSED_HEADER = "X-OH-Relay";
 const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 
@@ -1100,13 +1115,14 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   armTimeout();
 
   try {
-    if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
+    if (!ALLOW_REMOTE_RELAY && !RELAY_FOR_LAN && !isLoopbackAddress(req.socket?.remoteAddress)) {
+      res.setHeader(RELAY_REFUSED_HEADER, "refused");
       return sendError(
         res,
         403,
         new Error(
-          "The AI relay only answers this machine. Set OH_ALLOW_REMOTE_RELAY=1 to let other "
-            + "devices on your network relay AI calls through this server.",
+          "The AI relay only answers the computer running the server. To let this device use it, turn on "
+            + "Settings → Advanced → Network → \"Let other devices send AI calls through this server\" on that computer.",
         ),
       );
     }
@@ -1239,6 +1255,7 @@ app.get("/api/server/network", (req, res) => {
     port: Number(PORT),
     lockedByEnv: Boolean(HOST_FROM_ENV),
     addresses: local ? lanAddresses() : [],
+    ...relaySettingState(),
   });
 });
 
@@ -1251,6 +1268,31 @@ app.get("/api/server/network", (req, res) => {
 app.post("/api/server/network", jsonParser, (req, res) => {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) {
     return sendError(res, 403, new Error("Only the machine running the server can change this."));
+  }
+  // The relay switch on its own ({ relayForLan }): applied at once, no rebind,
+  // and not OH_HOST's business, which only decides the binding.
+  if (typeof req.body?.relayForLan === "boolean" && !("lanEnabled" in req.body)) {
+    if (ALLOW_REMOTE_RELAY) {
+      return sendError(
+        res,
+        409,
+        new Error("OH_ALLOW_REMOTE_RELAY is set, so it decides who can use the AI relay. Unset it to use this switch."),
+      );
+    }
+    try {
+      writeNetworkSettings({ relayForLan: req.body.relayForLan });
+    } catch (error) {
+      return sendError(res, 500, error);
+    }
+    RELAY_FOR_LAN = req.body.relayForLan;
+    return res.json({
+      lanEnabled: isLanHost(requestedHost),
+      host: requestedHost,
+      port: Number(PORT),
+      lockedByEnv: Boolean(HOST_FROM_ENV),
+      addresses: lanAddresses(),
+      ...relaySettingState(),
+    });
   }
   if (HOST_FROM_ENV) {
     return sendError(
@@ -1281,6 +1323,7 @@ app.post("/api/server/network", jsonParser, (req, res) => {
     port: Number(PORT),
     lockedByEnv: false,
     addresses: lanEnabled ? lanAddresses() : [],
+    ...relaySettingState(),
   });
   scheduleRebind();
 });

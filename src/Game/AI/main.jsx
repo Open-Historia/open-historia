@@ -25,7 +25,7 @@ import {
 } from "./contextWindow.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
-import { withRelayCutoffHint } from "./relayResponse.js";
+import { isRelayRefusal, withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
@@ -491,14 +491,20 @@ function isLocalEndpoint(url) {
 }
 
 // A stream the relay has to cut off partway reads as a bare network error;
-// withRelayCutoffHint makes it say what happened (relayResponse.js).
-const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) =>
-    withRelayCutoffHint(await fetch("/api/ai/relay", {
+// withRelayCutoffHint makes it say what happened (relayResponse.js). When the
+// relay refuses this device outright, the endpoint is no longer pinned to it,
+// so the next call tries direct again rather than going straight back to a
+// refusal (the model may allow this site by then; or the relay may).
+const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) => {
+    const response = await fetch("/api/ai/relay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, method, headers, payload }),
         signal,
-    }), signal);
+    });
+    if (isRelayRefusal(response)) relayOnlyOrigins.delete(endpointOrigin(url));
+    return withRelayCutoffHint(response, signal);
+};
 
 const directFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch(url, {

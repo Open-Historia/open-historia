@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { RELAY_CUT_OFF_MESSAGE, withRelayCutoffHint } from "./relayResponse.js";
+import { isRelayRefusal, RELAY_CUT_OFF_MESSAGE, RELAY_REFUSED_HEADER, withRelayCutoffHint } from "./relayResponse.js";
 
 const encoder = new TextEncoder();
 
@@ -51,6 +51,15 @@ test("the player's own cancel stays an abort", async () => {
     const abort = new DOMException("The operation was aborted.", "AbortError");
     const hinted = withRelayCutoffHint(new Response(streamed([], abort), { status: 200 }), controller.signal);
     await assert.rejects(hinted.text(), (error) => error === abort);
+});
+
+test("the relay refusing this device is told apart from an endpoint's own 403", () => {
+    const refused = new Response("{}", { status: 403, headers: { [RELAY_REFUSED_HEADER]: "refused" } });
+    const rejectedKey = new Response("{}", { status: 403 });
+    assert.equal(isRelayRefusal(refused), true);
+    assert.equal(isRelayRefusal(rejectedKey), false, "a relayed 403 from the AI endpoint keeps the pin");
+    assert.equal(isRelayRefusal(new Response("{}", { status: 200, headers: { [RELAY_REFUSED_HEADER]: "refused" } })), false);
+    assert.equal(isRelayRefusal(null), false);
 });
 
 test("a response with no body is handed back untouched", () => {

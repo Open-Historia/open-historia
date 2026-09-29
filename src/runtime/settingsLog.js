@@ -148,7 +148,10 @@ registerSettingsSnapshot("Network", async () => {
     const response = await fetch("/api/server/network", { cache: "no-store" });
     if (!response.ok) return null;
     const state = await response.json();
-    return [["Let other devices connect", `${onOff(state?.lanEnabled)}${state?.lockedByEnv ? " (set by OH_HOST)" : ""}`]];
+    return [
+        ["Let other devices connect", `${onOff(state?.lanEnabled)}${state?.lockedByEnv ? " (set by OH_HOST)" : ""}`],
+        ["Let other devices send AI calls through this server", `${onOff(state?.relayForLan)}${state?.relayLockedByEnv ? " (set by OH_ALLOW_REMOTE_RELAY)" : ""}`],
+    ];
 });
 
 registerSettingsSnapshot("Diagnostics", () => [

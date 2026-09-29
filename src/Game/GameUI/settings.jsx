@@ -1310,26 +1310,39 @@ const NetworkSharing = () => {
         );
     }
 
-    const toggle = async () => {
-        if (busy || state.lockedByEnv) return;
+    // One switch's change: the server answers with the whole network state.
+    const change = async (body, label, key) => {
+        if (busy) return;
         setBusy(true);
         setError("");
-        const next = !state.lanEnabled;
         try {
             const response = await fetch("/api/server/network", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ lanEnabled: next }),
+                body: JSON.stringify(body),
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data?.error || "Could not change this.");
             setState(data);
-            logSettingChange("Let other devices connect", Boolean(data?.lanEnabled));
+            logSettingChange(label, Boolean(data?.[key]));
         } catch (nextError) {
             setError(nextError.message);
         } finally {
             setBusy(false);
         }
+    };
+
+    const toggle = () => {
+        if (state.lockedByEnv) return;
+        change({ lanEnabled: !state.lanEnabled }, "Let other devices connect", "lanEnabled");
+    };
+
+    // A browser on another device reaches a model on this computer (LM Studio,
+    // Ollama) through the relay when the model refuses browser calls from other
+    // sites. The relay answers only this machine unless the player says so here.
+    const toggleRelay = () => {
+        if (state.relayLockedByEnv) return;
+        change({ relayForLan: !state.relayForLan }, "Let other devices send AI calls through this server", "relayForLan");
     };
 
     return (
@@ -1350,6 +1363,23 @@ const NetworkSharing = () => {
             <div style={helperTextStyle}>
             On: the Android app and browsers on other computers can reach this server. Off (default): only this machine can.
             </div>
+        )}
+
+        {state.lanEnabled && (
+            <>
+            <div style={state.relayLockedByEnv ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+            <Toggle
+            label="Let other devices send AI calls through this server"
+            enabled={Boolean(state.relayForLan)}
+            onToggle={toggleRelay}
+            />
+            </div>
+            <div style={helperTextStyle}>
+            {state.relayLockedByEnv
+                ? "Set by the OH_ALLOW_REMOTE_RELAY environment variable, so this switch is read-only."
+                : "For a browser on another device whose AI runs on this computer (LM Studio, Ollama) and refuses calls from other sites. Anyone on your network could send requests through this server while it is on."}
+            </div>
+            </>
         )}
 
         {state.lanEnabled && state.addresses?.length > 0 && (

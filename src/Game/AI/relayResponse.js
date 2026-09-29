@@ -10,6 +10,15 @@
 export const RELAY_CUT_OFF_MESSAGE =
     "The AI answer was cut off partway through the game server's relay. If a local model needs longer, raise OH_RELAY_TIMEOUT_MS on the server.";
 
+// The relay refusing to answer this device at all (another computer on the
+// LAN, with Settings → Network → "Let other devices send AI calls through this
+// server" off). Marked by a header, because an AI endpoint's own 403 — a
+// rejected key — is relayed with the same status. server/server.js sets it.
+export const RELAY_REFUSED_HEADER = "X-OH-Relay";
+
+export const isRelayRefusal = (response) =>
+    response?.status === 403 && response.headers?.get?.(RELAY_REFUSED_HEADER) === "refused";
+
 // Statuses a Response cannot be built with a body for.
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 
