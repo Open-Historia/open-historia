@@ -56,7 +56,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `DateWidget` | `time.jsx` | Date/country pill + timeline-skip + event-history panels |
 | `Toolbar` | `chat.jsx` | Bottom-left cluster: 💬 Chat + ✦ Actions launchers |
 | `Other` | `other.jsx` | Player-country flag badge (desktop only) |
-| `Search` | `search.jsx` | Place search (Nominatim) → `map.flyTo` |
+| `Search` | `search.jsx` | Place search: the world's own places first, then Photon → camera + the place's card |
 | `ForcesPanel` | `forces.jsx` | Unit list + deploy controls + mode banner |
 | `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; sits at `rightShift` |
 | `AdvisorPanel` | `advisor.jsx` (lazy) | Advisor chat + Stats tabs, resizable drawer |
@@ -479,7 +479,14 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 
 ## 11. Search — `src/Game/GameUI/search.jsx`
 
-`Search` (`search.jsx:144`, memoized) — a small 2.4rem square just right of the three-launcher toolbar (13.8rem from the left, z 9999), its bottom edge level with the bottoms of the dock's buttons rather than the dock, so it reads as a utility beside the launchers and not another one; expands to an input (rightward on desktop, a full-width 3rem bar above the toolbar on mobile). Its position is derived from the dock's geometry in `hudDock.js`, which the `Toolbar` reads too: the two used to be separate literals, and when a fourth launcher (the since-removed Dossier) widened the dock the search control sat on top of it. Adding or removing a launcher moves it on its own. Debounced (200 ms) autocomplete against **Nominatim** (`nominatim.openstreetmap.org/search`), results deduped + cached in-module. Picking a result (click / Enter / ↑↓) calls `mapRef.current.flyTo({center:[lon,lat], zoom:5})`. Purely a camera control — it does not touch game state.
+`Search` (`search.jsx:166`, memoized) — a small 2.4rem square just right of the launcher dock (z 9999), its bottom edge level with the bottoms of the dock's buttons rather than the dock, so it reads as a utility beside the launchers and not another one; expands to an input (rightward on desktop, a full-width 3rem bar above the toolbar on mobile). Its position is derived from the dock's geometry in `hudDock.js`, which the `Toolbar` reads too: the two used to be separate literals, and when a fourth launcher (the since-removed Dossier) widened the dock the search control sat on top of it. Adding or removing a launcher moves it on its own.
+
+What it finds, in this order (at most seven rows):
+
+- **In world** (up to four, a pill says so). The world's own places, which no geocoder knows, built in memory while the bar is open with no request and no debounce (`buildLocalPlaceEntries` in `src/runtime/placeSearch.js`): scenario cities and polity label sites that `Cities.jsx` and `Nations.jsx` publish (`publishCustomCityIndex`, `publishPolityIndex`), structures (`world.markers`), city renames (`world.cityRenames`), groups at the point their label is drawn (`publishGroupIndex`, from the regions worker's group-areas labels; found by a former name too), and units as the map shows them (`unitsController.getUnits()`, so a turn's unrevealed units stay hidden). A name matches whole (best), as a prefix, as a later word, or anywhere; prominence breaks ties. The same name within 0.75° is one place (a city rebuilt as a structure); groups and units are kept apart from that.
+- **The geocoder**: [Photon](https://photon.komoot.io) (`photon.komoot.io/api/`), debounced 300 ms, answers cached in-module, deduped and ranked (`rankGeocodedPlaces`). Not Nominatim: the OSM Foundation's Nominatim usage policy forbids client-side autocomplete. A result whose name an In-world row already has is dropped; an answer to an older query stays, dimmed, only while what is typed still starts with it.
+
+Picking a row (click, Enter, ↑↓): an extent is framed with `fitBounds` (up to 120° × 80°); otherwise the camera flies to a per-kind zoom (a country 4, a region 5, a settlement 7, a group 5, any other In-world place 7, else 9). An In-world place with no coordinates (a renamed stock city, a renamed stock country) is looked up by its old name through the geocoder (`flyToQuery`). Search is not only a camera control: a city or structure opens its card (`focusFeature`) and a unit its card (`focusUnit`, which first closes a region or feature card), without the click's toggle. A group has no card and only moves the camera.
 
 ---
 
@@ -508,7 +515,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 13 | Actions panel | `actions.jsx` | panel | `isOpen` | `JSON_URLS.game`, actions | `writeActionsState`, `generateActionSuggestions`, `refinePlayerAction`, `revertUnitOrder` |
 | 14 | Forces panel + mode banner | `forces.jsx` | panel | `Main.isForcesOpen` | units, allowed types, player code | `setInteractionMode`/`clearInteractionMode`, `map.flyTo` |
 | 15 | Cheats panel + tools | `cheats.jsx` | panel | `Main.isCheatsOpen` (+ `shouldLoadCheats`) | world/game/events/catalogs | many `writeWorldState`/`writeGameData`/`writeJson`, `applyGameMasterCommand`, `setRegionClickInterceptor` |
-| 16 | Search box | `search.jsx` | widget | local `expanded` | Nominatim | `map.flyTo` |
+| 16 | Search box | `search.jsx` | widget | local `expanded` | `getWorldPlaceIndex` (placeSearch.js), `useWorldState` markers/renames/overrides/groups, `unitsController.getUnits`, Photon | `map.flyTo`/`fitBounds`, `focusFeature`, `focusUnit` |
 | 17 | Player flag badge | `other.jsx` | badge | always (desktop) | `JSON_URLS.game`, world | — |
 | 18 | Main menu (Games/Scenarios/Community) | `libraryBar.jsx` | full page | `menuOpenDefault` | `useLibraryState`, hub posts | `activateGame`, `createGame/Scenario`, catalog refresh |
 | 19 | Game/Scenario editor drawer | `libraryBar.jsx` | panel | `editorKind`/`editorDetails` | scenario/game details | `saveScenario`/`saveGame`, asset up/clear, `exportScenarioBundle` |
