@@ -1774,6 +1774,10 @@ const diagnosticsButton = {
 // system, network sharing, diagnostics) sit inside those four sections rather
 // than adding sections of their own.
 
+// The guides are site pages. The Android app leaves them out of the APK
+// (mobile/scripts/stage-www.mjs), so there it opens the website's copy.
+const GUIDES_HREF = import.meta.env.VITE_OH_NATIVE ? "https://openhistoria.com/guides/" : "/guides/";
+
 const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, href, compact = false }) => {
     const tones = {
         neutral: { background: "rgba(255,255,255,0.04)", border: "rgba(255,255,255,0.08)", icon: "rgba(255,255,255,0.08)", color: "#f8fafc" },
@@ -1808,8 +1812,11 @@ const QuickAction = ({ title, description, symbol, tone = "neutral", onClick, hr
         </>
     );
 
+    // Always a new window, never this one: a page opened in place ends the
+    // running skip or AI call, and the desktop window has no back button to
+    // return by (electron/main.cjs sends a new window to the system browser).
     if (href) {
-        return <a href={href} target={href.startsWith("/") ? undefined : "_blank"} rel="noopener noreferrer" style={common}>{content}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" style={common}>{content}</a>;
     }
     return <button type="button" onClick={onClick} style={common}>{content}</button>;
 };
@@ -2507,7 +2514,7 @@ const SettingsMenu = ({
         panelContent = (
             <QuickMenuPanel title="Help" description="Guides, bug reporting and community links.">
                 <div style={grid}>
-                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href="/guides/" />
+                    <QuickAction title="Guides" description="How-to pages and setup help" symbol="?" href={GUIDES_HREF} />
                     {reportBugUrl && <QuickAction title="Report a Bug" description="Open the issue/report page" symbol="!" tone="amber" href={reportBugUrl} />}
                 </div>
                 <div style={{ alignItems: isMobile ? "stretch" : "center", display: "flex", flexDirection: isMobile ? "column" : "row", gap: "0.55rem", justifyContent: "space-between" }}>
