@@ -346,6 +346,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Prompt:** `tasks.countryStatSheet`. **Entry:** `generateCountryStatSheet({code, name})` `gameplay.js` (userMessage carries a `buildTargetDossier` + era slice).
 - **Tool/schema:** `submit_country_stat_sheet` / `COUNTRY_STAT_SHEET_SCHEMA`: `capital, continent, government, leader, stability(0–100), indices{sovereignty,foodAutonomy,energyAutonomy,economicIndependence,internalSecurity,internationalReputation}, economy{gdp,gdpGrowth,gdpPerCapita,currency,inflation,unemployment,publicDebt,budgetBalance}, gdpBreakdown{agriculture,industry,services}`.
 - **Validation:** all strings non-blank; all indices 0–100 integers; `agriculture+industry+services === 100` (`gameplaySchemas.js`). No fallback.
+- **A scenario's own sheet:** `loadStatSheetDefinition` (`src/runtime/statsSheet.js`) reads the scenario's `stats.json` once per library generation (scenario, its cache token and the library token) and never keeps a failed read. When a scenario that has one cannot be read, this task, a time skip and the Game Master fail before any request is sent, and a turn's tracked-stats refresh is skipped and logged; none of them falls back to the standard sheet, which would write the wrong statistics.
 
 ### 7.12a `timelineCurator` — the native timeline curator
 

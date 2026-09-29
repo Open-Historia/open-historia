@@ -2491,14 +2491,17 @@ const PLAYER_GROUP_TASKS = new Set([
 
 const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, reminders = true } = {}) => {
   const prompts = await loadPromptCatalog();
+  // No fallback to the standard sheet when a scenario's stats.json cannot be
+  // read: a custom-stats scenario would then be asked for, and would write,
+  // the wrong statistics. The task fails before any request is sent instead.
   const statSheetDefinition = STAT_INDEX_CONTEXT_TASKS.has(taskKey)
-    ? await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }))
+    ? await loadStatSheetDefinition()
     : null;
   const customFullStatSheet = Boolean(statSheetDefinition?.custom);
   const customStatRows = customFullStatSheet ? flattenStatSheetRows(statSheetDefinition) : [];
   const customStatKeys = customStatRows.map((row) => normalizeString(row?.key)).filter(Boolean);
   const statIndexDefinition = STAT_INDEX_CONTEXT_TASKS.has(taskKey) && !customFullStatSheet
-    ? await loadStatIndexDefinition().catch(() => ({ custom: false, rows: DEFAULT_STAT_INDEX_ROWS }))
+    ? await loadStatIndexDefinition({ definition: statSheetDefinition })
     : null;
   const statIndexRows = customFullStatSheet
     ? customStatRows.filter((row) => row.kind === "index")
@@ -10246,11 +10249,19 @@ const refreshTrackedCountryStatsIfDue = async ({
   let world = normalizeWorldState(bundle?.world);
   const currentDate = normalizeString(game?.gameDate || game?.startDate);
   if (!parseIsoDate(currentDate)) return world;
-  const statSheetDefinition = await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }));
+  let statSheetDefinition;
+  try {
+    statSheetDefinition = await loadStatSheetDefinition();
+  } catch (error) {
+    // Refreshing against the standard sheet would overwrite a custom-stats
+    // scenario's numbers with the wrong ones. The refresh stays due.
+    logDebugEvent("turn", "Tracked stats refresh skipped this turn: the scenario's Stats definition could not be read.", error, { problem: true });
+    return world;
+  }
   if (statSheetDefinition.custom) {
     return refreshTrackedCustomStatsIfDue({ bundle, signal, definition: statSheetDefinition });
   }
-  const statIndexDefinition = await loadStatIndexDefinition().catch(() => ({ custom: false, rows: DEFAULT_STAT_INDEX_ROWS }));
+  const statIndexDefinition = await loadStatIndexDefinition({ definition: statSheetDefinition });
   const statIndexRows = normalizeArray(statIndexDefinition?.rows).length
     ? normalizeArray(statIndexDefinition.rows)
     : DEFAULT_STAT_INDEX_ROWS;
@@ -11207,7 +11218,9 @@ export const ensureCountryStatSheet = (target, { reason = "" } = {}) =>
   firstReading("stat sheet", target, reason, async (name) => {
     const [world, definition] = await Promise.all([
       readWorldState({ force: false }).then(normalizeWorldState),
-      loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] })),
+      // A failed read fails the reading (logged by firstReading): judged
+      // against the standard sheet, a custom one would always look incomplete.
+      loadStatSheetDefinition(),
     ]);
     const persisted = normalizeCountryStatSheet(world.countryStats?.[name]);
     const complete = definition.custom
@@ -11344,7 +11357,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   const worldAtStart = bundle.world;
   const statCode = canonicalStatsPolity(code, worldAtStart) || normalizeString(code);
   const target = name || statCode || code || "the polity";
-  const statSheetDefinition = await loadStatSheetDefinition().catch(() => ({ custom: false, sections: [] }));
+  // A failed read is the Stats panel's error, never a standard sheet written
+  // over a custom-stats scenario.
+  const statSheetDefinition = await loadStatSheetDefinition();
   if (statSheetDefinition.custom) {
     return generateScenarioCustomStatSheet({
       bundle,
