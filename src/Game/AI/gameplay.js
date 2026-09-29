@@ -12145,11 +12145,14 @@ export const runChatActionBatch = async ({
       { countries: projectChatThread(entry.events).countries },
       speaker,
     ));
+    // The threads with the latest unseen lines, not the first or last in the
+    // store (which lists them newest-created first).
     const knowledge = buildCrossChatKnowledge({
       threads: visible,
       polity: speaker,
       cursors: nextCursors,
       projectAsSeenBy: threadAsSeenBy,
+      compareTime: compareGameDates,
     });
     Object.assign(nextCursors, knowledge.cursors);
     if (knowledge.text) knowledgeBlocks.push(`### ${speaker}'s own cables\n${knowledge.text}`);

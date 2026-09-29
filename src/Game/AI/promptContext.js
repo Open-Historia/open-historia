@@ -681,7 +681,11 @@ const diplomaticChatActivityKey = (chat) => {
   return "";
 };
 
-const sortDiplomaticChatsByRecentActivity = (chats) =>
+// Most recently active first, by the game date of each thread's latest dated
+// message (gameDates.js: a BC date is not a string to compare); a thread with
+// no dated message comes last. Ties keep the store's order, which lists the
+// newest-created first.
+export const sortDiplomaticChatsByRecentActivity = (chats) =>
   normalizeChats(chats)
     .map((chat, index) => ({
       chat,
@@ -690,7 +694,9 @@ const sortDiplomaticChatsByRecentActivity = (chats) =>
       hasMemory: Boolean(getLatestDiplomaticMemory(chat)),
     }))
     .sort((left, right) => {
-      const byActivity = right.activity.localeCompare(left.activity);
+      const byActivity = !left.activity || !right.activity
+        ? (right.activity ? 1 : 0) - (left.activity ? 1 : 0)
+        : compareGameDates(right.activity, left.activity);
       if (byActivity !== 0) return byActivity;
 
       // On the same in-game date, prefer a thread that already carries durable

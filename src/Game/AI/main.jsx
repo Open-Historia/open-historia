@@ -98,6 +98,7 @@ import {
     formatDateReadable,
     renderTemplate,
     resolveHelperValues,
+    sortDiplomaticChatsByRecentActivity,
 } from "./promptContext.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
@@ -3306,9 +3307,11 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // player has with everyone else, and the player's queued plans — redacted by
     // that polity's service against the player's. A polity whose agent has been
     // turned gets the cover story the player wrote instead, and believes it.
+    // The four most recently active, not the last four stored: the store lists
+    // chats newest-created first, and an old thread can hold the newest cable.
     const otherChats = speaker ? chats.filter((chat) => !isChatVisibleTo(chat, speaker)) : chats;
     const stolen = [
-        ...otherChats.slice(-4).map((chat) => {
+        ...sortDiplomaticChatsByRecentActivity(otherChats).slice(0, 4).map((chat) => {
             const who = (chat.countries || []).map((c) => c?.name).filter(Boolean).join(", ");
             const last = (chat.messages || []).slice(-4).map((m) => (m.speaker || m.role) + ": " + m.text).join(" | ");
             return last ? "Talks between " + who + ": " + last : "";
