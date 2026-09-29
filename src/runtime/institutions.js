@@ -857,20 +857,6 @@ export const normalizeInstitutionProposals = (value = {}, world = {}, identityIn
   return out;
 };
 
-const normalizeInstitutionGovernanceActivity = (value = {}) => {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const round = Number(source.lastAgendaRound);
-  const empty = Number(source.consecutiveEmptyAgendaChecks);
-  const outcome = lower(source.lastAgendaOutcome);
-  return {
-    lastAgendaDate: clean(source.lastAgendaDate).slice(0, 40),
-    lastAgendaRound: Number.isFinite(round) ? Math.max(0, Math.trunc(round)) : 0,
-    lastAgendaOutcome: ["proposal", "amendment", "advanced", "none"].includes(outcome) ? outcome : "",
-    consecutiveEmptyAgendaChecks: Number.isFinite(empty) ? Math.max(0, Math.min(12, Math.trunc(empty))) : 0,
-    sourceEventIds: unique(source.sourceEventIds, 24),
-  };
-};
-
 const normalizeMember = (value, world, identityIndex = null) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const polity = canonicalPolity(value.polity || value.country || value.member, world, identityIndex);
@@ -945,7 +931,6 @@ export const normalizeInstitutionRecord = (value, fallbackId = "", world = {}, i
     proposals: normalizeInstitutionProposals(value.proposals || value.resolutions || {}, world, identityIndex),
     lifecycleCases: normalizeInstitutionLifecycleCases(value.lifecycleCases || value.membershipCases || {}, world, identityIndex),
     membershipHistory: normalizeInstitutionMembershipHistory(value.membershipHistory || value.lifecycleHistory || [], world, identityIndex),
-    governanceActivity: normalizeInstitutionGovernanceActivity(value.governanceActivity || value.agendaActivity || {}),
     lastUpdatedDate: clean(value.lastUpdatedDate),
     note: clean(value.note).slice(0, 1000),
     sourceEventIds: unique(value.sourceEventIds, 24),
@@ -979,43 +964,6 @@ export const institutionLifecycleCases = (institution = {}) => Object.values(ins
 
 export const institutionPendingLifecycleCases = (institution = {}) => institutionLifecycleCases(institution)
   .filter((entry) => ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)));
-
-export const institutionMembershipHistoryForPolity = (institution = {}, polityInput = "") => {
-  const wanted = lower(polityInput);
-  if (!wanted) return [];
-  return array(institution?.membershipHistory).filter((entry) => lower(entry?.polity) === wanted);
-};
-
-export const institutionLifecycleCaseForPolity = (institution = {}, polityInput = "", { pendingOnly = false } = {}) => {
-  const wanted = lower(polityInput);
-  if (!wanted) return [];
-  return institutionLifecycleCases(institution).filter((entry) => (
-    lower(entry?.polity) === wanted
-    && (!pendingOnly || ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status)))
-  ));
-};
-
-
-export const recordInstitutionAgendaCheck = ({
-  world: worldLike = {}, institutionId = "", date = "", round = 0, outcome = "none", sourceEventIds = [],
-} = {}) => {
-  const world = clone(worldLike || {});
-  const institutions = normalizeInstitutions(world.institutions, world);
-  const id = canonicalInstitutionIdentity({ id: institutionId }).id;
-  const institution = institutions.byId[id];
-  if (!institution) return { world: { ...world, institutions }, institution: null, error: `Unknown institution ${clean(institutionId) || "<blank>"}.` };
-  const previous = normalizeInstitutionGovernanceActivity(institution.governanceActivity);
-  const nextOutcome = ["proposal", "amendment", "advanced"].includes(lower(outcome)) ? lower(outcome) : "none";
-  institution.governanceActivity = normalizeInstitutionGovernanceActivity({
-    lastAgendaDate: clean(date) || previous.lastAgendaDate,
-    lastAgendaRound: Number.isFinite(Number(round)) ? Number(round) : previous.lastAgendaRound,
-    lastAgendaOutcome: nextOutcome,
-    consecutiveEmptyAgendaChecks: nextOutcome === "none" ? previous.consecutiveEmptyAgendaChecks + 1 : 0,
-    sourceEventIds: unique(sourceEventIds, 24),
-  });
-  institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
-  return { world: { ...world, institutions }, institution: institutions.byId[id], error: "" };
-};
 
 export const resolveInstitutionRecord = (world = {}, institutionInput = "") => {
   const institutions = world?.institutions && typeof world.institutions === "object" ? world.institutions : {};
@@ -1483,41 +1431,4 @@ export const institutionStrategicPriority = (institution) => {
             : kind === "consultative_group" ? 45
               : 30;
   return Math.max(byId, byKind);
-};
-
-const canonicalBadgeRoot = (institution) => {
-  const identity = canonicalInstitutionIdentity(institution || {});
-  // Never leak storage/provider ids into the header. Known institutions receive
-  // a curated short key; alternate-history institutions may opt in with an
-  // explicit badgeKey and otherwise remain visible in the Diplomacy panel only.
-  return slug(institution?.badgeKey || identity.badgeKey);
-};
-
-export const institutionMembershipBadge = (institution, member) => {
-  const root = canonicalBadgeRoot(institution);
-  if (!root || !member) return "";
-  const status = lower(member.status || "member");
-  if (status === "member") return `${root}-member`;
-  if (status === "candidate") return `${root}-candidate`;
-  if (status === "associate") return `${root}-associate`;
-  if (status === "participant") return `${root}-participant`;
-  if (status === "observer") return `${root}-observer`;
-  if (status === "suspended") return `${root}-suspended`;
-  return "";
-};
-
-export const buildInstitutionContext = (world, focusPolities = [], { maxInstitutions = 14 } = {}) => {
-  const focus = new Set(array(focusPolities).map((polity) => lower(canonicalPolity(polity, world))).filter(Boolean));
-  const institutions = normalizeInstitutions(world?.institutions, world);
-  const rows = Object.values(institutions.byId)
-    .filter((institution) => institution.status !== "dissolved")
-    .filter((institution) => !focus.size || array(institution.members).some((member) => focus.has(lower(member.polity))))
-    .sort((a, b) => institutionStrategicPriority(b) - institutionStrategicPriority(a))
-    .slice(0, Math.max(1, maxInstitutions));
-  return rows.map((institution) => {
-    const members = array(institution.members)
-      .filter((member) => !focus.size || focus.has(lower(member.polity)))
-      .map((member) => `${member.polity} (${member.status}${member.role !== "member" ? `, ${member.role}` : ""})`);
-    return `- ${institution.name} [${institution.id}; ${institution.kind}]${members.length ? `: ${members.join(", ")}` : ""}`;
-  }).join("\n");
 };
