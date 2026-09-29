@@ -19,10 +19,12 @@ import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../r
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
 import { gameDateDayNumber } from "../../runtime/gameDates.js";
+import { livePuppetsFor, puppetStatesEnabled } from "../../runtime/puppets.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
   audienceIncludes,
+  audiencePolities,
   audienceSeesChat,
   isSimulationAudience,
   normalizeAudience,
@@ -86,12 +88,14 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "list_regions",
     description:
       "The regions one power currently holds, as {id, name}. Use the exact power name from list_powers. Paged: "
-      + "pass offset to continue. Copy ids or names EXACTLY into regionTransfers / regionControlOps / regionClaims.",
-    schema: object("Which power.", {
+      + "pass offset to continue. Copy ids or names EXACTLY into regionTransfers / regionControlOps / regionClaims. "
+      + "Or pass group instead of owner for every region a group controls, with each region's owner: the ids a groupOps entry names.",
+    schema: object("Which power, or which group.", {
       owner: text("The power's exact name."),
+      group: text("Instead of owner: a group's exact name."),
       offset: integer("First region to return (default 0)."),
       limit: integer("How many to return (default 200, max 300)."),
-    }, ["owner"]),
+    }),
   },
   {
     name: "find_region",
@@ -122,7 +126,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "power_info",
     description:
       "One power's situation: regions held, wars it is in, its relations ledger, claims it asserts and claims "
-      + "against it, reputation, intelligence rating, tags, its authored description, and unit count. "
+      + "against it, who directs it or whom it directs (subordinations), reputation, intelligence rating, tags, its authored description, and unit count. "
       + "Use the exact name from list_powers.",
     schema: object("Which power.", { name: text("The power's exact name.") }, ["name"]),
   },
@@ -179,7 +183,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "relations_between",
     description:
       "The diplomatic relation between two exact powers: score (-100..100), status, summary, when it last moved; "
-      + "the agreements between them and whether they are at war with each other.",
+      + "the agreements between them, whether they are at war with each other, and whether one directs the other (subordinations).",
     schema: object("The two powers.", { a: text("One power's exact name."), b: text("The other power's exact name.") }, ["a", "b"]),
   },
   {
@@ -233,7 +237,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "map_around",
     description:
       "Who owns what around one region: the region itself and every region within a few neighbour steps, each with "
-      + "its owner and sovereign, grouped by owner. A bounded local map — use it instead of asking for whole powers.",
+      + "its owner and sovereign and the group controlling it if any, grouped by owner. A bounded local map — use it instead of asking for whole powers.",
     schema: object("The centre and the radius.", {
       regionId: text("The centre region id (from find_region / list_regions)."),
       steps: integer("How many neighbour steps out (default 1, max 3)."),
@@ -835,6 +839,48 @@ const chatThreadBrief = (chat) => {
   };
 };
 
+// Who directs whom (world.puppets), as `audience` may know it: the narrator the
+// standing truth, loyalty and who has found out included; a viewer what its
+// governments believe still stands (runtime/puppets.js), a loyalty band only as
+// the overlord and never another's covert arrangement it has not uncovered.
+// Nothing at all while the game has puppet states switched off.
+const subordinationsFor = (context, involves) => {
+  if (!puppetStatesEnabled()) return [];
+  const world = context.world ?? {};
+  if (isSimulationAudience(context.audience)) {
+    return array(world.puppets)
+      .filter((row) => clean(row?.status || "active").toLowerCase() === "active" && involves(row))
+      .map((row) => ({
+        overlord: clean(row.overlord),
+        puppet: clean(row.puppet),
+        kind: clean(row.kind),
+        secrecy: clean(row.secrecy) === "covert" ? "covert" : "open",
+        ...(Number.isFinite(Number(row.loyalty)) ? { loyalty: Number(row.loyalty) } : {}),
+        ...(clean(row.startedDate) ? { since: clean(row.startedDate) } : {}),
+        ...(clean(row.secrecy) === "covert"
+          ? { alsoKnownTo: array(row.knownTo).map((entry) => clean(entry?.polity ?? entry)).filter(Boolean) }
+          : {}),
+      }));
+  }
+  const seen = new Map();
+  for (const viewer of audiencePolities(context.audience)) {
+    for (const row of livePuppetsFor(world, viewer)) {
+      if (!involves(row) || seen.has(row.id || `${row.overlord}|${row.puppet}`)) continue;
+      seen.set(row.id || `${row.overlord}|${row.puppet}`, {
+        overlord: row.overlord,
+        puppet: row.puppet,
+        kind: row.kind,
+        secrecy: row.secrecy,
+        ...(row.startedDate ? { since: row.startedDate } : {}),
+        ...(row.loyaltyBand ? { loyalty: row.loyaltyBand } : {}),
+        ...(row.fromIntelligence ? { fromIntelligence: true, ...(row.asOf ? { asOf: row.asOf } : {}) } : {}),
+      });
+    }
+  }
+  return [...seen.values()];
+};
+const sameName = (left, right) => Boolean(foldRegionKey(left)) && foldRegionKey(left) === foldRegionKey(right);
+
 const agreementBrief = (agreement) => ({
   id: clean(agreement?.id),
   kind: clean(agreement?.kind || agreement?.type),
@@ -953,13 +999,24 @@ export const executeLookup = (context, name, args = {}) => {
       return { count: powers.length, powers: powers.slice(0, 250) };
     }
     case "list_regions": {
+      const paged = (rows, brief) => {
+        const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
+        const limit = clampInt(a.limit, 1, 300, 200);
+        const page = rows.slice(offset, offset + limit).map(brief);
+        return { total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      };
+      // A group's area, which crosses countries: each region with its owner, the
+      // ids a groupOps release names.
+      if (clean(a.group) && !clean(a.owner)) {
+        const { groups, rowsOf } = groupsOnMap(context);
+        const group = findGroupKey(groups, a.group);
+        if (!group) return { error: `No group named "${clean(a.group)}". Names are exact.`, groups: Object.keys(groups) };
+        return { group, ...paged(rowsOf(group), regionBrief) };
+      }
+      if (!clean(a.owner)) return { error: "owner (a power's exact name) or group (a group's exact name) is required." };
       const owner = context.resolveOwner(a.owner);
       if (!owner) return unknownPower(context, a.owner);
-      const rows = context.ownerRows.get(owner) ?? [];
-      const offset = clampInt(a.offset, 0, Math.max(0, rows.length), 0);
-      const limit = clampInt(a.limit, 1, 300, 200);
-      const page = rows.slice(offset, offset + limit).map((row) => ({ id: row.id, name: row.name }));
-      return { owner, total: rows.length, offset, regions: page, ...(offset + limit < rows.length ? { next: offset + limit } : {}) };
+      return { owner, ...paged(context.ownerRows.get(owner) ?? [], (row) => ({ id: row.id, name: row.name })) };
     }
     case "find_region": {
       const query = clean(a.name);
@@ -1062,6 +1119,9 @@ export const executeLookup = (context, name, args = {}) => {
         claimsAgainstIt: claimsAgainst.slice(0, 20),
         units: context.units.filter((unit) => clean(unit?.ownerCode) === owner).length,
         ...(world.countryStats?.[owner] ? { stats: world.countryStats[owner] } : {}),
+        ...(puppetStatesEnabled()
+          ? { subordinations: subordinationsFor(context, (row) => sameName(row?.overlord, owner) || sameName(row?.puppet, owner)) }
+          : {}),
       };
     }
     case "recent_events": {
@@ -1186,6 +1246,10 @@ export const executeLookup = (context, name, args = {}) => {
         agreements: agreements.slice(0, 12).map(agreementBrief),
         wars: wars.map(warBrief),
         atWar: wars.some((war) => clean(war?.status).toLowerCase() !== "ended"),
+        ...(puppetStatesEnabled()
+          ? { subordinations: subordinationsFor(context, (row) => (sameName(row?.overlord, first) && sameName(row?.puppet, second))
+            || (sameName(row?.overlord, second) && sameName(row?.puppet, first))) }
+          : {}),
       };
     }
     case "storylines": {
@@ -1338,7 +1402,12 @@ export const executeLookup = (context, name, args = {}) => {
       for (const [id, depth] of distance) {
         const row = context.byId.get(id);
         const owner = row.owner || "unowned";
-        (byOwner[owner] ??= []).push({ id: row.id, name: row.name, steps: depth, ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}) });
+        const group = clean(context.world?.groupAreas?.[row.id]);
+        (byOwner[owner] ??= []).push({
+          id: row.id, name: row.name, steps: depth,
+          ...(row.sovereign && row.sovereign !== row.owner ? { sovereign: row.sovereign } : {}),
+          ...(group && context.world?.groups?.[group] ? { controlledByGroup: group } : {}),
+        });
       }
       for (const list of Object.values(byOwner)) list.sort((x, y) => x.steps - y.steps || x.name.localeCompare(y.name));
       return { centre: regionBrief(centre), steps, regions: distance.size, byOwner };

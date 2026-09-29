@@ -2057,17 +2057,20 @@ export const buildBoundedDiplomaticContext = (
     })
     .slice(0, MAX_CONTEXT_AGREEMENTS);
 
-  // Subordinations among the attention actors, as the TRUTH — loyalty, secrecy
-  // and who else has found out. This context reaches the jump, the idle
+  // Every standing subordination, the attention actors' first, as the TRUTH —
+  // loyalty, secrecy and who else has found out. Not only the attention
+  // actors': the world has few of them (MAX_PUPPETS), and a covert Puppet left
+  // out of the slice is a country the simulator narrates as independent. This context reaches the jump, the idle
   // diplomacy pass and next-speaker, all of which reason about the whole world.
   // It does NOT reach a leader or a group turn, and must not: a leader speaks as
   // one country and is briefed on what that country knows instead
   // (runtime/puppets.js puppetBriefingFor). An earlier comment here said the chat
   // task read this block; it never did, and believing so hid that a covert
   // Puppet in conversation did not know it was one.
+  const inAttention = (row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet));
   const puppets = (puppetStates ? array(world.puppets) : [])
     .filter((row) => row.status === "active")
-    .filter((row) => actorKeys.has(politySetKey(row.overlord)) || actorKeys.has(politySetKey(row.puppet)))
+    .sort((a, b) => Number(inAttention(b)) - Number(inAttention(a)))
     .slice(0, MAX_CONTEXT_PUPPETS);
 
   const text = [

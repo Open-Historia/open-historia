@@ -15,6 +15,8 @@ import {
   executeLookup,
   isLookupToolName,
 } from "../src/Game/AI/lookupTools.js";
+import { viewerAudience } from "../src/Game/AI/audience.js";
+import { setPuppetStatesEnabled } from "../src/runtime/puppets.js";
 
 const square = (x, y) => ({ type: "Polygon", coordinates: [[[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1], [x, y]]] });
 
@@ -458,4 +460,86 @@ test("map_around: the neighbourhood of a region grouped by owner, with sovereign
   const occupied = run("map_around", { regionId: "ukr-zap" });
   assert.equal(occupied.byOwner["Russian Federation"][0].sovereign, "Ukraine");
   assert.match(run("map_around", { regionId: "nope" }).error, /No region/);
+});
+
+const PUPPET_WORLD = {
+  ...WORLD,
+  polityOverrides: {
+    ...WORLD.polityOverrides,
+    Belarus: { name: "Belarus" },
+    Moldova: { name: "Moldova" },
+    Crimea: { name: "Crimea" },
+  },
+  puppets: [
+    { id: "p-bel", overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", loyalty: 70, status: "active", startedDate: "1994-07-20" },
+    { id: "p-mda", overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", loyalty: 30, status: "active", startedDate: "2013-05-01", knownTo: [{ polity: "Ukraine", learnedDate: "2014-02-01" }] },
+    { id: "p-crm", overlord: "Ukraine", puppet: "Crimea", kind: "protectorate", secrecy: "open", loyalty: 50, status: "released", startedDate: "1992-01-01", endedDate: "1995-01-01" },
+  ],
+};
+
+test("power_info and relations_between: who directs whom, the truth for the narrator", () => {
+  const ctx = buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine" });
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Russian Federation" }).subordinations, [
+    { overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", loyalty: 70, since: "1994-07-20" },
+    { overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", loyalty: 30, since: "2013-05-01", alsoKnownTo: ["Ukraine"] },
+  ]);
+  // An arrangement that ended directs nobody.
+  assert.deepEqual(executeLookup(ctx, "power_info", { name: "Ukraine" }).subordinations, []);
+  const pair = executeLookup(ctx, "relations_between", { a: "Belarus", b: "Russian Federation" });
+  assert.deepEqual(pair.subordinations.map((row) => `${row.overlord}>${row.puppet}`), ["Russian Federation>Belarus"]);
+  assert.deepEqual(executeLookup(ctx, "relations_between", { a: "Belarus", b: "Moldova" }).subordinations, []);
+});
+
+test("subordinations as a viewer knows them, and none at all with puppet states off", () => {
+  const as = (polity) => buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine", audience: viewerAudience([polity]) });
+  // Ukraine's service uncovered the covert client; the open satellite is public. No loyalty for another's puppet.
+  assert.deepEqual(executeLookup(as("Ukraine"), "power_info", { name: "Russian Federation" }).subordinations, [
+    { overlord: "Russian Federation", puppet: "Belarus", kind: "satellite", secrecy: "open", since: "1994-07-20" },
+    { overlord: "Russian Federation", puppet: "Moldova", kind: "client", secrecy: "covert", since: "2013-05-01", fromIntelligence: true, asOf: "2014-02-01" },
+  ]);
+  // Belarus knows its own arrangement and nothing of the covert one.
+  assert.deepEqual(executeLookup(as("Belarus"), "power_info", { name: "Russian Federation" }).subordinations.map((row) => row.puppet), ["Belarus"]);
+  assert.deepEqual(executeLookup(as("Belarus"), "relations_between", { a: "Moldova", b: "Russian Federation" }).subordinations, []);
+  // The overlord reads its puppet's loyalty as a band, never a number.
+  assert.equal(executeLookup(as("Russian Federation"), "power_info", { name: "Moldova" }).subordinations[0].loyalty, "Restless");
+
+  setPuppetStatesEnabled(false);
+  try {
+    const ctx = buildLookupContext({ regions: REGIONS, world: PUPPET_WORLD, player: "Ukraine" });
+    assert.equal("subordinations" in executeLookup(ctx, "power_info", { name: "Russian Federation" }), false);
+    assert.equal("subordinations" in executeLookup(ctx, "relations_between", { a: "Belarus", b: "Russian Federation" }), false);
+  } finally {
+    setPuppetStatesEnabled(true);
+  }
+});
+
+test("list_regions with a group: its whole area with each region's owner, paged; map_around names the group", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      groups: { "Kharkiv Partisans": { description: "Irregulars." } },
+      groupAreas: { "ukr-kharkiv": "Kharkiv Partisans", "rus-belgorod": "Kharkiv Partisans" },
+    },
+    player: "Ukraine",
+  });
+  const area = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans" });
+  assert.equal(area.group, "Kharkiv Partisans");
+  assert.equal(area.total, 2);
+  assert.deepEqual(area.regions, [
+    { id: "ukr-kharkiv", name: "Kharkiv", owner: "Ukraine" },
+    { id: "rus-belgorod", name: "Belgorod", owner: "Russian Federation" },
+  ]);
+  const page = executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", limit: 1 });
+  assert.equal(page.next, 1);
+  assert.deepEqual(executeLookup(ctx, "list_regions", { group: "Kharkiv Partisans", offset: 1 }).regions.map((region) => region.id), ["rus-belgorod"]);
+  assert.match(executeLookup(ctx, "list_regions", { group: "Kharkov Partisans" }).error, /No group named/);
+  assert.match(executeLookup(ctx, "list_regions", {}).error, /required/);
+  // owner wins when both are given.
+  assert.equal(executeLookup(ctx, "list_regions", { owner: "Ukraine", group: "Kharkiv Partisans" }).owner, "Ukraine");
+
+  const around = executeLookup(ctx, "map_around", { regionId: "ukr-kharkiv" });
+  assert.equal(around.byOwner.Ukraine[0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal(around.byOwner["Russian Federation"][0].controlledByGroup, "Kharkiv Partisans");
+  assert.equal("controlledByGroup" in executeLookup(ctx, "map_around", { regionId: "ukr-zap" }).byOwner["Russian Federation"][0], false);
 });

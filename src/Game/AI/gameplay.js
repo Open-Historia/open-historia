@@ -1553,13 +1553,24 @@ const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLook
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
 // is, and the regions it controls, by name with the id a groupOps entry copies.
 // Empty when the world has none, so a game without groups pays nothing.
+//
+// A release names the region ids it gives up, and lookups are off while Save AI
+// requests is on (the default), so the ids a release may name are shown here:
+// GROUP_REGIONS_IN_PROMPT shared among the groups, never fewer than twelve each.
+// A group larger than its share ends "+N more" (list_regions with a group when
+// lookups are on).
+const GROUP_REGIONS_IN_PROMPT = 400;
 const buildGroupsContext = async (worldLike) => {
   if (!worldLike?.groups || !Object.keys(worldLike.groups).length) return "";
   const world = normalizeWorldState(worldLike);
-  if (!Object.keys(world.groups).length) return "";
+  const count = Object.keys(world.groups).length;
+  if (!count) return "";
   const catalog = await loadRegionCatalog().catch(() => []);
   const names = new Map(catalog.map((region) => [region.id, region.name]));
-  return describeGroupsForPrompt(world, { regionName: (id) => names.get(id) || id });
+  return describeGroupsForPrompt(world, {
+    regionName: (id) => names.get(id) || id,
+    maxRegions: Math.max(12, Math.floor(GROUP_REGIONS_IN_PROMPT / count)),
+  });
 };
 
 // When the player leads a group rather than a country (runtime/groups.js

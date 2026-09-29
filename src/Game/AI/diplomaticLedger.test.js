@@ -99,6 +99,26 @@ test("bounded diplomatic context pulls a seed actor's active Puppet counterpart 
   assert.doesNotMatch(disabled.text, /SUBORDINATIONS/);
 });
 
+test("bounded diplomatic context shows every standing subordination, the attention actors' first", () => {
+  const row = (id, overlord, puppet, status = "active") => ({
+    id, overlord, puppet, kind: "client", loyalty: 40, secrecy: "covert", status, startedDate: "1890-01-01", knownTo: [],
+  });
+  const puppetWorld = {
+    ...world,
+    puppets: [
+      row("far", "Britain", "Egypt"),
+      row("gone", "Britain", "Portugal", "released"),
+      row("near", "France", "Morocco"),
+    ],
+  };
+  const context = buildBoundedDiplomaticContext(puppetWorld, { playerPolity: "France", maxActors: 2 });
+  // Outside the attention slice, a covert client is still a client: the simulator
+  // must not narrate Egypt as independent.
+  assert.deepEqual(context.puppets.map((entry) => entry.id), ["near", "far"]);
+  assert.match(context.text, /France directs Morocco[^]*Britain directs Egypt/);
+  assert.doesNotMatch(context.text, /Portugal/);
+});
+
 test("a lifecycle change on an agreement that does not exist is refused for the GM and dropped in simulation", () => {
   const row = "phantom-pact~end~alliance~France,Russia~1~Phantom Pact~gone";
   const strict = { events: alliance(), relationUpdates: "", agreementUpdates: row };
