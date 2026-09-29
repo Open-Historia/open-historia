@@ -126,6 +126,37 @@ test("pregame transport distinguishes a missing canonical section from explicit 
   assert.deepEqual(explicitEmpty.payload.canonicalUpdates, []);
 });
 
+test("pregame semantic normalization accepts lossless singleton list spellings", () => {
+  const candidate = normalizeGameplayPayload("pregameHistory", {
+    events: [event()],
+    summary: "Singleton spellings are normalized before schema validation.",
+    canonicalUpdates: [{
+      ...warFact({ sourceEventRefs: "e1" }),
+      sideA: "Alpha",
+      sideB: "Beta",
+    }],
+  });
+
+  assert.deepEqual(candidate.canonicalUpdates[0].sideA, ["Alpha"]);
+  assert.deepEqual(candidate.canonicalUpdates[0].sideB, ["Beta"]);
+  assert.deepEqual(candidate.canonicalUpdates[0].sourceEventRefs, ["e1"]);
+  assert.equal(validateGameplayPayload("pregameHistory", candidate).valid, true);
+});
+
+test("pregame transport recovers one extra corrective quote-escaping layer without changing semantics", () => {
+  const escaped = (value) => JSON.stringify(value).replace(/"/g, '\\"');
+  const decoded = decodePregameHistoryTransportPayload({
+    eventsJson: escaped([event()]),
+    summary: "Corrective retry preserved meaning.",
+    canonicalUpdatesJson: escaped([warFact()]),
+  });
+
+  assert.equal(decoded.error, "");
+  assert.deepEqual(decoded.payload.events, [event()]);
+  assert.deepEqual(decoded.payload.canonicalUpdates, [warFact()]);
+  assert.equal(validateGameplayPayload("pregameHistory", decoded.payload).valid, true);
+});
+
 test("pregame schema correction freezes validated event refs but not invalid canonical facts", () => {
   const candidate = {
     events: [event({ ref: "stable-e1" })],

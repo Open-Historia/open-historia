@@ -1527,11 +1527,31 @@ const parsePregameTransportArray = (value, field) => {
   if (!text) {
     throw new Error(`$.${field} must contain explicit JSON array text; blank is not the same as [].`);
   }
-  try {
-    const parsed = JSON.parse(text);
+
+  const parseArray = (candidate) => {
+    const parsed = JSON.parse(candidate);
     if (!Array.isArray(parsed)) throw new Error("decoded value is not an array");
     return parsed;
+  };
+
+  try {
+    return parseArray(text);
   } catch (strictError) {
+    // Gemini corrective tool calls can echo JSON-text fields with one extra
+    // quote-escaping layer (e.g. [{\"ref\":\"e1\"}]). This is a
+    // transport-only representation error: removing exactly one backslash
+    // before each quote recovers the same JSON value without inventing or
+    // rewriting any semantic fact. Only attempt it when the first object is
+    // visibly quote-escaped, so ordinary malformed JSON still fails closed.
+    if (/^\s*\[\s*\{\s*\\"/.test(text)) {
+      const deescaped = text.replace(/\\"/g, '"');
+      try {
+        return parseArray(deescaped);
+      } catch {
+        // Fall through to the existing bounded array salvage below.
+      }
+    }
+
     const salvaged = extractJsonArray(text);
     if (!Array.isArray(salvaged)) {
       throw new Error(`$.${field} must contain valid JSON array text: ${strictError?.message || strictError}.`);
@@ -3872,7 +3892,26 @@ const normalizeCountryStatSheetShape = (value) => {
 // Do not adapt lifecycle verbs, invent padding, or otherwise normalize meaning
 // before the native compiler sees it. Legacy lifecycle-shaped answers remain
 // visible to schema validation and are rejected rather than silently migrated.
-const normalizePregameHistoryShape = (value) => value;
+const normalizePregameHistoryShape = (value) => {
+  if (!isPlainRecord(value) || !Array.isArray(value.canonicalUpdates)) return value;
+  let changed = false;
+  const canonicalUpdates = value.canonicalUpdates.map((fact) => {
+    if (!isPlainRecord(fact)) return fact;
+    let next = fact;
+    // These fields are semantically lists. A provider occasionally emits the
+    // unambiguous singleton spelling (sideA: "Alpha") even though the tool
+    // schema says array. Canonicalize only that lossless representation here;
+    // never split delimited text or infer additional actors.
+    for (const field of ["sourceEventRefs", "sideA", "sideB", "parties", "participants"]) {
+      if (typeof next[field] !== "string" || !next[field].trim()) continue;
+      if (next === fact) next = { ...fact };
+      next[field] = [next[field].trim()];
+      changed = true;
+    }
+    return next;
+  });
+  return changed ? { ...value, canonicalUpdates } : value;
+};
 
 // Corrective retries may freeze independently valid historical cards even when
 // the overall Round-Zero answer fails schema validation in canonical state. Do
