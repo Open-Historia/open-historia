@@ -510,7 +510,7 @@ Proven offline in `.lab/probes/phase6-probe.mjs`: the advisor, the skip and the 
 
 ## The event cards' links
 
-`deriveEventLinks` (`src/Game/GameUI/eventFocus.js`, `eventLinks.test.js`): the powers, regions, formations and structures an event is about — from its operations first, then from the places and powers its words name, through the same word-boundary name index the event camera uses — each with the frame to fly to. The card shows them as chips; a click flies the map there. A place the map cannot frame is left out; a power is shown by the name it has now; eight at most. Derived on render, never stored.
+`deriveEventLinks` (`src/Game/GameUI/eventFocus.js`, `eventLinks.test.js`): the powers, regions, formations and structures an event is about — from its operations first (transfers, control and contest changes, claims, the regions a group takes or releases, polity changes, units, structures), then from the places and powers its words name, through the same word-boundary name index the event camera uses — each with the frame to fly to. The card shows them as chips; a click flies the map there. A place the map cannot frame is left out; a power is shown by the name it has now; eight at most. Derived on render, never stored.
 
 On a drawn map the stock outline tables (keyed by GADM id) know none of the regions, so the map's worker now records each region's bounding box (wrapped across the antimeridian) and the focus context frames drawn regions — and the polities holding them — by those boxes. The same fix gives the event camera a frame on drawn maps, where it had none.
 

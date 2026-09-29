@@ -27,6 +27,8 @@
 // Kept free of browser/PMTiles imports so it is unit-testable: time.jsx does the
 // tile reading and hands the decoded geometry in.
 
+import { normalizeGroupOp } from "../../runtime/groups.js";
+
 // ---------------------------------------------------------------------------
 // Bounds helpers. A bounds is [[west, south], [east, north]]; `east` may exceed
 // 180 for a box that crosses the antimeridian, which is what MapLibre's
@@ -408,6 +410,21 @@ const transferBounds = (transfer, context) =>
   ?? regionBoundsByName(transfer?.regionName, context)
   ?? regionBoundsByName(transfer?.regionId, context);
 
+// The regions a group operation names (runtime/groups.js), as the region
+// references a transfer carries. Read through the normalizer, so a streamed
+// card's loose shape (`regions`, a lone `regionId`) names the same places.
+const groupOpRegions = (impacts) => (impacts?.groupOps ?? []).flatMap((raw) =>
+  (normalizeGroupOp(raw)?.regionIds ?? []).map((regionId) => ({ regionId })));
+
+// Every region the event moved, held, contested, claimed or spread a group
+// into: the exact places it happened.
+const eventRegionRefs = (impacts) => [
+  ...(impacts?.regionTransfers ?? []),
+  ...(impacts?.regionControlOps ?? []),
+  ...(impacts?.regionClaims ?? []),
+  ...groupOpRegions(impacts),
+];
+
 // Every region a polity currently holds, merged. This is the LIVE map rather than
 // GADM's modern one, which is the whole point of the game: it is the only way to
 // frame an invented or era polity ("Free Ireland", "the Soviet Union") that has
@@ -508,14 +525,15 @@ const textFocusBounds = (event, context) => {
 };
 
 // Every event moves the camera. Work from the most specific thing the event
-// pins down to the least: the regions that changed hands, then any coordinate it
-// states outright, then the polities it changes, then its chat participants, and
-// only then the places its text merely mentions.
+// pins down to the least: the regions that changed hands, control or claimant,
+// or came under a group, then any coordinate it states outright, then the
+// polities it changes, then its chat participants, and only then the places its
+// text merely mentions.
 export const deriveEventFocusBounds = (event, context) => {
   const impacts = event?.impacts ?? {};
 
   const tiers = [
-    () => (impacts.regionTransfers ?? []).map((transfer) => transferBounds(transfer, context)),
+    () => eventRegionRefs(impacts).map((entry) => transferBounds(entry, context)),
     () => impactPointBounds(impacts),
     () => (impacts.polityChanges ?? []).map((change) => resolvePolityBounds(change?.code, context)),
     // A transfer whose region we could not place still names who won and lost
@@ -603,6 +621,7 @@ export const deriveEventLinks = (event, context, { max = EVENT_LINKS_MAX, unitNa
     addRegion(claim);
     addPolity(claim?.claimantCode);
   }
+  for (const entry of groupOpRegions(impacts)) addRegion(entry);
   for (const change of impacts.polityChanges ?? []) addPolity(change?.name || change?.code);
   for (const op of impacts.unitOps ?? []) {
     if (op?.op === "spawn") add("unit", op?.unit?.name, pointBounds(Number(op?.unit?.lng), Number(op?.unit?.lat)));
