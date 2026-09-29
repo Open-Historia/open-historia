@@ -1388,7 +1388,7 @@ const pregameEventSchema = {
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
     warId: textSchema(
-      "Canonical war id when this pre-game event is the one that started, joined, paused or ended a war listed in canonicalUpdates. Blank otherwise.",
+      "Optional canonical war id when this pre-game event clearly depicts a war transition listed in canonicalUpdates. Omit or leave blank when no such provenance link is clear.",
     ),
   },
   required: ["date", "title", "description"],
@@ -1398,18 +1398,37 @@ const pregameEventSchema = {
 // The pre-game bootstrap answers with ONE flat envelope for every canonical
 // ledger it seeds (wars, relations, agreements) instead of three mini-languages:
 // function-calling in "any" mode is sensitive to schema depth, so the transport
-// is deliberately flat and all-required - the model supplies the semantic values
-// and gameplay.js (expandCanonicalUpdateEnvelope) dispatches each item to the
-// ledger its "kind" names, ignoring the fields that kind does not use.
+// is deliberately flat. Before this internal schema runs, Round-Zero normalization
+// fills ONLY fields that the declared kind cannot semantically use; fields that
+// establish the actual canonical fact remain mandatory and fail closed when absent.
+// gameplay.js (expandCanonicalUpdateEnvelope) then dispatches each item to the
+// ledger its "kind" names.
+const PREGAME_CANONICAL_UPDATE_KINDS = [
+  "relation",
+  "storyline:active",
+  "storyline:dormant",
+  "war:start",
+  "war:join-a",
+  "war:join-b",
+  "war:leave",
+  "war:ceasefire",
+  "war:resume",
+  "war:end",
+  "agreement:start",
+  "puppet:open",
+  "puppet:covert",
+];
+
 const canonicalUpdateSchema = {
   type: "object",
   description:
-    "One canonical-state fact already true on the start date. Every field is required for provider reliability; use an empty string, empty array, or 0 for fields irrelevant to this kind.",
+    "One canonical-state fact already true on the start date. Semantic fields for the declared kind are mandatory; native Round-Zero normalization supplies neutral values only for fields that kind does not use.",
   properties: {
     kind: {
       type: "string",
+      enum: PREGAME_CANONICAL_UPDATE_KINDS,
       description:
-        "Semantic kind code. Use relation; storyline:active; storyline:dormant; war:start; war:join-a; war:join-b; war:leave; war:ceasefire; war:resume; war:end; agreement:start; puppet:open; puppet:covert.",
+        "Semantic kind code for the canonical Round-One ledger this item belongs to.",
     },
     id: { type: "string", description: "Stable storyline/war/agreement id, or empty for a relation." },
     polities: {
@@ -1437,7 +1456,7 @@ const canonicalUpdateSchema = {
     },
     date: {
       type: "string",
-      description: "Storyline start date YYYY-MM-DD when known; empty for other kinds.",
+      description: "Storyline start date or war transition date YYYY-MM-DD when known; empty when unknown or irrelevant.",
     },
     category: {
       type: "string",
@@ -3805,15 +3824,63 @@ const normalizeCountryStatSheetShape = (value) => {
 // that unambiguous omission before schema validation. Explicit lifecycle kinds
 // remain untouched so `agreement:end`, `agreement:suspend`, etc. still fail the
 // strict Round-Zero validator instead of being silently accepted.
+const withPregameNeutralDefaults = (entry, defaults) => {
+  let changed = false;
+  const candidate = { ...entry };
+  for (const [field, neutral] of Object.entries(defaults)) {
+    if (candidate[field] !== undefined && candidate[field] !== null) continue;
+    candidate[field] = Array.isArray(neutral) ? [...neutral] : neutral;
+    changed = true;
+  }
+  return { candidate, changed };
+};
+
+// The provider-facing pregame transport deliberately carries the canonical
+// envelope as JSON TEXT. That keeps the tool schema shallow, but it also means a
+// model can reasonably omit padding fields which are irrelevant to the declared
+// kind. Normalize only those semantically impossible fields here. Never invent a
+// belligerent, relation score, storyline pressure, agreement type, party, id, or
+// other fact that changes Day-One canon merely to make an item validate.
+const normalizePregameCanonicalUpdate = (entry) => {
+  if (!isPlainRecord(entry)) return { entry, changed: false };
+  const rawKind = String(entry.kind ?? "").trim();
+  const kind = rawKind.toLowerCase() === "agreement" ? "agreement:start" : rawKind;
+  const family = kind.toLowerCase().split(":")[0];
+  let candidate = kind === rawKind ? entry : { ...entry, kind };
+  let changed = kind !== rawKind;
+
+  const defaultsByFamily = {
+    relation: {
+      id: "", opponents: [], pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "",
+    },
+    storyline: {
+      opponents: [], score: 0, date: "",
+    },
+    war: {
+      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "",
+    },
+    agreement: {
+      opponents: [], score: 0, pressure: 0, momentum: 0, date: "", detail: "",
+    },
+    puppet: {
+      id: "", opponents: [], pressure: 0, momentum: 0, date: "", title: "", detail: "",
+    },
+  };
+  const defaults = defaultsByFamily[family];
+  if (!defaults) return { entry: candidate, changed };
+  const normalized = withPregameNeutralDefaults(candidate, defaults);
+  candidate = normalized.candidate;
+  changed = changed || normalized.changed;
+  return { entry: candidate, changed };
+};
+
 const normalizePregameHistoryShape = (value) => {
   if (!isPlainRecord(value) || !Array.isArray(value.canonicalUpdates)) return value;
   let changed = false;
   const canonicalUpdates = value.canonicalUpdates.map((entry) => {
-    if (!isPlainRecord(entry)) return entry;
-    const kind = String(entry.kind ?? "").trim();
-    if (kind.toLowerCase() !== "agreement") return entry;
-    changed = true;
-    return { ...entry, kind: "agreement:start" };
+    const normalized = normalizePregameCanonicalUpdate(entry);
+    changed = changed || normalized.changed;
+    return normalized.entry;
   });
   return changed ? { ...value, canonicalUpdates } : value;
 };

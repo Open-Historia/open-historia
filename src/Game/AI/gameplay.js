@@ -251,6 +251,7 @@ import {
   reconcileCombatWarState,
   repairWarLedgerPayload,
   validateCanonicalWarEvents,
+  validatePregameWarBootstrap,
   validateWarLedgerPayload,
 } from "./nativeWarLedger.js";
 import {
@@ -701,16 +702,16 @@ The submit_pregame_history function declaration is deliberately shallow. Return 
 Native code decodes both JSON strings immediately and validates the resulting events and canonicalUpdates against the full internal schema before any Round-Zero state is accepted. Do not return events or canonicalUpdates as direct top-level tool fields.
 
 CANONICAL ENVELOPE
-The objects encoded inside canonicalUpdatesJson are canonicalUpdates. Every item uses the same flat required fields; fill the fields a kind does not use with "", [] or 0.
+The objects encoded inside canonicalUpdatesJson are canonicalUpdates. Supply every semantic field listed for that kind. Fields that kind cannot use may be omitted; native code fills only those irrelevant placeholders with neutral values before validation. Never omit a field that establishes the actual Day-One fact.
 Kinds:
 - relation: polities=[A,B], score (absolute, -100..100), detail (summary).
 - storyline:active | storyline:dormant: id (stable, e.g. storyline-<slug>), polities (participants), pressure (0-100, unresolved stakes), momentum (0-100, current rate of change), date (when the process began, YYYY-MM-DD), category (process kind: crisis, revolution, diplomacy, politics, economy, insurgency...), title, detail (state: what is true now and why it is unresolved). One per unresolved multi-turn process still alive at Round 1 that is NOT itself a live war; the engine mirrors every live war into a storyline on its own.
-- war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), detail (note). Every war still live at Round 1 begins with a war:start, and the pre-game event that started it carries the same event.warId.
+- war:start | war:join-a | war:join-b | war:leave | war:ceasefire | war:resume | war:end: id, polities (actors / side A), opponents (side B), date (that transition's date when known, otherwise blank), detail (note). Every war still live at Round 1 begins with a war:start. If an important pre-game event clearly depicts that same war transition, give it the same event.warId so the engine can preserve provenance; the canonical war does NOT require a filler event solely for linkage.
 - agreement:start: id, polities (parties), category (agreement type: alliance | mutual_defense | guarantee | non_aggression | friendship_consultation | trade_economic | military_cooperation | military_access | neutrality | peace_settlement | other), title, detail (terms). Only agreements still in force on the start date; instruments that already ended belong in the backstory only.
 ${puppetStatesBootstrapKind}Never output relation status or event indexes/ids; the engine owns those.
 
 ROUND-ZERO AUDIT
-- Every war still live at Round 1 must be represented.
+- Every war still live at Round 1 must be represented. Historical event linkage is optional provenance; never invent an event card just to make a canonical baseline war exist.
 - Every unresolved non-war process that shapes Day-1 decisions (a crisis, an insurgency, a negotiation in progress, an economic emergency) should be a storyline; never spend a slot mirroring a live war.
 - Every materially important active formal agreement explicit in the source must be represented.
 - Persist the sparse bilateral relations needed to explain how the central actors make decisions on Day 1; do not leave central actors blank when the source establishes allies, patrons, rivals or enemies.
@@ -786,6 +787,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
         opponents,
         eventIndexes: [],
         eventIds: [],
+        baselineDate: normalizeString(raw.date),
         note: normalizeString(raw.detail),
       });
     } else if (family === "relation") {
@@ -3698,6 +3700,12 @@ const runJsonTask = async (taskKey, {
         // On a copy: an answer that cannot be saved goes back to the model as it
         // wrote it, not half taken apart.
         const salvaged = salvageBySchema(cloneValue(parsed), checkAnswer, {
+          // Round Zero is the campaign's canonical starting state. Historical
+          // cards can be salvaged individually, but a malformed canonical fact
+          // must never be "fixed" by deleting it and silently starting the game
+          // without a war/relation/agreement/storyline the model attempted to
+          // establish. Fail closed and retry instead.
+          protectedPathPrefixes: taskKey === "pregameHistory" ? ["$.canonicalUpdates"] : [],
           describe: (candidate, path) => (path[0] === "events" && typeof path[1] === "number"
             ? `"${normalizeString(candidate?.events?.[path[1]]?.title) || `event ${path[1] + 1}`}"`
             : ""),
@@ -16652,8 +16660,9 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
 // Preserve an explicit semantic war storyline when the model supplied one for the
 // same participant set (so its pressure/momentum/state judgement is retained), but
 // canonicalize its id/status/kind. If none exists, synthesize only the minimal
-// scheduler mirror from the already-validated war + its causal historical event.
-// This is NOT a new system or new historical judgement; it is an adapter between
+// scheduler mirror from the already-validated war, carrying historical event
+// provenance when one exists. This is NOT a new system or new historical
+// judgement; it is an adapter between
 // the existing world.wars and world.storylines ledgers.
 const ensurePregameWarStorylineMirrors = (
   candidate,
@@ -16721,7 +16730,8 @@ const ensurePregameWarStorylineMirrors = (
       fallbackTitle;
     const fallbackStartedDate =
       normalizeString(causalEvent?.date) ||
-      normalizeString(startDate);
+      normalizeString(war?.startedDate) ||
+      normalizeString(relatedUpdate?.baselineDate);
 
     const prior = semanticIndex >= 0 ? storylines[semanticIndex] : null;
     const canonicalMirror = {
@@ -16773,9 +16783,9 @@ const validatePregameCanonicalBootstrap = (
   const polityError = validatePregamePolityVocabulary(candidate, { world, canonicalPolities });
   if (polityError) return polityError;
 
-  // Rebind after any date salvage/sorting so a model-supplied number can never
-  // point at the wrong historical event: wars bind from event.warId, diplomacy
-  // from the director's own semantic binder.
+  // Rebind after any date salvage/sorting so an optional historical war link
+  // can never point at the wrong event: wars use event.warId when provenance is
+  // present, diplomacy uses the director's own semantic binder.
   normalizeWorldWarEventLinks(candidate);
   if (!strict) {
     candidate.relationUpdates = decodeRelationUpdates(candidate?.relationUpdates)
@@ -16787,33 +16797,18 @@ const validatePregameCanonicalBootstrap = (
   }
 
   const events = normalizeArray(candidate?.events);
-  const warUpdates = decodeWarUpdates(candidate?.warUpdates);
-  for (let index = 0; index < warUpdates.length; index += 1) {
-    const update = warUpdates[index];
-    if (!["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"].includes(normalizeString(update?.op))) {
-      return `$.warUpdates record ${index + 1} has the unsupported operation ${normalizeString(update?.op) || "<blank>"}.`;
-    }
-    const indexes = normalizeArray(update?.eventIndexes);
-    if (!indexes.length) {
-      return `$.warUpdates record ${index + 1} (${normalizeString(update?.id) || "unnamed war"}) must link to a real pre-game event: set the matching event.warId on the causal pre-game event; the engine owns the binding.`;
-    }
-    if (indexes.some((eventIndex) => eventIndex < 0 || eventIndex >= events.length)) {
-      return `$.warUpdates record ${index + 1} references a pre-game event outside $.events.`;
-    }
-  }
-
-  // Probe the ledger in memory: catches an invalid start/join/ceasefire order
-  // without applying the hard-combat validator to records of old battles.
-  const warProbe = applyWarUpdates({ world, updates: warUpdates, events, stopDate: startDate, round: 1 });
-  if (warProbe.appliedIds.length !== warUpdates.length) {
-    return "$.warUpdates contains an invalid Round-One war lifecycle sequence. Bootstrap only wars that actually survive into the start date, beginning with a valid start operation.";
-  }
-  for (const warId of new Set(warUpdates.map((update) => normalizeString(update?.id)).filter(Boolean))) {
-    const war = normalizeArray(warProbe.wars).find((entry) => normalizeString(entry?.id) === warId);
-    if (!war || !["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) {
-      return `$.warUpdates leaves ${warId} ${normalizeString(war?.status) || "missing"} at Round One. A war that ended before the campaign belongs only in the pre-game events, not the live war ledger.`;
-    }
-  }
+  const warBootstrap = validatePregameWarBootstrap({
+    world,
+    updates: candidate?.warUpdates,
+    events,
+    startDate,
+  });
+  if (warBootstrap.error) return warBootstrap.error;
+  const warUpdates = warBootstrap.updates;
+  const warProbe = warBootstrap.warProbe;
+  // Keep the normalized records on the candidate so later storyline mirroring
+  // and apply-time provenance use exactly the baseline the validator accepted.
+  candidate.warUpdates = warUpdates;
 
   // Belligerency is authoritative by now: every surviving Round-One war is
   // mirrored into the storyline ledger mechanically (storyline-<warId>) rather
@@ -16921,7 +16916,7 @@ export const maybeGeneratePregameHistory = async () => {
       strictFirst: true,
       userMessage: `Write the pre-game historical timeline AND the canonical Round-One bootstrap for ${startDate} as JSON only. ` +
         "Put every war, bilateral relation, formal agreement and unresolved non-war storyline already true on the start date into canonicalUpdates with the correct kind, using ONLY the supplied current polity identities; do not invent event indexes. " +
-        "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A relation or standing agreement does NOT need its own event card merely to exist; include historical events because they are important timeline anchors, not as bookkeeping padding.",
+        "Prioritise every active war and formal agreement first, then the materially important bilateral climates among the central actors. A baseline war, relation or standing agreement does NOT need its own event card merely to exist; when a historical event clearly caused a war transition, give it the same warId for provenance, but never create bookkeeping padding just to satisfy a link.",
       validatePayload: (candidate, { finalAttempt } = {}) =>
         validatePregameCanonicalBootstrap(candidate, {
           world: bundle.world,
@@ -16954,8 +16949,9 @@ export const maybeGeneratePregameHistory = async () => {
     // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
     // backstory events and merge them into the world the game starts on. The
     // version stamp tells the legacy migration there is nothing left to seed.
-    // Storyline ids are attached to the backstory events first, so every Day-1
-    // process starts with real sourceEventIds and a last visible date.
+    // Storyline ids are attached to matching backstory events first when such
+    // provenance exists. A valid baseline war may intentionally have no source
+    // event; its canonical state must still survive Round Zero.
     const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
     const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
     const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
@@ -16966,7 +16962,9 @@ export const maybeGeneratePregameHistory = async () => {
       world: currentWorld,
       updates: warUpdates,
       events: bootstrapEvents,
-      stopDate: startDate,
+      // A baseline war without a known historical date stays unknown; do not
+      // fabricate the campaign start date as the war's start.
+      stopDate: "",
       round: 1,
     });
     const diplomaticMerge = applyDiplomaticUpdates({

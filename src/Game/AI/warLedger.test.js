@@ -11,6 +11,7 @@ import {
   eventNarratesHardCombat,
   reconcileCombatWarState,
   repairWarLedgerPayload,
+  validatePregameWarBootstrap,
   validateWarLedgerPayload,
 } from "./nativeWarLedger.js";
 
@@ -50,6 +51,123 @@ test("a declaration starts a canonical war bound to its event", () => {
   assert.deepEqual(merge.wars[0].sourceEventIds, ["e1"]);
   assert.deepEqual(activeWarIdsForPolity(merge.world, "France"), ["war-france-germany-1914"]);
   assert.match(buildCanonicalWarContext(merge.world), /war-france-germany-1914 \| ACTIVE \| SIDE A: Germany \| SIDE B: France/);
+});
+
+test("Round-Zero baseline wars do not require a duplicate historical event link", () => {
+  for (const id of ["war-uac-apla", "sec-us-civil-war-apla", "russo-ukrainian-war"]) {
+    const result = validatePregameWarBootstrap({
+      world,
+      updates: [{
+        id,
+        op: "start",
+        actors: [id === "russo-ukrainian-war" ? "Russia" : "Union of America"],
+        opponents: [id === "russo-ukrainian-war" ? "Ukraine" : "American People's Liberation Army"],
+        eventIndexes: [],
+        eventIds: [],
+        baselineDate: id === "russo-ukrainian-war" ? "2022-02-24" : "2021-04-10",
+        note: "Already active when Round One begins.",
+      }],
+      events: [{
+        id: "history-1",
+        date: "2021-01-01",
+        title: "Background crisis deepens",
+        description: "The timeline records important context without duplicating the war id.",
+      }],
+      startDate: "2026-01-01",
+    });
+
+    assert.equal(result.error, "", id);
+    assert.deepEqual(result.warProbe.appliedIds, [id], id);
+    assert.equal(result.warProbe.wars[0].startedDate, id === "russo-ukrainian-war" ? "2022-02-24" : "2021-04-10", id);
+    assert.deepEqual(result.warProbe.wars[0].sourceEventIds, [], id);
+  }
+});
+
+test("Round-Zero preserves historical war provenance when a matching event exists", () => {
+  const events = [{
+    id: "e-war",
+    date: "2021-04-10",
+    title: "Second American Civil War erupts",
+    description: "Federal authority fractures as organized forces enter open conflict.",
+    warId: "sec-us-civil-war-apla",
+  }];
+  const result = validatePregameWarBootstrap({
+    world,
+    updates: [{
+      id: "sec-us-civil-war-apla",
+      op: "start",
+      actors: ["Union of America"],
+      opponents: ["American People's Liberation Army"],
+      eventIndexes: [0],
+      eventIds: [],
+      baselineDate: "2021-04-09",
+      note: "Civil war begins.",
+    }],
+    events,
+    startDate: "2021-07-18",
+  });
+
+  assert.equal(result.error, "");
+  assert.equal(result.warProbe.wars[0].startedDate, "2021-04-10", "linked event date outranks fallback baseline metadata");
+  assert.deepEqual(result.warProbe.wars[0].sourceEventIds, ["e-war"]);
+});
+
+test("Round-Zero does not fabricate the campaign start date for an undated unbound war", () => {
+  const result = validatePregameWarBootstrap({
+    world,
+    updates: [{
+      id: "war-unknown-start",
+      op: "start",
+      actors: ["A"],
+      opponents: ["B"],
+      eventIndexes: [],
+      eventIds: [],
+      baselineDate: "",
+      note: "The conflict predates the campaign, but its exact start is unknown.",
+    }],
+    events: [],
+    startDate: "2026-01-01",
+  });
+
+  assert.equal(result.error, "");
+  assert.equal(result.warProbe.wars[0].startedDate, "");
+  assert.equal(result.warProbe.wars[0].lastUpdatedDate, "");
+});
+
+test("Round-Zero still fails closed on invalid war baselines", () => {
+  const noOpponent = validatePregameWarBootstrap({
+    world,
+    updates: [{ id: "w", op: "start", actors: ["A"], opponents: [], baselineDate: "2020-01-01" }],
+    startDate: "2021-01-01",
+  });
+  assert.match(noOpponent.error, /invalid Round-One war lifecycle sequence/);
+
+  const ended = validatePregameWarBootstrap({
+    world,
+    updates: [
+      { id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2020-01-01" },
+      { id: "w", op: "end", actors: [], opponents: [], baselineDate: "2020-06-01" },
+    ],
+    startDate: "2021-01-01",
+  });
+  assert.match(ended.error, /leaves w ended at Round One/);
+
+  const future = validatePregameWarBootstrap({
+    world,
+    updates: [{ id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2022-01-01" }],
+    startDate: "2021-01-01",
+  });
+  assert.match(future.error, /baseline date must be on or before the Round-One date/);
+
+  const reversedDates = validatePregameWarBootstrap({
+    world,
+    updates: [
+      { id: "w", op: "start", actors: ["A"], opponents: ["B"], baselineDate: "2020-06-01" },
+      { id: "w", op: "ceasefire", actors: [], opponents: [], baselineDate: "2020-05-01" },
+    ],
+    startDate: "2021-01-01",
+  });
+  assert.match(reversedDates.error, /predates an earlier transition/);
 });
 
 test("a declaration with no matching warUpdates record is rejected", () => {

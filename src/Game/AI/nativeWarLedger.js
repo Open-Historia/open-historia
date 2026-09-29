@@ -137,6 +137,9 @@ const parseWarUpdateRecord = (line, index = 0) => {
     opponents: parseCsv(opponentsRaw),
     eventIndexes: parseEventNumbers(eventNumbersRaw),
     eventIds: [],
+    // Internal Round-Zero metadata only. The compact normal-turn line transport
+    // has no date field, so ordinary gameplay cannot set this accidentally.
+    baselineDate: "",
     note: normalizeString(noteRaw),
   };
 };
@@ -157,6 +160,7 @@ export const decodeWarUpdates = (value) => {
             .filter((item) => Number.isInteger(item) && item >= 0)
             .slice(0, 16),
           eventIds: [...new Set(normalizeArray(entry.eventIds).map(normalizeString).filter(Boolean))].slice(0, 24),
+          baselineDate: normalizeString(entry.baselineDate),
           note: normalizeString(entry.note),
         };
       })
@@ -1215,6 +1219,103 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
   return result;
 };
 
+// Round Zero is an as-of-start canonical baseline, not a replay of every
+// historical cause. A live war therefore does not need a duplicated event.warId
+// merely to exist. When a matching pre-game event is present we still preserve
+// that provenance; when it is absent, the structured war record stands on its
+// own and the lifecycle/sides remain fully validated.
+export const validatePregameWarBootstrap = ({
+  world = {},
+  updates = [],
+  events = [],
+  startDate = "",
+} = {}) => {
+  const normalizedEvents = normalizeEvents(events);
+  const decoded = bindWarUpdatesToEvents(updates, normalizedEvents);
+  const lastKnownDateByWar = new Map();
+
+  for (let index = 0; index < decoded.length; index += 1) {
+    const update = decoded[index];
+    const op = normalizeString(update?.op);
+    if (!["start", "join-a", "join-b", "leave", "ceasefire", "resume", "end"].includes(op)) {
+      return {
+        error: `$.warUpdates record ${index + 1} has the unsupported operation ${op || "<blank>"}.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+    const indexes = normalizeArray(update?.eventIndexes);
+    if (indexes.some((eventIndex) => eventIndex < 0 || eventIndex >= normalizedEvents.length)) {
+      return {
+        error: `$.warUpdates record ${index + 1} references a pre-game event outside $.events.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+
+    const baselineDate = normalizeString(update?.baselineDate);
+    if (baselineDate) {
+      if (!parseIsoDate(baselineDate)) {
+        return {
+          error: `$.warUpdates record ${index + 1} baseline date must be a valid game date or blank.`,
+          updates: decoded,
+          warProbe: null,
+        };
+      }
+      if (parseIsoDate(startDate) && compareGameDates(baselineDate, startDate) > 0) {
+        return {
+          error: `$.warUpdates record ${index + 1} baseline date must be on or before the Round-One date ${startDate}.`,
+          updates: decoded,
+          warProbe: null,
+        };
+      }
+    }
+
+    const effectiveDate = firstLinkedDate(update, normalizedEvents) || sortDate(baselineDate);
+    const warId = normalizeString(update?.id);
+    const priorKnownDate = lastKnownDateByWar.get(warId) || "";
+    if (effectiveDate && priorKnownDate && compareGameDates(effectiveDate, priorKnownDate) < 0) {
+      return {
+        error: `$.warUpdates record ${index + 1} for ${warId || "unnamed war"} predates an earlier transition in the same Round-Zero lifecycle.`,
+        updates: decoded,
+        warProbe: null,
+      };
+    }
+    if (effectiveDate && warId) lastKnownDateByWar.set(warId, effectiveDate);
+  }
+
+  // Do not pass startDate as a fallback event date. If the model supplied no
+  // provenance event and no known transition date, "unknown" is more honest
+  // than pretending the war began on the campaign's first playable day.
+  const warProbe = applyWarUpdates({
+    world,
+    updates: decoded,
+    events: normalizedEvents,
+    stopDate: "",
+    round: 1,
+  });
+  if (warProbe.appliedIds.length !== decoded.length) {
+    return {
+      error: "$.warUpdates contains an invalid Round-One war lifecycle sequence. Bootstrap only wars that actually survive into the start date, beginning with a valid start operation.",
+      updates: decoded,
+      warProbe,
+    };
+  }
+
+  for (const warId of new Set(decoded.map((update) => normalizeString(update?.id)).filter(Boolean))) {
+    const war = normalizeArray(warProbe.wars).find((entry) => normalizeString(entry?.id) === warId);
+    if (!war || !["active", "ceasefire"].includes(normalizeString(war?.status).toLowerCase())) {
+      return {
+        error: `$.warUpdates leaves ${warId} ${normalizeString(war?.status) || "missing"} at Round One. A war that ended before the campaign belongs only in the pre-game events, not the live war ledger.`,
+        updates: decoded,
+        warProbe,
+      };
+    }
+  }
+
+  return { error: "", updates: decoded, warProbe };
+};
+
 export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0 } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = warMapFromWorld(nextWorld);
@@ -1223,7 +1324,10 @@ export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", ro
 
   for (const update of decoded) {
     const linkedEvents = linkedEventsForUpdate(update, events);
-    const date = firstLinkedDate(update, events) || sortDate(stopDate);
+    // A Round-Zero baseline may be valid without a historical event card. In
+    // that one transport, gameplay.js carries the canonical transition date as
+    // baselineDate. Normal-turn records never have it and remain event-dated.
+    const date = firstLinkedDate(update, events) || sortDate(update?.baselineDate) || sortDate(stopDate);
     const result = applyUpdateToWarMap({ map, update, date, round, linkedEvents });
     if (result.error) {
       console.warn(`[OH war ledger] dropped invalid ${update.op} for ${update.id}: ${result.error}`);
