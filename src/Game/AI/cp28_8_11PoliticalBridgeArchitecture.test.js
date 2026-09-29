@@ -61,7 +61,7 @@ test("Political Actor mutations are treated as canonical consequences across cur
   const gmPrompt = read("src/Game/AI/gameplayPrompts.js");
   const receipt = read("src/runtime/applicationReceipt.js");
   assert.match(gameplay, /OWN_CONSEQUENCE_IMPACTS[\s\S]*?"politicalActorOps"/);
-  assert.match(gameplay, /gameMasterEventHasCanonicalEffects[\s\S]*?"politicalActorOps"/);
+  assert.match(read("src/Game/AI/gameMasterValidation.js"), /gameMasterEventHasCanonicalEffects[\s\S]*?"politicalActorOps"/);
   assert.match(gameplay, /\["politicalActorOps", "political-actor"\]/);
   assert.match(gmPrompt, /impacts\.politicalActorOps = canonical political-state mutations/);
   assert.match(gmPrompt, /do NOT write leader or government through polityChanges\.stats or countryStatPatches/);
