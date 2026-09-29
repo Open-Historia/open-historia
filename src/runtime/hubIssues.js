@@ -85,3 +85,26 @@ export const fetchHubIssues = async (label, { force = false } = {}) => {
 // The scenario posts: the Community tab's list, and where basemaps and flag
 // packs shared inside scenarios are found.
 export const fetchHubScenarioIssues = (options) => fetchHubIssues("scenario", options);
+
+// ---- images on the cards ----------------------------------------------------
+
+// An image a card loads straight from its URL, with no click: only GitHub's
+// own hosts over https (github.com/user-attachments, *.githubusercontent.com,
+// camo included). Anywhere else, whoever wrote the post would learn the
+// address of every player who opens the tab.
+export const hubImageUrl = (value) => {
+  const url = String(value ?? "").trim();
+  return /^https:\/\/(?:github\.com\/|(?:[a-z0-9-]+\.)*githubusercontent\.com\/)/i.test(url) ? url : null;
+};
+
+// The first image in an issue body a card may show: markdown ![alt](url) or
+// GitHub's own <img src="..."> attachment markup (issue bodies mix both,
+// depending on how the image was pasted), or null.
+const IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/gi;
+export const firstHubImage = (body) => {
+  for (const match of String(body ?? "").matchAll(IMAGE_PATTERN)) {
+    const url = hubImageUrl(match[1] ?? match[2]);
+    if (url) return url;
+  }
+  return null;
+};

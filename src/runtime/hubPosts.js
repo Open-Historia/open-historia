@@ -23,7 +23,7 @@ import {
   normalizeHubPublished,
   normalizeHubSuggestionRef,
 } from "../../server/hubProvenance.js";
-import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues } from "./hubIssues.js";
+import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 
 export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
 export const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
@@ -37,12 +37,9 @@ export const hubPostUrl = (postId) => `${HUB_URL}/issues/${Number(postId)}`;
 export const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.json)/i;
 
-// First image in the issue body — markdown ![alt](url) or GitHub's own
-// <img src="..."> attachment markup (issue bodies mix both depending on how
-// the image was pasted). Used as the card/detail-view cover; posts with no
+// The cover is the body's first image hosted by GitHub (hubIssues.js
+// firstHubImage), used as the card/detail-view cover; posts with no such
 // image simply get coverImageUrl: null (existing text-only card, no error).
-const COVER_IMAGE_PATTERN =
-  /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 
 // The key the Publish button writes into a post (the form's technical field),
 // which is how an install recognises the post as the one its player made.
@@ -90,8 +87,7 @@ export const parsePost = (issue, importsById) => {
     .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
     .replace(/\s+/g, " ")
     .trim();
-  const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
-  const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
+  const coverImageUrl = firstHubImage(body);
   // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
   // It is deduped per person (an account, or an IP hash) and covers every scenario —
   // release assets and attachment posts alike. We deliberately do NOT fall back to

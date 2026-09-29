@@ -12,7 +12,7 @@
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle, zipBundle } from "./bundleZip.js";
 import { bytesToBase64 } from "./bundleFiles.js";
-import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues } from "./hubIssues.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -32,7 +32,6 @@ const SCENARIO_ZIP_PATTERN =
 // are NOT matched here — they live in coverImageUrl instead.
 const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|geojson|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.(?:json|geojson))/i;
-const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const HASH_PATTERN = /Basemap-Hash:\s*([a-f0-9]{16,64})/i;
 const KIND_PATTERN = /Basemap-Kind:\s*(image|vector)/i;
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -89,7 +88,6 @@ const fetchHubImage = async (url) => {
 
 const parseBasemapPost = (issue) => {
   const body = String(issue.body ?? "");
-  const coverMatch = body.match(COVER_IMAGE_PATTERN);
   return {
     id: issue.number,
     title: String(issue.title ?? "").replace(/^\[Basemap\]\s*/i, "").trim() || `Basemap #${issue.number}`,
@@ -102,7 +100,8 @@ const parseBasemapPost = (issue) => {
     // A non-image data file (old .basemap.json bundle, or a new vector .geojson).
     bundleUrl: body.match(BUNDLE_LINK_PATTERN)?.[0] ?? null,
     // The attached image: card cover AND, for new image basemaps, the payload.
-    coverImageUrl: coverMatch ? coverMatch[1] ?? coverMatch[2] ?? null : null,
+    // Only an image GitHub hosts (hubIssues.js firstHubImage).
+    coverImageUrl: firstHubImage(body),
     contentHash: body.match(HASH_PATTERN)?.[1]?.toLowerCase() ?? null,
     kind: body.match(KIND_PATTERN)?.[1]?.toLowerCase() ?? "image",
   };

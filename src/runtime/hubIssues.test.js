@@ -9,8 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { HUB_API, fetchHubIssues, fetchHubPages, nextPageUrl } from "./hubIssues.js";
-import { fetchPostComments } from "./hubPosts.js";
+import { HUB_API, fetchHubIssues, fetchHubPages, firstHubImage, hubImageUrl, nextPageUrl } from "./hubIssues.js";
+import { fetchPostComments, parsePost } from "./hubPosts.js";
 
 // GitHub's list API over plain arrays: `pages[url]` is a page, or a status.
 const serve = (pages) => {
@@ -66,6 +66,24 @@ test("a list whose later page fails keeps what it read; a first page that fails 
   const url = `${HUB_API}/issues/7/comments?per_page=100`;
   serve({ [url]: { items: [{ id: 1 }], next: `${url}&page=2` }, [`${url}&page=2`]: 500 });
   await assert.rejects(fetchHubPages(url), (error) => error.status === 500);
+});
+
+test("a card shows only an image GitHub hosts, so no post can log who opens the tab", () => {
+  assert.equal(hubImageUrl("https://github.com/user-attachments/assets/abc"), "https://github.com/user-attachments/assets/abc");
+  assert.equal(hubImageUrl("https://camo.githubusercontent.com/x/y"), "https://camo.githubusercontent.com/x/y");
+  assert.equal(hubImageUrl("https://private-user-images.githubusercontent.com/1/2.png"), "https://private-user-images.githubusercontent.com/1/2.png");
+  for (const url of ["https://tracker.example/pixel.png", "http://github.com/user-attachments/assets/abc", "https://github.com.evil.example/x.png", "https://github.com@evil.example/x.png", "//tracker.example/x.png", "https://evilgithubusercontent.com/x.png"]) {
+    assert.equal(hubImageUrl(url), null, url);
+  }
+  const body = [
+    '<img src="https://tracker.example/pixel.png">',
+    "![map](https://tracker.example/map.png)",
+    '<img width="600" src="https://github.com/user-attachments/assets/cover-1">',
+  ].join("\n");
+  assert.equal(firstHubImage(body), "https://github.com/user-attachments/assets/cover-1", "the first image GitHub hosts, past any other");
+  assert.equal(firstHubImage("![x](https://tracker.example/x.png)"), null);
+  const post = parsePost({ number: 5, title: "[Scenario] X", body: '<img src="https://tracker.example/pixel.png">', html_url: "https://github.com/o/r/issues/5" });
+  assert.equal(post.coverImageUrl, null, "the Community tab falls back to its default cover");
 });
 
 test("a post's comments are read to the last page, or not at all", async () => {

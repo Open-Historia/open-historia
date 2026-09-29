@@ -12,7 +12,7 @@
 
 import { unzipBundle, looksLikeZip } from "./bundleZip.js";
 import { bytesToBase64 } from "./bundleFiles.js";
-import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues } from "./hubIssues.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
 
 // `labels=flag` is a contract with .github/ISSUE_TEMPLATE/flag.yml. The label must
 // EXIST in the repo — GitHub silently drops a label an issue form tries to apply if
@@ -27,7 +27,6 @@ const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 // GitHub renders a dragged-in png/jpg inline as markdown, but attaches an .svg as a
 // file link — so a flag can arrive either way.
 const IMAGE_EXT_PATTERN = /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i;
-const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const FILE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+)/i;
 // Optional, and only a hint: which country the author drew this for.
@@ -46,7 +45,8 @@ const firstMatch = (body, pattern) => {
 
 const parseFlagPost = (issue) => {
   const body = issue.body || "";
-  const cover = firstMatch(body, COVER_IMAGE_PATTERN);
+  // Only an image GitHub hosts (hubIssues.js firstHubImage).
+  const cover = firstHubImage(body);
   const fileLink = firstMatch(body, FILE_LINK_PATTERN);
   // An .svg (or any image GitHub attached rather than rendered) is the flag itself,
   // not a side file.
@@ -90,7 +90,7 @@ const parseScenarioAsFlagPack = (issue) => {
     official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
     upvotes: issue.reactions?.["+1"] ?? 0,
     code: null,
-    imageUrl: firstMatch(body, COVER_IMAGE_PATTERN),
+    imageUrl: firstHubImage(body),
     fromScenario: true,
     flagCount,
     packUrl,
