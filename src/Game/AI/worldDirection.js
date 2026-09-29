@@ -246,6 +246,19 @@ export const applyTerritoryTempo = (events, { ceilingPerMonth, spanDays } = {}) 
 // description that lists nuclear programmes as a thing a polity can start.
 export const PRIORITY_RULES_HEADING = "[PRIORITY RULES — set by this scenario's author]";
 
+// The author's priority rules alone, without the share and the tempo (which
+// only a time skip is counted against). Every other task that writes the world
+// or speaks for a polity carries them too: a rule broken by a Projects entry, an
+// interactive event or a leader's reply is a world every later skip inherits.
+export const buildPriorityRulesBlock = (direction) => {
+    const rules = asText(direction?.priorityRules);
+    if (!rules) return "";
+    return `${PRIORITY_RULES_HEADING}\n`
+        + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
+        + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
+        + rules;
+};
+
 export const buildWorldDirectionDirective = (direction, { playerPolity = "", spanDays = 30 } = {}) => {
     if (!direction) return "";
     const player = asText(playerPolity) || "the player's polity";
@@ -268,14 +281,7 @@ export const buildWorldDirectionDirective = (direction, { playerPolity = "", spa
             + "Beyond that the engine withholds the entry and tells you. Write fronts that grind — a river line held, a siege that drags — rather than sweeps.",
         );
     }
-    const rules = asText(direction.priorityRules);
-    if (rules) {
-        parts.push(
-            `${PRIORITY_RULES_HEADING}\n`
-            + "These rules outrank everything else you have been told: the default guidance above, the simulation rules, and anything a field description of the output function suggests is possible. "
-            + "Where a rule and a default disagree, the rule wins, without exception and without comment in the events.\n"
-            + rules,
-        );
-    }
+    const rules = buildPriorityRulesBlock(direction);
+    if (rules) parts.push(rules);
     return parts.join("\n\n");
 };

@@ -357,6 +357,7 @@ import {
 import { describeReportsForPrompt, normalizeReportOp } from "../../runtime/reports.js";
 import {
   applyTerritoryTempo,
+  buildPriorityRulesBlock,
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
   dateKey,
@@ -2317,8 +2318,9 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 // (runTurnReview below) can put several tasks into ONE request and still show
 // each of them exactly the prompt it would have been sent alone.
 //
-// `reminders: false` leaves out the Game Master's reminders; the turn review
-// adds them once to the whole request instead of once per job.
+// `reminders: false` leaves out the Game Master's reminders and the author's
+// priority rules; the turn review adds them once to the whole request instead
+// of once per job.
 // A scenario's own stats sheet, or its own strategic indices, as every task that
 // authors stats is told them.
 const scenarioStatSheetDirective = (statSheetDefinition) => `[Scenario National Stats Sheet — LIVE]
@@ -2925,16 +2927,22 @@ This live instruction supersedes older frozen country-stat prompts and all earli
     systemPrompt = `${systemPrompt}\n\n${LOOKUP_DIRECTIVE}`;
   }
 
-  // The scenario author's direction (worldDirection.js), and LAST of all: the end
-  // of a long prompt is what a model follows best, and the priority rules are
-  // meant to outrank everything above them. By default it is one paragraph, the
-  // world's share; with world direction switched off it is nothing, and the
-  // prompt is what it always was.
   // The player's standing goal (runtime/playerGoal.js): how the player's own
   // government conducts what their orders did not cover. Before the author's
   // direction, which outranks it like every other default.
   if (PLAYER_GOAL_TASKS.has(taskKey) && !jumpTask) {
     const block = await playerGoalBlock(normalizeString(variables?.playerPolity));
+    if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
+  }
+
+  // The scenario author's priority rules (worldDirection.js), for every task
+  // that writes the world or speaks for a polity; a time skip has them, with the
+  // world's share and the tempo, in its live records. Near the end, where a long
+  // prompt is followed best. Not the Game Master's: it carries out the player's
+  // explicit command, and a block saying the rules outrank everything would
+  // defeat it. Nothing while the author set none.
+  if (reminders && GM_REMINDER_TASKS.has(taskKey) && !jumpTask && taskKey !== "gameMaster") {
+    const block = buildPriorityRulesBlock(getActiveWorldDirection());
     if (block) systemPrompt = `${systemPrompt}\n\n${block}`;
   }
 
@@ -13799,8 +13807,13 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   const { jobs: shared, savedChars } = shareRepeatedBlocks(usable, sharedBlocks);
-  // The Game Master's reminders once for the whole request, not once per job.
-  const systemPrompt = [buildTurnReviewPrompt(shared), await gmRemindersBlock()].filter(Boolean).join("\n\n");
+  // The author's priority rules and the Game Master's reminders once for the
+  // whole request, not once per job.
+  const systemPrompt = [
+    buildTurnReviewPrompt(shared),
+    buildPriorityRulesBlock(getActiveWorldDirection()),
+    await gmRemindersBlock(),
+  ].filter(Boolean).join("\n\n");
   const tool = buildTurnReviewTool(shared);
   review.asked = true;
   // The panel says what this one request is doing, by the jobs it carries.

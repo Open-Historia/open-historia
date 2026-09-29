@@ -15,6 +15,7 @@ import {
     PRIORITY_RULES_HEADING,
     applyTerritoryTempo,
     beatIsWritten,
+    buildPriorityRulesBlock,
     buildScriptedEventsInstruction,
     dateKey,
     ensureScriptedEvents,
@@ -232,4 +233,21 @@ test("the simulator is told the tempo as a number for the period", () => {
     assert.match(directive, /^\[The Map's Tempo — counted by the engine\]/);
     assert.match(directive, /no faster than 2 regions per thirty days: 3 this period/);
     assert.equal(buildWorldDirectionDirective({ worldShare: 0, priorityRules: "", territoryTempo: 0 }), "");
+});
+
+test("the priority rules alone: no share, no tempo, nothing without rules", () => {
+    const direction = { worldShare: 35, territoryTempo: 2, priorityRules: "No nuclear weapons before 1945." };
+    const block = buildPriorityRulesBlock(direction);
+    assert.ok(block.startsWith(PRIORITY_RULES_HEADING));
+    assert.match(block, /outrank everything else you have been told/);
+    assert.ok(block.endsWith("No nuclear weapons before 1945."));
+    assert.doesNotMatch(block, /World's Share|Map's Tempo/);
+    assert.equal(buildPriorityRulesBlock({ worldShare: 35, priorityRules: "  " }), "");
+    assert.equal(buildPriorityRulesBlock(null), "");
+});
+
+test("the time skip's directive carries the same rules block as every other task", () => {
+    const direction = { worldShare: 35, priorityRules: "The Tsar never abdicates." };
+    const directive = buildWorldDirectionDirective(direction, { playerPolity: "France" });
+    assert.ok(directive.endsWith(buildPriorityRulesBlock(direction)));
 });
