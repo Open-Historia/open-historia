@@ -7,7 +7,7 @@
 // are disband one of their own units and ask, in words, for orders — which
 // queues an action the AI weighs on the next jump rather than moving anything now.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
 import {
@@ -18,7 +18,7 @@ import {
   removeUnit,
   requestUnitOrders,
 } from "../Map/unitsController.js";
-import { readEventsState } from "../../runtime/gameState.js";
+import { useEventsById } from "./eventLookup.js";
 // One posture vocabulary and one set of strength bands for the popup and the
 // Forces panel — duplicates of either would drift and describe the same formation
 // two different ways on two screens.
@@ -193,7 +193,6 @@ const UnitPopup = () => {
   const [dismissing, setDismissing] = useState(false);
   const [request, setRequest] = useState("");
   const [requestState, setRequestState] = useState("idle"); // idle | sending | queued
-  const [originEvent, setOriginEvent] = useState(null);
   const { current: map } = useMap();
   // On a touch screen Disband sits a thumb's width from Request orders, and on
   // a phone just above the toolbar; one stray tap would stand the formation
@@ -236,47 +235,15 @@ const UnitPopup = () => {
     return unsubscribe;
   }, []);
 
-  // Resolve "what put this formation here" from the event log. Cached by id, so
-  // the log is read at most once per selected unit that carries an eventId and
+  // Resolve "what put this formation here" from the event log, through the
+  // cache the structure card shares (eventLookup.js): read at most once per id,
   // never on a render or a map move.
   //
   // The cache used to be the whole log, read ONCE. This popup is mounted for the
   // life of the map, so every unit spawned by an event after that first read
   // resolved to nothing and silently lost its "Detected" row — the card's main
-  // reason for existing. Re-read when the id we want is not in hand; a miss is
-  // remembered as null so an event that has genuinely aged out of the log costs one
-  // read, not one per selection.
-  const eventCache = useRef(new Map());
-  const eventId = unit?.eventId || "";
-  useEffect(() => {
-    let cancelled = false;
-    if (!eventId) {
-      setOriginEvent(null);
-      return undefined;
-    }
-    if (eventCache.current.has(eventId)) {
-      setOriginEvent(eventCache.current.get(eventId));
-      return undefined;
-    }
-    const resolve = async () => {
-      let events = [];
-      try {
-        events = await readEventsState({ force: true });
-      } catch {
-        // A failed read is not an answer: leave the id unrecorded so selecting the
-        // unit again tries once more, rather than pinning it to "not found".
-        return;
-      }
-      for (const entry of events) eventCache.current.set(entry.id, entry);
-      if (!eventCache.current.has(eventId)) eventCache.current.set(eventId, null);
-      if (cancelled) return;
-      setOriginEvent(eventCache.current.get(eventId) ?? null);
-    };
-    resolve();
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId]);
+  // reason for existing.
+  const [originEvent = null] = useEventsById(unit?.eventId ? [unit.eventId] : []);
 
   const finishDismiss = () => {
     _currentSelection = null;

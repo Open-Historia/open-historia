@@ -338,6 +338,8 @@ The ⓘ beside the region's name (**Region info**) opens a section with the regi
 
 The feature card (a city or a structure) names the **Region** it stands in. `featureAt` in `Nations.jsx` resolves the region under the glyph and hands it over as `hostRegionName` and `hostRegion` (the same selection a click on that region gives `onRegionSelected`); the row is a link that closes the feature card and opens the region's, which a tap beside a small dot on a phone rarely managed. Coordinates show only where there is no region (a structure at sea, or a place opened from search).
 
+A structure's card also shows **Formerly** (its `aliases`, the names it had before the AI renamed it, which the AI is still told) and **Events**: the last two of its `sourceEventIds`, newest first, as date and title. The unit card's **Detected** row and this one resolve event ids through one cache (`Selection/eventLookup.js`): `events.json` is read only for an id not yet in hand, an id the log no longer holds is remembered as missing, a failed read records nothing, and only the id, title and date are kept. Switching saves empties it.
+
 ---
 
 ## 10. The decorative globe (`GlobeEffects.jsx`)

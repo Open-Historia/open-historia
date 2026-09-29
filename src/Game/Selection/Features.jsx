@@ -10,6 +10,7 @@ import { useBackToClose } from "../../runtime/backToClose.js";
 import { dismissRegionPopup, onRegionSelected } from "./Regions.jsx";
 import { dismissUnitPopup } from "./Units.jsx";
 import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
+import { useEventsById } from "./eventLookup.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -208,6 +209,11 @@ const FeaturePopup = () => {
 
   // Hook order must not depend on the selection — called before any return.
   const ownerName = useCountryDisplayName(liveMarker?.ownerCode || selection?.ownerCode || "");
+  // The last two events that built or changed a structure, newest first, read
+  // through the cache the unit card shares (eventLookup.js).
+  const sourceEvents = useEventsById(
+    Array.isArray(liveMarker?.sourceEventIds) ? liveMarker.sourceEventIds.slice(-2).reverse() : [],
+  );
 
   // On a phone the card and a bottom panel would share one spot at the
   // bottom of the screen, the card underneath: it tells the HUD it opened,
@@ -331,6 +337,20 @@ const FeaturePopup = () => {
           {feature.foundedAt ? <DetailRow label="Founded" value={feature.foundedAt} /> : null}
           {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
             <DetailRow label="Last changed" value={feature.updatedDate} />
+          ) : null}
+          {/* The names it had before the AI renamed it, which the AI is still told. */}
+          {!isCity && Array.isArray(feature.aliases) && feature.aliases.length > 0 ? (
+            <DetailRow label="Formerly" value={feature.aliases.join(", ")} />
+          ) : null}
+          {!isCity && sourceEvents.length > 0 ? (
+            <DetailRow
+              label="Events"
+              value={sourceEvents.map((event) => (
+                <span key={event.id} style={{ display: "block" }}>
+                  {event.date ? `${event.date} — ${event.title}` : event.title}
+                </span>
+              ))}
+            />
           ) : null}
           {/* The region it stands in, which leads on to that region's card;
               coordinates only where there is none (a structure at sea). */}
