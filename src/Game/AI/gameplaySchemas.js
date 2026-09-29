@@ -2035,6 +2035,23 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 3,
       items: createdChatSchema,
     },
+    // What the administrator's request itself asks for, read by the model that
+    // reads the request, in whatever language it was written. The request
+    // checks (gameMasterRequestCompleteness.js, gameplay.js) trust these and
+    // fall back to their English patterns only when an answer lacks them. Not
+    // in `required`: a preview saved before they existed must still validate.
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: {
+      type: "string",
+      description: "The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC); blank when it names none or several.",
+    },
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
@@ -2075,6 +2092,15 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
     puppetUpdatesJson: textSchema("JSON array text for structured world.puppets subordination changes — making a country a puppet (protectorate, satellite or client), changing one, or ending one. Use [] when none."),
     diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: textSchema("The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC). Empty string when it names none or several."),
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
@@ -2088,6 +2114,9 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "agreementUpdatesJson",
     "puppetUpdatesJson",
     "diplomaticOutreachJson",
+    "requestedSubordination",
+    "requestedDate",
+    "requestedOngoingProcess",
   ],
   additionalProperties: false,
 };
@@ -2166,6 +2195,10 @@ export const decodeGameMasterTransportPayload = (value) => {
     for (const [field, key] of GAME_MASTER_TRANSPORT_FIELDS) {
       payload[key] = parseGameMasterTransportArray(value[field], field);
     }
+    // Carried only when the answer has them, so an older answer decodes as it did.
+    if (typeof value.requestedSubordination === "boolean") payload.requestedSubordination = value.requestedSubordination;
+    if (typeof value.requestedDate === "string") payload.requestedDate = value.requestedDate.trim();
+    if (typeof value.requestedOngoingProcess === "boolean") payload.requestedOngoingProcess = value.requestedOngoingProcess;
     return { payload: normalizeGameMasterChats(payload), error: "" };
   } catch (error) {
     return { payload: null, error: String(error?.message || error || "Invalid GM transport payload.") };

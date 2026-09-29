@@ -44,3 +44,25 @@ test("a text with no array in it is still an error naming the field", () => {
   assert.equal(payload, null);
   assert.match(error, /\$\.eventsJson must contain valid JSON array text/);
 });
+
+// What the request asked for, read by the model in the request's own language.
+const requestFields = { requestedSubordination: true, requestedDate: " -0044-03-15 ", requestedOngoingProcess: false };
+const bareTransport = {
+  mode: "exact-event", summary: "s", eventsJson: "[]", territorialScopesJson: "[]", countryStatPatchesJson: "[]", storylineUpdatesJson: "[]",
+  warUpdatesJson: "[]", relationUpdatesJson: "[]", agreementUpdatesJson: "[]", diplomaticOutreachJson: "[]",
+};
+
+test("the answer's reading of the request is carried into the transaction and validates", async () => {
+  const { validateGameplayPayload } = await import("./gameplaySchemas.js");
+  const { payload, error } = decodeGameMasterTransportPayload({ ...bareTransport, ...requestFields });
+  assert.equal(error, "");
+  assert.equal(payload.requestedSubordination, true);
+  assert.equal(payload.requestedDate, "-0044-03-15");
+  assert.equal(payload.requestedOngoingProcess, false);
+  assert.equal(validateGameplayPayload("gameMaster", payload).valid, true);
+});
+
+test("an answer without them decodes without them, so the English fallbacks decide", () => {
+  const { payload } = decodeGameMasterTransportPayload(bareTransport);
+  for (const field of Object.keys(requestFields)) assert.equal(field in payload, false, field);
+});

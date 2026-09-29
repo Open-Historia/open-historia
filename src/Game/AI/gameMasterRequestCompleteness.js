@@ -57,8 +57,17 @@ export const requestExplicitlyInstallsPuppet = (requestText) => {
   return PUPPET_INSTALL_PATTERNS.some((pattern) => hasNonNegatedInstallMatch(text, pattern));
 };
 
+// Whether the request asks for a puppet. The answer's own requestedSubordination
+// is read first: the model that read the request says so in any of the game's
+// languages, where the patterns above know only English. They are the fallback
+// for an answer without the field (an older or a local model's).
+export const gameMasterRequestAsksForPuppet = (candidate, request = "") =>
+  typeof candidate?.requestedSubordination === "boolean"
+    ? candidate.requestedSubordination
+    : requestExplicitlyInstallsPuppet(request);
+
 export const validateGameMasterRequestedPuppetCompleteness = (candidate, { request = "" } = {}) => {
-  if (!requestExplicitlyInstallsPuppet(request)) return "";
+  if (!gameMasterRequestAsksForPuppet(candidate, request)) return "";
   const hasInstall = Array.isArray(candidate?.puppetUpdates) && candidate.puppetUpdates.some(
     (entry) => String(entry?.op ?? "").trim().toLowerCase() === "install",
   );

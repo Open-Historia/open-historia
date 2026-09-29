@@ -70,7 +70,7 @@ import {
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
 import { politicalImpactCompletenessIssues } from "./politicalImpactCompleteness.js";
-import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
+import { validateGameMasterRequestedPuppetCompleteness, gameMasterRequestAsksForPuppet } from "./gameMasterRequestCompleteness.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
   applyPoliticalActorOperation,
@@ -14619,9 +14619,18 @@ export const extractExplicitGameMasterRequestDates = (requestText) => {
   return [...dates].sort();
 };
 
+// The date the request names: the answer's own requestedDate when it has the
+// field (read from the request in any language; blank means none), else the
+// English/ISO patterns above.
+const gameMasterRequestedDates = (candidate, request) => {
+  if (typeof candidate?.requestedDate !== "string") return extractExplicitGameMasterRequestDates(request);
+  const date = normalizeGameMasterIsoDate(candidate.requestedDate);
+  return date ? [date] : [];
+};
+
 const validateGameMasterRequestedExactDate = (candidate, { mode, request }) => {
   if (mode !== "exact-event") return "";
-  const requestedDates = extractExplicitGameMasterRequestDates(request);
+  const requestedDates = gameMasterRequestedDates(candidate, request);
   // Only enforce when the administrator supplied one unambiguous explicit date.
   // Requests that mention several historical dates need semantic interpretation.
   if (requestedDates.length !== 1) return "";
@@ -14700,7 +14709,12 @@ const validateGameMasterStorylineUpdates = async (candidate, { mode, world, game
   if (validationError) return validationError;
 
   const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
-  if (mode === "world-intervention" && GAME_MASTER_PERSISTENT_PROCESS_HINT.test(normalizeString(request)) && !updates.length) {
+  // The answer's requestedOngoingProcess reads the request in any language; the
+  // English hint is the fallback for an answer without it.
+  const ongoingProcess = typeof candidate?.requestedOngoingProcess === "boolean"
+    ? candidate.requestedOngoingProcess
+    : GAME_MASTER_PERSISTENT_PROCESS_HINT.test(normalizeString(request));
+  if (mode === "world-intervention" && ongoingProcess && !updates.length) {
     return "World Intervention describes an unresolved or changing multi-turn process, but $.storylineUpdates is empty. Persist that crisis/process in canonical world.storylines (or update/resolve the existing storyline) so the normal World Director inherits it on later turns.";
   }
 
@@ -15194,7 +15208,7 @@ const validateGameMasterPreviewPayload = async (candidate, {
   // asked to install a puppet/satellite/protectorate/client, prose plus a friendly
   // relation or treaty is not a substitute for the canonical world.puppets row.
   // Fail closed so runJsonTask can correct the incomplete plan before Preview.
-  if (requestExplicitlyInstallsPuppet(request) && !isActiveFeatureEnabled("puppetStates")) {
+  if (gameMasterRequestAsksForPuppet(candidate, request) && !isActiveFeatureEnabled("puppetStates")) {
     return "[canonical subordination-state] Puppet states are switched off for this game, so the requested puppet/satellite/protectorate/client relationship cannot be created. Turn the feature back on in the scenario or game editor (Features) if you want this change.";
   }
   const puppetCompletenessError = validateGameMasterRequestedPuppetCompleteness(candidate, { request });
