@@ -7371,8 +7371,12 @@ const applySimulationResult = async ({
     signal: projects?.signal,
   });
   // Kept with the turn's checks so a retry of another check finds the same
-  // supplemental events rather than searching afresh.
-  const breadthRepair = review ? null : await (checks ? checks.run("breadth", searchBreadth) : searchBreadth());
+  // supplemental events rather than searching afresh. A search that was made
+  // and failed (the request, or an answer that broke its rules) holds the turn
+  // like any other check; one not needed, or that found nothing, has answered.
+  const breadthRepair = review ? null : await (checks
+    ? checks.run("breadth", searchBreadth, (answer) => (answer?.failed ? "the search failed or came back unusable" : ""))
+    : searchBreadth());
   if (breadthRepair?.events?.length) {
     // New storyline ids ride on their own repair events before any filtering,
     // so a surviving event carries its continuity exactly like a main event.
