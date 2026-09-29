@@ -631,6 +631,10 @@ const JS_REGISTRY_FILES = [
   "src/Game/AI/structuredMode.js", "src/Game/AI/playerFocus.js", "src/Game/AI/simulationStatus.js",
   "src/Game/AI/historyConsolidation.js", "src/Game/AI/interactiveRewind.js", ...MESSAGE_FILES,
 ];
+// Plain .js split out of a .jsx panel so node can test it: its prose is the
+// panel's own and is read the way the panel's is, every string that reads like
+// prose included (the pieces a line is built from are looked up on their own).
+const PROSE_FILES = ["src/Game/GameUI/turnReveal.js"];
 const FACTORIES = { segment: [1, 4] }; // promptGuidance.js: segment(id, label, start, end, hint)
 
 export const interfaceFiles = (root) => {
@@ -654,7 +658,7 @@ export const extractTree = (root) => {
     const rel = path.relative(root, file).split(path.sep).join("/");
     const code = fs.readFileSync(file, "utf8");
     const jsx = rel.endsWith(".jsx");
-    const result = extractFromSource(code, rel, { jsx, catchAll: jsx, factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
+    const result = extractFromSource(code, rel, { jsx, catchAll: jsx || PROSE_FILES.includes(rel), factories: FACTORIES, messages: jsx || MESSAGE_FILES.includes(rel) });
     if (result.error) errors.push(result.error);
     for (const [t, where] of result.exact) if (!exact.has(t)) exact.set(t, where);
     for (const [t, where] of result.patterns) if (!patterns.has(t)) patterns.set(t, where);
