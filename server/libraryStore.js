@@ -25,6 +25,7 @@ import { coarsenFeatureCollection } from "./coarseGeometry.js";
 import {
   fetchableHubOrigin,
   hubOriginAfterWrite,
+  importedGameScenarioId,
   normalizeHubOrigin,
   normalizeHubPublished,
   normalizeHubReviews,
@@ -3900,9 +3901,12 @@ const importGameBundle = (bundle) => {
   const meta = bundle.game && typeof bundle.game === "object" ? bundle.game : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const ref = bundle.scenarioRef && typeof bundle.scenarioRef === "object" ? bundle.scenarioRef : {};
-  const scenarioId = String(ref.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID;
+  const requestedScenarioId = String(ref.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID;
+  // A map the sender says is a hub file is this library's copy of that file,
+  // never merely whatever holds the same id here (hubProvenance.js).
+  const scenarioId = importedGameScenarioId({ ...ref, scenarioId: requestedScenarioId }, getScenarioCatalog().scenarios);
 
-  const gameId = ensureUniqueId(meta.name || scenarioId || "game", "game");
+  const gameId = ensureUniqueId(meta.name || requestedScenarioId || "game", "game");
   const gameDir = getGameDirectory(gameId);
   ensureDirectory(gameDir);
   ensureDirectory(path.join(gameDir, "storage"));

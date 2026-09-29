@@ -62,6 +62,7 @@ import {
 import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
+import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -2531,14 +2532,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const { bundle, scenarioBundle, snapshotsText } = await readGameZip(buffer);
 
       // The scenario first, so the game's card names its map the moment it
-      // appears. Only when this library doesn't already hold that id: importing
-      // regardless would mint a second copy of the same map — up to 53 MB —
-      // every time the same game was imported, and ensureUniqueId would rename
-      // it, so the game would point at whichever copy arrived first anyway.
+      // appears. The carried map is imported unless this library already holds
+      // a copy of it (importedScenarioCopy.js): an id match alone is no match,
+      // since ids come from names and every "New Scenario" shares one. The game
+      // names whichever id the map ends up under.
       let scenarioId = bundle.scenarioRef?.scenarioId ?? "";
-      if (scenarioBundle && !scenarios.some((entry) => entry.id === scenarioId)) {
-        const imported = await importScenarioBundle(scenarioBundle);
-        scenarioId = imported.scenario.id;
+      if (scenarioBundle) {
+        scenarioId = await findScenarioCopyOfBundle(scenarioBundle, scenarios, loadScenarioDetails)
+          ?? (await importScenarioBundle(scenarioBundle)).scenario.id;
       }
 
       const details = await importGameBundle({

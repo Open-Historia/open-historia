@@ -23,6 +23,7 @@ import { OWNER_SCHEMA } from "./ownerMigration.js";
 import {
   fetchableHubOrigin,
   hubOriginAfterWrite,
+  importedGameScenarioId,
   isBlockedContributor,
   normalizeHubKey,
   normalizeHubLogin,
@@ -209,6 +210,19 @@ test("a hub file's copy is an unedited scenario from the same post at the same f
   assert.equal(scenarioCopyOfHubFile(ORIGIN, scenarios.slice(0, 4)), null, "an older, an edited or another post's copy is not it");
   assert.equal(scenarioCopyOfHubFile(null, scenarios), null);
   assert.equal(scenarioCopyOfHubFile(ORIGIN, null), null);
+});
+
+test("an imported hub game names this library's copy of the file, never merely the same id", () => {
+  const ref = { builtIn: false, hubOrigin: ORIGIN, scenarioId: "new-scenario" };
+  const own = { id: "new-scenario", hubOrigin: null };
+  const copy = { id: "world-2", hubOrigin: ORIGIN };
+  assert.equal(importedGameScenarioId(ref, [own, copy]), "world-2", "the copy of that file, whatever its id");
+  assert.equal(importedGameScenarioId(ref, [{ ...own, hubOrigin: ORIGIN }, copy]), "new-scenario", "the named id when it is a copy");
+  assert.equal(importedGameScenarioId(ref, [own]), "new-scenario-hub-42", "an unrelated holder of the id: a free id, so the map shows missing");
+  assert.equal(importedGameScenarioId(ref, [own, { id: "new-scenario-hub-42" }]), "new-scenario-hub-42-2");
+  assert.equal(importedGameScenarioId(ref, []), "new-scenario", "a free id stays");
+  assert.equal(importedGameScenarioId({ ...ref, builtIn: true }, [own]), "new-scenario", "a built-in map is on every install");
+  assert.equal(importedGameScenarioId({ scenarioId: "mine" }, [{ id: "mine" }]), "mine", "no hub file: the sender's id");
 });
 
 test("the web store writes provenance through the same rules", () => {

@@ -110,6 +110,28 @@ export const scenarioCopyOfHubFile = (origin, scenarios, preferredId = "") => {
   return copies.find((entry) => entry.id === preferredId) ?? copies[0] ?? null;
 };
 
+// The scenario an imported game names, when its sender said the map is a hub
+// file (scenarioRef.hubOrigin). The sender's id alone says nothing: ids come
+// from names, so this library's own "New Scenario" can hold the id of an
+// unrelated map, and the game would open on it. The game names this library's
+// copy of that file; with none, it names an id nothing here holds, so the
+// library shows the map as missing and offers to fetch it. A built-in map, or
+// one that is no hub file, keeps the sender's id.
+export const importedGameScenarioId = (ref, scenarios) => {
+  const requested = String(ref?.scenarioId ?? "").trim();
+  const origin = ref?.builtIn ? null : normalizeHubOrigin(ref?.hubOrigin);
+  if (!origin || !requested) return requested;
+  const list = Array.isArray(scenarios) ? scenarios : [];
+  const copy = scenarioCopyOfHubFile(origin, list, requested);
+  if (copy) return copy.id;
+  const taken = new Set(list.map((entry) => entry?.id));
+  if (!taken.has(requested)) return requested;
+  const base = `${requested}-hub-${origin.postId}`;
+  let id = base;
+  for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
+  return id;
+};
+
 export const normalizeHubSuggestionRef = (raw) => {
   if (!raw || typeof raw !== "object") return null;
   const id = text(raw.id, 80);

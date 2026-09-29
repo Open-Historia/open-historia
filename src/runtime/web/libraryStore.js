@@ -8,6 +8,7 @@
 import { STORES, idbGet, idbGetAll, idbGetAllKeys, idbPut, idbPutPair, idbDelete, kvGet, kvPut } from "./idb.js";
 import { serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
+import { importedGameScenarioId } from "../../../server/hubProvenance.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
   parseJsonValue, serializeJsonValue,
@@ -1691,9 +1692,11 @@ const importGameBundle = async (bundle) => {
   const metaIn = bundle.game && typeof bundle.game === "object" ? bundle.game : {};
   const data = bundle.data && typeof bundle.data === "object" ? bundle.data : {};
   const ref = bundle.scenarioRef && typeof bundle.scenarioRef === "object" ? bundle.scenarioRef : {};
-  const scenarioId = trimmed(ref.scenarioId) || DEFAULT_SCENARIO_ID;
+  const requestedScenarioId = trimmed(ref.scenarioId) || DEFAULT_SCENARIO_ID;
+  // Server twin: a hub file's map is this library's copy of it, not the id.
+  const scenarioId = importedGameScenarioId({ ...ref, scenarioId: requestedScenarioId }, (await getScenarioCatalog()).scenarios);
 
-  const id = await ensureUniqueId(metaIn.name || scenarioId || "game", "game");
+  const id = await ensureUniqueId(metaIn.name || requestedScenarioId || "game", "game");
   const record = emptyGameRecord(id);
   record.json = {};
   for (const key of GAME_BUNDLE_DATA_KEYS) {
