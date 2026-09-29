@@ -11544,7 +11544,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // call ONLY when the persisted component coverage still matches the authoritative
   // current territorial plan. This repairs saves poisoned by the old migration lock,
   // where a new border fingerprint could be stamped onto stale pre-annexation totals.
-  // An explicit manual hard audit (Shift+click in Stats) is the deliberate escape hatch:
+  // An explicit manual hard audit (Stats ↻ > Rebuild baseline) is the deliberate escape hatch:
   // it bypasses this zero-call guard so a suspect baseline can be rebuilt from live canon.
   if (
     !rebuildNumericBaseline &&

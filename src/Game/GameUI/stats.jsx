@@ -169,6 +169,24 @@ const countryStatsTrackingIntervalLabel = (months) => {
     return count === 1 ? "Every month" : `Every ${count} months`;
 };
 
+const refreshMenuButtonStyle = {
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    borderRadius: "8px",
+    color: "#e7e7e9",
+    cursor: "pointer",
+    fontSize: "0.74rem",
+    fontWeight: 750,
+    padding: "0.4rem 0.7rem",
+};
+
+const refreshMenuHintStyle = {
+    color: "rgba(255,255,255,0.42)",
+    fontSize: "0.64rem",
+    lineHeight: 1.4,
+    marginTop: "0.25rem",
+};
+
 const clamp01 = (value) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
 
 const INDEX_ROWS = DEFAULT_STAT_INDEX_ROWS;
@@ -1432,6 +1450,9 @@ const StatsPaneBody = ({ active }) => {
     const [statsView, setStatsView] = useState("politics");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
+    // The ↻ menu, open for one polity only: `step` is "open" or "confirm" (the
+    // rebuild asked for, not yet confirmed). Pointing the pane elsewhere closes it.
+    const [refreshMenu, setRefreshMenu] = useState({ target: "", step: "" });
     // On a phone, Back closes the statistics sheet on top, not the advisor under it.
     useBackToClose(advancedOpen, () => setAdvancedOpen(false));
     useBackToClose(trackingOpen, () => setTrackingOpen(false));
@@ -2054,6 +2075,9 @@ const StatsPaneBody = ({ active }) => {
     }, [active, advancedOpen, targetCountry, player.date, player.round, state.sheet]);
 
     const sheet = state.sheet;
+    const refreshMenuStep = refreshMenu.target === targetCountry && statsView === "economy" && state.status !== "loading"
+        ? refreshMenu.step
+        : "";
     // Header identity can safely use the already-loaded canonical world's shallow
     // stat metadata while Economy itself waits for the validated/migrated sheet.
     // This preserves capital/government/leader text without triggering heavy Stats
@@ -2180,14 +2204,76 @@ const StatsPaneBody = ({ active }) => {
             </div>
             {statsView === "economy" && state.status !== "loading" && (
                 <button
+                type="button"
                 className="oh-tap"
-                onClick={(event) => loadSheet({ force: true, forceReassess: event.shiftKey })}
-                title="Refresh stat sheet · Shift+click = force fresh baseline"
-                aria-label="Refresh stat sheet; hold Shift while clicking to force a fresh baseline"
-                style={{ background: "none", border: "none", color: "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1rem", padding: 0 }}
+                onClick={() => setRefreshMenu(refreshMenuStep ? { target: "", step: "" } : { target: targetCountry, step: "open" })}
+                title="Refresh options"
+                aria-label="Refresh options"
+                aria-expanded={Boolean(refreshMenuStep)}
+                style={{ background: "none", border: "none", color: refreshMenuStep ? "#2bc1f3" : "rgba(255,255,255,0.4)", cursor: "pointer", fontSize: "1rem", padding: 0 }}
                 >↻</button>
             )}
             </div>
+
+            {/* The hard audit used to be Shift+click on ↻: out of reach on a
+                touch screen, and nothing said what either refresh costs. */}
+            {refreshMenuStep && (
+                <div style={{ ...cardStyle, display: "flex", flexDirection: "column", gap: "0.55rem", marginTop: "0.7rem" }}>
+                <div>
+                <button
+                type="button"
+                className="oh-tap-row"
+                onClick={() => {
+                    setRefreshMenu({ target: "", step: "" });
+                    loadSheet({ force: true });
+                }}
+                style={refreshMenuButtonStyle}
+                >Refresh</button>
+                <div style={refreshMenuHintStyle}>
+                {statSheetDefinition.custom
+                    ? "Uses 1 request."
+                    : "Uses a request only if something has changed since the last assessment."}
+                </div>
+                </div>
+                {!statSheetDefinition.custom && refreshMenuStep === "open" && (
+                    <div>
+                    <button
+                    type="button"
+                    className="oh-tap-row"
+                    onClick={() => setRefreshMenu({ target: targetCountry, step: "confirm" })}
+                    style={refreshMenuButtonStyle}
+                    >Rebuild baseline from scratch</button>
+                    <div style={refreshMenuHintStyle}>
+                    Uses 1 request and replaces the current numbers with a fresh assessment of the country as it stands now.
+                    </div>
+                    </div>
+                )}
+                {!statSheetDefinition.custom && refreshMenuStep === "confirm" && (
+                    <div>
+                    <div style={{ color: "rgba(255,255,255,0.82)", fontSize: "0.74rem", lineHeight: 1.45 }}>
+                    Rebuild this country's baseline from scratch? It uses 1 request and replaces the current numbers.
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.45rem" }}>
+                    <button
+                    type="button"
+                    className="oh-tap-row"
+                    onClick={() => {
+                        setRefreshMenu({ target: "", step: "" });
+                        loadSheet({ force: true, forceReassess: true });
+                    }}
+                    style={{ ...refreshMenuButtonStyle, borderColor: "rgba(248,113,113,0.45)", color: "#fca5a5" }}
+                    >Rebuild baseline</button>
+                    <button
+                    type="button"
+                    className="oh-tap-row"
+                    onClick={() => setRefreshMenu({ target: targetCountry, step: "open" })}
+                    style={refreshMenuButtonStyle}
+                    >Cancel</button>
+                    </div>
+                    </div>
+                )}
+                </div>
+            )}
 
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.9rem" }}>
             <button
