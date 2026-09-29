@@ -286,3 +286,39 @@ test("governing-alignment repair obeys an exclusive reference-canon boundary in 
   assert.equal(result.proposals[0].proposal.sourceAsOf, undefined, "scenario-derived governing alignment must not masquerade as target-date external evidence");
   assert.equal(result.proposals[0].proposal.referenceDates, undefined);
 });
+
+test("an alignment retry is told what the previous attempt got wrong", async () => {
+  const prompts = [];
+  const result = await generatePoliticalGoverningAlignmentRepairCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: { "Republic X": electoralActor() } },
+    generatedAt: fixedNow,
+    maxAttempts: 2,
+    callModel: async (_system, history) => {
+      prompts.push(String(history?.at(-1)?.parts?.[0]?.text ?? ""));
+      return { toolInput: { alignments: [{ polityKey: "Republic X", confidence: "high", alignmentJson: "{\"rulingPartyIds\":[\"ghost\"]}" }] } };
+    },
+  });
+  assert.equal(prompts.length, 2);
+  assert.doesNotMatch(prompts[0], /PREVIOUS ATTEMPT VALIDATION ERRORS/);
+  assert.match(prompts[1], /PREVIOUS ATTEMPT VALIDATION ERRORS — correct these exactly:\n- alignmentJson references unknown party id ghost/);
+  assert.deepEqual(result.failures[0].errors, ["alignmentJson references unknown party id ghost"]);
+});
+
+test("errors carried in from an earlier one-call attempt reach the first prompt", async () => {
+  let prompt = "";
+  await generatePoliticalGoverningAlignmentRepairCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: { "Republic X": electoralActor() } },
+    generatedAt: fixedNow,
+    maxAttempts: 1,
+    retryErrorsByPolity: { "Republic X": ["alignmentJson references unknown party id ghost"] },
+    callModel: async (_system, history) => {
+      prompt = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { alignments: [{ polityKey: "Republic X", confidence: "high", alignmentJson: "{\"rulingPartyIds\":[\"a\"]}" }] } };
+    },
+  });
+  assert.match(prompt, /PREVIOUS ATTEMPT VALIDATION ERRORS — correct these exactly:\n- alignmentJson references unknown party id ghost/);
+});

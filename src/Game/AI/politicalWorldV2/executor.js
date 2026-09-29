@@ -309,6 +309,7 @@ export const createPoliticalWorldV2Executor = ({
         behaviorallyCompleteStandard: true,
         requireRepresentationCoverage: true,
         retryErrorsByPolity: checkpoint?.retryContext?.politicalActor || {},
+        politicalSystemLocksByPolity: checkpoint?.retryContext?.politicalSystemLocks || {},
         callModel: trackedCallModel,
         signal,
       });
@@ -335,6 +336,7 @@ export const createPoliticalWorldV2Executor = ({
         scenarioContext: inputs?.scenarioContext,
         contextByPolity: inputs?.contextByPolity || {},
         maxAttempts: 1,
+        retryErrorsByPolity: checkpoint?.retryContext?.governingAlignment || {},
         callModel: trackedCallModel,
         signal,
       });
@@ -593,7 +595,12 @@ export const createPoliticalWorldV2Executor = ({
       const applied = applyPoliticalGenerationToWorld(stagedWorld, result.generation, scenarioDate, { fillEmptyGovernmentPartyRefs: true });
       stagedWorld = applied.world;
       const stagingRejectedPolities = unique(applied.errors.map((entry) => clean(entry?.polityKey)).filter(Boolean));
-      if (stagingRejectedPolities.length) result.stagingRejectedPolities = stagingRejectedPolities;
+      if (stagingRejectedPolities.length) {
+        result.stagingRejectedPolities = stagingRejectedPolities;
+        result.stagingErrorsByPolity = Object.fromEntries(applied.errors
+          .map((entry) => [clean(entry?.polityKey), array(entry?.errors).map(clean).filter(Boolean).slice(0, 8)])
+          .filter(([polityKey]) => Boolean(polityKey)));
+      }
       newJobs.push(...repairJobsFor({ checkpoint, parent: job, type: "governing-alignment", targets: unique([...array(result.unresolvedPolities), ...stagingRejectedPolities]), depth, maxDepth: 3, chunkSize: depth === 0 ? 8 : depth === 1 ? 4 : 2 }));
     }
 

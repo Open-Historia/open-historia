@@ -3574,6 +3574,10 @@ export const generatePoliticalWorldProposalsCore = async ({
   // Carry native validation feedback across those external attempts so a retry
   // is actually corrective instead of asking the model the same question again.
   retryErrorsByPolity = {},
+  // The political-system fields that already passed validation on an earlier
+  // external attempt, keyed by polity; returned again for polities still
+  // unresolved so the next one-call attempt keeps them.
+  politicalSystemLocksByPolity = {},
   callModel,
   generatedAt = () => new Date().toISOString(),
   signal,
@@ -3609,6 +3613,7 @@ export const generatePoliticalWorldProposalsCore = async ({
   const totalGenerationBatches = regularBatches.length + fastBatches.length;
   const fastNativeFallbackPolities = new Set();
   let fastModelCalls = 0;
+  const retainedPoliticalSystemLocks = {};
 
   for (const [batchIndex, initialItems] of regularBatches.entries()) {
     let unresolved = [...initialItems];
@@ -3617,7 +3622,10 @@ export const generatePoliticalWorldProposalsCore = async ({
         ? retryErrorsByPolity[item.polityKey].map((error) => clean(error)).filter(Boolean).slice(0, 8)
         : []])
       .filter(([, errors]) => errors.length));
-    const politicalSystemLocks = {};
+    const politicalSystemLocks = Object.fromEntries(initialItems
+      .map((item) => [item.polityKey, politicalSystemLocksByPolity?.[item.polityKey]])
+      .filter(([, lock]) => isRetryPoliticalSystemLock(lock))
+      .map(([polityKey, lock]) => [polityKey, clone(lock)]));
     const acceptedKeys = new Set();
     let attempts = 0;
 
@@ -3727,6 +3735,7 @@ export const generatePoliticalWorldProposalsCore = async ({
         needs: [...item.needs],
         errors: [...(previousErrors[item.polityKey] ?? ["Political generation did not produce a valid proposal"])],
       });
+      if (politicalSystemLocks[item.polityKey]) retainedPoliticalSystemLocks[item.polityKey] = clone(politicalSystemLocks[item.polityKey]);
     }
     batchResults.push({
       phase: "generation",
@@ -3995,6 +4004,7 @@ export const generatePoliticalWorldProposalsCore = async ({
     },
     generatedPolities: finalAccepted.length,
     failedPolities: finalFailures.length,
+    politicalSystemLocksByPolity: retainedPoliticalSystemLocks,
   };
 };
 

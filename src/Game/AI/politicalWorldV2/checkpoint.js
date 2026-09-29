@@ -126,7 +126,7 @@ export const createPoliticalWorldV2Checkpoint = ({
   attempts: {},
   // Validation feedback that must survive one-call resumable attempts. This is
   // not canon; it only helps the next bounded provider request correct itself.
-  retryContext: { politicalActor: {}, governingAlignment: {} },
+  retryContext: { politicalActor: {}, governingAlignment: {}, politicalSystemLocks: {} },
   generationEntriesByPolity: {},
   warnings: [],
   currentTask: null,
@@ -203,6 +203,7 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
   next.retryContext = {
     politicalActor: object(next?.retryContext?.politicalActor),
     governingAlignment: object(next?.retryContext?.governingAlignment),
+    politicalSystemLocks: object(next?.retryContext?.politicalSystemLocks),
   };
   next.generationEntriesByPolity = object(next.generationEntriesByPolity);
   next.warnings = array(next.warnings).map(clean).filter(Boolean);

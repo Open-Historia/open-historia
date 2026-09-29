@@ -4216,3 +4216,24 @@ test("electoral party influenceEstimate is recovered as generated support instea
   ]);
   assert.ok(parties.every((party) => party.influence === undefined));
 });
+
+test("a political-system lock from an earlier one-call attempt is honoured and handed back while unresolved", async () => {
+  let promptText = "";
+  const lock = { type: "presidential_republic", representation: "electoral" };
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: false,
+    politicalSystemLocksByPolity: { "Republic X": lock, "Not Requested": lock },
+    callModel: async (_system, history) => {
+      promptText = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { proposals: [] } };
+    },
+  });
+  assert.match(promptText, /CORRECTIVE RETRY POLITICAL SYSTEM LOCK \(FIELD LEVEL\): type=presidential_republic; representation=electoral/);
+  assert.equal(result.failedPolities, 1);
+  assert.deepEqual(result.politicalSystemLocksByPolity, { "Republic X": lock });
+});

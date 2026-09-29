@@ -320,6 +320,48 @@ test("the session budget counts calls across tasks and stops exactly at the limi
   assert.equal(result.pauseReason, "model-call-budget");
 });
 
+test("a failed governing alignment's errors are kept and sent with the next attempt", async () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.stagedWorld.politicalActors.byPolity.A = {
+    ...completeActor("A"),
+    government: { ...completeActor("A").government, rulingPartyIds: [] },
+    parties: [...completeActor("A").parties, { id: "opp", name: "Opposition Party", support: { percent: 40 }, ideology: "Conservative", publicPriorities: ["Oppose government"] }],
+  };
+  checkpoint.coverage["governing-alignment"] = ["B", "C"];
+  const prompts = [];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 2,
+    callModel: async (_system, history) => {
+      prompts.push(String(history?.at(-1)?.parts?.[0]?.text ?? ""));
+      return { toolInput: { alignments: [{ polityKey: "A", confidence: "high", alignmentJson: "{\"rulingPartyIds\":[\"ghost\"]}" }] } };
+    },
+  });
+  assert.equal(prompts.length, 2);
+  assert.doesNotMatch(prompts[0], /PREVIOUS ATTEMPT VALIDATION ERRORS/);
+  assert.match(prompts[1], /- alignmentJson references unknown party id ghost/);
+  assert.deepEqual(result.retryContext.governingAlignment.A, ["alignmentJson references unknown party id ghost"]);
+  assert.equal(result.attempts["governing-alignment:A"], 2);
+});
+
+test("political-system locks reported for an unresolved actor are kept for its next attempt", async () => {
+  const checkpoint = readyCheckpoint();
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.coverage["political-actor"] = ["A", "B"];
+  const lock = { type: "presidential_republic", representation: "electoral" };
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 1,
+    createExecutor: scriptedExecutor({
+      result: { generation: { proposals: [], failures: [{ polityKey: "C", errors: ["parties must not be empty"] }], politicalSystemLocksByPolity: { C: lock } }, acceptedPolities: [], unresolvedPolities: ["C"] },
+    }),
+  });
+  assert.deepEqual(result.retryContext.politicalSystemLocks, { C: lock });
+  assert.deepEqual(result.retryContext.politicalActor.C, ["parties must not be empty"]);
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

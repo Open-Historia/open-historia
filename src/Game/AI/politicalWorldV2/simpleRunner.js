@@ -36,11 +36,27 @@ const retryBucket = (checkpoint, key) => {
   return checkpoint.retryContext[key];
 };
 
-const actorFailureErrors = (result, polity) => {
+const failureErrors = (result, polity, fallback) => {
   const failure = array(result?.generation?.failures).find((entry) => clean(entry?.polityKey) === polity);
   const staging = result?.stagingErrorsByPolity?.[polity];
   const errors = uniqueClean([...(array(failure?.errors)), ...(array(staging))]);
-  return errors.length ? errors.slice(0, 8) : ["Previous bounded generation attempt did not produce a valid canonical Political Actor for this polity."];
+  return errors.length ? errors.slice(0, 8) : [fallback];
+};
+
+const actorFailureErrors = (result, polity) => failureErrors(result, polity, "Previous bounded generation attempt did not produce a valid canonical Political Actor for this polity.");
+const alignmentFailureErrors = (result, polity) => failureErrors(result, polity, "Previous bounded attempt did not resolve a valid ruling party from the supplied roster for this polity.");
+
+// Political-system fields that passed validation stay locked across one-call
+// attempts. A result that reports its locks is authoritative for its targets.
+const storePoliticalSystemLocks = (checkpoint, result, accepted, unresolved) => {
+  const locks = retryBucket(checkpoint, "politicalSystemLocks");
+  for (const polity of accepted) delete locks[polity];
+  const reported = result?.generation?.politicalSystemLocksByPolity;
+  if (!reported || typeof reported !== "object") return;
+  for (const polity of unresolved) {
+    if (reported[polity] && typeof reported[polity] === "object") locks[polity] = clone(reported[polity]);
+    else delete locks[polity];
+  }
 };
 
 const recordCoverage = (checkpoint, key, targets) => {
@@ -102,6 +118,8 @@ const invalidateDownstreamActorCoverage = (checkpoint, targets) => {
   clearAttempts(checkpoint, "historical-verification", accepted);
   clearAttempts(checkpoint, "temporal-sentinel", accepted);
   for (const polity of accepted) delete checkpoint.verification?.challenges?.[polity];
+  // Alignment feedback named the old actor's party roster.
+  for (const polity of accepted) delete checkpoint.retryContext?.governingAlignment?.[polity];
 };
 
 export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inputs = {}) => {
@@ -129,14 +147,19 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
     const feedback = retryBucket(next, "politicalActor");
     for (const polity of accepted) delete feedback[polity];
     for (const polity of unresolved) feedback[polity] = actorFailureErrors(result, polity);
+    storePoliticalSystemLocks(next, result, accepted, unresolved);
     bumpAttempts(next, task.type, unresolved);
   } else if (task.type === "governing-alignment") {
     const declaredAccepted = new Set(array(result?.acceptedPolities).map(clean).filter(Boolean));
     const declaredRejected = new Set(uniqueClean([...array(result?.unresolvedPolities), ...array(result?.stagingRejectedPolities)]));
     const accepted = taskTargets(task).filter((polity) => declaredAccepted.has(polity) && !declaredRejected.has(polity) && next.stagedWorld?.politicalActors?.byPolity?.[polity]);
+    const unresolved = taskTargets(task).filter((polity) => !accepted.includes(polity));
     recordCoverage(next, "governing-alignment", accepted);
     clearAttempts(next, task.type, accepted);
-    bumpAttempts(next, task.type, taskTargets(task).filter((polity) => !accepted.includes(polity)));
+    const feedback = retryBucket(next, "governingAlignment");
+    for (const polity of accepted) delete feedback[polity];
+    for (const polity of unresolved) feedback[polity] = alignmentFailureErrors(result, polity);
+    bumpAttempts(next, task.type, unresolved);
   } else if (task.type === "institution-discovery") {
     next.stages.institutionDiscovery = "complete";
     clearAttempts(next, task.type, []);
