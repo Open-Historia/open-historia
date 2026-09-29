@@ -69,9 +69,18 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const regionCache = useMemo(() => createRegionCache(), [api, regionEpoch]);
 
+  // Worked out again on every document edit, but handed on as the same object
+  // while every status stays as it was, so the markup is not redrawn for an
+  // edit that changes none of them.
+  const statusesRef = useRef({});
   const statuses = useMemo(() => {
     if (!api || !review) return {};
-    return Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, ctx, { renames, cache: regionCache })]));
+    const next = Object.fromEntries(changes.map((change) => [change.id, mapChangeStatus(change, ctx, { renames, cache: regionCache })]));
+    const previous = statusesRef.current;
+    const ids = Object.keys(next);
+    if (ids.length === Object.keys(previous).length && ids.every((id) => previous[id] === next[id])) return previous;
+    statusesRef.current = next;
+    return next;
   }, [api, review, changes, ctx, renames, regionCache]);
 
   const decide = useCallback((ids, kind) => {
