@@ -478,6 +478,15 @@ test("proposals that only open a vote ask lightly, and minor ones not at all", (
   assert.equal(institutionLifecycleConfirmText(institution, "reinstate", "Republic of Estonia"), "");
 });
 
+test("a charter that forbids dissolution or expulsion promises no vote on it", () => {
+  const institution = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Baltic Compact", minimumFoundingMembers: 1, dissolutionMode: "not-permitted", expulsionMode: "not-permitted" },
+  }).institution;
+  assert.equal(institutionLifecycleConfirmText(institution, "dissolve"), "", "the command refuses, and says so");
+  assert.equal(institutionLifecycleConfirmText(institution, "expel", "Republic of Estonia"), "");
+});
+
 test("a portfolio lists current memberships before former ones, each by name", () => {
   const world = {
     ...baseWorld(),

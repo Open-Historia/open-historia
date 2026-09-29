@@ -541,8 +541,11 @@ export const institutionLifecycleConfirmText = (institution = {}, type = "", pol
     if (days > 1) return `Withdraw from ${name}? You will leave after ${days} days' notice, and rejoining means applying for membership again.`;
     return `Withdraw from ${name}? You will leave immediately, and rejoining means applying for membership again.`;
   }
-  if (kind === "dissolve") return `Propose dissolving ${name}? The members will vote on it.`;
-  if (kind === "expel" && clean(polity)) return `Propose expelling ${clean(polity)} from ${name}? The members will vote on it.`;
+  // A charter that forbids dissolution or expulsion holds no vote on it: the
+  // command refuses and says why, so there is nothing to ask.
+  const forbidden = (rule) => lower(institution?.charter?.lifecycle?.[rule]?.mode) === "not-permitted";
+  if (kind === "dissolve") return forbidden("dissolution") ? "" : `Propose dissolving ${name}? The members will vote on it.`;
+  if (kind === "expel" && clean(polity) && !forbidden("expulsion")) return `Propose expelling ${clean(polity)} from ${name}? The members will vote on it.`;
   return "";
 };
 
