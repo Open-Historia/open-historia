@@ -37,8 +37,8 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 
 | Channel branch | What it feeds | CI trigger | Reaches players via |
 |---|---|---|---|
-| `main` | Stable | `app-bundle.yml` (push) → `app-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages; `android-apk.yml` (dispatch) → `android` release | Desktop stable download; the live website; the Android app |
-| `beta` | Beta testers | `app-bundle.yml` (push) → `app-beta` release; `android-apk-beta.yml` (dispatch) → `android-beta` release | Desktop beta download; the Android beta app |
+| `main` | Stable | `desktop-installer.yml` (dispatch / `desktop-v*` tag) → `desktop-stable` release; `deploy-site.yml` / admin-panel button → Cloudflare Pages; `android-apk.yml` (dispatch) → `android` release | The desktop app; the live website; the Android app |
+| `beta` | Beta testers | `desktop-beta.yml` (dispatch / `desktop-beta-v*` tag) → `desktop-beta` pre-release; `android-apk-beta.yml` (dispatch) → `android-beta` release | The desktop beta app; the Android beta app |
 | `alpha` | Experimental staging | *(no push-triggered workflow)* | Only reaches users when its work is **bridged** into `beta`/`main` |
 
 `alpha` is a staging branch with **no CI publish trigger of its own**. Work on `alpha` does not reach any installed app or the website until it is bridged forward into `beta` (then `main`).
@@ -65,8 +65,8 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 
 | Release tag | Built by | From | Asset(s) | Prerelease? | For |
 |---|---|---|---|---|---|
-| `app-stable` | `app-bundle.yml` | push to `main` | `Open-Historia.zip` (source + map data) | no (`--latest=false`) | One-download desktop install, stable |
-| `app-beta` | `app-bundle.yml` | push to `beta` | `Open-Historia.zip` | no (`--latest=false`) | One-download desktop install, beta |
+| `desktop-stable` | `desktop-installer.yml` (§4.1) | `workflow_dispatch` from `main` / `desktop-v*` tag | `Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, the `latest.yml` / `latest-mac.yml` / `latest-linux.yml` update feeds, `latest.json` | no | The desktop app; it updates itself from here (not on macOS) |
+| `desktop-beta` | `desktop-beta.yml` (§4.1) | `workflow_dispatch` from `beta` / `desktop-beta-v*` tag | The same set named `Open-Historia-Beta-*` | **yes** (`--prerelease`) | "Open Historia Beta", a second desktop app beside the stable one, with its own saves; it updates itself from here |
 | `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (`io.github.arkniem.paxhistoria`); it self-updates from here |
 | `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (`io.github.arkniem.paxhistoria.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
 | `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
@@ -77,21 +77,24 @@ The APK asset names are contractual — they, and the two Android application id
 
 ## 4. GitHub Actions workflows (`.github/workflows/`)
 
-Three workflow files live on `main`. `android-apk-beta.yml` (§4.3) is there too, only so its Run workflow entry appears; it refuses to run from anything but `beta`.
+`desktop-installer.yml`, `android-apk.yml`, `deploy-site.yml` and `tests.yml` are the stable channel's workflows. `desktop-beta.yml` and `android-apk-beta.yml` (§4.3) are on `main` too, only so their Run workflow entries appear; each refuses to run from anything but `beta`.
 
-### 4.1 `app-bundle.yml` — full-app one-download bundle
+### 4.1 `desktop-installer.yml` and `desktop-beta.yml` — the desktop app
 
-`.github/workflows/app-bundle.yml`. Packages the **whole app plus the world-map data** into one `Open-Historia.zip` so players install with a single download — no Git, no Git LFS, no separate map-data step.
+`.github/workflows/desktop-installer.yml`. Builds the Electron app for Windows, macOS and Linux — the client compiled here and packaged with the server — and attaches one installer per platform to the rolling `desktop-stable` release. Nothing is built on the player's machine.
 
 | Aspect | Detail |
 |---|---|
-| Triggers | `workflow_dispatch`; push to `main` or `beta` |
-| Map data | `node scripts/fetch-map-assets.mjs` writes the binaries into the tree (guarded: absent script → code-only bundle, never a failure) |
-| Assemble | `rsync` the tree into `bundle/Open-Historia/` excluding `.git`, `.github`, `node_modules`, `dist`, `bundle`; restore exec bits on the `Launch`/`Update` scripts; `zip -r` |
-| Channel pick | `github.ref_name == main` → tag `app-stable`; else → `app-beta` (`.github/workflows/app-bundle.yml:57`) |
-| Publish | `gh release create <tag> --latest=false … || gh release edit …`; then `gh release upload <tag> Open-Historia.zip --clobber` |
+| Triggers | `workflow_dispatch` (the `tag` input, default `desktop-stable`; clear it to build without publishing); push tag `desktop-v*` |
+| Matrix | `windows-latest` / `macos-latest` / `ubuntu-latest`, `fail-fast: false`; each installer must be built on its own OS |
+| Version | `electron/build-id.json` gets the run id; `package.json` `version` becomes `0.0.<run_number>`, which is what `electron-updater` compares |
+| Build | `npm ci` → `npm run build` → `npx electron-builder <--win|--mac|--linux> --publish never` (unsigned: `CSC_IDENTITY_AUTO_DISCOVERY: false`) |
+| Map data | Not packaged: the app runs `scripts/fetch-map-assets.mjs --ensure` on first launch (`electron/main.cjs`) |
+| Publish | `gh release create` on first use, then `gh release upload <tag> … --clobber`: the installers, the `latest*.yml` update feeds, and (from the Windows job) `latest.json` with a link per platform |
 
-Runs on **every** push to `main`/`beta` so the download never goes stale. The zip's launchers (`Launch Open Historia.{bat,command,sh}`) install deps, build, fetch map assets, and start the game at `http://localhost:3000`.
+`.github/workflows/desktop-beta.yml` is the same pipeline from `beta`, with the channel stamped (`scripts/stamp-channel.mjs beta`), the tests run first, and `--config electron-builder.beta.yml`, which gives it its own app id, name, icon and update feed. It publishes to the `desktop-beta` pre-release (dispatch from `beta`, or a `desktop-beta-v*` tag) and installs **beside** the stable app with its own saves.
+
+These replaced `app-bundle.yml`, which zipped the source, the map data and the `Launch`/`Update` scripts into `Open-Historia.zip` on the `app-stable` / `app-beta` releases; the workflow, the scripts and both releases are gone (`b34a0e38`).
 
 ### 4.2 `android-apk.yml` — stable Android APK
 
@@ -263,9 +266,9 @@ The web game points at the registry through build-time env (`.env.web`):
 The ~200 MB world-map binaries left Git LFS (whose free 1 GB/mo org-wide bandwidth was exhausted by a handful of full checkouts, then 403'd) and now ship as assets on the `map-data` GitHub Release, whose download bandwidth is free and unmetered.
 
 - **Manifest:** `scripts/map-assets.json` — `owner`/`repo`/`release` (`Open-Historia`/`open-historia`/`map-data`) plus each asset's `path`, release `asset` name, `bytes`, and `sha256`.
-- **Fetcher:** `scripts/fetch-map-assets.mjs` makes the local tree match the manifest. Full run verifies SHA-256 and re-fetches anything missing or changed; `--ensure` trusts byte-size for speed. **Best-effort — never exits non-zero**, so it can never block a launch, update, or the `app-bundle.yml` bundle step. Downloads to a `.download` temp then atomic-renames.
+- **Fetcher:** `scripts/fetch-map-assets.mjs` makes the local tree match the manifest. Full run verifies SHA-256 and re-fetches anything missing or changed; `--ensure` trusts byte-size for speed. **Best-effort — never exits non-zero**, so it can never block a launch or an update. Downloads to a `.download` temp then atomic-renames.
 - **Name namespaces:** the manifest maps a *versioned* release asset name to a *stable* local path — e.g. `regions-seed-z8.geojson` (release) → `public/assets/regions-seed.geojson` (tree), and `default-regions-names.geojson` → `server/data/stock/regions.geojson` (the stock world every scenario without a map of its own renders on; it used to be the built-in scenario's file). The client always reads the stable path. The built-in scenario's own map is not on the release at all: it ships in the app as `server/seed/default/regions.geojson` (see [Assets](assets-and-data.md) §3).
-- **Callers:** the app launchers/updater and `app-bundle.yml` call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
+- **Callers:** the desktop app on launch (`electron/main.cjs`, `--ensure`) and anyone running from a clone call it in place of `git lfs pull`. **Never re-add these files to Git LFS.**
 
 When a map file changes: upload the new asset to the `map-data` Release, then update its `sha256` + `bytes` in `scripts/map-assets.json`.
 
@@ -302,19 +305,19 @@ It reads only from `server/seed/default`, which **is** committed (map included) 
 
 | Surface | Landing branch | Build artifact | Delivery mechanism | Player action |
 |---|---|---|---|---|
-| **Desktop (stable)** | `main` | `Open-Historia.zip` on `app-stable` | `app-bundle.yml` on push | Download zip once, or run "Update Open Historia" |
-| **Desktop (beta)** | `beta` | `Open-Historia.zip` on `app-beta` | `app-bundle.yml` on push | Download the beta zip |
+| **Desktop (stable)** | `main` | Installers on `desktop-stable` | `desktop-installer.yml` (dispatch from `main` / `desktop-v*` tag) | Install once; the app offers updates from `desktop-stable` (macOS: install the new zip by hand) |
+| **Desktop (beta)** | `beta` | `Open-Historia-Beta-*` installers on `desktop-beta` | `desktop-beta.yml` (dispatch from `beta` / `desktop-beta-v*` tag) | Install from the pre-release, beside the stable app; updates from `desktop-beta` |
 | **Android (stable)** | `main` | `open-historia.apk` on `android` | `android-apk.yml` (dispatch from `main` / `android-v*` tag) | Install once; the app self-updates from `android/latest.json` |
 | **Android (beta)** | `beta` | `open-historia-beta.apk` on `android-beta` | `android-apk-beta.yml` (dispatch from `beta` / `android-beta-v*` tag) | Install from the pre-release, beside the stable app; self-updates from `android-beta/latest.json` |
 | **Website** | `main` | `dist-site/` | Admin-panel 🚀 button → clean `upstream/main` worktree → `build:site` → `wrangler pages deploy` (or legacy `deploy-site.yml`) | Nothing — next page load |
 | **Import counter Worker** | `main` | `tools/import-counter/worker.js` | Rides the admin-panel site deploy from the same worktree | — |
 | **Registry Worker** | admin repo | `registry/worker.js` | Rides the site deploy from the admin repo dir | — |
 | **Node directory** | *runtime data* | signed JSON | Admin panel re-signs + POSTs to the registry on any node change | Live, no rebuild |
-| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` at launch/update/bundle | Downloaded on first run |
+| **Map binaries** | *manual* | Release assets | Uploaded to `map-data`; fetched by `fetch-map-assets.mjs` when the desktop app launches, and staged into the APK by `mobile/scripts/stage-map-assets.mjs` | Downloaded on first run |
 
 Key asymmetries a newcomer should internalize:
 
-- **A push to `main` or `beta` re-ships the desktop zip automatically; a push does *not* ship the website or the APK.** The website waits for a maintainer to click 🚀 (or dispatch `deploy-site.yml`); the APK waits for a `workflow_dispatch` or an `android-v*` tag.
+- **A push to `main` or `beta` ships nothing to installed apps.** The desktop installers wait for a `workflow_dispatch` or a `desktop-v*` / `desktop-beta-v*` tag, the APKs for a dispatch or an `android-v*` / `android-beta-v*` tag, and the website for a maintainer to click 🚀 (or for `deploy-site.yml`, which a push to `main` still triggers).
 - **`alpha` ships nothing on its own** — it reaches users only once bridged into `beta`/`main`.
 - **Worker code and website move together** through the admin-panel deploy engine, precisely to stop merged worker code from sitting undeployed.
 - **Map data is decoupled from code** — a code release does not re-cut the map; a map change is a manual Release upload + manifest edit.

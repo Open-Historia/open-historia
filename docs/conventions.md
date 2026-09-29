@@ -37,12 +37,14 @@ The repo ships to players through **rolling per-channel GitHub Releases**, drive
 
 | Branch | Built by | Produces |
 |--------|----------|----------|
-| `main` | `.github/workflows/app-bundle.yml` | `Open-Historia.zip` on the **`app-stable`** release (stable desktop bundle). |
+| `main` | `.github/workflows/desktop-installer.yml` | The Windows, macOS and Linux installers (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`) and their update feeds on the **`desktop-stable`** release (run from the Actions tab, or push a `desktop-v*` tag). |
 | `main` | `.github/workflows/deploy-site.yml` | Deploys **openhistoria.com** (Cloudflare Pages) via `npm run build:site`. |
-| `beta` | `.github/workflows/app-bundle.yml` | `Open-Historia.zip` on the **`app-beta`** release. |
-| (any) `mobile/**` change | `.github/workflows/android-apk.yml` | `open-historia.apk` on the **`android`** release (run from the Actions tab, or push an `android-v*` tag). |
+| `beta` | `.github/workflows/desktop-beta.yml` | The "Open Historia Beta" installers on the **`desktop-beta`** pre-release, a separate app beside the stable one (run from the Actions tab on `beta`, or push a `desktop-beta-v*` tag). |
+| `main` | `.github/workflows/android-apk.yml` | `open-historia.apk` on the **`android`** release (run from the Actions tab on `main`, or push an `android-v*` tag). |
+| `beta` | `.github/workflows/android-apk-beta.yml` | `open-historia-beta.apk` on the **`android-beta`** pre-release (run from the Actions tab on `beta`, or push an `android-beta-v*` tag). |
+| PRs into `beta`/`main`, pushes to `beta` | `.github/workflows/tests.yml` | Runs `npm test`; publishes nothing. |
 
-`app-bundle.yml` runs on **every push to `main` and `beta`**, so the download never goes stale (`.github/workflows/app-bundle.yml:13-15`). It picks the channel from `github.ref_name`: `main → app-stable`, else `app-beta` (`app-bundle.yml:57-68`).
+No installer is built on a push: each release is cut by a dispatch or a tag. The installers carry the client prebuilt and the server inside Electron; the world map is not packaged and downloads on first launch (`electron/main.cjs` runs `scripts/fetch-map-assets.mjs --ensure`). The zip bundle and its `Launch`/`Update` scripts (`app-bundle.yml`, the `app-stable`/`app-beta` releases) were retired in `b34a0e38`.
 
 `deploy-site.yml` skips its build for `**.md`, `mobile/**`, and `.github/**` changes (docs/app can't change what the site serves) and refuses to deploy any file over Cloudflare Pages' 25 MiB limit (`deploy-site.yml:21-27`, `:58-68`).
 
@@ -126,7 +128,7 @@ Note ESLint only targets `.ts`/`.tsx` — the many `.jsx`/`.js` files are not li
 
 ### Line endings
 
-`.gitattributes` forces **LF** on `*.sh` and `*.command` — "CRLF breaks bash on Linux/macOS." Keep the launcher scripts LF; don't let an editor rewrite them to CRLF.
+`.gitattributes` forces **LF** on `*.sh` and `*.command` — "CRLF breaks bash on Linux/macOS." Keep any shell script LF; don't let an editor rewrite it to CRLF.
 
 ---
 
@@ -178,9 +180,9 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the 
 
 `--mode web` builds the browser-playable website; **any other mode builds the local/desktop app** (`vite.config.ts:63-64`). The web flag is compiled to a literal (`import.meta.env.VITE_OH_WEB`) so Rollup dead-code-eliminates the web runtime out of the desktop build (`vite.config.ts:66-76`).
 
-### The desktop launcher scripts
+### The desktop app
 
-`Launch Open Historia.{bat,command,sh}` are the player-facing entry points: they check Node, run `scripts/fetch-map-assets.mjs`, `npm install`, `npm run build`, and start the server. `Update Open Historia.*` re-pulls while preserving saves/scenarios/map data. Keep them LF (§5).
+Players install the Electron app from the `desktop-stable` release (§2); there are no launcher or update scripts any more. `npm run dist:win` (and the other `dist:*` scripts) builds an installer locally the way `desktop-installer.yml` does. The app downloads the world map on first launch with `scripts/fetch-map-assets.mjs` and, on Windows and Linux, updates itself from its release's `latest*.yml` feed (`electron-updater`).
 
 ---
 
@@ -211,8 +213,8 @@ These strings are wired into external contracts (release assets players download
 | **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
 | **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
 | **`android`** (rolling release tag) | `android-apk.yml:74-76` | The APK is republished to this single rolling release; the app updates itself from it. |
-| **`app-stable` / `app-beta`** (release tags) | `app-bundle.yml:57-68` | The `Open-Historia.zip` download tags for the two desktop channels. |
-| **`Open-Historia.zip`** (bundle asset name) | `app-bundle.yml:54,84`; README | The one-download full app; linked by name. |
+| **`desktop-stable` / `desktop-beta`** (release tags) | `package.json` `build.publish`, `electron-builder.beta.yml` `publish`, `desktop-installer.yml`, `desktop-beta.yml` | The installed apps read their update feed (`latest*.yml`) from these URLs, which are baked into every install; the README links `desktop-stable`. |
+| **Installer asset names** (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, and the `Open-Historia-Beta-*` set) | `artifactName` in `package.json` `build` and `electron-builder.beta.yml`; `latest.json` in both desktop workflows | The update feeds and `latest.json` name them, and the README and site link them by name. |
 | **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
 | **`app.paxhistoria`** (Capacitor `hostname`) | `mobile/capacitor.config.json:7` | The WebView origin the Android app serves under. |
 | **`Build: N`** convention | `android-apk.yml:32-35,72` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |

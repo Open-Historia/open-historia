@@ -111,7 +111,7 @@ The web build bundles the same map: `scripts/seed-web-defaults.mjs` copies it be
 
 ### `scripts/fetch-map-assets.mjs`
 
-Makes the local tree match the manifest. Called by the launcher and updater **in place of** `git lfs pull`.
+Makes the local tree match the manifest. Called by the desktop app on launch (`electron/main.cjs`, `--ensure`) and run by hand after a clone, **in place of** `git lfs pull`.
 
 | Mode | Command | Behaviour |
 |---|---|---|

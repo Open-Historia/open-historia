@@ -32,7 +32,7 @@ All three run the identical `src/` client. What changes is (a) the `VITE_OH_WEB`
 
 | Variant | Build command | `/api` backend | Asset storage | Distribution |
 |---|---|---|---|---|
-| **Desktop download** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/` | Local Express server `server/server.js` on `localhost:3000` | Files under `server/data/` (JSON manifests + binary assets) | Zip + launcher scripts (`Launch Open Historia.*`) |
+| **Desktop app** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/`, packaged with `server/` by electron-builder | Express server `server/server.js`, run inside the Electron process on `localhost:3000` | Files under the data directory (`server/data/` from a clone; the app's user-data folder in the installed app, via `OH_DATA_DIR`) | Installers on the `desktop-stable` release (`desktop-installer.yml`); see [delivery](delivery-and-deploy.md) §4.1 |
 | **Web build** (the hosted website `openhistoria.com/play/`) | `npm run build:web` / `build:site` → `dist-web/` | **No server** — a `fetch()` interceptor answers `/api/*` from IndexedDB | IndexedDB in the browser; map tiles from the registry Worker / content nodes | Cloudflare Pages |
 | **Android app** | client from `dist-android/` (`npm run build:android`) inside the APK, with the world map under `www/assets` | None — the web backend (`src/runtime/web/*`) answers `/api/*` in the page | IndexedDB `open-historia-web`; map data read from the APK by HTTP Range | Capacitor APK (`mobile/`) — see [mobile.md](mobile.md) |
 
@@ -203,7 +203,7 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
 | `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |
-| `/api/server/shutdown` | POST | Exits the process (no button in the beta UI any more; scripts and the launcher) |
+| `/api/server/shutdown` | POST | Exits the process (no button in the UI any more; for scripts) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 
 **Security middleware** (`server/server.js:73`, `:112`): blanket permissive CORS (so the Android WebView's cross-origin *probe* works) but state-changing writes are blocked unless same-origin or loopback (`crossOriginWriteAllowed` in `security.js`); override with `OH_ALLOW_CROSS_ORIGIN=1`. See [Server & security](server.md).

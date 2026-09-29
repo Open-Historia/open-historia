@@ -76,22 +76,17 @@ desktop app below needs no such setup.
 
 ### Desktop (offline, single-player)
 
-Download **[`Open-Historia.zip`](https://github.com/Open-Historia/open-historia/releases/tag/app-stable)**
-(~186 MB — code *and* all map data), unzip it anywhere, then:
+Download the installer for your platform from the
+**[Open Historia for Desktop release](https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable)**, then:
 
 - **Windows:** run **`Open-Historia-Setup.exe`**, then open Open Historia from the Start Menu
 - **macOS:** unzip and drag **Open Historia** to Applications (first run: right-click -> *Open*)
 - **Linux:** `chmod +x Open-Historia-x86_64.AppImage` and run it
 
-The launcher checks Node.js, downloads the map data, installs dependencies, builds,
-and opens the game. To update an existing install later, run the matching
-newest installer from the downloads page and run it over the top - your saves
-while preserving your saves, scenarios, and map data.
-
-> [!TIP]
-> Run the launcher **normally** — it does not need (and works better without)
-> administrator rights: an elevated window gets the admin account's environment,
-> which can hide a Node.js that was installed for your own account.
+The app comes ready to run; the world map downloads the first time it opens. On
+Windows and Linux it offers new versions itself. On macOS, or to update by hand,
+install the newest download from the same release over the top: your saves,
+scenarios and map data are kept.
 
 
 #### Android app
@@ -194,8 +189,9 @@ OH_HOST=192.168.1.20 node server/server.js # one interface only
 > **Note:** the large map binaries (`*.pmtiles`, `public/assets/*-seed.*`, and the stock
 > world `server/data/stock/regions.geojson`) are **not** in the repo — they are
 > hosted as [GitHub Release assets](https://github.com/Open-Historia/open-historia/releases/tag/map-data)
-> and downloaded by `scripts/fetch-map-assets.mjs`. The launcher script for your platform
-> runs this for you automatically, so a plain ZIP download works too — no Git LFS needed.
+> and downloaded by `scripts/fetch-map-assets.mjs`. Run it once after cloning
+> (`node scripts/fetch-map-assets.mjs`); the desktop app runs it for you on first
+> launch — no Git LFS needed.
 
 ---
 
