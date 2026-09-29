@@ -3,6 +3,7 @@ import {
   PMTILES_ARCHIVES,
   TERRAIN_TILE_TEMPLATE,
   buildTileUrl,
+  deleteRuntimeJsonByPrefix,
   esriTileTemplate,
   loadCountryNames,
   readJson,
@@ -11,7 +12,6 @@ import {
   warmPmtilesArchive,
   warmRemoteResources,
 } from "./assets.js";
-import { warmCountryLabelCollections } from "./countryLabels.js";
 import { warmsWholeMapArchives } from "./deviceProfile.js";
 import { logDebugEvent } from "./debugLog.js";
 
@@ -171,14 +171,6 @@ const STARTUP_TASKS = [
     run: () => loadCountryNames(),
   },
   {
-    id: "country-labels",
-    label: "Building country labels",
-    weight: 14,
-    // Same z0-only read as country-index — see the note there.
-    deps: [],
-    run: () => warmCountryLabelCollections(),
-  },
-  {
     id: "cities",
     label: "Caching city layer",
     weight: 10,
@@ -294,6 +286,13 @@ export const runStartupPreload = async ({
   };
 
   publish("Preparing the world");
+
+  // The stock modern-country label atlas ("country-labels-v3-…") was built
+  // here on every launch and cached per language and owner set, though no
+  // served world ever draws it (every world is a custom one). The task is gone;
+  // this clears what earlier versions left in Cache Storage. Off the startup
+  // path, and a no-op once they are gone.
+  void deleteRuntimeJsonByPrefix("country-labels-").catch(() => {});
 
   // One controller for the whole gating set rather than one per task: with tasks
   // running concurrently there is no "remaining budget for this step" left to

@@ -19,6 +19,7 @@ const world = fs.readFileSync(new URL("../World.jsx", import.meta.url), "utf8");
 const natGeoDarkStyle = fs.readFileSync(new URL("../natGeoDarkStyle.js", import.meta.url), "utf8");
 const mapLayerOrder = fs.readFileSync(new URL("../mapLayerOrder.js", import.meta.url), "utf8");
 const runtimeAssets = fs.readFileSync(new URL("../../../runtime/assets.js", import.meta.url), "utf8");
+const preload = fs.readFileSync(new URL("../../../runtime/preload.js", import.meta.url), "utf8");
 const editorBasemaps = fs.readFileSync(new URL("../../../Editor/basemaps.js", import.meta.url), "utf8");
 
 // These are intentionally source-level architecture guards. They catch accidental
@@ -312,8 +313,13 @@ test("mid-campaign PTR updates publish immediately, cancel stale solves, and ref
   assert.doesNotMatch(polityTextLayer, /\[debugBaseline, enabled, fontFamilies, haloColor, map, mode, onStatusChange, records, textColor\]/);
 });
 
-test("custom political maps do not build an unused stock-country label atlas", () => {
-  assert.match(nations, /if \(customFlag\) \{[\s\S]*setPointLabelData\(EMPTY_FEATURE_COLLECTION\)[\s\S]*setCurvedLabelData\(EMPTY_FEATURE_COLLECTION\)/);
+test("no map builds the stock-country label atlas no served world draws", () => {
+  // Every served world is a custom one; the stock label layers stay only as
+  // empty anchors, and startup no longer builds their atlas.
+  assert.doesNotMatch(nations, /loadCountryLabelCollections|setPointLabelData|setCurvedLabelData/);
+  assert.match(nations, /id="country-curved-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.match(nations, /id="country-point-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.doesNotMatch(preload, /warmCountryLabelCollections|id: "country-labels"/);
 });
 
 test("dirty boundary filtering is owner-list based rather than capped to four overlapping owners", () => {

@@ -9,8 +9,6 @@
 // This list is the single current-renderer authority for bottom -> top order.
 export const MAP_LAYER_ORDER = [
   // Political body / local geography.
-  "countries-fill",
-  "countries-outline",
   "custom-regions-fill-far",
   "custom-regions-repair-fill-far",
   "regions-fill",

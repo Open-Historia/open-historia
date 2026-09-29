@@ -146,7 +146,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `gameState.js` | `GAME_DEFAULTS` + `WORLD_DEFAULTS`; read/write of the per-game `game.json` and `world.json` runtime state | [World state](world-state.md) |
 | `preload.js` | The 8 startup warm tasks + progress model. §3c |
 | `StartupScreen.jsx` / `ErrorBoundary.jsx` | Loading overlay; render-error recovery |
-| `countryLabels.js`, `countryFlags.js`, `countryTags.js`, `countryNames`/`polityNames.js` | Country label/flag/tag/name resolution from `countries.pmtiles` + overrides |
+| `countryLabels.js`, `countryFlags.js`, `countryTags.js`, `countryNames`/`polityNames.js` | Country flag/tag/name resolution from `countries.pmtiles` + overrides; the picker's coarse region shapes |
 | `communityBasemaps.js`, `communityFlags.js`, `basemapLibrary.js`, `flagLibrary.js` | Community/basemap/flag catalogs |
 | `mapSettings.js`, `difficulty.js`, `scenarios.js` | Map display settings, difficulty directives, scenario helpers |
 | `translator.js`, `i18n.js` | Live UI translation + language directives |

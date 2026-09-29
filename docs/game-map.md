@@ -45,7 +45,7 @@ Fields `useWorldState` derives from `world.json`:
 | `markers` | `state.markers` | `MarkersLayer.jsx` |
 | `labelFont` / `labelHaloColor` / `labelTextColor` | same | Label styling |
 
-> **Note on the `customRegions` flag:** `readRuntimeJsonAsset` / `normalizeRuntimeWorld` forces `customRegions:true` onto every world it serves. In practice the game is *always* on the custom render path (`customFlag` true); the stock-country path (`showStockCountries`) is effectively dead — see [§4](#4-owner-colouring--the-single-resolver) and the `countries-source` note.
+> **Note on the `customRegions` flag:** `normalizeRuntimeWorld` (`server/libraryStore.js`, and its twin in `src/runtime/web/models.js`) forces `customRegions:true` onto every world it serves, so the game is *always* on the custom render path (`customFlag` true once the world is known). The stock-country path — a `countries-source` fill keyed on GADM codes and the modern-country label atlas from `countryLabels.js` — never drew and has been removed; `countries.pmtiles` stays for the country index and bounds.
 
 ---
 
@@ -143,15 +143,14 @@ Two constants (`World.jsx:44`) give the image-source corners:
 
 | Source id | Type | Data | Gated on | Layers |
 |---|---|---|---|---|
-| `countries-source` | vector | `PMTILES_PROTOCOL_URLS.countries`, `maxzoom 8` | `!customFlag` | `countries-fill`, `countries-outline` |
-| `regions-source` | vector | `PMTILES_PROTOCOL_URLS.regions`, `maxzoom 8` | **never gated** | `regions-fill`, `regions-disputed`, `regions-outline` |
+| `regions-source` | vector | `PMTILES_PROTOCOL_URLS.regions`, `maxzoom 8` | `shouldMountStockRegions` = `!customFlag \|\| regionTileHandoffSafe` (the scenario's region ids match the tiles exactly) | `regions-fill`, `regions-disputed`, `regions-outline` |
 | `custom-regions-source` | geojson | the authored regions URL itself (`regionsGeojsonUrl`, `promoteId: id`, `tolerance 0.6`); live ownership reaches it through feature-state | mounted whenever `customFlag` | `custom-regions-fill-far`, `custom-regions-fill`, `custom-regions-local-outline` |
-| `country-curved-label-source` | geojson | `activeCurvedLabelData` | — | `country-curved-labels` |
-| `country-point-label-source` | geojson | `activePointLabelData` | — | `country-labels` |
+| `country-curved-label-source` | geojson | always empty | — | `country-curved-labels` (an anchor other layers are placed under) |
+| `country-point-label-source` | geojson | always empty | — | `country-labels` (an anchor) |
 
-**`countries-source` is dead code by design.** Its `countries-fill` uses `fillStyle`, whose `match` is the only expression that keys on a country **code** (`["get","GID_0"]`). Because `customRegions` is forced true everywhere, `showStockCountries` (`worldKnown && !customFlag`) is always false and the source never mounts. It's left intact (not half-fixed) for a future dead-code sweep. The layer that actually paints the political map is `regions-fill` via `stockRegionsFillPaint`, which matches `GID_1` (a region id) and needs no code→name bridge.
+The layer that paints the political map from the tiles is `regions-fill` via `stockRegionsFillPaint`, which matches `GID_1` (a region id) and needs no code→name bridge. The old `countries-source` (a fill keyed on the GADM country code) could never mount, since `customRegions` is forced true, and was removed.
 
-**`regions-source` is NOT gated on `customFlag`** — this is load-bearing. On a re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry, nothing hand-drawn) `regions-fill` is the *only* thing painting owners above z6.5, because `custom-regions-fill-far` stops at `maxzoom 7` and `FAR_FILL_FADE` has already faded it to 0 by z6.5. Unmounting it once left every such map blank past 6.5 and (via the `getLayer()` filter in the click handler) unclickable too.
+**`regions-source` is mounted on custom maps too** (when their region ids match the tiles) — this is load-bearing. On a re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry, nothing hand-drawn) `regions-fill` is the *only* thing painting owners above z6.5, because `custom-regions-fill-far` stops at `maxzoom 7` and `FAR_FILL_FADE` has already faded it to 0 by z6.5. Unmounting it once left every such map blank past 6.5 and (via the `getLayer()` filter in the click handler) unclickable too.
 
 ### 4.2 The crossfade constants
 
@@ -192,7 +191,7 @@ There is **one** owner→rgb resolver, `createOwnerRgbResolver(colorMap, polityO
 
 The two-namespace merge is the whole point: a polity can be correctly *named* by the registry while `colors.json` has no key for it (shipped example: "British Empire" owns 426 regions in `world-war-ii-1939-copy` with its colour only in `polityOverrides`). Resolving the name but not the colour painted those regions a muddy procedural fallback — reading to players as "the map didn't annex it."
 
-`ownerColorCss(owner)` wraps it into a `rgb(...)` string (or `NEUTRAL_LAND_COLOR`). `fallbackRgbFromOwner` strips to A–Z first so accented/two-word names hash usefully instead of collapsing to a dark corner; it's the JS twin of `buildFallbackColorExpression` (which still hashes the *code* off the stock tiles, because tile properties are baked GADM and never become names).
+`ownerColorCss(owner)` wraps it into a `rgb(...)` string (or `NEUTRAL_LAND_COLOR`). `fallbackRgbFromOwner` strips to A–Z first so accented/two-word names hash usefully instead of collapsing to a dark corner.
 
 ### Palette live-reload
 
@@ -224,34 +223,19 @@ A group (`world.groups`, `world.groupAreas`; `src/runtime/groups.js`) controls a
 
 The shapes come from the regions worker, asked outside the political pipeline — a group moves no owner and no border — with a `group-areas` message that `Nations.jsx` sends once this worker has published `catalog-ready` (and again when repaired shapes land, and whenever `useWorldState`'s `groups` / `groupAreas` change); only the newest answer is drawn. `vnext/groupAreas.js` cuts the outline from the frontier topology, never from a polygon union: an edge is on it when a region outside the group shares it or no region does (the coast), unless it is a seam whose two sides were simplified apart and recovered as a run between two members. On the built-in map that is one closed ring for Syria, 67 for Indonesia's islands and ≤17 ms for Russia. The tint is each member region's shape (the repaired one where there is one), one surface per group. The region card (`Selection/Regions.jsx`) says **Group control** with the group's colour, name and description.
 
-`DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx:338`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
-
 ---
 
 ## 7. Country / owner labels
 
-Two label render paths, selected by the world flag:
+Every served world is a custom one, so a map's country names are its polities' names, built from the live ownership and following conquests:
 
-| State | Point labels | Curved labels |
-|---|---|---|
-| `!worldKnown` | empty | empty (no flash before load) |
-| `customFlag` (custom map) | `ownerLabelData` (per-owner) | empty |
-| stock world | `pointLabelData` | `curvedLabelData` |
+1. **Geometry and placement** — the political worker (`vnext/polityBoundariesWorker.js`) runs `buildPolityLabelCollections` (`vnext/polityLabels.js`) on each accepted cartography revision and posts `labelData`, `ptrLabelData`, `pointLabelData`, `lineLabelData` and `glyphLabelData`. No polygon fitting happens on the UI thread; `Nations.jsx` keeps the result in `polityLabelCollections`.
+2. **Drawing** — the polity text renderer (PTR-1, `labels/PolityTextLayer.jsx`, layer `polity-text-renderer`) is the default. Turn it off with `?legacyPolityText=1` or the `localStorage` value `"0"`.
+3. **Fallback** — the MapLibre symbol layers `country-line-labels-live-world` / `-detail` and `country-labels-live-managed` / `-overlap` draw a polity while PTR is off, still preparing, failed, or cannot prepare that one polity (`legacyPtrOwnerFilter` hides a legacy label once PTR draws its owner).
 
-### Stock labels — `src/runtime/countryLabels.js`
+Names run through `translateLabel`, since they are baked into map features; a `labelEpoch` (bumped on `i18n:updated`) rebuilds them when translations land.
 
-`loadCountryLabelCollections({ force, ownedCodes })` reads the **z0 tile** of `countries.pmtiles`, decodes it, and for each country builds either a **curved** multi-glyph label (one Point feature per letter, following the country's principal axis — `buildCurvedLabelPath` + `buildCurvedLabelGlyphFeatures`) or a single **point** label when the shape is too compact/round to curve text along. Names run through `resolveCountryDisplayName` + `translateLabel` (labels are baked into map features, not DOM, so they must be pre-translated). `ownedCodes` filters out countries owning no territory this scenario (so modern names don't float over medieval land). Results are cached in runtime JSON, keyed on `tile-hash + byteLength + archiveUrl + language + owner-set` (`COUNTRY_LABELS_CACHE_KEY = "country-labels-v3"`; an empty build is served once but never cached, since an empty z0 read is almost always a degraded tile, not a label-less world).
-
-### Owner labels for custom maps — `buildOwnerLabelCollection` (`Nations.jsx:343`)
-
-The stock pipeline labels *modern* countries, which is wrong on scenario maps (it printed "Russia"/"Ukraine" over the USSR). Instead, one label per **owner per contiguous landmass**:
-
-1. `buildRegionAdjacency` (`Nations.jsx:278`) — which regions physically touch, by hashing every vertex on a ~11 m (`1e-4°`) grid. Geometry-only, so it's memoized per world and survives ownership changes.
-2. Union-find groups same-owner **adjacent** regions into one territory each. Contiguity (not distance) is what keeps a colony separate from its metropole (France's mainland vs French West Africa) while keeping a touching chain like Siberia a single label.
-3. `mergeOwnerClusters` then does a small centroid mop-up (`CLUSTER_JOIN_DEGREES = 10`) to fold islands into nearby mainland and heal adjacency near-misses.
-4. Each cluster becomes a Point feature named by `polityOverrides[owner].name || countryNameByCode.get(owner) || owner`, run through `resolveCountryDisplayName` + `translateLabel`, uppercased. Every owner keeps its largest cluster; extra clusters must clear `MIN_CLUSTER_AREA = 1.5` (deg²).
-
-`ownerLabelData` recomputes as `regionOwnershipOverrides` poll in, so **labels follow conquests**. A `labelEpoch` (bumped on the `i18n:updated` event) forces a rebuild when translations land.
+The `country-labels` and `country-curved-labels` layers are always empty. They fed the stock modern-country atlas (`loadCountryLabelCollections` in `countryLabels.js`), which no served world could draw and which is gone; the layers stay because cities, structures and units are placed under `country-curved-labels` and `MAP_LAYER_ORDER` names both.
 
 ### Label layers & styling
 
@@ -266,7 +250,7 @@ Both label sources feed `type:"symbol"` layers (`country-labels`, `country-curve
 | `visibility` | `none` when `hideCountryLabels` map setting is on |
 | `text-pitch/rotation-alignment` | `"map"`, `text-keep-upright:false` |
 
-**Globe text-size fix (issue #6):** globe projection oversizes a label's own high-latitude text relative to its outline. `GLOBE_LAT_CORRECTION = cos(feature.lat * π/180)` undoes it, applied via `buildCountryTextSize(..., correctForGlobe=true)` **only** in globe mode (the factor is visibly wrong in Mercator at high latitude). Every label feature carries its own `lat` for this — the reason `countryLabels.js` bumped its cache to `v3`.
+**Globe text-size fix (issue #6):** globe projection oversizes a label's own high-latitude text relative to its outline. `GLOBE_LAT_CORRECTION = cos(feature.lat * π/180)` undoes it, applied via `buildCountryTextSize(..., correctForGlobe=true)` **only** in globe mode (the factor is visibly wrong in Mercator at high latitude). Every label feature carries its own `lat` for this — the worker writes it on every label feature.
 
 ---
 
@@ -350,7 +334,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | `minZoom 2.25` | `<Map>` | World-view floor |
 | `maxZoom 16` | `<Map>` | Camera ceiling; past PMTiles' z8 the tiles overzoom |
 | `maxBounds` lat `-80…85` | `<Map>` | Keep the camera in the usable latitude band |
-| PMTiles `maxzoom 8` | `countries-source`, `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
+| PMTiles `maxzoom 8` | `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
 | `custom-regions-fill-far maxzoom 7` | seed-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
 | Polity names end at z7.5 | `LABEL_MAX_ZOOM` (every label layer's `maxzoom` and ramp, `Nations.jsx`), `POLITY_TEXT_MAX_ZOOM` (`labels/polityTextLayout.js`) | Names fade over the last half zoom and stop at 7.5; past that the map is provinces and cities |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |
@@ -380,8 +364,8 @@ colors.json ──(getNationColors, oh:colors-updated event)──► colorMap
    └─► resolveOwnerRgb ──► every fill / stripe / label / marker / unit colour
 
 regionsGeojson / citiesGeojson ──(readJson, force)──► custom region & city geometry
-countries.pmtiles / regions.pmtiles / cities.pmtiles ──► stock tile geometry
-   └─► countryLabels.js (z0 countries tile) ──► point + curved stock labels
+regions.pmtiles / cities.pmtiles ──► stock tile geometry
+countries.pmtiles ──► country index + bounds (no layer draws it)
 ```
 
 Every owner recolour, label rebuild, and unit/marker update is a consequence of a `world.json` (or `colors.json`) change surfacing through the store's write events. The map is a pure function of that state plus the static per-scenario geometry.

@@ -34,10 +34,7 @@ import {
 } from "./regionsSourceMemory.js";
 import { publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import {
-  loadCountryLabelCollections,
-  summarizePolityLabelDiagnostics,
-} from "../../runtime/countryLabels.js";
+import { summarizePolityLabelDiagnostics } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
@@ -228,13 +225,6 @@ const STOCK_LABEL_RAMP = Object.freeze([4, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX
 const CUSTOM_CURVED_LABEL_RAMP = Object.freeze([3.85, 0, 4.15, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX_ZOOM, 0]);
 const LIVE_LABEL_RAMP = Object.freeze([2.0, 0.90, 3.2, 0.985, 5.8, 0.96, 6.95, 0.72, LABEL_MAX_ZOOM, 0]);
 
-const buildFallbackColorExpression = () => ([
-  "rgb",
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 0, 1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 2, 3], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 1, 2], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-]);
-
 // Palettes are owner -> [r,g,b]. Re-reading colors.json hands back a fresh object
 // every time; swapping identity for identical contents would rebuild every
 // MapLibre match expression on the map, so compare contents before accepting it.
@@ -377,11 +367,6 @@ const buildPaxPoliticalFillOpacity = (hiddenExpression = null) => [
 ];
 
 const PAX_POLITICAL_FILL_OPACITY = buildPaxPoliticalFillOpacity();
-// What fillStyle returns when the stock-countries layer cannot be shown.
-const HIDDEN_COUNTRIES_FILL_PAINT = {
-  "fill-color": NEUTRAL_LAND_COLOR,
-  "fill-opacity": 0,
-};
 const DISPUTED_STRIPE_OPACITY = 0.22;
 
 // Experiment F: stop drawing the stock GeoJSON fallback and the stock vector
@@ -393,16 +378,6 @@ const DISPUTED_STRIPE_OPACITY = 0.22;
 // opacity policy so the handoff changes geometry source, not visual strength.
 const STOCK_REGION_HANDOFF_ZOOM = 4.5;
 const DISPUTED_TILE_FILL_OPACITY = PAX_POLITICAL_FILL_OPACITY;
-
-// GADM assigns disputed / undetermined boundary areas the codes Z01-Z09 (the
-// slivers around India — Kashmir, Aksai Chin, Arunachal Pradesh). The base map
-// carries each as its own polity named with the bare code, which surfaced on the
-// map as "Z01" labels; show "Disputed (<claimant>)" instead, keyed to the main
-// country that administers/claims each (per server/country-names.json).
-const DISPUTED_TERRITORY_CLAIMANT = {
-  Z01: "India", Z02: "China", Z03: "China", Z04: "India", Z05: "India",
-  Z06: "Pakistan", Z07: "India", Z08: "China", Z09: "India",
-};
 
 const PERF_MAP_WARN_MS = 40;
 
@@ -460,8 +435,6 @@ const WorldMap = ({ isGlobe = false }) => {
   // or explicitly fails open to canonical geometry; never reveal a known-bad
   // tessellation for a few frames and then snap it away after scenario entry.
   const [initialRegionRepairSettled, setInitialRegionRepairSettled] = useState(false);
-  const [pointLabelData, setPointLabelData] = useState(EMPTY_FEATURE_COLLECTION);
-  const [curvedLabelData, setCurvedLabelData] = useState(EMPTY_FEATURE_COLLECTION);
   const [customRegionMeta, setCustomRegionMeta] = useState(EMPTY_CUSTOM_REGION_META);
   const [regionRenderRepair, setRegionRenderRepair] = useState(EMPTY_REGION_RENDER_REPAIR);
   const [disputedRegionData, setDisputedRegionData] = useState(EMPTY_FEATURE_COLLECTION);
@@ -557,7 +530,6 @@ const WorldMap = ({ isGlobe = false }) => {
   regionClaimantsRef.current = regionClaimants;
   const [acknowledgedBoundaryOwnership, setAcknowledgedBoundaryOwnership] = useState(null);
   const [boundaryWorkerEpoch, setBoundaryWorkerEpoch] = useState(0);
-  const countriesUrl = PMTILES_PROTOCOL_URLS.countries;
   const regionsUrl = PMTILES_PROTOCOL_URLS.regions;
   const regionsGeojsonUrl = JSON_URLS.regionsGeojson;
   // What the MapLibre source and the cartography worker actually fetch: the
@@ -621,11 +593,6 @@ const WorldMap = ({ isGlobe = false }) => {
   );
   const scenarioOwnsRegionGeometryAtAllZooms = Boolean(customActive && !regionTileHandoffSafe);
   const shouldMountStockRegions = !customFlag || regionTileHandoffSafe;
-  const ownedCountryCodes = useMemo(
-    () => new Set(customRegionMeta.ownedCountryCodes ?? []),
-    [customRegionMeta.ownedCountryCodes],
-  );
-  const ownedCodesKey = useMemo(() => [...ownedCountryCodes].sort().join(","), [ownedCountryCodes]);
 
   // Bumped when the translator learns new strings, so labels rebuild with
   // translated names (they're baked into map features, not DOM text).
@@ -1004,15 +971,6 @@ const WorldMap = ({ isGlobe = false }) => {
     ["<=", ["coalesce", ["get", "curveMinZoom"], 99], currentLabelZoom],
   ], [currentLabelZoom, legacyPtrOwnerFilter, visibleDerivedOwnerFilter]);
 
-  // A custom map is named by the live polity layers alone; the stock
-  // modern-country points belong to stock worlds.
-  const activePointLabelData = worldKnown && !customFlag ? pointLabelData : EMPTY_FEATURE_COLLECTION;
-
-  // Stock curved-label data remains separate. R5.4.6 renderer confirmation
-  // applies only to the two live custom-polity curve layers above.
-  const activeCurvedLabelData = worldKnown && !customFlag && !mapDisplaySettings.disableCurvedCountryLabels
-    ? curvedLabelData
-    : EMPTY_FEATURE_COLLECTION;
   const handleRegionClick = useCallback(async (event) => {
     const unitsAt = () =>
       map.getLayer("units-fill")
@@ -2073,81 +2031,6 @@ const WorldMap = ({ isGlobe = false }) => {
     workerLabelNames,
   ]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    // Custom/scenario maps are labelled exclusively by the political worker.
-    // Do not spend main-thread/cache work generating the modern stock-country
-    // label atlas that can never render in that mode.
-    if (customFlag) {
-      setPointLabelData(EMPTY_FEATURE_COLLECTION);
-      setCurvedLabelData(EMPTY_FEATURE_COLLECTION);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    // labelEpoch > 0 means translations arrived after the first build: force
-    // a rebuild so baked-in label names pick them up.
-    loadCountryLabelCollections({
-      force: labelEpoch > 0,
-      ownedCodes: ownedCountryCodes.size ? ownedCountryCodes : null,
-    })
-      .then(({ pointLabelData: pointLabels, curvedLabelData: curvedLabels }) => {
-        if (cancelled) return;
-        setPointLabelData(pointLabels);
-        setCurvedLabelData(curvedLabels);
-      })
-      .catch((error) => console.error("Failed to load country labels:", error));
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customFlag, ownedCodesKey, labelEpoch]);
-
-  // DEAD as it stands, and deliberately left alone rather than half-fixed. It is
-  // the only expression in the game that matches a country CODE — ["get", "GID_0"]
-  // off the stock tiles — and it cannot fire: readRuntimeJsonAsset forces
-  // customRegions:true onto every world it serves (normalizeRuntimeWorld), so
-  // showStockCountries is always false and countries-source never mounts.
-  //
-  // Its stops would need a code->name bridge to work, which is exactly the thing
-  // this rename exists to remove. It belongs in the dead-code sweep with
-  // countries-source, not in a patch that keeps codes alive to colour nothing.
-  // The layer that DOES paint the political map (stockRegionsFillPaint) matches
-  // GID_1 — a region id, not a country — and needs no bridge at all.
-  const fillStyle = useMemo(() => {
-    // Its only consumer is the stock-countries layer, which showStockCountries
-    // pins to zero opacity whenever customFlag is set. Gated on the FLAG for the
-    // same reason that is: customActive additionally waits for geometry.
-    if (customFlag) return HIDDEN_COUNTRIES_FILL_PAINT;
-
-    const stops = Object.entries(colorMap).flatMap(([owner, rgb]) => {
-      const displayRgb = normalizePoliticalRgb(rgb);
-      return [owner, `rgb(${displayRgb[0]}, ${displayRgb[1]}, ${displayRgb[2]})`];
-    });
-    const fallback = buildFallbackColorExpression();
-    const regionOverrideStops = Object.entries(regionOwnershipOverrides).flatMap(([regionId, ownerCode]) => [
-      regionId,
-      ownerColorCss(ownerCode),
-    ]);
-
-    return {
-      "fill-color": regionOverrideStops.length > 0
-        ? [
-          "match",
-          ["get", "GID_1"],
-          ...regionOverrideStops,
-          stops.length > 0 ? ["match", ["get", "GID_0"], ...stops, fallback] : fallback,
-        ]
-        : stops.length > 0
-        ? ["match", ["get", "GID_0"], ...stops, fallback]
-        : fallback,
-      "fill-opacity": PAX_POLITICAL_FILL_OPACITY,
-    };
-  }, [colorMap, customFlag, regionOwnershipOverrides, ownerColorCss]);
-
   const enrichedDisputedRegionData = useMemo(() => {
     if (!disputedRegionData?.features?.length) return EMPTY_FEATURE_COLLECTION;
     return {
@@ -3060,17 +2943,6 @@ const WorldMap = ({ isGlobe = false }) => {
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
 
-  // Stock country fills/borders render ONLY once the world is known to be a
-  // stock world. Gating on the customRegions FLAG (not customActive, which
-  // additionally waits for geometry) means a custom world never flashes the
-  // modern map — not before the world loads, and not while its geometry does.
-  const showStockCountries = worldKnown && !customFlag;
-  const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
-  const countriesOutlinePaint = {
-    "line-color": "rgba(7, 10, 14, 0.90)",
-    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.62, 8, 0.96, 12, 1.25],
-    "line-opacity": showStockCountries ? 0.82 : 0,
-  };
   // Scenario geometry owns its grid; never stack stock outlines on top of it.
   // Both paths use the same close-zoom hairline policy, and stay hidden until
   // the world is known. Political frontiers remain visible independently.
@@ -3206,26 +3078,11 @@ const WorldMap = ({ isGlobe = false }) => {
           while the machine still had 3GB free, because the cap is per-renderer.
           z8's 2.6M is stable. Rendering finer than the editor can edit only draws
           detail no map can be built against. Past z8 MapLibre overzooms, exactly
-          as it already did past z10. */}
-      {!customFlag && (
-      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={8}>
-        <Layer
-          id="countries-fill"
-          type="fill"
-          source-layer="countries"
-          paint={countriesFillPaint}
-        />
-        <Layer
-          id="countries-outline"
-          type="line"
-          source-layer="countries"
-          paint={countriesOutlinePaint}
-        />
-      </Source>
-      )}
+          as it already did past z10.
 
-      {/* Deliberately NOT gated on customFlag, unlike countries-source above —
-          this source is not decoration on a custom map, it is the close-detail
+          Mounted on a custom map too, whenever its region ids match the tiles
+          (regionTileHandoffSafe) — this source is not decoration on a custom
+          map, it is the close-detail
           political layer for re-ownership scenarios. The seed GeoJSON now stays
           underneath as a fallback if a vector tile is late, while regions-fill
           sharpens the map once the tile is present. Keeping this source mounted
@@ -3471,7 +3328,11 @@ const WorldMap = ({ isGlobe = false }) => {
         onStatusChange={setPtrPolityTextStatus}
       />
 
-      <Source id="country-curved-label-source" type="geojson" data={activeCurvedLabelData}>
+      {/* Always empty now: every served world is a custom one (customRegions is
+          forced on), and the stock modern-country labels that fed these two
+          layers could never draw. The layers stay as the anchors other layers
+          are placed under (beforeId, mapLayerOrder.js). */}
+      <Source id="country-curved-label-source" type="geojson" data={EMPTY_FEATURE_COLLECTION}>
         <Layer
           id="country-curved-labels"
           type="symbol"
@@ -3574,7 +3435,7 @@ const WorldMap = ({ isGlobe = false }) => {
         )}
       </Source>
 
-      <Source id="country-point-label-source" type="geojson" data={activePointLabelData}>
+      <Source id="country-point-label-source" type="geojson" data={EMPTY_FEATURE_COLLECTION}>
         <Layer
           id="country-labels"
           type="symbol"

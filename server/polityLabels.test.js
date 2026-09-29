@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Exercise the exact worker-safe label engine used by Political Cartography v2.
-// Runtime countryLabels.js still owns stock-map loading/caching, but geometry
-// regressions belong against production vNext layout rather than its legacy copy.
+// Runtime countryLabels.js still carries a legacy copy of it, but geometry
+// regressions belong against production vNext layout rather than that copy.
 import {
   POLITY_LABEL_TIERS,
   buildPolityLabelCollections,

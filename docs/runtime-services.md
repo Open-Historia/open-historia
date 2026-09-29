@@ -16,7 +16,7 @@ Related pages: [World state](world-state.md) · [Game state](world-state.md) · 
 | Language setting | `src/runtime/i18n.js` | UI language choice, `LANGUAGES`, RTL, `languageDirective` | Settings UI, `translator.js`, `callAI` |
 | Translator | `src/runtime/translator.js` (+ `phraseBook.js`, `promptTranslations.js`) | shipped packs applied to the live DOM; content translated by the AI | `src/main.jsx` (boot), map labels, content writers |
 | Country tags | `src/runtime/countryTags.js` | tag normalization + author-vs-live resolution | editor, game, server, `promptContext.js` |
-| Country labels | `src/runtime/countryLabels.js` | map country-label GeoJSON (curved + point) | `src/Game/Map/Nations.jsx` |
+| Country labels | `src/runtime/countryLabels.js` | coarse region shapes for the country picker; label diagnostics | `src/Game/GameUI/CountryPickerMap.jsx`, `src/Game/Map/Nations.jsx` |
 | Community flags | `src/runtime/communityFlags.js` | hub-hosted shared flags & flag packs | `src/Editor/FlagPicker.jsx` |
 | Hub posts | `src/runtime/hubPosts.js` | reading the community hub: scenario posts (`Scenario-Key`), a post's comments, the suggestions among them (`refreshPublishedRecord`), file downloads through `/api/hub/file` | `communityHub.jsx`, `libraryBar.jsx`, `ScenarioSuggestions.jsx` |
 | Suggested changes | `src/runtime/scenarioChanges.js` (the diff), `scenarioSuggestion.js` (the `.zip` and the comment), `suggestionApply.js` (accepting a change outside the map), `suggestionSections.js` | what a player changed in a community scenario, carried to its author and applied change by change ([game-ui.md §4.8](game-ui.md#48-suggested-changes)) | `ScenarioSuggestions.jsx`, `src/Editor/suggestionReview.js` |
@@ -204,7 +204,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 | `enqueueEventStrings(events)` | An event log as it is written: queues only the scenario's own events (`source` `"scenario"`); the AI's are written in the player's language |
 | `enqueueContentStrings(payload)` | Deep-walk a saved payload (≤6 deep) pulling human-readable fields (`CONTENT_TEXT_KEYS` + `aliases`), skipping `features`/`geometry`/`coordinates`, and enqueue them. Called by `library.js` on `createScenario/saveScenario/createGame/saveGame` so edited names/descriptions translate **and reach the server pack** the moment they're saved |
 
-`countryLabels.js` calls `translateLabel(...)` so map labels follow the UI language; when new translations land, the `"i18n:updated"` event (debounced in `announceUpdate`) tells label builders to rebuild.
+The map's label builders call `translateLabel(...)` so map labels follow the UI language; when new translations land, the `"i18n:updated"` event (debounced in `announceUpdate`) tells them to rebuild.
 
 ### Server language pack
 
@@ -249,21 +249,16 @@ Short traits describing what a country *is* (`"socialist"`, `"authoritarian"`, `
 
 ## Country labels — `src/runtime/countryLabels.js`
 
-Builds the GeoJSON that draws country **names** on the map (not the DOM). Reads the countries PMTiles z0 tile, decodes it, and produces two FeatureCollections: `curvedLabelData` (per-glyph point features following a computed spine for long/curved countries) and `pointLabelData` (a single centroid point for the rest). Consumed by `src/Game/Map/Nations.jsx`.
+What is left of the stock modern-country label builder. The map's polity names come from the political worker (`src/Game/Map/vnext/polityLabels.js`); this file keeps:
 
 | Export | Purpose |
 |---|---|
-| `loadCountryLabelCollections({ force, ownedCodes })` | Main entry: returns `{ curvedLabelData, pointLabelData }`, memoized + persisted |
-| `warmCountryLabelCollections(options)` | Preload helper returning `{ kind:"json", size, url }` for the warm-cache report |
+| `loadRegionLabelGeometry()` | Coarse region shapes from the regions PMTiles z0 tile, memoized per archive, for the country picker (`CountryPickerMap.jsx`) |
+| `summarizePolityLabelDiagnostics(collections)` | The label diagnostics `Nations.jsx` logs |
 
-### How it connects
+It also carries an older copy of the polity-label engine (`buildPolityLabelCollections` and its tiers) that nothing imports; the worker uses the one in `vnext/polityLabels.js`.
 
-- **Names** run through `translateLabel(resolveCountryDisplayName(rawName, code))` (`countryLabels.js:499`) — so labels honor both the scenario country-name overrides *and* the UI language.
-- **`ownedCodes`** (a `Set`): when non-empty, countries owning no territory in the scenario are skipped, so a nonexistent-era nation doesn't float its modern name over unclaimed land. A distinct owner set caches separately (owner-hash suffix on the cache key).
-- **Cache key** (`computeCountryLabelCacheKey`, `countryLabels.js:461`) folds tile-byte FNV hash + byte length + archive URL + **`getStoredLanguage()`**, so caches never leak across UI languages. Persisted via `writeRuntimeJson` / read via `readRuntimeJson` (see [Assets](assets-and-data.md)). Cache version is `country-labels-v3` (bumped to v3 when glyph `lat` was added for the globe text-size fix, issue #6).
-- **Empty-result guard** (`countryLabels.js:642`): an empty build is treated as a degraded z0 read — served once, never cached — so a transient miss can't poison every future boot.
-
-Geometry helpers (`getCentroid`, `getPrincipalAxisAngle`, `buildCurvedLabelPath`, `buildCurvedLabelGlyphFeatures`, `tileToLngLat`, …) convert tile coordinates to lng/lat and decide curved-vs-point; each glyph carries its own `lat` so `Nations.jsx` can correct globe-projection text inflation at high latitude.
+The stock atlas (`loadCountryLabelCollections`, `warmCountryLabelCollections`) is gone: every served world has `customRegions: true` (`normalizeRuntimeWorld`), so the layers it fed never drew, yet the startup screen built it on every launch and Cache Storage kept a copy per language and owner set. The startup preload now deletes those `country-labels-*` entries (`deleteRuntimeJsonByPrefix`, `assets.js`).
 
 ---
 

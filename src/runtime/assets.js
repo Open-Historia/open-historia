@@ -1182,6 +1182,30 @@ export const writeRuntimeJson = async (
   return clone ? cloneJson(data) : data;
 };
 
+// Drop every persisted runtime payload whose key starts with `prefix`: a cache
+// family nothing reads any more. Best-effort like the writes above; resolves to
+// how many entries went.
+export const deleteRuntimeJsonByPrefix = async (prefix) => {
+  const key = String(prefix ?? "");
+  if (!key) return 0;
+  for (const cachedKey of [...runtimeJsonValueCache.keys()]) {
+    if (String(cachedKey).startsWith(key)) runtimeJsonValueCache.delete(cachedKey);
+  }
+  const cache = await getPersistentCache();
+  if (!cache) return 0;
+  const marker = buildRuntimeCacheUrl(key).replace(/\.json$/, "");
+  let removed = 0;
+  try {
+    for (const request of await cache.keys()) {
+      if (!String(request?.url ?? "").startsWith(marker)) continue;
+      if (await cache.delete(request)) removed += 1;
+    }
+  } catch {
+    // A cache that cannot be listed keeps its entries; nothing reads them.
+  }
+  return removed;
+};
+
 export const buildTileUrl = (template, { x, y, z }) =>
   template
     .replace("{z}", String(z))
