@@ -9,9 +9,12 @@
 // unwritten, and the player retries, continues without, or discards.
 //
 // This is what makes the retry cheap and "continue without" free: every check's
-// answer is kept for the held turn, by key. A retry runs the turn's finish
-// again, and a check that answered is given its answer back rather than asked
-// again; only the ones that failed are asked. Once the player continues
+// answer is kept for the held turn, by the check and what it was asked about. A
+// retry runs the turn's finish again, and a check asked the same thing is given
+// its answer back rather than asked again; only the ones that failed are asked.
+// A check asked about something different (the timeline clean-up, shown events
+// a retried search produced afresh) is asked, never handed an answer about
+// other events. Once the player continues
 // without, the failed answers are given back as they are (the fail-open
 // fallback) and nothing is asked at all.
 //
@@ -30,27 +33,31 @@ const CHECK_LABELS = Object.freeze({
     structures: "structures",
     timeline: "the timeline clean-up",
     actions: "which orders were carried out",
+    breadth: "the search for more events",
 });
 
-export const describeCheck = (key) => CHECK_LABELS[String(key ?? "").split("#")[0]] ?? String(key ?? "a check");
+export const describeCheck = (check) => CHECK_LABELS[check] ?? String(check ?? "a check");
 
 export const createTurnChecks = () => {
     const answers = new Map();
     let accepted = false;
     return {
-        // ask() makes the request; failureOf(answer) is a reason string when
-        // the answer is a failure, or "" when it is usable. A throw from ask()
-        // is not kept: it is the caller's to handle, as it was before.
-        run: async (key, ask, failureOf = () => "") => {
+        // check names the check (CHECK_LABELS); `about` is what it was asked,
+        // when one check is asked more than once in a turn. ask() makes the
+        // request; failureOf(answer) is a reason string when the answer is a
+        // failure, or "" when it is usable. A throw from ask() is not kept: it
+        // is the caller's to handle, as it was before.
+        run: async (check, ask, failureOf = () => "", { about = "" } = {}) => {
+            const key = JSON.stringify([check, about]);
             const kept = answers.get(key);
             if (kept && (!kept.reason || accepted)) return copy(kept.answer);
             const answer = await ask();
-            answers.set(key, { answer: copy(answer), reason: String(failureOf(answer) || "") });
+            answers.set(key, { check, answer: copy(answer), reason: String(failureOf(answer) || "") });
             return answer;
         },
-        failures: () => [...answers.entries()]
-            .filter(([, entry]) => entry.reason)
-            .map(([key, entry]) => ({ key, reason: entry.reason })),
+        failures: () => [...answers.values()]
+            .filter((entry) => entry.reason)
+            .map((entry) => ({ check: entry.check, reason: entry.reason })),
         // The player chose to go on without the checks that failed; false
         // takes that back (a cancelled Continue).
         accept: (on = true) => { accepted = on === true; },
@@ -68,7 +75,7 @@ export const checksHoldTurn = (checks) => Boolean(checks && !checks.accepted && 
 export const checksHeldError = (failures) => {
     const list = Array.isArray(failures) ? failures : [];
     const what = list.length
-        ? list.map(({ key, reason }) => `${describeCheck(key)} (${reason})`).join("; ")
+        ? list.map(({ check, reason }) => `${describeCheck(check)} (${reason})`).join("; ")
         : "a check did not come back";
     const error = new Error(
         "Your events are ready, but the checks that move units, take ground, build structures and tidy the "

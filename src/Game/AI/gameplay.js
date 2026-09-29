@@ -7285,7 +7285,6 @@ const applySimulationResult = async ({
   const requests = projects?.requests ?? null;
   // A time skip's checks (turnChecks.js); null for every other kind of turn.
   const checks = projects?.checks ?? null;
-  let curatorCalls = 0;
   const boardCheck = (ask) => (checks ? checks.run("board", ask) : ask());
 
   // One curator analysis for the round's candidates and for the breadth
@@ -7308,8 +7307,9 @@ const applySimulationResult = async ({
         variables: curatorVariables(input),
         ...jumpTaskOptions(requests, "review"),
       });
-      // Numbered: the breadth repair's supplemental events are curated too.
-      return checks ? checks.run(`timeline#${curatorCalls++}`, ask, fellBack) : ask();
+      // By the candidates judged: the breadth repair's supplemental events are
+      // curated too, and a retried repair may bring different ones.
+      return checks ? checks.run("timeline", ask, fellBack, { about: JSON.stringify(input.candidates) }) : ask();
     };
 
   // The curator decides whether an event exists BEFORE impacts, chats, history
@@ -7362,7 +7362,7 @@ const applySimulationResult = async ({
   // and a curator pass after it — to pad a skip that came back thin, and a thin
   // skip is still a skip: the lanes it neglected are the ones the world director
   // selects first next turn.
-  const breadthRepair = review ? null : await maybeRepairWorldBreadthAfterCuration({
+  const searchBreadth = () => maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
     bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
@@ -7370,6 +7370,9 @@ const applySimulationResult = async ({
     mode: result.mode,
     signal: projects?.signal,
   });
+  // Kept with the turn's checks so a retry of another check finds the same
+  // supplemental events rather than searching afresh.
+  const breadthRepair = review ? null : await (checks ? checks.run("breadth", searchBreadth) : searchBreadth());
   if (breadthRepair?.events?.length) {
     // New storyline ids ride on their own repair events before any filtering,
     // so a surviving event carries its continuity exactly like a main event.

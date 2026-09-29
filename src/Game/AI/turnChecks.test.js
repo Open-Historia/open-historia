@@ -79,9 +79,20 @@ test("a check that threw is not kept: the caller handles it as before", async ()
     assert.deepEqual(checks.failures(), []);
 });
 
-test("numbered checks are named by what they are", () => {
-    assert.equal(describeCheck("timeline#1"), "the timeline clean-up");
+test("checks are named by what they are", () => {
+    assert.equal(describeCheck("timeline"), "the timeline clean-up");
     assert.equal(describeCheck("review"), "the turn review");
+});
+
+test("a check asked about something else is asked, never handed another answer", async () => {
+    const checks = createTurnChecks();
+    const curator = counted([ai({ judgments: ["about A"] }), ai({ judgments: ["about B"] })]);
+    await checks.run("timeline", curator.ask, fellBack, { about: "events A" });
+    const again = await checks.run("timeline", curator.ask, fellBack, { about: "events A" });
+    const other = await checks.run("timeline", curator.ask, fellBack, { about: "events B" });
+    assert.deepEqual(again.payload.judgments, ["about A"]);
+    assert.deepEqual(other.payload.judgments, ["about B"]);
+    assert.equal(curator.calls(), 2);
 });
 
 test("a cancelled Continue is taken back: the failed checks hold the turn again", async () => {

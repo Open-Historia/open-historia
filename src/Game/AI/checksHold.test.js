@@ -44,7 +44,8 @@ test("with Save AI requests off, every separate check goes through the turn's ch
         assert.match(directors, new RegExp(`askAsCheck\\("${key}", `), `${key} is a check`);
     }
     const apply = body(gameplay, "const applySimulationResult = async");
-    assert.match(apply, /checks\.run\(`timeline#\$\{curatorCalls\+\+\}`, ask, fellBack\)/);
+    assert.match(apply, /checks\.run\("timeline", ask, fellBack, \{ about: JSON\.stringify\(input\.candidates\) \}\)/);
+    assert.match(apply, /checks\.run\("breadth", searchBreadth\)/);
 });
 
 test("a failed check made inside the apply holds the turn at the last point before the write", () => {
