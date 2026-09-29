@@ -95,6 +95,45 @@ test("reconciliation binds unlabelled combat to the one matching active war", ()
   assert.equal(validateWarLedgerPayload(candidate, { world: warWorld }), "");
 });
 
+// The prompt tells the model to tag fighting with the war's id. Tagged with a
+// ceasefire war's id and no record of its own, the segment used to be rejected
+// ("ceasefire, not active") — a corrective request — where the same event
+// untagged resumed the war.
+test("fighting tagged with a ceasefire war's id resumes that war", () => {
+  const truce = {
+    ...world,
+    wars: [{ id: "war-france-germany-1914", status: "ceasefire", sideA: ["Germany"], sideB: ["France"], startedDate: "1914-08-03" }],
+  };
+  const battle = (warId) => ({
+    events: [{
+      id: "e1",
+      date: "1915-03-10",
+      title: "Battle of Neuve Chapelle",
+      description: "French and German armies clash again along the border after the truce breaks down.",
+      kind: "military",
+      combatants: ["France", "Germany"],
+      warId,
+    }],
+    warUpdates: "",
+  });
+
+  const tagged = battle("war-france-germany-1914");
+  const repair = reconcileCombatWarState(tagged, { world: truce });
+  assert.equal(repair.resumed, 1);
+  assert.deepEqual(repair.unresolved, []);
+  assert.deepEqual(decodeWarUpdates(tagged.warUpdates).map((update) => [update.id, update.op]), [["war-france-germany-1914", "resume"]]);
+  assert.equal(validateWarLedgerPayload(tagged, { world: truce }), "");
+
+  const untagged = battle(undefined);
+  reconcileCombatWarState(untagged, { world: truce });
+  assert.deepEqual(decodeWarUpdates(untagged.warUpdates), decodeWarUpdates(tagged.warUpdates), "tagged or not, the same resume");
+
+  // A record the model wrote for the war itself is left for the validator.
+  const withRecord = { ...battle("war-france-germany-1914"), warUpdates: "war-france-germany-1914~resume~~~1~The truce collapses" };
+  assert.equal(reconcileCombatWarState(withRecord, { world: truce }).resumed, 0);
+  assert.equal(decodeWarUpdates(withRecord.warUpdates).length, 1);
+});
+
 test("a readiness event naming two allies is not combat and creates no war", () => {
   const candidate = {
     events: [{

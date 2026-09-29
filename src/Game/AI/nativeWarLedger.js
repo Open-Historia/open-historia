@@ -752,6 +752,25 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
   let sanitized = 0;
   const unresolved = [];
 
+  // Renewed hard combat between a ceasefire war's own sides resumes it: the
+  // event is bound to the war and a resume record is added for it.
+  const resumeCeasefireWar = (war, event, index) => {
+    event.warId = war.id;
+    const note = compactWarField(
+      `Hostilities resumed in ${normalizeString(event.title)}`,
+    );
+    appendCompactWarUpdate(
+      candidate,
+      `${compactWarField(war.id)}~resume~~~${index + 1}~${note}`,
+    );
+    updates = decodeWarUpdates(candidate.warUpdates);
+    resumed += 1;
+    console.warn(
+      `[OH war ledger bootstrap] materialized resume ${war.id} from renewed hard combat ` +
+      `"${normalizeString(event.title)}".`,
+    );
+  };
+
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
@@ -803,6 +822,18 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
     if (explicitWarId) {
       const known = wars.find((war) => war.id === explicitWarId);
       const matchingUpdate = updates.find((update) => normalizeString(update?.id) === explicitWarId);
+      // The prompt tells the model to tag fighting with the war's id, and a
+      // ceasefire war's id is one it is shown. Without a record of its own for
+      // the war this used to fail the segment ("ceasefire, not active") where
+      // the same event untagged resumed the war.
+      if (
+        known?.status === "ceasefire"
+        && !matchingUpdate
+        && matchingWarForCombatants([known], combatants, new Set(["ceasefire"])).length === 1
+      ) {
+        resumeCeasefireWar(known, event, index);
+        continue;
+      }
       if (known || matchingUpdate) continue;
 
       // A model-supplied id + two names is NOT enough to create belligerency.
@@ -890,21 +921,7 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       new Set(["ceasefire"]),
     );
     if (ceasefireMatches.length === 1) {
-      const war = ceasefireMatches[0];
-      event.warId = war.id;
-      const note = compactWarField(
-        `Hostilities resumed in ${normalizeString(event.title)}`,
-      );
-      appendCompactWarUpdate(
-        candidate,
-        `${compactWarField(war.id)}~resume~~~${index + 1}~${note}`,
-      );
-      updates = decodeWarUpdates(candidate.warUpdates);
-      resumed += 1;
-      console.warn(
-        `[OH war ledger bootstrap] materialized resume ${war.id} from renewed hard combat ` +
-        `"${normalizeString(event.title)}".`,
-      );
+      resumeCeasefireWar(ceasefireMatches[0], event, index);
       continue;
     }
     if (ceasefireMatches.length > 1) {
