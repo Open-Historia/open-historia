@@ -214,7 +214,7 @@ test("scripted-event dependency negatives stay false until the referenced event 
 
 test("one weighted branch outcome is selected once and survives retry plus save reload", () => {
   let rolls = 0;
-  const branched = { ...event("election"), outcomes: [
+  const branched = { ...event("election"), textMode: "exact", outcomes: [
     { id: "a", title: "A wins", text: "Candidate A wins.", weight: 25 },
     { id: "b", title: "B wins", text: "Candidate B wins.", weight: 75 },
   ] };
@@ -222,12 +222,16 @@ test("one weighted branch outcome is selected once and survives retry plus save 
   assert.equal(first.eligible.length, 1);
   assert.equal(first.eligible[0].selectedOutcomeId, "b");
   assert.equal(first.eligible[0].text, "Candidate B wins.");
+  assert.equal(first.eligible[0].parentText, branched.text, "the selected branch keeps the parent event context beside its own text");
+  assert.equal(first.eligible[0].textMode, "exact", "the selected outcome inherits the parent event wording mode");
   assert.equal(rolls, 1, "100% trigger consumes no roll; only the branch selection rolls");
   const retry = planScriptedEvents([branched], { world, pendingState: first.pendingState, random: () => { rolls += 1; return 0; } });
   assert.equal(retry.eligible[0].selectedOutcomeId, "b");
   assert.equal(rolls, 1, "held retry must not reroll branch selection");
   const committed = commitScriptedEventPlan({}, retry, { throughDate: "1914-03-21" });
   assert.equal(committed.state.election.selectedOutcomeId, "b");
+  assert.equal(committed.fired[0].selectedOutcomeId, "b");
+  assert.equal(committed.fired[0].text, "Candidate B wins.", "fallback/engine insertion must keep the selected branch, not the parent event text");
   const afterReload = planScriptedEvents([branched], { world, resolvedState: normalizeScriptedEventState(committed.state), random: () => { rolls += 1; return 0; } });
   assert.deepEqual(afterReload.eligible, []);
   assert.equal(rolls, 1);

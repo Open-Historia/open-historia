@@ -1069,4 +1069,3 @@ export const SuggestionsBanner = ({ scenarios, onOpen }) => {
     </div>
   );
 };
-

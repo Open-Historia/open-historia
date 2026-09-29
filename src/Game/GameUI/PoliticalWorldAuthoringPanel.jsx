@@ -275,9 +275,9 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
       onDetailsChange?.(nextDetails);
       setDraft(politicalActorToEditorState(actor));
       setDirty(false);
-      setMessage("Political Actor saved to scenario canon.");
+      setMessage("Political World saved.");
     } catch (error) {
-      setMessage(error?.message || "Could not save Political Actor.");
+      setMessage(error?.message || "Could not save Political World.");
     } finally {
       setBusy(false);
     }
@@ -343,7 +343,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
           <div style={{ minWidth: 0 }}>
             <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.63rem", fontWeight: 850, letterSpacing: "0.08em", textTransform: "uppercase" }}>Scenario authoring</div>
             <div style={{ fontSize: "1.15rem", fontWeight: 850, letterSpacing: "-0.025em", marginTop: "0.12rem" }}>Political World</div>
-            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.69rem", marginTop: "0.16rem" }}>{actorCount} canonical actor{actorCount === 1 ? "" : "s"} · {rows.length} scenario polities</div>
+            <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.69rem", marginTop: "0.16rem" }}>{actorCount} Political World profile{actorCount === 1 ? "" : "s"} · {rows.length} scenario polities</div>
           </div>
           <button aria-label="Close Political World manager" className="oh-tap" onClick={closeManager} style={{ ...buttonStyle, background: "rgba(255,255,255,0.04)", fontSize: "1rem", minWidth: "2.35rem", padding: 0 }} type="button">×</button>
         </header>
@@ -368,7 +368,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                       <span style={{ display: "block", fontSize: "0.76rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
                       <code style={{ color: "rgba(255,255,255,0.35)", display: "block", fontSize: "0.57rem", marginTop: "0.12rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.polityKey}</code>
                     </span>
-                    <span title={row.hasActor ? "Political Actor exists" : "No Political Actor yet"} style={{ background: row.hasActor ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.12)", border: `1px solid ${row.hasActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: row.hasActor ? "#86efac" : "#fbbf24", flex: "0 0 auto", fontSize: "0.55rem", fontWeight: 900, padding: "0.1rem 0.35rem" }}>{row.hasActor ? "PW" : "+"}</span>
+                    <span title={row.hasActor ? "Political World configured" : "No Political World profile yet"} style={{ background: row.hasActor ? "rgba(34,197,94,0.15)" : "rgba(245,158,11,0.12)", border: `1px solid ${row.hasActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: row.hasActor ? "#86efac" : "#fbbf24", flex: "0 0 auto", fontSize: "0.55rem", fontWeight: 900, padding: "0.1rem 0.35rem" }}>{row.hasActor ? "SET" : "+"}</span>
                   </button>
                 );
               }) : <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.72rem", padding: "1rem 0.5rem", textAlign: "center" }}>No polities match this search.</div>}
@@ -384,18 +384,18 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                   <div style={{ minWidth: 0 }}>
                     <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                       <div style={{ fontSize: "1.05rem", fontWeight: 850 }}>{actorLabel(world, selectedKey)}</div>
-                      <span style={{ background: selectedActor ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${selectedActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: selectedActor ? "#86efac" : "#fbbf24", fontSize: "0.56rem", fontWeight: 900, padding: "0.12rem 0.38rem", textTransform: "uppercase" }}>{selectedActor ? "Canonical actor" : "Creates actor on save"}</span>
+                      <span style={{ background: selectedActor ? "rgba(34,197,94,0.12)" : "rgba(245,158,11,0.12)", border: `1px solid ${selectedActor ? "rgba(34,197,94,0.26)" : "rgba(245,158,11,0.24)"}`, borderRadius: 999, color: selectedActor ? "#86efac" : "#fbbf24", fontSize: "0.56rem", fontWeight: 900, padding: "0.12rem 0.38rem", textTransform: "uppercase" }}>{selectedActor ? "Political World configured" : "Creates Political World profile on save"}</span>
                     </div>
                     <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.63rem", marginTop: "0.18rem" }}>Stable polity key: <code>{selectedKey}</code></div>
-                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>Edits write directly to the scenario's canonical world.politicalActors ledger. Blank trait values remain unset, not zero. Hidden native/derived Political World state is preserved.</div>
+                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>These are the scenario's starting political facts. Blank trait values stay unset rather than becoming 0, and Political World data this editor does not show is preserved.</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
                     <button disabled={!dirty || busy} onClick={discard} style={{ ...buttonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
-                    <button disabled={!dirty || busy} onClick={save} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save Political Actor"}</button>
+                    <button disabled={!dirty || busy} onClick={save} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save Political World"}</button>
                   </div>
                 </div>
 
-                {message ? <div style={{ background: message.startsWith("Political Actor saved") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.09)", border: `1px solid ${message.startsWith("Political Actor saved") ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.24)"}`, borderRadius: "10px", color: message.startsWith("Political Actor saved") ? "#bbf7d0" : "#fecaca", fontSize: "0.7rem", marginBottom: "0.7rem", padding: "0.5rem 0.65rem" }}>{message}</div> : null}
+                {message ? <div style={{ background: message.startsWith("Political World saved") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.09)", border: `1px solid ${message.startsWith("Political World saved") ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.24)"}`, borderRadius: "10px", color: message.startsWith("Political World saved") ? "#bbf7d0" : "#fecaca", fontSize: "0.7rem", marginBottom: "0.7rem", padding: "0.5rem 0.65rem" }}>{message}</div> : null}
 
                 <div style={{ display: "grid", gap: "0.7rem" }}>
                   <details open style={sectionStyle}>
@@ -500,8 +500,8 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                   </details>
 
                   <details data-political-trait-catalog="true" style={sectionStyle}>
-                    <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Canonical traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
-                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Every supported native trait is shown. Blank means <strong>unset</strong>, not 0. Values are canonical 0-100 inputs.</div>
+                    <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Political traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
+                    <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Every supported trait is shown. Blank means <strong>not specified</strong>, not 0. Values run from 0 to 100.</div>
                     <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(13.5rem, 1fr))", marginTop: "0.65rem" }}>
                       {POLITICAL_TRAIT_REGISTRY.map((trait) => {
                         const rawValue = draft.traitValues?.[trait.key] ?? "";
@@ -526,7 +526,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
                   <details data-political-structured-json="true" style={sectionStyle}>
                     <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Advanced structured traits & perceptions</summary>
-                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Raw JSON remains available for legacy/extension traits and structured perceptions. Canonical registered traits stay synchronized with the controls above while this JSON is valid.</div>
+                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>Raw JSON remains available for legacy or extension traits and structured perceptions. Registered traits stay synchronized with the controls above while this JSON is valid.</div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(20rem, 1fr))", marginTop: "0.65rem" }}>
                       <div><label style={labelStyle}>Traits JSON</label><textarea rows={12} spellCheck={false} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.66rem", lineHeight: 1.42, resize: "vertical" }} value={draft.traitsJson ?? "{}"} onChange={(event) => editTraitsJson(event.target.value)} /></div>
                       <div><label style={labelStyle}>Perceptions JSON</label><textarea rows={12} spellCheck={false} style={{ ...inputStyle, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", fontSize: "0.66rem", lineHeight: 1.42, resize: "vertical" }} value={draft.perceptionsJson ?? "{}"} onChange={(event) => edit("perceptionsJson", event.target.value)} /></div>
@@ -534,13 +534,13 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                   </details>
 
                   <details data-political-debug="true" style={sectionStyle}>
-                    <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Canonical debug · read-only</summary>
-                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>This proves what is currently saved in scenario canon. Derived state is intentionally not directly editable.</div>
+                    <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: 850 }}>Advanced saved state · read-only</summary>
+                    <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.35rem" }}>This shows exactly what the scenario currently stores. Values calculated by the game are read-only here.</div>
                     <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(auto-fit, minmax(18rem, 1fr))", marginTop: "0.65rem" }}>
                       <div><label style={labelStyle}>Decision authority · derived</label><pre style={{ ...inputStyle, maxHeight: "13rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.decisionAuthority ?? null, null, 2)}</pre></div>
                       <div><label style={labelStyle}>Behavioral disposition · derived now</label><pre style={{ ...inputStyle, maxHeight: "13rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.derivedDisposition ?? null, null, 2)}</pre></div>
                     </div>
-                    <div style={{ marginTop: "0.55rem" }}><label style={labelStyle}>Full saved Political Actor JSON</label><pre style={{ ...inputStyle, maxHeight: "22rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.actor ?? null, null, 2)}</pre></div>
+                    <div style={{ marginTop: "0.55rem" }}><label style={labelStyle}>Full saved Political World JSON</label><pre style={{ ...inputStyle, maxHeight: "22rem", overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(debugSnapshot?.actor ?? null, null, 2)}</pre></div>
                   </details>
                 </div>
               </>
@@ -557,7 +557,7 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
       <div style={{ alignItems: "flex-start", display: "flex", flexWrap: "wrap", gap: "0.7rem", justifyContent: "space-between" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", fontWeight: 800 }}>Manual Political World authoring</div>
-          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Edit scenario-start Political Actors directly: government, leaders, parties, blocs, strategic outlook, perceptions and the full canonical trait catalog.</div>
+          <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.7rem", lineHeight: 1.5, marginTop: "0.2rem" }}>Set each country's starting Political World: government, leaders, parties, blocs, strategy, perceptions and political traits.</div>
           <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.64rem", marginTop: "0.35rem" }}>{actorCount} actor{actorCount === 1 ? "" : "s"} configured across {rows.length} scenario polities.</div>
         </div>
         <button onClick={() => setManagerOpen(true)} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", flex: "0 0 auto" }} type="button">Manage Political World</button>

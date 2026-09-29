@@ -30,6 +30,8 @@ import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { normalizeMarkdown } from "./markdownText.js";
+import { normalizeEventQuote } from "../../runtime/eventQuote.js";
+import { playerFacingJumpError } from "./jumpErrorCopy.js";
 import { filedFateLabel, normalizeFiledEvents } from "../../runtime/filedEvents.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
@@ -863,6 +865,30 @@ const FiledNote = ({ fate, note }) => (
     </div>
 );
 
+const EventQuotation = ({ quote, compact = false }) => {
+    const entry = normalizeEventQuote(quote);
+    if (!entry) return null;
+    const attribution = [entry.speaker, entry.role].filter(Boolean).join(", ");
+    return (
+        <div
+        data-event-quotation="true"
+        style={{
+            borderLeft: "2px solid rgba(148,163,184,0.42)",
+            color: "rgba(239,239,242,0.86)",
+            marginTop: compact ? "0.15rem" : "0.05rem",
+            padding: compact ? "0.18rem 0 0.18rem 0.6rem" : "0.28rem 0 0.28rem 0.72rem",
+        }}
+        >
+        <div style={{ fontSize: compact ? "0.73rem" : "0.79rem", lineHeight: 1.5 }}>“{entry.text}”</div>
+        {attribution && (
+            <div style={{ color: "rgba(206,206,210,0.62)", fontSize: compact ? "0.66rem" : "0.7rem", fontStyle: "italic", marginTop: "0.18rem" }}>
+            {attribution}
+            </div>
+        )}
+        </div>
+    );
+};
+
 // The events a finished turn's writer produced but the engine kept off the
 // timeline. Folded under the cards, greyed, so a card watched arriving during
 // the skip does not simply vanish when the turn lands.
@@ -890,6 +916,7 @@ const FiledEventsSection = ({ events }) => {
             {event.date && <div style={{ color: "rgba(228,228,231,0.6)", fontSize: "0.68rem" }}>{formatDate(event.date)}</div>}
             <div style={{ color: "rgba(255,255,255,0.9)", fontSize: "0.78rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>{event.title}</div>
             {event.description && <div style={{ color: "rgba(228,228,231,0.76)", fontSize: "0.74rem", lineHeight: 1.55 }}>{event.description}</div>}
+            <EventQuotation quote={event.quote} compact />
             </div>
             </div>
         ))}
@@ -989,6 +1016,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
             </div>
         )}
+        <EventQuotation quote={event.quote} />
 
         {documents.length > 0 && (
             <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -2555,7 +2583,7 @@ const DateWidget = ({
                 logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s (${jumpError.heldKind}); nothing was written.`, jumpError.message);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
-                setError(jumpError.message || "Failed to simulate timeline jump.");
+                setError(playerFacingJumpError(jumpError));
             }
         } finally {
             jumpAbortRef.current = null;

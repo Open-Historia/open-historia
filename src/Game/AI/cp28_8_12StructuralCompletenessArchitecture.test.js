@@ -6,9 +6,22 @@ const gameplay = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf
 const prompts = fs.readFileSync(new URL("./gameplayPrompts.js", import.meta.url), "utf8");
 const channels = fs.readFileSync(new URL("../../runtime/institutionalChannels.js", import.meta.url), "utf8");
 
-test("world-change validation enforces PWv2 structural political completeness", () => {
-  assert.match(gameplay, /validatePoliticalImpactCompleteness\(candidate,\s*\{\s*world\s*\}\)/);
-  assert.match(gameplay, /politicalActorOps before the event can enter the timeline/);
+test("world-change validation enforces Political World structural completeness through transient claims", () => {
+  assert.match(gameplay, /preparePoliticalClaimContext\(candidate\)/);
+  assert.match(gameplay, /validatePoliticalImpactCompleteness\(candidate,\s*\{\s*world,\s*claimContext:\s*politicalClaimContext\s*\}\)/);
+  assert.match(gameplay, /validatePolityImpactCompleteness\(candidate\)/);
+  assert.match(gameplay, /Always return politicalClaims: transient validation/);
+});
+
+test("jump political claims bind before event sorting and are removed before persistence", () => {
+  assert.match(
+    gameplay,
+    /preparePoliticalClaimContext\(candidate\)[\s\S]{0,1200}sortTimelineEventsChronologically\(candidate\)/,
+  );
+  assert.match(
+    gameplay,
+    /validateGeneratedWorldChanges\(candidate,[\s\S]{0,800}politicalClaimContext,[\s\S]{0,500}clearPoliticalClaimBindings\(candidate\);[\s\S]{0,120}delete candidate\.politicalClaims/,
+  );
 });
 
 test("lifecycle invitation hearings are gated away from formal Council governance", () => {
@@ -56,4 +69,5 @@ test("structural scripted political beats block prose-only deterministic fallbac
   assert.match(gameplay, /buildScriptedPoliticalImpactInstruction\(scriptedPoliticalRequirements,\s*\{\s*world:\s*ledgerWorld\s*\}\)/);
   assert.match(gameplay, /state\.structuralScriptedFallbackBlocked = scriptedPoliticalRequirements\.length > 0/);
   assert.match(gameplay, /if \(state\.structuralScriptedFallbackBlocked\) throw error/);
+  assert.match(gameplay, /politicalClaimContext\.legacyEvents\.add\(event\)/);
 });

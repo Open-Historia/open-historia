@@ -72,6 +72,13 @@ const STRONG_MILITARY_CONSEQUENCE_RE =
 const CONCRETE_MILESTONE_RE =
   /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
 
+// High-signal civilian/scientific titles must not be hidden because their body
+// happens to mention a patrol, reconnaissance, readiness or another routine
+// military word. This guard is deliberately title-scoped: a genuinely military
+// card can still be screened even if its description mentions politics/science.
+const CLEARLY_NON_MILITARY_TITLE_RE =
+  /\b(?:elections?|referendum|protests?|demonstrations?|parliament|legislature|court|judicial|scientific|research|spacecraft|satellite|lunar|moon|mars|lander|space mission|space probe)\b/i;
+
 // Material endogenous changes that can legitimately wake a deferred process even
 // when they do not yet carry a hard map/ledger impact. The associated storyline
 // update must ALSO move objective state (status/pressure/momentum); this regex alone
@@ -497,18 +504,31 @@ export const createWorldActorResolver = (world, gameCountry = "") => {
     return uniqueStrings([target, ...(record?.aliases || [])]);
   };
 
-  const mentioned = (value) => {
-    const haystack = ` ${normalizeString(value).toLowerCase()} `;
-    const matches = [];
-    for (const record of records) {
-      const aliases = uniqueStrings([record.canonical, ...normalizeArray(record.aliases)])
-        .sort((a, b) => b.length - a.length);
-      if (aliases.some((alias) => {
+  const aliasesMentionHaystack = (haystack, aliases) =>
+    uniqueStrings(aliases)
+      .sort((a, b) => b.length - a.length)
+      .some((alias) => {
         const token = normalizeString(alias).toLowerCase();
         if (!token || token.length < 3) return false;
         const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(haystack);
-      })) {
+      });
+
+  const mentionsActor = (actor, value) => {
+    const target = normalizeString(actor);
+    if (!target) return true;
+    const haystack = ` ${normalizeString(value).toLowerCase()} `;
+    return aliasesMentionHaystack(haystack, aliasesFor(target));
+  };
+
+  const mentioned = (value) => {
+    const haystack = ` ${normalizeString(value).toLowerCase()} `;
+    const matches = [];
+    for (const record of records) {
+      if (aliasesMentionHaystack(
+        haystack,
+        [record.canonical, ...normalizeArray(record.aliases)],
+      )) {
         matches.push(record.canonical);
       }
     }
@@ -521,6 +541,7 @@ export const createWorldActorResolver = (world, gameCountry = "") => {
     knownCanonical,
     equivalent,
     aliasesFor,
+    mentionsActor,
     mentionedPolities: mentioned,
   };
 };
@@ -540,35 +561,11 @@ export const worldActorsEquivalent = (
   return Boolean(a && b && a === b);
 };
 
-const actorMentionedInText = (actor, text, world, gameCountry = "") => {
-  const target = normalizeString(actor);
-  if (!target) return true;
+const actorMentionedInText = (actor, text, world, gameCountry = "") =>
+  createWorldActorResolver(world, gameCountry).mentionsActor(actor, text);
 
-  const haystack = ` ${normalizeString(text).toLowerCase()} `;
-  const record = polityAliasRecords(world, gameCountry)
-    .find((entry) => entry.canonical.toLowerCase() === target.toLowerCase());
-
-  const aliases = uniqueStrings([target, ...(record?.aliases || [])])
-    .sort((a, b) => b.length - a.length);
-
-  return aliases.some((alias) => {
-    const token = normalizeString(alias).toLowerCase();
-    if (!token || token.length < 3) return false;
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i")
-      .test(haystack);
-  });
-};
-
-const mentionedPolities = (text, world, gameCountry = "") => {
-  const matches = [];
-  for (const record of polityAliasRecords(world, gameCountry)) {
-    if (actorMentionedInText(record.canonical, text, world, gameCountry)) {
-      matches.push(record.canonical);
-    }
-  }
-  return uniqueStrings(matches);
-};
+const mentionedPolities = (text, world, gameCountry = "") =>
+  createWorldActorResolver(world, gameCountry).mentionedPolities(text);
 
 const actorIsActiveBelligerent = (actor, world) => {
   const rawBelligerents = activeBelligerentSet(world);
@@ -1317,6 +1314,11 @@ export const deriveWorldExplorationAudit = (
   ];
   const ledgerText = JSON.stringify(ledgerValues);
   const outreachText = JSON.stringify(outreach);
+  // Build the actor catalogue once for this audit. Fire Rises-sized worlds can
+  // contain hundreds of polity aliases and thousands of ownership rows; rebuilding
+  // that catalogue inside every actor/text probe turns exploration validation into
+  // an accidental quadratic main-thread workload.
+  const actorResolver = createWorldActorResolver(world, gameCountry);
 
   const entries = new Map();
   const claimedEventIndexes = new Set();
@@ -1325,11 +1327,9 @@ export const deriveWorldExplorationAudit = (
   const claimEventForActor = (actor) => {
     for (let index = 0; index < events.length; index += 1) {
       if (
-        actorMentionedInText(
+        actorResolver.mentionsActor(
           actor,
           eventExplorationText(events[index]),
-          world,
-          gameCountry,
         )
       ) {
         claimedEventIndexes.add(index);
@@ -1342,11 +1342,9 @@ export const deriveWorldExplorationAudit = (
   const claimStorylineForActor = (actor) => {
     for (const update of storylineUpdates) {
       if (
-        actorMentionedInText(
+        actorResolver.mentionsActor(
           actor,
           storylineExplorationText(update),
-          world,
-          gameCountry,
         )
       ) {
         const id = normalizeString(update?.id);
@@ -1372,7 +1370,7 @@ export const deriveWorldExplorationAudit = (
       !verdict &&
       actor &&
       outreach.length > 0 &&
-      actorMentionedInText(actor, outreachText, world, gameCountry)
+      actorResolver.mentionsActor(actor, outreachText)
     ) {
       verdict = "outreach";
     }
@@ -1381,7 +1379,7 @@ export const deriveWorldExplorationAudit = (
       !verdict &&
       actor &&
       ledgerValues.some(hasNativeLedgerRecords) &&
-      actorMentionedInText(actor, ledgerText, world, gameCountry)
+      actorResolver.mentionsActor(actor, ledgerText)
     ) {
       verdict = "ledger";
     }
@@ -1432,7 +1430,7 @@ export const deriveWorldExplorationAudit = (
       } else {
         for (let index = 0; index < events.length; index += 1) {
           const text = eventExplorationText(events[index]);
-          const actorCount = mentionedPolities(text, world, gameCountry).length;
+          const actorCount = actorResolver.mentionedPolities(text).length;
           const createdChats = normalizeArray(events[index]?.impacts?.createdChats).length;
           if (actorCount >= 2 || createdChats > 0) {
             claimedEventIndexes.add(index);
@@ -1808,9 +1806,10 @@ const falseNonBelligerentWartimeReason = (
 };
 
 const routineMilitaryNoDeltaReason = (event) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const title = normalizeString(event?.title);
+  const text = `${title} ${normalizeString(event?.description)}`;
 
+  if (CLEARLY_NON_MILITARY_TITLE_RE.test(title)) return "";
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
   // The cue is single words, so it fires on a noun in passing: a drone

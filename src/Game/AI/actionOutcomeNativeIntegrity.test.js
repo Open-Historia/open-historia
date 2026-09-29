@@ -67,6 +67,39 @@ test("a quiet inspection report that mentions patrols is still kept off the time
   assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
 });
 
+// Regression corpus from a community live playthrough: civilian/scientific
+// events must not disappear merely because their article mentions military-style
+// vocabulary such as reconnaissance or patrols in passing.
+test("a lunar science milestone cannot be hidden as routine military activity", () => {
+  const event = {
+    id: "change-4-far-side",
+    date: "2019-01-03",
+    kind: "world",
+    playerRelated: false,
+    title: "China's Chang'e-4 Achieves First-Ever Landing on Moon's Far Side",
+    description: "The Chang'e-4 lander completed the historic lunar mission and began scientific reconnaissance of the far-side terrain.",
+    impacts: {},
+  };
+  const screened = screenGeneratedWorldEvents({ events: [event] });
+  assert.deepEqual(screened.events, [event]);
+  assert.deepEqual(screened.hidden, []);
+});
+
+test("civilian protest news cannot be hidden because security patrols appear in the article", () => {
+  const event = {
+    id: "nationwide-protests",
+    date: "2019-04-11",
+    kind: "world",
+    playerRelated: false,
+    title: "Nationwide Anti-Government Protests Erupt Across Major Cities",
+    description: "Large civilian demonstrations spread through major cities while police increased security patrols around government buildings.",
+    impacts: {},
+  };
+  const screened = screenGeneratedWorldEvents({ events: [event] });
+  assert.deepEqual(screened.events, [event]);
+  assert.deepEqual(screened.hidden, []);
+});
+
 // The live preview marks a streamed card with the rule that will judge it when
 // the turn lands, and changes nothing about the event it looks at.
 test("the live preview gives a streamed card the screen's own verdict", () => {

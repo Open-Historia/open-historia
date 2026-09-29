@@ -26,6 +26,21 @@ test("live Baltic GM repair shorthand is rejected before it can masquerade as a 
   assert.match(government, /non-empty patch object/i);
 });
 
+test("replace-leader refuses caretaker administration placeholders", () => {
+  const operation = {
+    op: "replace-leader",
+    polityKey: "Latvia",
+    office: "headOfGovernment",
+    leader: { name: "Caretaker Administration" },
+  };
+  assert.match(validatePoliticalActorOperationShape(operation, { allowNativeDerived: false }), /placeholder, not an officeholder/i);
+
+  const world = { politicalActors: normalizePoliticalActors({ byPolity: { Latvia: { polityKey: "Latvia", government: {} } } }) };
+  const result = applyPoliticalActorOperation(world, operation);
+  assert.equal(result.applied, false);
+  assert.match(result.error, /placeholder, not an officeholder/i);
+});
+
 test("structured system/government patches are accepted", () => {
   assert.equal(validatePoliticalActorOperationShape({
     op: "set-political-system",

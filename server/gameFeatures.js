@@ -168,6 +168,12 @@ export const SCRIPTED_EVENT_CONDITION_TYPES = Object.freeze([
   "institution_member_status",
   "polity_subordinate_to",
   "polity_not_subordinate_to",
+  "polity_controls_region",
+  "polity_not_controls_region",
+  "scripted_event_fired",
+  "scripted_event_skipped",
+  "scripted_outcome_selected",
+  "scripted_outcome_not_selected",
 ]);
 
 const scriptedEventDateKey = (iso) => {
@@ -206,7 +212,7 @@ const normalizeScriptedCondition = (value) => {
   const type = String(value.type ?? "").trim().toLowerCase();
   if (!type) return null;
   const out = { type: type.slice(0, 80) };
-  for (const key of ["polityId", "warId", "institutionId", "overlordId", "status", "kind"]) {
+  for (const key of ["polityId", "warId", "institutionId", "overlordId", "eventId", "outcomeId", "regionId", "baseOwner", "status", "kind"]) {
     const token = String(value[key] ?? "").trim().slice(0, 160);
     if (token) out[key] = token;
   }
@@ -275,6 +281,34 @@ const normalizeScriptedTrigger = (value) => {
   return { mode: mode.slice(0, 32) || "invalid" };
 };
 
+const normalizeScriptedOutcomeWeight = (value, fallback = 1) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(1000000, number)) : fallback;
+};
+
+const normalizeScriptedTextMode = (value) => (
+  String(value ?? "").trim().toLowerCase() === "exact" ? "exact" : "generated"
+);
+
+const normalizeScriptedOutcomes = (value, parentId) => {
+  if (!Array.isArray(value)) return [];
+  const ids = new Map();
+  const outcomes = [];
+  for (let index = 0; index < value.length && outcomes.length < 24; index += 1) {
+    const entry = value[index];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const body = String(entry.text ?? entry.description ?? "").replace(/\r\n/g, "\n").trim().slice(0, 4000);
+    if (!body) continue;
+    const baseId = scriptedEventId(entry.id, `${parentId}|outcome|${body}|${index}`);
+    const seen = ids.get(baseId) || 0;
+    ids.set(baseId, seen + 1);
+    const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
+    const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
+    outcomes.push({ id, title, text: body, weight: normalizeScriptedOutcomeWeight(entry.weight, 1) });
+  }
+  return outcomes;
+};
+
 export const normalizeScriptedEvents = (value) => {
   let source = value;
   if (typeof source === "string") {
@@ -290,6 +324,7 @@ export const normalizeScriptedEvents = (value) => {
         date: match[1],
         title: scriptedEventTitle(body),
         text: body,
+        textMode: "generated",
         trigger: { mode: "rules", operator: "all", conditions: [], percent: 100 },
       };
     }).filter(Boolean);
@@ -309,12 +344,15 @@ export const normalizeScriptedEvents = (value) => {
     ids.set(baseId, seen + 1);
     const id = seen ? `${baseId}-${seen + 1}`.slice(0, 160) : baseId;
     const title = String(entry.title ?? "").replace(/\s+/g, " ").trim().slice(0, 140) || scriptedEventTitle(body);
+    const outcomes = normalizeScriptedOutcomes(entry.outcomes, id);
     events.push({
       id,
       date,
       title,
       text: body,
+      textMode: normalizeScriptedTextMode(entry.textMode ?? entry.wordingMode ?? entry.presentationMode),
       trigger: normalizeScriptedTrigger(entry.trigger),
+      ...(outcomes.length ? { outcomes } : {}),
     });
   }
   return events.sort((left, right) => scriptedEventDateKey(left.date) - scriptedEventDateKey(right.date));

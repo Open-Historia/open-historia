@@ -7,7 +7,7 @@ import { dedupeByName, landHolderNames, pickableCountries } from "../../runtime/
 import ReactDOM from "react-dom";
 import { sendDiplomaticMessage, startDiplomaticChat, loadDiplomaticHistory } from "../AI/main.jsx";
 import { checkDemandReply, ensureCountryAssessed, processPendingEventOutreach, runChatActionBatch } from "../AI/gameplayLazy.js";
-import { eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
+import { createPlayerPollEvent, eventsFromLegacyChat, projectChatThread } from "../../runtime/chatThreads.js";
 import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } from "../../runtime/demandCheck.js";
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
@@ -1139,6 +1139,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // ballots work, while still being a diplomatic negotiation rather than the
     // institution's permanent Council workspace.
     const isInstitutionCouncil = isInstitutional && !isLifecycleConversation;
+    // Ordinary multi-party diplomacy already has a canonical poll event log;
+    // expose it to the human too. Institution Councils use their separate formal
+    // governance/ballot system and lifecycle hearings are membership workflows,
+    // so neither gets this conversational vote control.
+    const canCallChatVote = isGroup && !isInstitutional && !isLifecycleConversation;
     const playerLifecycleCase = useMemo(() => {
         if (!isLifecycleConversation || !playerCountry) return null;
         const wanted = new Set((Array.isArray(chat?.lifecycleCaseIds) ? chat.lifecycleCaseIds : []).map((id) => String(id || "").trim()));
@@ -1175,6 +1180,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     const [visibleMessageLimit, setVisibleMessageLimit] = useState(CHAT_INITIAL_RENDER_WINDOW);
     const [isLoading, setIsLoading]             = useState(false);
     const [playerInput, setPlayerInput]         = useState("");
+    const [pollComposerOpen, setPollComposerOpen] = useState(false);
+    const [pollQuestion, setPollQuestion] = useState("");
+    const [pollOptionsText, setPollOptionsText] = useState("Yes\nNo\nAbstain");
+    const [pollError, setPollError] = useState("");
     const [speakingCountry, setSpeakingCountry] = useState(null);
     const [lifecycleCaseOverrides, setLifecycleCaseOverrides] = useState({});
     const [lifecycleRevealInProgress, setLifecycleRevealInProgress] = useState(false);
@@ -1349,6 +1358,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         setLifecycleCaseOverrides({});
         setLifecycleRevealInProgress(false);
         setStagedLifecycleSpeaker(null);
+        setPollComposerOpen(false);
+        setPollQuestion("");
+        setPollOptionsText("Yes\nNo\nAbstain");
+        setPollError("");
         lifecycleRevealTokenRef.current += 1;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [chat.id]);
@@ -1560,7 +1573,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         // someone in, who calls a vote — instead of a separate speaker-selection
         // request followed by one request per leader. This is the only group-chat
         // response path; failure is surfaced rather than reviving the old sequence.
-        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "" } = {}) => {
+        const runGroupTurn = async (text, nextMessages, { lifecycleResponseRequested = false, formalBusinessRequested = false, formalBusinessInteractive = false, institutionDebateRequested = false, institutionProposalId = "", chatOverride = null } = {}) => {
             setIsLoading(true);
             // The player's line, with the catch-up it carries and its moment.
             const asked = nextMessages.at(-1);
@@ -1568,7 +1581,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             const campaignId = activeCampaignNow();
             try {
                 const outcome = await runChatActionBatch({
-                    chat: { ...chat, messages: nextMessages, actionFeedback: actionFeedbackRef.current },
+                    chat: { ...(chatOverride || chat), messages: nextMessages, actionFeedback: actionFeedbackRef.current },
                     playerMessage: text,
                     playerCountry,
                     catchUp: asked?.catchUp || "",
@@ -1652,6 +1665,66 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 setIsLoading(false);
                 setSpeakingCountry(null);
             }
+        };
+
+        // A human-called vote in an ordinary group chat. The poll itself and the
+        // line calling it are written into the SAME canonical chat event log as
+        // AI-created polls, then the existing one-request group turn lets every
+        // AI participant answer/vote. This is conversational diplomacy only; it
+        // intentionally cannot mutate institution governance.
+        const handlePlayerCreatePoll = async () => {
+            if (!canCallChatVote || isLoading) return;
+            const options = pollOptionsText
+                .split(/\r?\n|,/)
+                .map((entry) => entry.trim())
+                .filter(Boolean);
+            const pollEvent = createPlayerPollEvent({
+                player: playerCountry,
+                question: pollQuestion,
+                options,
+                time: gameDate,
+                idFor: newThreadId,
+            });
+            if (!pollEvent) {
+                setPollError("Enter a question and at least two distinct options.");
+                return;
+            }
+            setPollError("");
+            cutIn();
+            const line = `I call a vote: ${pollEvent.question}`;
+            const current = chatRef.current ?? chat;
+            const existing = current.events?.length
+                ? current.events
+                : eventsFromLegacyChat({ ...current, messages: messagesRef.current });
+            const messageEvent = {
+                id: newThreadId("msg"), kind: "message", time: gameDate, by: playerCountry,
+                role: "user", text: line,
+            };
+            const events = [...existing, messageEvent, pollEvent];
+            const projected = projectChatThread(events);
+            const projectedMessages = viewMessagesOf(projected);
+            const updatedChat = {
+                ...current,
+                events,
+                messages: projectedMessages,
+                countries: projected.countries,
+                title: projected.title,
+                polls: projected.polls,
+                demands: projected.demands,
+            };
+            // Keep the in-flight turn on this exact poll-bearing snapshot even
+            // before the parent has had a React render to feed it back as props.
+            chatRef.current = updatedChat;
+            messagesRef.current = projectedMessages;
+            setMessages(projectedMessages);
+            onThreadUpdate?.(current.id, {
+                events, countries: projected.countries, title: projected.title,
+                polls: projected.polls, demands: projected.demands,
+            });
+            setPollComposerOpen(false);
+            setPollQuestion("");
+            setPollOptionsText("Yes\nNo\nAbstain");
+            await runGroupTurn(line, projectedMessages, { chatOverride: updatedChat });
         };
 
         // The player's own vote. Appended to the thread's log like any other
@@ -2039,7 +2112,21 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                         <button type="button" className="oh-tap-row" disabled={isLoading} onClick={() => handlePlayerLifecycleDecision("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 8, background: "rgba(239,68,68,.07)", color: "#fca5a5", padding: ".3rem .46rem", fontSize: ".54rem", cursor: isLoading ? "wait" : "pointer" }}>Reject</button>
                     </div> : isInstitutional && !lifecycleTerminal ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Continue hearing →</button> : lifecycleCanRequestResponse ? <button type="button" className="oh-tap-row" disabled={isLoading} onClick={handleLifecycleContinue} style={{ border: "1px solid var(--oh-grey-border-strong)", borderRadius: 8, background: "var(--oh-grey-raised)", color: "var(--oh-grey-text)", padding: ".3rem .48rem", fontSize: ".55rem", fontWeight: 760, cursor: isLoading ? "wait" : "pointer", whiteSpace: "nowrap" }}>Request response →</button> : null}
                 </div>}
+                {canCallChatVote && pollComposerOpen && <div data-player-chat-poll-composer="true" style={{ marginBottom: ".5rem", padding: ".55rem .62rem", border: "1px solid rgba(255,255,255,.1)", borderRadius: 10, background: "rgba(255,255,255,.03)" }}>
+                    <div style={{ fontSize: ".56rem", fontWeight: 820, color: "var(--oh-grey-text)" }}>Call a conversational vote</div>
+                    <div style={{ marginTop: ".12rem", fontSize: ".51rem", lineHeight: 1.35, color: "rgba(255,255,255,.38)" }}>Recorded in this diplomatic thread. This does not create institutional law or a formal institution ballot.</div>
+                    <input value={pollQuestion} onChange={(event) => { setPollQuestion(event.target.value); setPollError(""); }} maxLength={500} placeholder="What should this group decide?" style={{ width: "100%", boxSizing: "border-box", marginTop: ".45rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".68rem" }} />
+                    <textarea value={pollOptionsText} onChange={(event) => { setPollOptionsText(event.target.value); setPollError(""); }} rows={3} maxLength={1200} placeholder={"One option per line\nYes\nNo"} style={{ width: "100%", boxSizing: "border-box", marginTop: ".38rem", border: "1px solid rgba(255,255,255,.12)", borderRadius: 8, background: "rgba(0,0,0,.2)", color: "white", padding: ".42rem .5rem", fontSize: ".64rem", fontFamily: "inherit", resize: "vertical" }} />
+                    {pollError && <div style={{ marginTop: ".3rem", color: "#fca5a5", fontSize: ".56rem" }}>{pollError}</div>}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: ".35rem", marginTop: ".42rem" }}>
+                        <button type="button" className="oh-tap-row" onClick={() => { setPollComposerOpen(false); setPollError(""); }} style={{ border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "transparent", color: "rgba(255,255,255,.58)", padding: ".3rem .48rem", fontSize: ".58rem", cursor: "pointer" }}>Cancel</button>
+                        <button type="button" className="oh-tap-row" onClick={handlePlayerCreatePoll} disabled={isLoading} style={{ border: "1px solid rgba(59,130,246,.35)", borderRadius: 8, background: "rgba(59,130,246,.13)", color: "#bfdbfe", padding: ".3rem .52rem", fontSize: ".58rem", fontWeight: 780, cursor: isLoading ? "wait" : "pointer" }}>Open vote</button>
+                    </div>
+                </div>}
                 <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    {canCallChatVote && (
+                        <button type="button" className="oh-tap" onClick={() => { setPollComposerOpen((open) => !open); setPollError(""); }} aria-pressed={pollComposerOpen} title="Call a binding conversational vote in this group chat" style={{ background: pollComposerOpen ? "rgba(59,130,246,.2)" : "rgba(255,255,255,0.05)", border: `1px solid ${pollComposerOpen ? "rgba(96,165,250,.6)" : "rgba(255,255,255,0.15)"}`, borderRadius: "10px", color: pollComposerOpen ? "#bfdbfe" : "rgba(255,255,255,0.7)", cursor: "pointer", flexShrink: 0, fontFamily: "sans-serif", fontSize: ".68rem", fontWeight: 760, height: "2.5rem", padding: "0 .62rem" }}>Vote</button>
+                    )}
                     {canDemand && (
                         <button
                         type="button"
@@ -3458,7 +3545,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     } = {}) => {
         const id = String(institutionId || "").trim();
         const proposal = String(proposalId || "").trim();
-        const mode = kind === "vote" ? "vote" : "debate";
+        const mode = kind === "vote" ? "vote" : kind === "amendment" ? "amendment" : "debate";
         if (!id || !proposal) return null;
         const key = `${id}:${proposal}:${mode}`;
         if (institutionAutomationInFlight.current.has(key)) return null;
@@ -3500,6 +3587,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             }
             const result = await runChatActionBatch({
                 chat: materialized.channel,
+                playerMessage: mode === "amendment" ? comment : "",
                 playerCountry,
                 time: gameDate,
                 institutionDebateRequested: mode === "debate",

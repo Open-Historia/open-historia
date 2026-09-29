@@ -943,7 +943,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             nextPoliticalActor?.government?.ideology,
         ].map((value) => String(value || "").trim()).filter(Boolean).join(" · ");
         await noteGmChange(hasComponentBaseline ? "stats" : "polity",
-            `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}PWv2 ${politicalSummary}` : ""}.`);
+            `Edited ${nextName} in the country editor${edits.length ? `: ${edits.join("; ")}` : ""}${politicalSummary ? `${edits.length ? "; " : ": "}Political World ${politicalSummary}` : ""}.`);
 
         if (typeof window !== "undefined") {
             window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
@@ -1004,7 +1004,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
     return (
         <>
-        {header(meta.title, "Identity, Political World v2, national baseline, and present-state administration")}
+        {header(meta.title, "Identity, Political World, national baseline, and present-state administration")}
         <div style={{ overflowY: "auto", paddingRight: "0.12rem" }}>
             <div style={{
                 background: "rgba(255,255,255,0.05)",
@@ -1125,7 +1125,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     <div style={{ ...editorFieldStyle, marginTop: "0.65rem" }}>
                         <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
                             <div>
-                                <div style={editorSectionLabelStyle}>Political World v2</div>
+                                <div style={editorSectionLabelStyle}>Political World</div>
                                 <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.62rem", lineHeight: 1.4 }}>
                                     Canonical political truth used by the Advisor, diplomacy, institutions and simulation. This is not a Stats-side copy.
                                 </div>
@@ -1246,9 +1246,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                         </details>
 
                         <details open style={{ marginTop: "0.75rem" }} data-political-trait-catalog="true">
-                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Canonical traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
+                            <summary style={{ cursor: "pointer", fontSize: "0.72rem", fontWeight: 850 }}>Political traits · full supported catalog ({POLITICAL_TRAIT_REGISTRY.length})</summary>
                             <div style={{ color: "rgba(255,255,255,0.46)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
-                                Every native PWv2 trait is listed here, including traits this actor has never established. Blank means <strong>unset</strong>, not 0. Values are canonical 0-100 inputs used by the native disposition engine.
+                                Every supported Political World trait is listed here. Blank means <strong>not specified</strong>, not 0. Values run from 0 to 100 and shape how this government behaves.
                             </div>
                             <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", marginTop: "0.6rem" }}>
                                 {POLITICAL_TRAIT_REGISTRY.map((trait) => {
@@ -1309,8 +1309,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.42rem", marginTop: "0.55rem" }}>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(JSON.stringify(politicsDebug?.actor ?? null, null, 2));
-                                    setStatus(ok ? "Copied full Political Actor JSON." : "Failed to copy Political Actor JSON.");
-                                }}>Copy full actor JSON</button>
+                                    setStatus(ok ? "Copied full Political World JSON." : "Failed to copy Political World JSON.");
+                                }}>Copy full Political World JSON</button>
                                 <button type="button" style={buttonStyle} onClick={async () => {
                                     const ok = await copyToClipboard(decisionContextText || "");
                                     setStatus(ok ? "Copied Political Decision Context capsule." : "Failed to copy decision capsule.");
@@ -1337,9 +1337,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                             <pre style={{ ...debugPreStyle, maxHeight: "13rem" }}>{JSON.stringify(politicsDebug?.storedDisposition ?? null, null, 2)}</pre>
                             <label style={labelStyle}>Behavioral disposition · derived now</label>
                             <pre style={{ ...debugPreStyle, maxHeight: "13rem" }}>{JSON.stringify(politicsDebug?.derivedDisposition ?? null, null, 2)}</pre>
-                            <label style={labelStyle}>Full Political Actor JSON</label>
+                            <label style={labelStyle}>Full Political World JSON</label>
                             <pre style={{ ...debugPreStyle, maxHeight: "22rem" }}>{JSON.stringify(politicsDebug?.actor ?? null, null, 2)}</pre>
-                            <label style={labelStyle}>Bounded Political Decision Context capsule</label>
+                            <label style={labelStyle}>Political decision context · debug</label>
                             <textarea
                                 readOnly
                                 rows={18}
@@ -3585,7 +3585,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
                             {politicalOps.length > 0 && (
                                 <div data-gm-political-actor-ops="true">
-                                    {subsectionTitle("Political Actor / PWv2", politicalOps.length, "exact canonical political mutations")}
+                                    {subsectionTitle("Political World", politicalOps.length, "exact political changes")}
                                     {politicalOps.map((entry, index) => {
                                         let args = entry.argsJson;
                                         try { args = JSON.parse(entry.argsJson); } catch { /* keep raw text */ }

@@ -41,3 +41,27 @@ test("malformed formal institution actions stay in the formal lane with a precis
   assert.equal(result.formal[0].rawType, "institution_resolve_amendment");
   assert.match(result.formal[0].validationError, /requires amendmentId/i);
 });
+
+test("malformed resolve-amendment preserves enough identity for unambiguous native repair", () => {
+  const result = partitionInstitutionChatActions([{
+    type: "institution_resolve_amendment",
+    actorName: "Estonia",
+    proposalId: "regional-connectivity",
+    amendmentStatus: "accepted",
+  }]);
+  assert.equal(result.formal.length, 1);
+  assert.deepEqual({
+    type: result.formal[0].type,
+    rawType: result.formal[0].rawType,
+    actorName: result.formal[0].actorName,
+    proposalId: result.formal[0].proposalId,
+    amendmentStatus: result.formal[0].amendmentStatus,
+  }, {
+    type: "institution_invalid",
+    rawType: "institution_resolve_amendment",
+    actorName: "Estonia",
+    proposalId: "regional-connectivity",
+    amendmentStatus: "accepted",
+  });
+  assert.match(result.formal[0].validationError, /requires amendmentId/i);
+});

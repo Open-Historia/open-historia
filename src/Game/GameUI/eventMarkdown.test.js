@@ -43,3 +43,11 @@ test("the card still styles the blocks that a paragraphed body produces", () => 
     const bottom = paragraph.match(/margin:\s*\S+\s+\S+\s+(\S+)/);
     assert.ok(bottom && parseFloat(bottom[1]) > 0, `paragraphs are spaced apart, got ${bottom?.[1]}`);
 });
+
+test("canonical event quotes render beneath prose with an italic speaker attribution", () => {
+    assert.match(source, /data-event-quotation="true"/);
+    assert.match(source, /“\{entry\.text\}”/);
+    assert.match(source, /fontStyle: "italic"/);
+    assert.match(source, /\[entry\.speaker, entry\.role\]\.filter\(Boolean\)\.join\(", "\)/);
+    assert.match(source, /<EventQuotation quote=\{event\.quote\} \/>/);
+});
