@@ -17,6 +17,7 @@ import {
 } from "../../runtime/assets.js";
 import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { discardPendingJumpSegment, discardPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
+import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
@@ -2400,22 +2401,19 @@ const DateWidget = ({
             }
             // What the turn actually DID to the world, in detailed mode. This is
             // the entry that answers the most common report there is — "the
-            // event said my army took the province but the border never moved" —
-            // because a turn that narrates a capture with zero region transfers
-            // shows up here as `regionTransfers: 0` beside an event list that
-            // clearly describes one. Titles and counts, not event prose: the
-            // prose is in the player's own screenshot, and it is the part of a
-            // log they are least comfortable posting.
+            // event said my army took the province but the border never moved".
+            // Every impact array is counted (EVENT_IMPACT_KEYS): a wartime capture
+            // or occupation is a de-facto control op, not a legal transfer, so a
+            // correct occupation turn shows `regionControlOps` beside
+            // `regionTransfers: 0`, and only a turn whose events describe a
+            // capture with both at zero moved nothing. Titles and counts, not
+            // event prose: the prose is in the player's own screenshot, and it is
+            // the part of a log they are least comfortable posting.
             const changeCount = (impactKey) => turnEvents
                 .reduce((total, event) => total + (event?.impacts?.[impactKey]?.length ?? 0), 0);
             logDebugEvent("turn", `Turn ${result.game?.round ?? 0} world changes.`, {
                 events: turnEvents.map((event) => event?.title || "(untitled)"),
-                regionTransfers: changeCount("regionTransfers"),
-                polityChanges: changeCount("polityChanges"),
-                unitOps: changeCount("unitOps"),
-                markerOps: changeCount("markerOps"),
-                projectOps: changeCount("projectOps"),
-                createdChats: changeCount("createdChats"),
+                ...Object.fromEntries(EVENT_IMPACT_KEYS.map((key) => [key, changeCount(key)])),
                 units: result.world?.units?.length ?? 0,
                 pendingUnitOrders: result.world?.pendingUnitOrders?.length ?? 0,
                 projects: result.world?.projects?.length ?? 0,
