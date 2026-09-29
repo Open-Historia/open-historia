@@ -1726,6 +1726,15 @@ export const INTERACTIVE_SUMMARY_SCHEMA = {
     title: textSchema("Concise event headline."),
     description: textSchema("Complete but concise account of the interactive event's outcome."),
     importance: textSchema("Event importance, normally major."),
+    // Land the Scene handed over by agreement (a treaty, cession, sale or trade).
+    // Land won in fighting is not a transfer: the territory Director marks it as
+    // occupied from the description.
+    regionTransfers: {
+      type: "array",
+      description: "Only regions whose legal sovereignty the Scene handed over by agreement (treaty, cession, sale, trade). Omit for anything won in fighting.",
+      maxItems: 12,
+      items: regionTransferSchema,
+    },
   },
   required: ["title", "description", "importance"],
   additionalProperties: false,

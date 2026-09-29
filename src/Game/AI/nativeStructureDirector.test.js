@@ -50,3 +50,15 @@ test("with nothing known about the ground, the owner stands as written", () => {
   assert.equal(builtOwner(run({})), "Egypt");
   assert.equal(builtOwner(run({ ownerHoldsLand: false })), "Egypt");
 });
+
+test("a structure placed approximately keeps its mark through the director's rules", () => {
+  const approximate = { asked: "Djibo, Burkina Faso", country: "Burkina Faso", near: "Ouagadougou" };
+  const { acceptedByEvent } = sanitizeStructureOrders({
+    events: [{ title: "Burkina Faso Establishes a Forward Operating Base at Djibo", description: "Engineers build the base.", date: "2026-03-14" }],
+    orders: [{ eventIndex: 0, structures: [{ name: "Djibo Forward Operating Base", kind: "military base", ownerCode: "Burkina Faso", lng: -1.2, lat: 12.5, approximate }] }],
+    world: { markers: [] },
+    playerCountry: "Burkina Faso",
+    makeId: () => "structure-1",
+  });
+  assert.deepEqual(acceptedByEvent.get(0)?.[0]?.marker?.approximate, approximate);
+});

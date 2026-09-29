@@ -56,8 +56,37 @@ const COMBAT_EVENT_PATTERN =
 const DECISIVE_OUTCOME_PATTERN =
   /\b(captures?|recaptures?|seizes?|retakes?|conquers?|defeats?|routs?|annihilates?|surrenders?|capitulates?|falls? to|holds? the field)\b/i;
 
+// A land formation of any size coming into being: "raises a new VDP
+// rapid-reaction battalion", "forms a mechanized company", "stands up a new joint
+// border force". Up to three describing words may sit between the cue and the
+// noun, but not a preposition or article, so "raises funds for the army" is money,
+// not a formation. Seen in a live game (2026-09-27): a battalion the director
+// raised correctly was thrown away because only armies down to regiments, with
+// nothing between "new" and the noun, counted.
+const FORMATION_NOUN =
+  "(?:army|armies|corps|divisions?|brigades?|regiments?|battalions?|compan(?:y|ies)|militias?|forces?|legions?|detachments?|contingents?|battle ?groups?|formations?)";
+const DESCRIBING_WORD = "(?:(?!(?:for|to|of|with|and|or|the|in|on|at|from|against|by)\\b)[\\w-]+ )";
+const RAISED_FORMATION_PATTERN = new RegExp(
+  "\\bnew " + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b"
+  + "|\\b(?:forms?|formed|forming|raises?|raised|raising|activates?|activated|stands? up|stood up|creates?|created|musters?|mustered)\\b"
+  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b",
+  "i",
+);
+
 const NEW_FORMATION_PATTERN =
   /\b(new (?:army|corps|division|brigade|regiment|formation)|forms? (?:an? )?(?:army|corps|division|brigade|regiment)|raises? (?:an? )?(?:army|corps|division|brigade|regiment)|mobiliz(?:e|es|ed|ation)|newly mobilized|reinforcements? arrive|reserve(?:s)? activated|conscription creates|expands? the army|new formation)\b/i;
+const isNewFormation = (text) => NEW_FORMATION_PATTERN.test(text) || RAISED_FORMATION_PATTERN.test(text);
+
+// A player's order that raises or sends forces (mapConsequences.js
+// markOrderedEvents): its outcome event is the unit director's to read, however
+// that event happens to be worded.
+const ORDER_RAISES_PATTERN = /\b(?:raise|raises|recruit|recruits|form|forms|mobili[sz]e|mobili[sz]es|muster|musters|stand up|create|creates|deploy|deploys|send|sends)\b/i;
+const FORMATION_NOUN_PATTERN = new RegExp("\\b" + FORMATION_NOUN + "\\b", "i");
+export const orderRaisesForces = (text) => {
+  const value = String(text ?? "");
+  return ORDER_RAISES_PATTERN.test(value) && (FORMATION_NOUN_PATTERN.test(value) || MILITARY_FORMATION_PATTERN.test(value));
+};
+const orderedForces = (event) => event?.ordered?.forces === true;
 
 const NON_COMBAT_STRENGTH_PATTERN =
   /\b(reinforc|replacement|attrition|disease|desertion|demobiliz|reorgan|refit|resupply|replenish|training loss|accident)\b/i;
@@ -111,13 +140,16 @@ const hasMilitaryContent = (event) => {
     || normalizeArray(event?.tags).some((tag) => normalizeString(tag).toLowerCase() === "military");
   return MILITARY_EVENT_PATTERN.test(text)
     || ((explicitlyMilitary || MILITARY_FORMATION_PATTERN.test(text))
-      && (OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text)));
+      && (OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text)))
+    || RAISED_FORMATION_PATTERN.test(text)
+    || orderedForces(event);
 };
 
 export const eventNeedsNativeUnitDirector = (event) => {
   if (!event || typeof event !== "object") return false;
   const text = eventText(event);
-  return OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text);
+  return OPERATIONAL_UNIT_DELTA_PATTERN.test(text) || SERVICE_FORMATION_PATTERN.test(text) || RAISED_FORMATION_PATTERN.test(text)
+    || orderedForces(event);
 };
 
 const makeWorkingUnitMap = (units) =>
@@ -209,7 +241,7 @@ export const sanitizeDirectorOrders = ({ events, orders, units, game }) => {
         }
 
         const ownerUnits = [...unitMap.values()].filter((unit) => unit.ownerCode === owner);
-        if (ownerUnits.length > 0 && !NEW_FORMATION_PATTERN.test(text) && !SERVICE_FORMATION_PATTERN.test(text)) {
+        if (ownerUnits.length > 0 && !isNewFormation(text) && !SERVICE_FORMATION_PATTERN.test(text) && !orderedForces(event)) {
           reject("existing units already represent this polity; no explicit new-formation cue");
           continue;
         }

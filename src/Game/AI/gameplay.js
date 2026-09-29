@@ -19,9 +19,10 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
-import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
-import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import { buildUnitDirectorInput } from "./nativeUnitDirector.js";
+import { applyMapConsequences, markOrderedEvents } from "./mapConsequences.js";
+import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
+import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
 import {
   buildPlayerFocusDirective,
   citeNarratedOrders,
@@ -117,7 +118,7 @@ import {
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -2280,7 +2281,18 @@ const buildPlacementGazetteer = (context, world) => {
     if (!owner) return null;
     return (context.ownerRows.get(owner) ?? []).length > 0;
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand };
+  // A country's capital as the Scenario's cities mark it ("primary"), held by that
+  // country now: where approximate placement (AI/placement.js) puts a thing whose
+  // town the map does not know.
+  const capitalOf = (name) => {
+    const owner = context.resolveOwner(name) || normalizeString(name);
+    const key = fold(owner);
+    if (!key) return null;
+    const held = context.cityRows.filter((city) => city.capital && fold(context.regionOfCity(city)?.owner) === key);
+    const city = held.find((entry) => fold(entry.capital) === "primary") ?? held[0];
+    return city ? { name: city.name, point: city.coordinates } : null;
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2318,7 +2330,7 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
       // `owner`: the polity building it, which decides which Montana "Montana" is.
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2356,7 +2368,17 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
     // turns, to "northern frontier with Colombia" and then "northern border with
     // Colombia". A moved unit is not treated so: a move that cannot be placed
     // leaves the unit where it stands.
-    const homeland = !resolved && !hasCoordinates && entry.spawn && entry.owner
+    //
+    // A NEW unit or structure whose place is not on the map at all gets an
+    // approximate placement (AI/placement.js): near the capital of the country the
+    // phrase names, inside it when it marks none, or in its owner's own land. Seen in a live game (2026-09-27):
+    // a base at "Djibo, Burkina Faso" was dropped because the map has no Djibo.
+    const approximated = (() => {
+      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !entry.phrase) return null;
+      const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true });
+      return attempt?.approximate && !attempt.error ? attempt : null;
+    })();
+    const homeland = !resolved && !approximated && !hasCoordinates && entry.spawn && entry.owner
       ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
       : null;
     if (resolved) {
@@ -2382,6 +2404,17 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       target[lngKey] = resolved.lng;
       target[latKey] = resolved.lat;
       if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (approximated) {
+      noteReceipt(receipt, "adjusted", describeApproximatePlacement({
+        title: entry.title, name: entry.name, phrase: entry.phrase, reason: byPhrase?.error, placed: approximated,
+      }));
+      target[lngKey] = approximated.lng;
+      target[latKey] = approximated.lat;
+      if (entry.family === "unit" && approximated.regionId) target.regionId = approximated.regionId;
+      // The player settles an approximate structure of their own: Accept or Move
+      // (runtime/structurePlacement.js). A unit carries no mark; it moves anyway.
+      if (entry.family === "marker") target.approximate = approximated.approximate;
       placed += 1;
     } else if (homeland && !homeland.error) {
       const tried = byPhrase?.error
@@ -2574,6 +2607,14 @@ ${continuity}`);
 The engine carries these orders out every turn — a move continues toward its destination, a patrol keeps its station. Do not move these units again; give one a unit op only when an event redirects it or ends its order, and say why.
 ${pending}`);
   }
+
+  // Always sent, whatever the player's prompts say: without it the map stays
+  // empty while the story raises armies and builds bases. Seen in a live game
+  // (2026-09-27): thirteen rounds of military and construction events carried
+  // not one unit or structure change. The shortest form of the unit guidance
+  // the skip template used to carry, not a copy of it.
+  blocks.push(`[Units and Structures on the Map]
+When an event raises, moves, reinforces or wears down a force, that event carries the unitOps that show it. When an event builds or establishes something that stands in one place, it carries a markerOps build at a place the map knows, with its country.`);
 
   const board = buildJumpProjectsDirective(variables.projectsSummary);
   if (board) blocks.push(board);
@@ -2913,6 +2954,13 @@ So use the wider picture to choose the sender and the moment — never to give t
   if (["unitDirector", "structureDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
   }
+  // A Scene can hand land over by agreement; its outcome carries that as
+  // regionTransfers, checked as a jump's are. Anything won in fighting is left to
+  // the territory Director, which marks it occupied from the description.
+  if (taskKey === "interactiveSummary") {
+    systemPrompt = `${systemPrompt}\n\n[Land Changing Hands]\nIf the scene ended with land handed over by agreement (a treaty, a cession, a sale or a trade), list each region in regionTransfers with its new owner's full name as toCode, its previous owner's as fromCode, and basis. Name the regions as the map does. Leave regionTransfers out for anything taken or held by force: say in the description what was captured or occupied, and the map will show it as occupied.`;
+  }
+
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
     const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
@@ -12901,13 +12949,16 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   if (failed) throw failed;
   const lastSummary = normalizeString(normalizeArray(history).at(-1)?.summary);
 
-  const interactiveEvent = normalizeGeneratedEvent({
+  const outcome = normalizeGeneratedEvent({
     date: bundle.game.gameDate,
     description: normalizeString(summaryPayload?.description) || lastSummary,
     impacts: {
       createdChats: [],
       polityChanges: [],
-      regionTransfers: [],
+      // Land the Scene handed over by agreement. Checked below as a jump's
+      // transfers are; land won in fighting is marked occupied by the territory
+      // Director instead.
+      regionTransfers: normalizeArray(summaryPayload?.regionTransfers),
     },
     importance: normalizeString(summaryPayload?.importance) || "major",
     kind: "interactive",
@@ -12916,8 +12967,25 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     title: normalizeString(summaryPayload?.title) || interactive.title || "Interactive event resolved",
     source: summaryGeneration.source,
   });
+  if (outcome && normalizeArray(outcome.impacts?.regionTransfers).length) {
+    const transferError = await validateGeneratedWorldChanges({ events: [outcome] }, bundle.world, {
+      captureGuard: true,
+      playerCountry: normalizeString(bundle.game?.country),
+    }).catch((error) => error?.message || "the transfers could not be checked");
+    if (transferError) {
+      logDebugEvent("turn", "Scene outcome: its land transfers did not pass the checks a jump's must, so the Scene changes no borders.", transferError, { problem: true });
+      outcome.impacts.regionTransfers = [];
+    }
+  }
 
-  return applySimulationResult({
+  // The Scene outcome reaches the map as a jump's events do (mapConsequences.js):
+  // units, occupied land and Structures, and the Board. Seen in a live game
+  // (2026-09-27): a Scene established a headquarters in Ouagadougou and nothing
+  // appeared, because a Scene outcome never reached a Director.
+  const scene = outcome ? await sceneMapConsequences({ bundle, outcome, generation: summaryGeneration }) : null;
+  const sceneOutcome = scene?.events?.[0] ?? outcome;
+
+  const applyScene = (withBoard) => applySimulationResult({
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -12928,15 +12996,87 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
       ...bundle.world,
       activeInteractive: null,
     },
+    // The Board moves with a Scene too: from the review's answer when one request
+    // asked everything, otherwise by its own request, as after a jump.
+    projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
     result: {
       clearActions: false,
-      events: interactiveEvent ? [interactiveEvent] : [],
+      events: sceneOutcome ? [sceneOutcome] : [],
+      structureLinks: scene?.structureLinks ?? [],
       mode: "interactive",
       stopDate: bundle.game.gameDate,
       summary: normalizeString(summaryPayload?.description) || lastSummary,
       generation: summaryGeneration,
+      receipt: scene?.receipt ?? null,
     },
   });
+  // A Board that fails holds a jump for the player to retry; a Scene is not held
+  // for its Board. Its outcome is written without the Board moving, and the next
+  // jump's Board pass reads it with the rest.
+  try {
+    return await applyScene(Boolean(scene?.board));
+  } catch (error) {
+    if (!error?.projectsHeld) throw error;
+    logDebugEvent("turn", "Scene outcome: the Board did not update, so the Scene was written without it.", error, { problem: true });
+    return applyScene(false);
+  }
+};
+
+// The checks a Scene outcome goes through: units, territory, Structures and the
+// Board — never the timeline, agent reports or order attribution. While requests
+// are being saved they are ONE review request, and none when nothing in the Scene
+// qualifies; otherwise each check that has something to look at makes its own,
+// as after a jump. A check that fails leaves the Scene outcome as written.
+const SCENE_REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "board"]);
+const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
+  const saving = savingRequests();
+  // Approximate placements are told to the model like a jump's. The last jump's
+  // notes are carried over, because only the newest entry in the history keeps
+  // its notes; the receipt is written only when this Scene added one.
+  const previous = normalizeArray(normalizeWorldState(bundle.world).simulationHistory)[0]?.receipt;
+  const receipt = createApplicationReceipt();
+  for (const note of normalizeArray(previous?.notes)) noteReceipt(receipt, note?.kind, note?.text);
+  const carried = receipt.notes.length;
+  const merged = { events: [outcome], stopDate: normalizeString(bundle.game?.gameDate), clearActions: false };
+  let review = null;
+  if (saving) {
+    try {
+      review = await runTurnReview({
+        context: { bundle, mode: "interactive", targetDate: merged.stopDate },
+        merged,
+        signal: null,
+        state: { requests: null, generation, hiddenEvents: [] },
+        sections: SCENE_REVIEW_SECTIONS,
+      });
+    } catch (error) {
+      logDebugEvent("turn", "Scene outcome: the map check failed; the Scene stands as written.", error, { problem: true });
+      return null;
+    }
+  }
+  const { events, structureLinks } = await applyMapConsequences({
+    events: merged.events,
+    world: bundle.world,
+    game: bundle.game,
+    playerCountry: normalizeString(bundle.game?.country),
+    analyze: directorAnalyzers({ bundle, review, signal: null, requests: null, gameDate: merged.stopDate, sections: SCENE_REVIEW_SECTIONS, receipt }),
+    findPlaces: review ? null : placeReaderFor(bundle),
+    resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: null }),
+  });
+  // The Board moves only when the Scene concerns an entry on it: from the review's
+  // part while saving, otherwise by its own request only then — a Scene that
+  // touches nothing on the Board costs nothing for it. The calendar never asks
+  // after a Scene; that is a jump's.
+  const board = requestSettings.reviewSection("board") && (saving
+    ? Boolean(review?.parts?.board)
+    : boardPassReasons({
+      board: normalizeArray(bundle.world?.projects),
+      events,
+      gameDate: merged.stopDate,
+      round: Math.max(1, Number(bundle.game?.round) || 0),
+      reviewedRound: Math.max(1, Number(bundle.game?.round) || 0),
+      playerCountry: normalizeString(bundle.game?.country),
+    }).length > 0);
+  return { events, structureLinks, review: review ?? null, board, receipt: receipt.notes.length > carried ? receipt : null };
 };
 
 // End the scene where it stands (the panel's End the scene). With no beat
@@ -13689,7 +13829,7 @@ const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit directo
 
 // The director's orders may say where in words too. Placed here, before the
 // director's own rules measure the move, because those rules read coordinates.
-const placeDirectorOrders = async (payload, world, events) => {
+const placeDirectorOrders = async (payload, world, events, receipt = null) => {
   const orders = normalizeArray(payload?.eventOrders);
   if (!orders.length) return payload;
   const containers = orders.map((order, index) => ({
@@ -13698,7 +13838,7 @@ const placeDirectorOrders = async (payload, world, events) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt: null });
+    await resolvePlacements(containers, world, { receipt });
   } catch (error) {
     console.warn("[unit director] the orders' places could not be resolved; the orders stand as written.", error);
   }
@@ -13723,7 +13863,7 @@ const structureDirectorVariables = (input, game) => ({
 
 // Same as the unit director's: every `at` becomes coordinates before the
 // director's rules, which need a point, look at the structures.
-const placeStructureOrders = async (payload, world, events) => {
+const placeStructureOrders = async (payload, world, events, receipt = null) => {
   const orders = normalizeArray(payload?.eventOrders);
   if (!orders.length) return payload;
   const containers = orders.map((order, index) => ({
@@ -13732,11 +13872,53 @@ const placeStructureOrders = async (payload, world, events) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt: null, noteGround: true });
+    await resolvePlacements(containers, world, { receipt, noteGround: true });
   } catch (error) {
     console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
   }
   return payload;
+};
+
+// How each Director is answered, for mapConsequences.js: from the turn review's
+// part when one request already asked everything (`review`), otherwise by a
+// request of its own. Each analyser is handed the events as they stand when its
+// Director runs, since an answer is placed against those, and approximate
+// placements are noted on `receipt` for the next turn. `sections` is a Scene's
+// list of checks, each also subject to its setting; a jump passes none and runs
+// the unit and territory Directors whatever the settings, as it always has.
+const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate = "", sections = null, receipt = null }) => {
+  const runs = (key) => !sections || (sections.includes(key) && requestSettings.reviewSection(key));
+  const asked = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
+    lookups: buildTaskLookups(bundle),
+    fallback,
+    signal,
+    userMessage,
+    variables,
+    ...jumpTaskOptions(requests, "review"),
+  });
+
+  const units = !runs("units") ? null : async (input, events) => {
+    const answer = review
+      ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
+      : await asked("unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+    await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
+    return answer;
+  };
+
+  const territory = !runs("territory") ? null : async (input) => (review
+    ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
+    : asked("territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+
+  const structuresRun = sections ? runs("structures") : (review || requestSettings.reviewSection("structures"));
+  const structures = !structuresRun ? null : async (input, events) => {
+    const answer = review
+      ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
+      : await asked("structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
+        structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }));
+    return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
+  };
+
+  return { units, territory, structures };
 };
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
@@ -13814,7 +13996,11 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
 
-const runTurnReview = async ({ context, merged, signal, state }) => {
+// `sections`: only these checks are asked about (a Scene asks units, territory,
+// structures and the board; never the timeline, agents or order attribution).
+// A Scene has no time skip's request budget (`state.requests` is null) and is
+// simply one request when anything qualifies.
+const runTurnReview = async ({ context, merged, signal, state, sections = null }) => {
   const { bundle, mode } = context;
   const requests = state.requests;
   const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [] };
@@ -13822,7 +14008,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  const wants = (section) => requestSettings.reviewSection(section);
+  const wants = (section) => (!sections || sections.includes(section)) && requestSettings.reviewSection(section);
   const round = (Number(bundle.game?.round) || 1) + 1;
   const stopDate = normalizeString(merged.stopDate) || context.targetDate;
   const playerCountry = normalizeString(bundle.game?.country);
@@ -13880,7 +14066,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // but it is cheap to repair semantically while this combined review request
   // is already available. The plan exposes only exact current ids + numbered
   // retained candidates; native code validates the returned pairings again.
-  const actionOutcomePlan = merged.clearActions === false ? null : buildActionOutcomeAssociationPlan({
+  const actionOutcomePlan = merged.clearActions === false || sections ? null : buildActionOutcomeAssociationPlan({
     actions: bundle.actions,
     events: candidates,
   });
@@ -13987,7 +14173,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   const usable = jobs.filter((job) => job.schema);
-  if (!usable.length || !requests.budget.take("review")) {
+  if (!usable.length || (requests && !requests.budget.take("review"))) {
     if (usable.length) logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
     return review;
   }
@@ -14181,6 +14367,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // director then runs exactly as it always has, with its part of that answer in
   // place of the request it would have made. `review` is null when saving is off,
   // and each check makes its own request as before.
+  // An event answering the player's order to raise or build is the Directors' to
+  // read whatever its wording (mapConsequences.js). Marked here so the review asks
+  // about it, and again when the Directors run, because the order attribution
+  // below may give an event its order only after the review.
+  merged.events = markOrderedEvents(merged.events, context.bundle?.actions);
   const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
 
   // A current order whose outcome event omitted actionIds gets one bounded
@@ -14204,106 +14395,34 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // only the plausible ones, and they ride the same application path as the
   // simulator's own unitOps (a long move becomes a standing order). A failed or
   // unavailable director never costs the turn — the events pass through as written.
+  //
+  // Then the territory director marks who holds the ground (occupation only: it
+  // never pretends a capture is international law, and an unresolved place fails
+  // safe by disappearing), and the structure director builds what the events
+  // built. All three run in mapConsequences.js, which a Scene outcome goes
+  // through too; each Structure that belongs to a Project is linked to it once
+  // the turn is written (structureLinks).
   state.phases?.enter("placing");
-  let directedEvents = merged.events;
-  try {
-    directedEvents = await directGeneratedUnitOps({
-      events: merged.events,
-      game: bundle.game,
-      world: bundle.world,
-      analyzeBatch: review
-        ? async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } })
-        : async (input) => {
-          const answer = await runJsonTask("unitDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: unitDirectorUnavailable,
-            signal,
-            userMessage: UNIT_DIRECTOR_INSTRUCTION,
-            variables: unitDirectorVariables(input, bundle.game),
-            ...jumpTaskOptions(state.requests, "review"),
-          });
-          await placeDirectorOrders(answer?.payload, bundle.world, merged.events);
-          return answer;
-        },
-    });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH unit director] pass failed; the simulator's unit operations stand.", error);
-    directedEvents = merged.events;
-  }
-
-
-  // Second narrow pass: the surviving prose and front state become the native
-  // disputed-region machinery (regionControlOps) without pretending every
-  // occupation is international law. Its additions go through the same
-  // geography resolver as the simulator's own ops, bounded by current control;
-  // an unresolved place fails safe by disappearing rather than minting a
-  // phantom region key. A failed pass never costs the turn.
-  let territoryEvents = directedEvents;
-  try {
-    territoryEvents = await directGeneratedTerritoryOps({
-      events: directedEvents,
-      world: bundle.world,
-      // The places the events name, with who holds each (lookupTools.js
-      // placesNamedIn), so the director can fill in fromCode without asking.
-      // Not needed when the review already answered: the director never asks.
-      findPlaces: review ? null : placeReaderFor(bundle),
-      analyzeBatch: review
-        ? async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } })
-        : async (input) =>
-          runJsonTask("territoryDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: territoryDirectorUnavailable,
-            signal,
-            userMessage: TERRITORY_DIRECTOR_INSTRUCTION,
-            variables: await territoryDirectorVariables(input, bundle.world),
-            ...jumpTaskOptions(state.requests, "review"),
-          }),
-    });
-    const containers = territoryEvents.map((event, index) => ({
-      event,
-      impacts: event?.impacts,
-      path: `$.events[${index}].impacts`,
-    }));
-    await resolveRegionControlOps(containers, bundle.world, { requests: state.requests });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH territory director] pass failed; the simulator's territorial operations stand.", error);
-    territoryEvents = directedEvents;
-  }
-
-  // Third: the structures the events built (nativeStructureDirector.js), which
-  // the simulator almost never puts on the map by itself. Each one that belongs
-  // to a Project is linked to it once the turn is written (structureLinks).
-  let builtEvents = territoryEvents;
-  let structureLinks = [];
-  try {
-    const built = await directGeneratedStructureOps({
-      events: territoryEvents,
-      world: bundle.world,
-      playerCountry: normalizeString(bundle.game?.country),
-      analyzeBatch: review
-        ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
-        : requestSettings.reviewSection("structures")
-          ? async (input) => {
-            const answer = await runJsonTask("structureDirector", {
-              lookups: buildTaskLookups(bundle),
-              fallback: structureDirectorUnavailable,
-              signal,
-              userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
-              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }),
-              ...jumpTaskOptions(state.requests, "review"),
-            });
-            return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
-          }
-          : null,
-    });
-    builtEvents = built.events;
-    structureLinks = built.links;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH structure director] pass failed; the events keep the structures they had.", error);
-  }
+  const { events: builtEvents, structureLinks } = await applyMapConsequences({
+    events: markOrderedEvents(merged.events, bundle.actions),
+    world: bundle.world,
+    game: bundle.game,
+    playerCountry: normalizeString(bundle.game?.country),
+    analyze: directorAnalyzers({
+      bundle,
+      review,
+      signal,
+      requests: state.requests,
+      gameDate: normalizeString(merged.stopDate) || context.targetDate,
+      receipt: state.receipt,
+    }),
+    // The places the events name, with who holds each (lookupTools.js
+    // placesNamedIn), so the territory director can fill in fromCode without
+    // asking. Not needed when the review already answered: it never asks.
+    findPlaces: review ? null : placeReaderFor(bundle),
+    resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: state.requests }),
+    signal,
+  });
 
   const result = {
     clearActions: merged.clearActions,

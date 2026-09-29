@@ -36,6 +36,14 @@ _Avoid_: Process, thread, arc
 Anything physical the campaign builds and the map draws in one place: a base, shipyard, data centre, ground station, reactor, embassy. Kept in `world.markers[]` and written by an event's `markerOps`, so **marker** is the field name for the record while Structure is the thing itself. A satellite is not one; the ground station that serves it is. Something that moves is a unit.
 _Avoid_: Feature, facility, building (as the term for the record)
 
+**Approximate placement**:
+Where a Structure or unit goes when the place its event names is not on the map: near the capital of the country the place is said to be in, or in its owner's own territory when no country is named. The player may accept or move an approximate Structure of their own or their puppets'; everyone else's stays where it landed.
+_Avoid_: Fallback spot, guessed location, default position
+
+**Director**:
+A check that reads Canonical events and turns what they narrate into changes on the map: the unit director moves, raises and wears down units, the territory director marks who holds the ground, the structure director builds Structures. It runs after a jump and after a Scene, never invents what the event does not say, and the engine's rules decide which of its changes stand.
+_Avoid_: Reviewer, pass, reconciler (as the name of the check)
+
 ### Library
 
 **Scenario**:
@@ -63,6 +71,18 @@ _Avoid_: Wider-world event, background event
 **Player focus**:
 How much of each jump belongs to Player events: World first, Balanced, Focused or Spotlight. The Scenario sets the level a new Game starts on and the player changes it for their own Game, like any other feature setting. It is a minimum share that applies only as far as the player has something going on; in a quiet stretch the World fills the jump.
 _Avoid_: Player share, player weighting, attention balance
+
+**Interactive event**:
+A moment a jump offers the player to play out in person instead of reading about it. The player can play it or let it pass.
+_Avoid_: Interactive (as a noun), playable event
+
+**Scene**:
+An Interactive event the player chose to play: a run of choices that ends in one Scene outcome.
+_Avoid_: Interactive, episode
+
+**Scene outcome**:
+The Canonical event a Scene ends in. It changes the world as any event from a jump would, including the map, through the Directors.
+_Avoid_: Interactive event result, scene summary
 
 **Hidden event**:
 A Canonical event kept off the timeline because it was routine, low-value or already covered. It still happened. Distinct from a rejected event, which the simulation judged untrue and which never happened.

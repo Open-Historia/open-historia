@@ -5,6 +5,7 @@ import { Layer, Source, useMap } from "react-map-gl/maplibre";
 import { onRegionSelected, onOceanClicked, dismissRegionPopup } from "../Selection/Regions";
 import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
+import { saveSettledStructure } from "../../runtime/structurePlacement.js";
 import {
   getInteractionMode,
   clearInteractionMode,
@@ -1202,6 +1203,15 @@ const WorldMap = ({ isGlobe = false }) => {
     };
 
     const mode = getInteractionMode();
+
+    // Move on an approximately placed structure's popup (Selection/Features.jsx):
+    // it goes where the player clicks, sea included, and is settled.
+    if (mode.kind === "structure-place") {
+      void saveSettledStructure(mode.markerId, { lng: event.lngLat.lng, lat: event.lngLat.lat })
+        .catch((error) => logDebugEvent("warn", "[map] Moving the structure failed.", error));
+      clearInteractionMode();
+      return;
+    }
 
     if (mode.kind === "admin-place") {
       placeUnitAdmin(mode.unitId, event.lngLat.lng, event.lngLat.lat);

@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { eventNeedsNativeUnitDirector, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -38,4 +38,52 @@ test("a move for a unit the event does not move yet is kept", () => {
     game: {},
   });
   assert.equal(acceptedByEvent.get(0)?.length, 1);
+});
+
+// Seen in a harness run (2026-09-27) on a player's Burkina Faso Game: the unit
+// director asked to raise "1st Dori VDP Rapid-Reaction Battalion" and the rule
+// threw it away, because the new-formation cue only knew armies down to
+// regiments and only with nothing between "new" and the noun.
+const burkinaUnit = {
+  id: "unit-bf", name: "Burkinabe Army Northern Group", type: "infantry",
+  ownerCode: "Burkina Faso", strength: 100, lng: -1.5, lat: 12.4,
+};
+const raising = (title, description = "") => sanitizeDirectorOrders({
+  events: [{ title, description, kind: "military", impacts: {} }],
+  orders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "New formation", type: "infantry", ownerCode: "Burkina Faso", strength: 100, lng: -0.05, lat: 14.03 } }] }],
+  units: [burkinaUnit],
+  game: {},
+});
+
+test("a new formation is raised whatever its size, with words between 'new' and the noun", () => {
+  for (const title of [
+    "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori",
+    "Burkinabe Forces Raise a New Rapid-Reaction Battalion and Deploy It to Dori",
+    "Army Forms a Mechanized Company to Guard the Northern Road",
+    "Government Raises a Volunteer Militia in Soum Province",
+    "Ouagadougou Stands Up a New Joint Border Force",
+  ]) {
+    const { acceptedByEvent, diagnostics } = raising(title);
+    assert.equal(acceptedByEvent.get(0)?.length, 1, `${title}: ${JSON.stringify(diagnostics)}`);
+  }
+});
+
+test("a formation that already exists fighting again is still not a new one", () => {
+  const { acceptedByEvent, diagnostics } = raising(
+    "Burkinabe Battalion Holds Its Positions Near Dori",
+    "The battalion repelled an attack on the northern road.",
+  );
+  assert.equal(acceptedByEvent.get(0), undefined);
+  assert.match(diagnostics[0]?.reason ?? "", /no explicit new-formation cue/);
+});
+
+test("an event that raises a new formation is one the director is asked about", () => {
+  assert.equal(eventNeedsNativeUnitDirector({ title: "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori" }), true);
+  assert.equal(eventNeedsNativeUnitDirector({ title: "Government Raises a Volunteer Militia in Soum Province" }), true);
+});
+
+test("money or votes raised for an army are not a new formation", () => {
+  assert.equal(eventNeedsNativeUnitDirector({ title: "Parliament Raises Funds for the Army" }), false);
+  const { acceptedByEvent } = raising("Parliament Raises Funds for the Army", "The defence budget grows for the troops.");
+  assert.equal(acceptedByEvent.get(0), undefined);
 });

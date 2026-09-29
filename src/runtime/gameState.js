@@ -1445,6 +1445,7 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
   const createdAt = normalizeOptionalString(entry.createdAt) || timestamp;
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
+  const approximate = normalizeApproximateMark(entry.approximate);
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
@@ -1461,7 +1462,19 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
+    ...(approximate ? { approximate } : {}),
   };
+};
+
+// A structure given an approximate placement because the place its event named is
+// not on the map (AI/placement.js): what was asked for, and where it went. The
+// player settles it with Accept or Move (structurePlacement.js).
+const normalizeApproximateMark = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const asked = normalizeOptionalString(value.asked);
+  const country = normalizeOptionalString(value.country);
+  if (!asked || !country) return null;
+  return { asked, country, near: normalizeOptionalString(value.near) };
 };
 
 export const normalizeMarkers = (markers) =>
