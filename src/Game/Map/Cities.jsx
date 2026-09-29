@@ -8,6 +8,7 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { cityPopulationExpr, populationFilter, populationLabelFilter } from "./cityLayerExpressions.js";
 import { useWorldState } from "./useWorldState.js";
 import { withPopulationsForYear } from "../../runtime/cityPopulation.js";
 import { gameDateYear } from "../../runtime/gameDates.js";
@@ -20,43 +21,6 @@ import {
 } from "../../runtime/cityFeatures.js";
 
 ensurePmtilesProtocol();
-
-const populationFilter = (pop) => [
-    "any",
-    ["==", ["get", "capital"], "primary"],
-    [
-        ">",
-        ["get", "population"],
-        [
-            "step", ["zoom"],
-            3000000,
-            5.25, 1500000,
-            6.25, 750000,
-            7.25, 350000,
-            8.25, 150000,
-        ],
-    ],
-];
-
-// City labels are intentionally stricter than markers. A regional map can carry
-// a useful constellation of settlements without asking the eye to read every
-// one of their names at once. Capitals always win; smaller labels arrive later.
-const populationLabelFilter = (pop) => [
-    "any",
-    ["==", ["get", "capital"], "primary"],
-    [
-        ">",
-        ["get", "population"],
-        [
-            "step", ["zoom"],
-            4000000,
-            5.5, 2000000,
-            6.5, 1000000,
-            7.5, 500000,
-            8.5, 250000,
-        ],
-    ],
-];
 
 // Custom (scenario-authored) cities are a curated era set, not the 70k-strong
 // modern database, and their historical populations are far below modern
@@ -125,16 +89,6 @@ const customCircleSortKey = (pop) => [
 // Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
 // AI renames (world.cityRenames) are applied as a client-side match override so a
 // renamed city shows its new name without touching the tiles.
-const cityPopulationExpr = (populations) => {
-    const baseName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
-    const pairs = Object.entries(populations || {});
-    if (!pairs.length) return ["get", "population"];
-    const expr = ["match", baseName];
-    for (const [name, value] of pairs) expr.push(String(name).toLowerCase(), value);
-    expr.push(["get", "population"]);
-    return expr;
-};
-
 const cityLabelExpr = (renames) => {
     const baseLabel = ["coalesce", ["get", "city"], ["get", "name"], ""];
     const pairs = Object.entries(renames || {});
@@ -434,7 +388,7 @@ const Cities = () => {
     const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
     const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
-    const pop = React.useMemo(() => cityPopulationExpr(cityPopulations), [cityPopulations]);
+    const pop = React.useMemo(() => cityPopulationExpr(cityPopulations, cityRenames), [cityPopulations, cityRenames]);
     // Each city's population for the year, where the scenario gives it by year;
     // a population the AI set (cityPopulations, in `pop`) still wins.
     const gameYear = useGameYear();

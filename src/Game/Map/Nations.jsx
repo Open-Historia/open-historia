@@ -41,7 +41,7 @@ import {
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
-import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
+import { cityPopulationOverridesByTileName, effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
 import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
@@ -1191,7 +1191,12 @@ const WorldMap = ({ isGlobe = false }) => {
           name: props.city || props.name || "",
           // The drawn figure is already the year's (Cities.jsx); one the AI set
           // by hand is the city's population from then on.
-          population: effectiveCityPopulation(props, { cityPopulations: getWorldStateSnapshot()?.cityPopulations }),
+          population: effectiveCityPopulation(props, {
+            cityPopulations: cityPopulationOverridesByTileName(
+              getWorldStateSnapshot()?.cityPopulations,
+              getWorldStateSnapshot()?.cityRenames,
+            ),
+          }),
           capital: props.capital,
           tier: props.tier,
           ownerCode: hostCountry,

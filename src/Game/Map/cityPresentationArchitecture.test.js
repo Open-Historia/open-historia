@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const cities = fs.readFileSync(new URL("./Cities.jsx", import.meta.url), "utf8");
+const cityExpressions = fs.readFileSync(new URL("./cityLayerExpressions.js", import.meta.url), "utf8");
 const nations = fs.readFileSync(new URL("./Nations.jsx", import.meta.url), "utf8");
 
 test("cities use ranked game markers with dedicated capital stars", () => {
@@ -27,9 +28,12 @@ test("capital labels stay white while the capital marker carries the gold accent
 
 
 test("minor settlements are progressively revealed instead of saturating regional zooms", () => {
-  assert.match(cities, /const populationLabelFilter/);
-  assert.match(cities, /5\.25, 1500000/);
-  assert.match(cities, /8\.25, 150000/);
+  assert.match(cityExpressions, /export const populationLabelFilter/);
+  assert.match(cityExpressions, /5\.25, 1500000/);
+  assert.match(cityExpressions, /8\.25, 150000/);
+  // The stock layers take them from there; cityLayerExpressions.test.js
+  // evaluates them against AI-set populations.
+  assert.match(cities, /filter=\{populationLabelFilter\(pop\)\}/);
   assert.match(cities, /const customLabelFilter/);
   assert.match(cities, /\[">=", \["zoom"\], 5\.8\]/);
   assert.match(cities, /\[">=", \["zoom"\], 6\.5\]/);
