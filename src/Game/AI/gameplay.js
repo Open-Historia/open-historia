@@ -328,7 +328,7 @@ import {
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
-import { idlePulseEvent, idlePulseUnitOps, keepDetectedEvents } from "./idlePulse.js";
+import { idlePulseEvent, idlePulseUnitOps, keepDetectedEvents, sightingEvent } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleChatBatchCore,
@@ -16804,23 +16804,8 @@ const applyIdlePulseUnitOps = async (bundle, unitOps) => {
 // model judged the movement near enough for their services to have seen it.
 const appendSightingEvent = async (bundle, sighting, unitOps) => {
   const events = await readEventsState({ force: true });
-  const next = normalizeEvents([
-    ...events,
-    {
-      date: normalizeString(bundle.game?.gameDate),
-      title: normalizeString(sighting.title),
-      description: normalizeString(sighting.description),
-      importance: "minor",
-      kind: "intel",
-      playerRelated: true,
-      notable: false,
-      // The event carries the very ops it is reporting. They have already been
-      // applied to the world above and nothing re-applies an event's impacts from
-      // the log, so this is not a second application — it is what lets the event
-      // camera fly to the sighting instead of guessing from the prose.
-      impacts: { unitOps },
-    },
-  ]);
+  // The AI's own event, carrying the ops it reports (idlePulse.js says why).
+  const next = normalizeEvents([...events, sightingEvent(bundle.game?.gameDate, sighting, unitOps)]);
   await writeEventsState(next);
 };
 

@@ -43,6 +43,28 @@ export const idlePulseUnitOps = (world, unitOps, player) => {
     .slice(0, 2);
 };
 
+// The intel event that reports a sighting in the log. Written by the model in
+// the player's language, so it is marked as the AI's: an event with no source is
+// read as the scenario's own text (gameState.js normalizeEventEntry), and the
+// translator sent every sighting off for translation into the language it was
+// already in (translator.js isAuthoredEvent).
+//
+// It carries the very ops it is reporting. They have already been applied to
+// the world and nothing re-applies an event's impacts from the log, so this is
+// not a second application — it is what lets the event camera fly to the
+// sighting instead of guessing from the prose.
+export const sightingEvent = (date, sighting, unitOps) => ({
+  date: clean(date),
+  title: clean(sighting?.title),
+  description: clean(sighting?.description),
+  importance: "minor",
+  kind: "intel",
+  playerRelated: true,
+  notable: false,
+  source: "ai",
+  impacts: { unitOps },
+});
+
 // A unit the pulse touched keeps the event it was detected with. The applier
 // stamps the event that last moved a unit onto it, and the pulse's event is not
 // in the log: pointing at it would take the "Detected" row off the unit's card
