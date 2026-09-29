@@ -227,12 +227,42 @@ const ringDistanceKm = (ring, lng, lat) => {
   return best;
 };
 
+const measureBounds = (rings) => {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const ring of rings) {
+    for (const [lng, lat] of ring) {
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
+  }
+  return { west, south, east, north };
+};
+
+// Outlines are cached by their loaders, so their boxes are worked out once.
+const boundsCache = new WeakMap();
+const boundsOf = (rings) => {
+  if (boundsCache.has(rings)) return boundsCache.get(rings);
+  const bounds = measureBounds(rings);
+  boundsCache.set(rings, bounds);
+  return bounds;
+};
+
 /**
  * Turn decoded region outlines into the locate() index buildForcePostureText uses.
  *
  * Ownership follows the LIVE map via regionVocab's regionOwnerName — an explicit
  * regionOwnershipOverrides entry wins, else the region's base country — so a
  * polity the campaign invented ("Free Ireland") is as locatable as a stock one.
+ *
+ * Whose territory a point is in is answered from EVERY region, not only the
+ * wanted owners': a Russian group in Syria is inside Syria whether or not Syria
+ * is one of the powers indexed, and "at sea" means no region holds the point.
+ * Only the border distances, the expensive part, are limited to wanted owners.
  *
  * @param outlines Map(regionId -> {country, countryCode, rings})
  */
@@ -243,16 +273,19 @@ export const createTerritoryIndex = (outlines, world, { owners = [] } = {}) => {
 
   const overrides = world?.regionOwnershipOverrides ?? {};
   const byOwner = new Map();
+  const land = [];
   for (const [id, outline] of outlines) {
     const owner = regionOwnerName(
       { id, country: outline.country, countryCode: outline.countryCode },
       overrides,
     );
-    if (!owner || !wanted.has(lower(owner))) continue;
+    if (!owner) continue;
+    land.push({ owner, rings: outline.rings, bounds: boundsOf(outline.rings) });
+    if (!wanted.has(lower(owner))) continue;
     if (!byOwner.has(owner)) byOwner.set(owner, []);
     byOwner.get(owner).push(...outline.rings);
   }
-  if (byOwner.size === 0) return null;
+  if (land.length === 0) return null;
 
   return {
     owners: [...byOwner.keys()],
@@ -265,7 +298,8 @@ export const createTerritoryIndex = (outlines, world, { owners = [] } = {}) => {
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
       let inside = "";
-      for (const [owner, rings] of byOwner) {
+      for (const { owner, rings, bounds } of land) {
+        if (lng < bounds.west || lng > bounds.east || lat < bounds.south || lat > bounds.north) continue;
         if (rings.some((ring) => ringContains(ring, lng, lat))) {
           inside = owner;
           break;

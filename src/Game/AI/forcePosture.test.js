@@ -236,3 +236,26 @@ test("the digest turns a locate() result into the clause the advisor reads", () 
   const text = buildForcePostureText([massing], [], index(), "Eastland");
   assert.match(text, /inside Westland, about \d+ km from the Eastland border/);
 });
+
+test("a unit in a country nobody asked about is inside it, not at sea", () => {
+  // Syria is not one of the indexed powers; a Russian group standing in it is
+  // still on land, and the border it is measured against is an indexed one.
+  const levant = new Map([
+    ["TUR.1", { country: "Turkey", countryCode: "TUR", rings: [square(26, 36, 44, 42)] }],
+    ["SYR.1", { country: "Syria", countryCode: "SYR", rings: [square(36, 32, 42, 36)] }],
+  ]);
+  const territories = createTerritoryIndex(levant, {}, { owners: ["Russia", "Turkey"] });
+  const placed = territories.locate({ lng: 38, lat: 34 });
+  assert.equal(placed.inside, "Syria");
+  assert.equal(placed.nearest, "Turkey");
+  const text = buildForcePostureText([unit({ lng: 38, lat: 34 })], [], territories, "Turkey");
+  assert.match(text, /inside Syria, about \d+ km from the Turkey border/);
+  assert.doesNotMatch(text, /at sea/);
+});
+
+test("with none of its owners indexed, a point on land is still inside its country", () => {
+  const territories = createTerritoryIndex(outlines, {}, { owners: ["Atlantis"] });
+  assert.deepEqual(territories.owners, []);
+  assert.equal(territories.locate({ lng: 5, lat: 5 }).inside, "Eastland");
+  assert.equal(territories.locate({ lng: 50, lat: 50 }), null);
+});
