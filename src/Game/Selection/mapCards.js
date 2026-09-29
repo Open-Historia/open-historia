@@ -81,6 +81,23 @@ export const isSameRegionSelection = (current, next) => {
   return current.COUNTRY === next.COUNTRY && current.NAME_1 === next.NAME_1;
 };
 
+// The region card's status line, or no status for a region held in the normal
+// way. Unowned land can be claimed too (terra nullius): the card showed only
+// "Unclaimed Territory" there and never named who claimed it.
+export const regionControlStatus = ({ controllerCode = "", sovereignCode = "", claimants = [], displayName = (code) => code } = {}) => {
+  const isUnclaimed = !controllerCode;
+  const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
+  const isContested = claimants.length > 0;
+  let status = null;
+  if (isUnclaimed) {
+    if (claimants.length === 1) status = `Unclaimed, claimed by ${displayName(claimants[0])}`;
+    else if (claimants.length > 1) status = "Unclaimed, contested";
+  } else if (isOccupied && isContested) status = "Occupied / contested";
+  else if (isOccupied) status = "Occupied";
+  else if (isContested) status = "Contested";
+  return { isUnclaimed, isOccupied, isContested, status };
+};
+
 // A card's spot on screen, followed as the camera moves (once a frame at most).
 // null while `active` is off (a phone's sheet follows no point) or the spot is
 // not on screen.

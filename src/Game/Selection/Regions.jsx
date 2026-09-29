@@ -16,7 +16,7 @@ import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { isSameRegionSelection, useCardScreenPos } from "./mapCards.js";
+import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -551,17 +551,6 @@ const RegionPopup = () => {
     )];
     const isUnclaimed = controllerCode === "";
     const controllingGroup = regionId ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null : null;
-    const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
-    const isContested = claimants.length > 0;
-    const controlStatus = isOccupied && isContested
-        ? "Occupied / contested"
-        : isOccupied
-            ? "Occupied"
-            : isContested
-                ? "Contested"
-                : isUnclaimed
-                    ? "Unclaimed"
-                    : "Administered";
     const displayPolity = (code) => {
         if (!code) return "Unclaimed Territory";
         const identity = resolvePolityIdentity(code, worldState, {
@@ -573,6 +562,14 @@ const RegionPopup = () => {
         const key = identity.resolved || code;
         return worldState?.polityOverrides?.[key]?.name || key || "Unclaimed Territory";
     };
+    // Shown for a region that is occupied or claimed, unowned land included
+    // (mapCards.js).
+    const { isOccupied, status: controlStatus } = regionControlStatus({
+        controllerCode,
+        sovereignCode,
+        claimants,
+        displayName: displayPolity,
+    });
     // header stays on the current administrator/controller. legal title goes below.
     const displayCountry = isUnclaimed ? "Unclaimed Territory" : displayPolity(controllerCode);
     // The same summary the country panel shows (runtime/puppets.js), and for an
@@ -738,14 +735,18 @@ const RegionPopup = () => {
         </div>
         </div>
 
-        {!isUnclaimed && (isOccupied || isContested) && (
+        {controlStatus && (
             <>
             <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
             <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
-            <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
-            <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+            {!isUnclaimed && (
+                <>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Sovereign</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(sovereignCode)}</span>
+                <span style={{ color: "rgba(255,255,255,0.42)" }}>Controlled by</span>
+                <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>{displayPolity(controllerCode)}</span>
+                </>
+            )}
             <span style={{ color: "rgba(255,255,255,0.42)" }}>Status</span>
             <span style={{ color: isOccupied ? "#fbbf24" : "rgba(255,255,255,0.84)", fontWeight: 700 }}>{controlStatus}</span>
             {claimants.length > 0 && (

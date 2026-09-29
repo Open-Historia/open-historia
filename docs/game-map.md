@@ -332,6 +332,8 @@ The region, unit and feature cards share `Selection/mapCards.js`. On a desktop e
 
 A click on the place whose card is open closes it; a click anywhere else shows that place. "The same place" is decided by id (`isSameRegionSelection`: the region's `GID_1`; `isSameFeatureSelection`: the structure's id), never by name alone: a drawn map's regions share names like "New Region", and two structures may both be "Naval Base". A city has no id, so it is its name at its own coordinates.
 
+The region card's control block (`regionControlStatus`) shows for a region that is occupied or claimed: Sovereign, Controlled by, Status and Claimants, with the claims the map file draws merged in (`withMapClaims`). Unowned land that someone claims shows Status and Claimants only, the status reading "Unclaimed, claimed by …" for one claimant and "Unclaimed, contested" for more.
+
 ---
 
 ## 10. The decorative globe (`GlobeEffects.jsx`)

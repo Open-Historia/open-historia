@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cardScreenPoint, isBehindGlobe, isSameFeatureSelection, isSameRegionSelection } from "./mapCards.js";
+import { cardScreenPoint, isBehindGlobe, isSameFeatureSelection, isSameRegionSelection, regionControlStatus } from "./mapCards.js";
 
 // A stand-in for MapLibre: a flat map projects longitude straight across the
 // screen, `pixelsPerDegree` to the degree, centred on `center`.
@@ -80,4 +80,18 @@ test("two drawn regions of one name are two regions", () => {
     "without ids, the country and the name",
   );
   assert.equal(isSameRegionSelection(null, first), false);
+});
+
+test("a claim on unowned land is named on the region card", () => {
+  const name = (code) => ({ FRA: "France", ESP: "Spain" }[code] ?? code);
+  assert.equal(regionControlStatus({ claimants: ["FRA"], displayName: name }).status, "Unclaimed, claimed by France");
+  assert.equal(regionControlStatus({ claimants: ["FRA", "ESP"], displayName: name }).status, "Unclaimed, contested");
+  assert.equal(regionControlStatus({}).status, null, "unowned land nobody claims has no status");
+});
+
+test("owned land keeps its occupied and contested statuses", () => {
+  assert.equal(regionControlStatus({ controllerCode: "A", sovereignCode: "A" }).status, null, "held the normal way");
+  assert.equal(regionControlStatus({ controllerCode: "A", sovereignCode: "B" }).status, "Occupied");
+  assert.equal(regionControlStatus({ controllerCode: "A", sovereignCode: "A", claimants: ["B"] }).status, "Contested");
+  assert.equal(regionControlStatus({ controllerCode: "A", sovereignCode: "B", claimants: ["C"] }).status, "Occupied / contested");
 });
