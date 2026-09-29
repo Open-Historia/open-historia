@@ -24,6 +24,7 @@ import {
   uploadScenarioAsset,
 } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { downloadHubBundle, downloadHubFile, hubPostUrl } from "../../runtime/hubPosts.js";
 import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
@@ -441,17 +442,6 @@ const DialogFrame = ({ title, subtitle, onClose, children, footer }) => {
   );
 };
 
-const copyText = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    // Insecure contexts (the Android app) have no clipboard API; the text is
-    // on screen to copy by hand.
-    return false;
-  }
-};
-
 const postTitleOf = (origin) => origin?.title || `#${origin?.postId}`;
 
 // ---- Suggest changes (the player who downloaded the scenario) -------------------
@@ -497,7 +487,7 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
       // The page first, while the click still counts as the player's: a browser
       // only lets a click open a window for a moment.
       if (openPost) window.open(`${postUrl}#new_comment_field`, "_blank", "noopener");
-      const copied = await copyText(comment);
+      const copied = await copyToClipboard(comment);
       await saveBlobToDisk(await buildSuggestionZip(suggestion), fileName);
       setSent({ fileName, comment, copied, openedPost: openPost });
       setPhase("sent");
@@ -584,7 +574,7 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
           </ol>
           <textarea readOnly data-no-translate style={{ ...inputStyle, fontFamily: "monospace", fontSize: "0.76rem", minHeight: "9rem" }} value={sent.comment} onFocus={(event) => event.target.select()} />
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button type="button" className="oh-tap-row" onClick={async () => setSent({ ...sent, copied: await copyText(sent.comment) })} style={tapFit(buttonStyle, touch)}>Copy the comment</button>
+            <button type="button" className="oh-tap-row" onClick={async () => setSent({ ...sent, copied: await copyToClipboard(sent.comment) })} style={tapFit(buttonStyle, touch)}>Copy the comment</button>
             <a href={`${postUrl}#new_comment_field`} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={{ ...tapFit(buttonStyle, touch), textDecoration: "none" }}>Open the post ↗</a>
           </div>
         </>

@@ -22,6 +22,7 @@ import {
     setGenerationRating,
 } from "../AI/telemetry.js";
 import { readWorldState } from "../../runtime/gameState.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 
@@ -141,8 +142,10 @@ const RatingWidget = ({ rating, onRate }) => {
     );
 };
 
+// Through the shared helper, which falls back where navigator.clipboard is
+// missing (LAN play over http, the Android app), and says when even that fails.
 const CopyButton = ({ text }) => {
-    const [copied, setCopied] = useState(false);
+    const [result, setResult] = useState(""); // "" | copied | failed
     if (!text) return null;
     return (
         <button
@@ -151,14 +154,11 @@ const CopyButton = ({ text }) => {
             style={{ ...buttonStyle, padding: "0.15rem 0.5rem", fontSize: "0.66rem" }}
             title="Copy to clipboard"
             onClick={async () => {
-                try {
-                    await navigator.clipboard.writeText(text);
-                    setCopied(true);
-                    setTimeout(() => setCopied(false), 1200);
-                } catch { /* clipboard unavailable */ }
+                setResult((await copyToClipboard(text)) ? "copied" : "failed");
+                setTimeout(() => setResult(""), 1200);
             }}
         >
-            {copied ? "Copied" : "Copy"}
+            {result === "copied" ? "Copied" : result === "failed" ? "Copy failed" : "Copy"}
         </button>
     );
 };

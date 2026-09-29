@@ -16,6 +16,7 @@ import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { copyToClipboard } from "../../runtime/clipboard.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -227,6 +228,22 @@ const IconBtn = ({ children, title, onClick }) => {
         >
         {children}
         </button>
+    );
+};
+
+// Copies a name through the shared helper, which falls back where
+// navigator.clipboard is missing (LAN play over http, the Android app), and
+// says for a moment whether it worked: a tick, or a cross and "Copy failed".
+const CopyNameBtn = ({ text, title }) => {
+    const [result, setResult] = React.useState(""); // "" | copied | failed
+    const copy = async () => {
+        setResult((await copyToClipboard(text)) ? "copied" : "failed");
+        setTimeout(() => setResult(""), 1500);
+    };
+    return (
+        <IconBtn title={result === "copied" ? "Copied" : result === "failed" ? "Copy failed" : title} onClick={copy}>
+        {result === "copied" ? "\u2713" : result === "failed" ? "\u2715" : "\u29C9"}
+        </IconBtn>
     );
 };
 
@@ -738,7 +755,7 @@ const RegionPopup = () => {
         </div>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
         {!isUnclaimed && <IconBtn title="Open diplomatic chat" onClick={handleOpenChat}>{"\uD83D\uDCAC"}</IconBtn>}
-        <IconBtn title="Copy name" onClick={() => navigator.clipboard?.writeText(displayCountry)}>{"\u29C9"}</IconBtn>
+        <CopyNameBtn title="Copy name" text={displayCountry} />
         {!isUnclaimed && <IconBtn title="Country intel (AI)" onClick={handleToggleStats}>{"\u24D8"}</IconBtn>}
         </div>
         </div>
@@ -773,7 +790,7 @@ const RegionPopup = () => {
         {NAME_1}
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-        <IconBtn title="Copy region name" onClick={() => navigator.clipboard?.writeText(NAME_1)}>{"\u29C9"}</IconBtn>
+        <CopyNameBtn title="Copy region name" text={NAME_1} />
         <IconBtn title="Region info">{"\u24D8"}</IconBtn>
         </div>
         </div>
