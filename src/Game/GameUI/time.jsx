@@ -15,8 +15,8 @@ import {
     loadRegionCatalog,
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
+import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingReviewJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, discardPendingReviewJump } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
@@ -1276,6 +1276,7 @@ const TimelineSkipPanel = ({
     isLoading,
     isOpen,
     isRetryingProjects,
+    isRetryingReview,
     isRetryingSegment,
     modeSuggestion,
     offeredInteractive = null,
@@ -1285,14 +1286,18 @@ const TimelineSkipPanel = ({
     onClose,
     onDeclineModeSuggestion,
     onDiscardProjects,
+    onDiscardReview,
     onDiscardSegment,
     onJump,
     onRetryProjects,
+    onRetryReview,
     onRetrySegment,
     onUndo,
     progressLabel,
     projectsHeld,
     projectsRetries,
+    reviewHeld,
+    reviewRetries,
     sceneInProgress = false,
     segmentHeld,
     segmentRetries,
@@ -1697,6 +1702,96 @@ const TimelineSkipPanel = ({
                     flex: 1,
                     fontSize: "0.76rem",
                     opacity: isRetryingProjects ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Discard the turn
+                </button>
+            </div>
+            </div>
+        )}
+
+        {/* A HELD turn: the events are in hand and nothing is written, because
+            the review that moves the map with them (units, ground, structures,
+            the board, the agents' reports) did not come back. Before this the
+            turn landed anyway with none of that done and said nothing. Continue
+            takes it that way on purpose; Retry asks only the review again. */}
+        {reviewHeld && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.28)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "16px",
+                color: "#fde68a",
+                display: "flex",
+                flexDirection: "column",
+                fontSize: "0.76rem",
+                gap: "0.7rem",
+                lineHeight: "1.5",
+                padding: "0.85rem 0.9rem",
+            }}
+            >
+            <div>{reviewHeld}</div>
+            {reviewRetries > 0 && !isRetryingReview && (
+                <div style={{ color: "rgba(253,230,138,0.68)", fontSize: "0.72rem" }}>
+                Tried {reviewRetries === 1 ? "once" : `${reviewRetries} times`} — the checks still
+                did not come back. Retrying again may help if the model is only busy;
+                otherwise continue without them, or discard the turn.
+                </div>
+            )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isRetryingReview}
+                onClick={() => onRetryReview()}
+                style={{
+                    background: "rgba(251,191,36,0.18)",
+                    border: "1px solid rgba(251,191,36,0.4)",
+                    borderRadius: "12px",
+                    color: "#fde68a",
+                    cursor: isRetryingReview ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingReview ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                {isRetryingReview ? (progressLabel || "Retrying the checks…") : "Retry the checks"}
+                </button>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isRetryingReview}
+                onClick={() => onRetryReview({ withoutReview: true })}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingReview ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingReview ? 0.6 : 1,
+                    padding: "0.5rem 0.7rem",
+                }}
+                >
+                Continue without them
+                </button>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={isRetryingReview}
+                onClick={onDiscardReview}
+                style={{
+                    background: "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.16)",
+                    borderRadius: "12px",
+                    color: "rgba(255,255,255,0.72)",
+                    cursor: isRetryingReview ? "default" : "pointer",
+                    flex: 1,
+                    fontSize: "0.76rem",
+                    opacity: isRetryingReview ? 0.6 : 1,
                     padding: "0.5rem 0.7rem",
                 }}
                 >
@@ -2212,6 +2307,13 @@ const DateWidget = ({
     // How many times the failed segment has been retried for the jump currently
     // held — same reason as projectsRetries.
     const [segmentRetries, setSegmentRetries] = useState(0);
+    // A turn whose events are all in hand but whose turn review — the request
+    // that moves units, takes ground, builds structures and moves the board —
+    // did not come back. Nothing is written: the player retries the review,
+    // continues without it, or discards.
+    const [reviewHeld, setReviewHeld] = useState("");
+    const [isRetryingReview, setIsRetryingReview] = useState(false);
+    const [reviewRetries, setReviewRetries] = useState(0);
     // The structured-output ladder has now twice found the same lower method
     // working for this endpoint. Offered rather than applied: the app does the
     // discovery, the player makes the decision. Checked after a turn ends, so it
@@ -2401,6 +2503,8 @@ const DateWidget = ({
         setSegmentRetries(0);
         setProjectsHeld("");
         setProjectsRetries(0);
+        setReviewHeld("");
+        setReviewRetries(0);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2515,6 +2619,14 @@ const DateWidget = ({
                 setError("");
                 setProjectsHeld(jumpError.message || "The Projects & Operations board did not update.");
                 setProjectsRetries(0);
+            } else if (jumpError?.reviewHeld) {
+                // Not a failed turn: the events are in hand, and the turn is
+                // HELD because the review that moves the map with them did not
+                // come back. Retrying asks only the review again.
+                setError("");
+                setReviewHeld(jumpError.message || "The turn review did not come back.");
+                setReviewRetries(0);
+                logDebugEvent("turn", `Turn HELD after ${Math.round((Date.now() - startedAt) / 1000)}s: the turn review did not come back; nothing was written.`);
             } else {
                 console.error("Failed to simulate jump:", jumpError);
                 setError(jumpError.message || "Failed to simulate timeline jump.");
@@ -2632,6 +2744,12 @@ const DateWidget = ({
                 setSegmentRetries(0);
                 setProjectsHeld(retryError.message);
                 setProjectsRetries(0);
+            } else if (retryError?.reviewHeld) {
+                // The segments finished; the review is holding the turn now.
+                setSegmentHeld("");
+                setSegmentRetries(0);
+                setReviewHeld(retryError.message);
+                setReviewRetries(0);
             } else {
                 // The segments finished but the write did not. The held jump is
                 // gone with it, so this is an ordinary turn failure from here.
@@ -2663,6 +2781,54 @@ const DateWidget = ({
         discardPendingProjectsJump();
         setProjectsHeld("");
         setProjectsRetries(0);
+    };
+
+    // Finish a turn held on its review: ask the review again, or (withoutReview)
+    // take the turn as the simulator wrote it, with nothing on the map moved
+    // for it. Either way the events are not regenerated.
+    const retryHeldReview = async ({ withoutReview = false } = {}) => {
+        if (isRetryingReview) return;
+        setIsRetryingReview(true);
+        if (!withoutReview) setReviewRetries((count) => count + 1);
+        setJumpProgress("");
+        const startedAt = Date.now();
+        const controller = new AbortController();
+        jumpAbortRef.current = controller;
+        try {
+            const result = await retryPendingReviewJump({ signal: controller.signal, onProgress: showSkipPhase, withoutReview });
+            setGameData(result.game);
+            setEvents(result.events);
+            setWorldState(result.world);
+            setVisibleEventCount(1);
+            setReviewHeld("");
+            setReviewRetries(0);
+            logDebugEvent("turn", `Held turn finished ${withoutReview ? "without its review " : ""}in ${Math.round((Date.now() - startedAt) / 1000)}s — now ${result.game?.gameDate || "unknown"}.`, {
+                round: result.game?.round ?? 0,
+                events: result.events?.length ?? 0,
+            });
+            setPanel("history");
+        } catch (retryError) {
+            if (controller.signal.aborted || retryError?.name === "AbortError") {
+                logDebugEvent("turn", "Review retry cancelled; the turn is still held.");
+            } else if (retryError?.reviewHeld) {
+                setReviewHeld(retryError.message);
+            } else {
+                // The review came back but the write did not. The held turn is
+                // gone with it, so this is an ordinary turn failure from here.
+                setReviewHeld("");
+                setError(retryError.message || "Failed to finish the held turn.");
+            }
+        } finally {
+            jumpAbortRef.current = null;
+            setIsRetryingReview(false);
+            setJumpProgress("");
+        }
+    };
+
+    const discardHeldReview = () => {
+        discardPendingReviewJump();
+        setReviewHeld("");
+        setReviewRetries(0);
     };
 
     const acceptModeSuggestion = () => {
@@ -3270,12 +3436,17 @@ const DateWidget = ({
         onDiscardSegment={discardHeldSegment}
         onJump={(days) => runJump(days, "jump")}
         onRetryProjects={retryHeldProjects}
+        onRetryReview={retryHeldReview}
         onRetrySegment={retryHeldSegment}
+        onDiscardReview={discardHeldReview}
         onUndo={runUndo}
         offeredInteractive={skipInFlight ? null : shownOffer}
         progressLabel={jumpProgress}
         projectsHeld={projectsHeld}
         projectsRetries={projectsRetries}
+        isRetryingReview={isRetryingReview}
+        reviewHeld={reviewHeld}
+        reviewRetries={reviewRetries}
         sceneInProgress={sceneInProgress}
         segmentHeld={segmentHeld}
         segmentRetries={segmentRetries}

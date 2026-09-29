@@ -20,6 +20,8 @@ import {
     normalizeReviewJobs,
     readTurnReviewAnswer,
     remapBoardOps,
+    reviewHeldError,
+    reviewNeedsRetry,
     shareRepeatedBlocks,
 } from "./turnReview.js";
 
@@ -198,4 +200,42 @@ test("an op that named no usable event keeps naming none, for the board's own fa
 
 test("with nothing to map, nothing comes back", () => {
     assert.deepEqual(remapBoardOps(), { ops: [], dropped: 0 });
+});
+
+// ---- A review that did not come back ------------------------------------------
+// It used to land the turn anyway, with nothing on the map moved for it and no
+// word to the player. These pin the cases that are not a judgment call; which
+// partial answers are worth holding a turn over is reviewNeedsRetry's to decide.
+
+const review = (overrides = {}) => ({ asked: true, parts: {}, reasons: [], failure: null, missing: [], ...overrides });
+
+test("a review whose request failed holds the turn", () => {
+    const failed = review({ failure: new Error("503 The model is overloaded"), missing: ["units", "territory", "board"] });
+    assert.equal(Boolean(reviewNeedsRetry(failed)), true);
+});
+
+test("a review that was never asked, or answered every job, does not hold the turn", () => {
+    assert.equal(Boolean(reviewNeedsRetry(review({ asked: false }))), false);
+    assert.equal(Boolean(reviewNeedsRetry(review({ parts: { units: {}, board: {} } }))), false);
+});
+
+test("the held error is flagged for the UI and says what failed", () => {
+    const cause = new Error("The turn review timed out: the model stopped answering.");
+    const error = reviewHeldError(review({ failure: cause }));
+    assert.equal(error.reviewHeld, true);
+    assert.equal(error.cause, cause);
+    assert.match(error.message, /nothing has been saved yet/);
+    assert.match(error.message, /timed out/);
+});
+
+test("with no request error, the held error names the checks that came back empty", () => {
+    const error = reviewHeldError(review({ missing: ["units", "territory"] }));
+    assert.match(error.message, /no usable answer for units, territory/);
+    assert.equal(error.cause, null);
+});
+
+test("a map-moving job coming back empty holds the turn; the others fail open alone", () => {
+    assert.equal(reviewNeedsRetry(review({ missing: ["units"], parts: { board: {} } })), true);
+    assert.equal(reviewNeedsRetry(review({ missing: ["territory"] })), true);
+    assert.equal(reviewNeedsRetry(review({ missing: ["board", "timeline", "spies"], parts: { units: {} } })), false);
 });

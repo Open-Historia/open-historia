@@ -12,9 +12,11 @@ import { logDebugEvent } from "../../runtime/debugLog.js";
 // A counter, not a boolean: independent generators overlap.
 let activeSimulations = 0;
 
-// A jump held on a failed segment, and a turn held at the Projects board.
+// A jump held on a failed segment, a turn held at the Projects board, and a
+// turn held on a failed turn review.
 let pendingJumpSegment = null;
 let pendingProjectsJump = null;
+let pendingReviewJump = null;
 
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
@@ -36,6 +38,11 @@ export const setPendingJumpSegment = (value) => {
 export const getPendingProjectsJump = () => pendingProjectsJump;
 export const setPendingProjectsJump = (value) => {
   pendingProjectsJump = value ?? null;
+};
+
+export const getPendingReviewJump = () => pendingReviewJump;
+export const setPendingReviewJump = (value) => {
+  pendingReviewJump = value ?? null;
 };
 
 export const setChatGenerationInFlight = (inFlight) => {
@@ -63,12 +70,14 @@ export const subscribeChatGeneration = (listener) => {
 
 export const hasPendingJumpSegment = () => pendingJumpSegment !== null;
 export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
+export const hasPendingReviewJump = () => pendingReviewJump !== null;
 
 // A held jump counts as busy: the idle pulse checks this before it writes, so it
 // cannot write into a world that is about to be replaced by the held turn.
 export const isSimulationBusy = () => activeSimulations > 0
   || pendingProjectsJump !== null
-  || pendingJumpSegment !== null;
+  || pendingJumpSegment !== null
+  || pendingReviewJump !== null;
 
 export const isChatGenerationLikely = () => chatGenerationInFlight;
 
@@ -91,6 +100,13 @@ export const discardPendingProjectsJump = () => {
   const had = pendingProjectsJump !== null;
   pendingProjectsJump = null;
   if (had) logDebugEvent("turn", "Held turn discarded; the board was never updated and nothing was written.");
+  return had;
+};
+
+export const discardPendingReviewJump = () => {
+  const had = pendingReviewJump !== null;
+  pendingReviewJump = null;
+  if (had) logDebugEvent("turn", "Held turn discarded; the turn review never came back and nothing was written.");
   return had;
 };
 

@@ -137,6 +137,8 @@ import {
   buildTurnReviewPrompt,
   buildTurnReviewTool,
   readTurnReviewAnswer,
+  reviewHeldError,
+  reviewNeedsRetry,
   remapBoardOps,
   shareRepeatedBlocks,
 } from "./turnReview.js";
@@ -381,13 +383,16 @@ import {
   beginSimulation,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
+  discardPendingReviewJump,
   endSimulation,
   getPendingJumpSegment,
   getPendingProjectsJump,
+  getPendingReviewJump,
   isSimulationBusy,
   setChatGenerationInFlight,
   setPendingJumpSegment,
   setPendingProjectsJump,
+  setPendingReviewJump,
 } from "./simulationStatus.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -4453,6 +4458,12 @@ const activeCampaignId = () => {
 // segment failed, the ones before it are still in hand, and NOTHING has been
 // written. Held so the player is told which segment failed and can retry just
 // that segment or discard the turn (see runJumpSegments).
+//
+// pendingReviewJump: a jump whose every segment is in hand but whose turn
+// review (runTurnReview) did not come back, so the units, territory,
+// structures, board and agents' reports it answers for were never decided.
+// Nothing is written. The player retries the review, takes the turn without it
+// (the review failing open, as it always did), or discards.
 
 // Storyline motion repairs that failed, keyed by campaign and storyline id (see
 // recordMotionRepairOutcome). Memory only: it keeps a storyline that fails the
@@ -4463,8 +4474,10 @@ export {
   NO_RESPONSE_BODY_NOTE,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
+  discardPendingReviewJump,
   hasPendingJumpSegment,
   hasPendingProjectsJump,
+  hasPendingReviewJump,
   isChatGenerationLikely,
   isSimulationBusy,
 } from "./simulationStatus.js";
@@ -14124,7 +14137,9 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
 const runTurnReview = async ({ context, merged, signal, state, sections = null }) => {
   const { bundle, mode } = context;
   const requests = state.requests;
-  const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [] };
+  // `failure` is the error when the request itself failed; `missing` names the
+  // jobs asked of it that came back with no usable part.
+  const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], failure: null, missing: [] };
   // A canned turn means the model is not answering; asking it to check one would
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
@@ -14346,6 +14361,10 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
   } catch (error) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
     logDebugEvent("turn", "Turn review failed; every check falls back to leaving the turn as written.", error, { problem: true });
+    // Said on the review, not only in the log: a time skip holds the turn on
+    // it (finishTimelineJump) rather than landing it with nothing moved.
+    review.failure = error;
+    review.missing = shared.map((job) => job.key);
     return review;
   } finally {
     idle.cancel();
@@ -14379,6 +14398,7 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
     }
     review.parts[job.key] = salvaged.value;
   }
+  review.missing = shared.map((job) => job.key).filter((key) => !review.parts[key]);
   return review;
 };
 
@@ -14493,7 +14513,18 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // about it, and again when the Directors run, because the order attribution
   // below may give an event its order only after the review.
   merged.events = markOrderedEvents(merged.events, context.bundle?.actions);
-  const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+  // A review the player chose to go without (retryPendingReviewJump) is taken
+  // as it came back, not asked again.
+  const review = state.requests?.saving
+    ? (state.acceptedReview ?? await runTurnReview({ context, merged, signal, state }))
+    : null;
+  // Nothing is written yet, so a review that did not come back holds the turn
+  // here, where everything a retry needs is in hand, rather than landing it
+  // with no unit moved, no ground taken and no board moved.
+  if (review && review !== state.acceptedReview && reviewNeedsRetry(review)) {
+    setPendingReviewJump({ context, state, review });
+    throw reviewHeldError(review);
+  }
 
   // A current order whose outcome event omitted actionIds gets one bounded
   // semantic association pass. Saving mode piggybacks on the combined review;
@@ -14622,6 +14653,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (!evaluationMode) {
     discardPendingProjectsJump();
     discardPendingJumpSegment();
+    discardPendingReviewJump();
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
@@ -14802,6 +14834,38 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
     // Re-holds itself on another failure, so the player can retry again or
     // discard — exactly as they could the first time.
     await runJumpSegments({ context, onEvents, onProgress, signal, state });
+    return await finishTimelineJump({ context, signal, state });
+  } finally {
+    endSimulation();
+  }
+};
+
+// Finish a turn held on its review (reviewHeldError). `withoutReview` takes the
+// turn as the failed review left it — every check leaves the turn as written,
+// as a failed review always did — and asks nothing. Otherwise the review alone
+// is asked again: the segments are in hand and are not regenerated. Re-holds
+// itself if the review fails again.
+export const retryPendingReviewJump = async ({ onProgress, signal, withoutReview = false } = {}) => {
+  const held = getPendingReviewJump();
+  if (!held) throw new Error("There is no turn waiting on its review.");
+  const { context, state, review } = held;
+  beginSimulation();
+  try {
+    // Released before the attempt, so a turn can never be applied twice.
+    setPendingReviewJump(null);
+    state.acceptedReview = withoutReview ? review : null;
+    // A fresh decision to spend, as a segment retry is: the held attempt spent
+    // the budget's review request, and the apply still asks for its own.
+    const spentSoFar = state.requests ?? { used: 0, refused: 0 };
+    state.requests = {
+      ...createJumpRequests({
+        segments: 1,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      }),
+      used: spentSoFar.used,
+      refused: spentSoFar.refused,
+    };
+    state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
     return await finishTimelineJump({ context, signal, state });
   } finally {
     endSimulation();

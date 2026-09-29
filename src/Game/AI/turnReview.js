@@ -232,3 +232,49 @@ export const remapBoardOps = ({ ops, shownEvents, visibleEvents, hiddenEvents, i
     }
     return { ops: kept, dropped };
 };
+
+// ---- A review that did not come back ------------------------------------------
+//
+// A job that fails open by itself is the design above. The whole review failing
+// is not: the turn then landed with no unit moved, no ground taken, nothing
+// built and the board still, and said nothing. A time skip holds the turn on it
+// instead (gameplay.js finishTimelineJump) and asks the player.
+//
+// review: what gameplay.js runTurnReview returns —
+//   asked    false when nothing needed checking, so no request was made
+//   failure  the error, when the request itself failed (timeout, 503, no answer)
+//   missing  the keys of the jobs asked that came back with no usable part
+//   parts    the usable parts, by key
+
+// Whether a review is worth holding the turn over, rather than landing it with
+// every missing check leaving the turn as written.
+// The request failing always does. So does a map-moving job coming back empty:
+// that is the silent turn players reported, armies that never marched. The
+// board, the curator and the agents' reports fail open by themselves as before;
+// holding a turn over one of them would cost a click for little.
+const MAP_JOBS = new Set(["units", "territory", "structures"]);
+
+export const reviewNeedsRetry = (review) => {
+  if (!review?.asked) return false;
+  if (review.failure) return true;
+  return asArray(review.missing).some((key) => MAP_JOBS.has(asText(key)));
+};
+
+// The turn is generated and waiting on its review, not lost. Flagged so the UI
+// can tell it apart from an ordinary failure and offer the review again, the
+// turn without it, or a discard.
+export const reviewHeldError = (review) => {
+  const cause = review?.failure ?? null;
+  const missing = asArray(review?.missing).map(asText).filter(Boolean);
+  const what = cause
+    ? (asText(cause.message) || "the request failed")
+    : `no usable answer for ${missing.join(", ") || "its checks"}`;
+  const error = new Error(
+    "Your events are ready, but the checks that move units, take ground, build structures and update the "
+    + `board did not come back, so nothing has been saved yet: ${what}. `
+    + "Retry the checks, continue without them, or discard the turn.",
+  );
+  error.reviewHeld = true;
+  error.cause = cause;
+  return error;
+};

@@ -35,6 +35,7 @@ export const simulateTimelineJump = async (...args) => (await gameplay()).simula
 export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
+export const retryPendingReviewJump = async (...args) => (await gameplay()).retryPendingReviewJump(...args);
 export const maybeGeneratePregameHistory = async (...args) => {
   // This is the only production entry point for the automatic Round-Zero
   // bootstrap. Gate it before importing the large gameplay chunk so an author
