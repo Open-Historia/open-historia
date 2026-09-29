@@ -1121,8 +1121,11 @@ const OlMap = ({
 
     let alive = true;
     if (seedKind === "import-world") {
+      // A map opened or started before the world arrives wins: the seed used
+      // to be added on top of it.
+      const load = mapLoads;
       loadSeedFeatures().then((features) => {
-        if (!alive || !regionSourceRef.current) return;
+        if (!alive || !regionSourceRef.current || load !== mapLoads) return;
         regionSourceRef.current.addFeatures(features);
         onRegionCount?.(regionSourceRef.current.getFeatures().length);
       });

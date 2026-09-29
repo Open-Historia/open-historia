@@ -584,7 +584,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // whole map before it clears the old one. A failed open used to leave the new
   // document's fields over an emptied map while the saves still wrote to the
   // old id, and said nothing.
+  //
+  // The open map is settled before the fetch: re-opening the map that is open
+  // (its row in Saved maps) would otherwise read the stored copy from before
+  // the flush and put it on screen over the edits just saved. An edit made
+  // while the fetch runs is settled again before the swap.
   const openDoc = async (id) => {
+    const question = "This map has changes that could not be saved. Open the other map and lose them?";
+    if (!(await settleBeforeReplacing(question))) return;
+    const editsSettled = d.editCount();
     let opened;
     let background;
     try {
@@ -595,7 +603,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
-    if (!(await settleBeforeReplacing("This map has changes that could not be saved. Open the other map and lose them?"))) return;
+    if (d.editCount() !== editsSettled && !(await settleBeforeReplacing(question))) return;
     try {
       api?.loadRegions(opened.regions);
     } catch (e) {
