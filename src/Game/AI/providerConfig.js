@@ -804,12 +804,26 @@ const CONNECTION_EDIT_LOG = {
     suggestedModel: (connection) => `suggested model set to ${connection.suggestedModel || "(none)"}`,
 };
 
+// A key belongs to the service that issued it. Switching a Connection's
+// provider changes where the key is sent — a Gemini key went to OpenRouter as
+// a Bearer token, unseen in its password field, and came back a 401 nobody
+// could explain — so the key is left behind. Except between the two
+// self-hosted kinds, whose key goes to the same endpoint as before. A patch
+// that brings its own key keeps it.
+const keyLeftBehind = (before, patch) => {
+    if (patch?.provider === undefined || "apiKey" in patch) return {};
+    const provider = normalizeProvider(patch.provider);
+    if (provider === before.provider) return {};
+    const sameServer = providerSetupRequirement(before.provider) === "endpoint" && providerSetupRequirement(provider) === "endpoint";
+    return sameServer ? {} : { apiKey: "" };
+};
+
 export function updateConnection(id, patch) {
     const connections = getConnections();
     const index = connections.findIndex((connection) => connection.id === id);
     if (index === -1) return false;
     const before = connections[index];
-    const next = normalizeConnection({ ...before, ...patch, id });
+    const next = normalizeConnection({ ...before, ...keyLeftBehind(before, patch), ...patch, id });
     connections[index] = next;
     saveConnections(connections);
     // A new key or address may well have a fresh allowance, so every mark on

@@ -357,6 +357,29 @@ test("entry states are kept apart from the settings, and survive a reload", () =
   assert.equal(config.fallbackStateStore.get(entry.id), undefined, "the reset button");
 });
 
+test("switching a Connection to another provider leaves its key behind", () => {
+  const gemini = config.addConnection({ provider: "gemini", apiKey: "AIzaSECRETSECRETSECRET1234" });
+  config.updateConnection(gemini, { provider: "openai-compatible" });
+  let connection = config.getConnections().find((candidate) => candidate.id === gemini);
+  assert.equal(connection.provider, "openai-compatible");
+  assert.equal(connection.apiKey, "", "the Gemini key is never sent to the new endpoint");
+
+  // Between the two self-hosted kinds the key still goes to the same server.
+  const local = config.addConnection({ provider: "openai-compatible", endpoint: "http://192.168.1.5:4000/v1", apiKey: "sk-local" });
+  config.updateConnection(local, { provider: "anthropic-compatible" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-local");
+  assert.equal(connection.endpoint, "http://192.168.1.5:4000/v1");
+
+  // A patch that brings its own key keeps it, and other edits touch nothing.
+  config.updateConnection(local, { provider: "openai", apiKey: "sk-openai" });
+  config.updateConnection(local, { name: "Work" });
+  connection = config.getConnections().find((candidate) => candidate.id === local);
+  assert.equal(connection.apiKey, "sk-openai");
+  config.updateConnection(local, { provider: "openai" });
+  assert.equal(config.getConnections().find((candidate) => candidate.id === local).apiKey, "sk-openai", "the same provider again is no switch");
+});
+
 test("editing an Unusable entry or its Connection clears the mark, so the fix is tried at once", () => {
   store.set("gemini_api_key", "AIzaBADKEY12345678901234");
   const [entry] = config.getFallbackList();
