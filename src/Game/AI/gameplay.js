@@ -562,29 +562,19 @@ const buildMilitaryFeasibilityText = (world, actionsText) => {
   ].join("\n");
 };
 
-const STAT_SHEETS_STORAGE_KEY = "oh-stat-sheets";
-
-const readStoredStatSheets = () => {
-  try {
-    return JSON.parse(localStorage.getItem(STAT_SHEETS_STORAGE_KEY)) ?? {};
-  } catch {
-    return {};
-  }
-};
-
 // International reputation the AI evolves each turn (world.internationalReputation),
-// surfaced to prompts. Falls back to the last stat sheet the player viewed, then a
-// neutral 50 — so it is never "unknown".
+// surfaced to prompts. Falls back to the player's canonical stat sheet
+// (world.countryStats, the store the Stats tab reads), then a neutral 50 — so it
+// is never "unknown".
 const buildPlayerPolityReputationText = async (bundle) => {
   const playerCode = normalizeString(bundle.game.country);
   if (!playerCode) {
     return "No player polity is currently set.";
   }
   const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
-  let reputation = Number(world.internationalReputation?.[playerCode]);
+  let reputation = Number(world.internationalReputation?.[playerCode] ?? NaN);
   if (!Number.isFinite(reputation)) {
-    const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
-    reputation = Number(readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet?.indices?.internationalReputation);
+    reputation = Number(world.countryStats?.[playerCode]?.indices?.internationalReputation ?? NaN);
   }
   if (!Number.isFinite(reputation)) {
     reputation = 50;

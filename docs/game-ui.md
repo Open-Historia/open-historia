@@ -289,7 +289,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 |---|---|---|
 | Target | `targetCountry` seeds from the player's country; **clicking any country on the map** re-targets it (`setRegionClickObserver`) | `src/Game/Selection/Regions.jsx` |
 | Data | `generateCountryStatSheet({code, name})` (AI), validated by `validateGameplayPayload("countryStatSheet", …)` | `src/Game/AI/gameplay.js`, `gameplaySchemas.js` |
-| Caching | Per `gameKey:code`, keyed by game date; memory + `localStorage["oh-stat-sheets"]` (cap 60); regenerated when the date moves; ↻ forces regen | — |
+| Caching | The canonical sheet is `world.countryStats[code]`, saved with the game. A per-`gameKey:code` copy keyed by game date sits in memory + `localStorage["oh-stat-sheets-v2"]` (cap 20) as a convenience fallback; regenerated when the date moves; ↻ forces regen | `src/runtime/countryStats.js` |
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |
 | Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`) | `src/runtime/countryFlags.js` |
 
@@ -497,7 +497,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 3 | 🧭 Advisor button | `main.jsx` | button | `Main.isAdvisorOpen` | — | opens advisor drawer |
 | 4 | Advisor drawer (Advisor tab) | `advisor.jsx` | panel | `isAdvisorOpen` | `JSON_URLS.advisor`, `JSON_URLS.game` | `sendMessage`, `writeJson(advisor)` |
 | 5 | Advisor resize handle | `advisor.jsx` | drag | pointer capture | — | `onResize`→`localStorage["oh-advisor-width"]` |
-| 6 | Stats tab | `stats.jsx` | panel | advisor tab state | game/world, stat cache | `generateCountryStatSheet`, `localStorage["oh-stat-sheets"]` |
+| 6 | Stats tab | `stats.jsx` | panel | advisor tab state | game/world, stat cache | `generateCountryStatSheet`, `world.countryStats`, `localStorage["oh-stat-sheets-v2"]` |
 | 7 | Date pill `«` / `»` | `time.jsx` | buttons | `Main.activeBottomPanel` | game/events/world | opens skip/history panels |
 | 8 | Timeline skip panel | `time.jsx` | panel | `activeBottomPanel==="skip"` | game date, snapshots | `simulateTimelineJump`/`simulateAutoJump`/`rollBackToSnapshot` |
 | 9 | Event history panel | `time.jsx` | panel | `activeBottomPanel==="history"` | `simulationHistory`, events | `setWorldStateOverride`/`setUnitsOverride`, `fitBounds` |
