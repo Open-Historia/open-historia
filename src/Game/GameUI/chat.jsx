@@ -215,6 +215,8 @@ const findCommunityFlagPost = (posts, { code, name }) => {
     const normalizedName = String(name ?? "").trim().toLowerCase();
     return posts.find((post) => {
         if (post.fromScenario || !post.imageUrl) return false;
+        // Flag-Polity is the exact name the flag was shared for: compared as is.
+        if (post.polity && post.polity === String(name ?? "").trim()) return true;
         if (normalizedCode && post.code && post.code.toUpperCase() === normalizedCode) return true;
         return normalizedName && String(post.title ?? "").trim().toLowerCase() === normalizedName;
     }) ?? null;

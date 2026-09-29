@@ -19,6 +19,7 @@ import {
   loadCommunityFlagDataUrl,
   loadCommunityFlagPack,
   openFlagPublishForm,
+  publishFlag,
 } from "../runtime/communityFlags.js";
 import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 import { listFlags, saveFlag, deleteFlag } from "../runtime/flagLibrary.js";
@@ -166,6 +167,9 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
   </div>
 );
 
+// Only a flag held as a data URL has a file to share; a built-in is a flagcdn link.
+const isDataUrl = (value) => typeof value === "string" && value.startsWith("data:");
+
 const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(8rem, 1fr))", gap: "0.7rem" };
 
 const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, author = "", onPick }) => {
@@ -222,7 +226,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
   const q = query.trim().toLowerCase();
   const filteredBuiltIn = filterBuiltInFlags(builtIn, q);
   const filteredCommunity = q
-    ? community.filter((p) => `${p.title} ${p.author} ${p.code || ""}`.toLowerCase().includes(q))
+    ? community.filter((p) => `${p.title} ${p.author} ${p.code || ""} ${p.polity || ""}`.toLowerCase().includes(q))
     : community;
 
   const pick = (dataUrlOrUrl) => { onPick(dataUrlOrUrl); onClose(); };
@@ -251,6 +255,18 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
     }
   };
 
+  // Share a flag that only exists inside the app: save it as a file, open the
+  // hub's form, and say what to do with the file — the basemap picker's flow.
+  // `polity` goes to the form exactly (Flag-Polity).
+  const handlePublish = async ({ name, polity, dataUrl, author: by }) => {
+    try {
+      const { fileName } = await publishFlag({ name, polity, dataUrl, author: by || author });
+      window.alert(`"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the flag image box, then submit.`);
+    } catch (e) {
+      window.alert(`Could not prepare that flag for sharing: ${e?.message || e}`);
+    }
+  };
+
   // A community flag is fetched through the hub proxy and stored as a data URL, so
   // the scenario keeps working if the post is later edited or deleted.
   const handleInstall = async (post) => {
@@ -264,8 +280,10 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
       // it to the hub. Best-effort: a library that won't save must not lose the pick.
       try {
         await saveFlag({
-          name: post.title || post.code || "Flag",
-          code: post.code || "",
+          name: post.title || post.polity || post.code || "Flag",
+          // The exact polity name when the post has one (Flag-Polity); older
+          // posts only carry the upper-cased Flag-Code hint.
+          code: post.polity || post.code || "",
           author: post.author || "",
           dataUrl,
           source: { community: true, url: post.url || null },
@@ -390,7 +408,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                         imageUrl={f.dataUrl}
                         active={currentFlag === f.dataUrl}
                         onClick={() => pick(f.dataUrl)}
-                        onPublish={() => openFlagPublishForm({ name: `${f.code} flag`, author, code: f.code })}
+                        onPublish={isDataUrl(f.dataUrl) ? () => handlePublish({ name: `${f.code} flag`, polity: f.code, dataUrl: f.dataUrl }) : undefined}
                       />
                     ))}
                   </div>
@@ -411,7 +429,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                           imageUrl={f.dataUrl}
                           active={currentFlag === f.dataUrl}
                           onClick={() => pick(f.dataUrl)}
-                          onPublish={() => openFlagPublishForm({ name: f.name, author: f.author || author, code: f.code || "" })}
+                          onPublish={isDataUrl(f.dataUrl) ? () => handlePublish({ name: f.name, polity: f.code || "", dataUrl: f.dataUrl, author: f.author }) : undefined}
                           onDelete={async () => { await deleteFlag(f.id).catch(() => {}); refreshMine(); }}
                         />
                       ))}
@@ -443,7 +461,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                 <button
                   type="button"
                   style={{ ...uploadBtn, background: "rgba(255,255,255,0.1)" }}
-                  onClick={() => openFlagPublishForm({ name: ownerCode ? `${ownerCode} flag` : "", author, code: ownerCode || "" })}
+                  onClick={() => openFlagPublishForm({ name: ownerCode ? `${ownerCode} flag` : "", author, polity: ownerCode || "" })}
                   title="Opens the hub's flag form — drag your image in and submit"
                 >
                   ⬆ Share a flag
