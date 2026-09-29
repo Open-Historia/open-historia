@@ -48,8 +48,12 @@ export const institutionMemberRoster = (world = {}) => collectScenarioPoliticalP
 // are exact keys, so a typo or a near-name would found a phantom member that
 // votes and counts toward quorum without matching any country. Kept, not
 // refused: this only warns. An exact name or alias a polity is known by counts.
-// With no roster to compare against there is nothing to warn about.
+// With no roster to compare against there is nothing to warn about, and a
+// world without ownerCodes has none: on the stock map every country the map
+// draws owns its land without being listed, as the country picker assumes, so
+// "France" would be flagged there although it is on the map.
 export const unmatchedInstitutionMembers = (names = [], world = {}) => {
+  if (!Array.isArray(world?.ownerCodes) || !world.ownerCodes.length) return [];
   const roster = institutionMemberRoster(world);
   if (!roster.length) return [];
   const known = new Set(roster);

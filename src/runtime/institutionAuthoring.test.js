@@ -170,3 +170,9 @@ test("members that name no polity in the scenario are flagged exactly as written
 test("with no roster to compare against, no member is flagged", () => {
   assert.deepEqual(unmatchedInstitutionMembers(["Latvia", "Anything"], { institutions: {} }), []);
 });
+
+test("on the stock map, where the drawn countries are not listed, no member is flagged", () => {
+  const { ownerCodes: _unlisted, ...stock } = rosterWorld();
+  assert.deepEqual(unmatchedInstitutionMembers(["France", "Latvija"], stock), []);
+  assert.deepEqual(unmatchedInstitutionMembers(["France"], { ...stock, ownerCodes: [] }), []);
+});
