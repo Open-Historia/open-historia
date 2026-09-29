@@ -334,6 +334,8 @@ A click on the place whose card is open closes it; a click anywhere else shows t
 
 The region card's control block (`regionControlStatus`) shows for a region that is occupied or claimed: Sovereign, Controlled by, Status and Claimants, with the claims the map file draws merged in (`withMapClaims`). Unowned land that someone claims shows Status and Claimants only, the status reading "Unclaimed, claimed by …" for one claimant and "Unclaimed, contested" for more.
 
+The ⓘ beside the region's name (**Region info**) opens a section with the region's cities (with populations, capital and biggest first) and its neighbouring regions grouped by who holds them now. `Selection/regionInfo.js` answers the questions the AI's `region_info` lookup answers, from what the map already holds: the compact catalog the map primes (`getPrimedScenarioRegionCatalog`: declared adjacencies, else touching boxes; centroids) and the city rows it publishes for search (`getWorldPlaceIndex().cities`, with `world.cityRenames` applied). A city belongs to the region whose centre is nearest among those whose box holds it. No read and no request. A world whose map primes no catalog (stock tiles only) says it knows nothing more.
+
 ---
 
 ## 10. The decorative globe (`GlobeEffects.jsx`)

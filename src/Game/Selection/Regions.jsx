@@ -17,6 +17,8 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { isSameRegionSelection, regionControlStatus, useCardScreenPos } from "./mapCards.js";
+import { regionInfoFor } from "./regionInfo.js";
+import { getWorldPlaceIndex } from "../../runtime/placeSearch.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -196,7 +198,7 @@ const createFlagState = (status = "idle", imageUrl = null, emoji = null) => ({
 
 // Flags are resolved through the shared stable-lineage flag service below.
 
-const IconBtn = ({ children, title, onClick }) => {
+const IconBtn = ({ children, title, onClick, expanded }) => {
     const [hovered, setHovered] = React.useState(false);
 
     return (
@@ -205,6 +207,7 @@ const IconBtn = ({ children, title, onClick }) => {
         className="oh-tap"
         title={title}
         aria-label={title}
+        aria-expanded={expanded}
         onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
@@ -293,6 +296,8 @@ const RegionPopup = () => {
     const [selection, setSelection] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
+    // The Region info section (regionInfo.js), shut again for each region.
+    const [showRegionInfo, setShowRegionInfo] = useState(false);
     const [flagState, setFlagState] = useState(() => createFlagState());
     const [flagImageFailed, setFlagImageFailed] = useState(false);
     // Scenario polity registry (world.polityOverrides): era names + optional flags.
@@ -410,6 +415,7 @@ const RegionPopup = () => {
     _setSelection = (value) => {
         _currentSelection = value;
         setDismissing(false);
+        setShowRegionInfo(false);
         setFlagState(value ? createFlagState("loading") : createFlagState());
         setFlagImageFailed(false);
         setSelection(value);
@@ -590,6 +596,17 @@ const RegionPopup = () => {
     // 216 px and broke the country's name mid-word.
     const POPUP_WIDTH = isTouch ? 300 : 238;
     const showFlagImage = Boolean(flagState.imageUrl && !flagImageFailed);
+    // Only while the section is open: the cities and neighbours, from what the
+    // map holds in memory (regionInfo.js), for no read and no request.
+    const regionInfo = showRegionInfo
+        ? regionInfoFor({
+            regionId,
+            catalog: getPrimedScenarioRegionCatalog(),
+            cities: getWorldPlaceIndex().cities,
+            cityRenames: worldState?.cityRenames,
+            ownerOf: (id, entry) => territoryState.regionOwnershipOverrides?.[id] ?? entry?.country ?? "",
+        })
+        : null;
 
     return createPortal(
         <div
@@ -731,9 +748,47 @@ const RegionPopup = () => {
         </span>
         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
         <IconBtn title="Copy region name" onClick={() => navigator.clipboard?.writeText(NAME_1)}>{"\u29C9"}</IconBtn>
-        <IconBtn title="Region info">{"\u24D8"}</IconBtn>
+        <IconBtn title="Region info" expanded={showRegionInfo} onClick={() => setShowRegionInfo((open) => !open)}>{"\u24D8"}</IconBtn>
         </div>
         </div>
+
+        {showRegionInfo && (
+            <>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "7px 0 5px" }} />
+            {regionInfo && (regionInfo.cities.length > 0 || regionInfo.neighbours.length > 0) ? (
+                <div style={{ display: "grid", gridTemplateColumns: "76px minmax(0, 1fr)", gap: "3px 7px", fontSize: "11px", lineHeight: 1.35 }}>
+                {regionInfo.cities.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Cities</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.cities
+                        .map((city) => (city.population > 0 ? `${city.name} (${city.population.toLocaleString()})` : city.name))
+                        .join(", ")}
+                    </span>
+                    </>
+                )}
+                {regionInfo.neighbours.length > 0 && (
+                    <>
+                    <span style={{ color: "rgba(255,255,255,0.42)" }}>Neighbours</span>
+                    <span style={{ color: "rgba(255,255,255,0.84)", wordBreak: "break-word" }}>
+                    {regionInfo.neighbours.map((group) => (
+                        <span key={group.owner || "unowned"} style={{ display: "block" }}>
+                        <span style={{ color: "rgba(255,255,255,0.55)" }}>{displayPolity(group.owner)}</span>
+                        {" \u00B7 "}
+                        {group.regions.join(", ")}
+                        </span>
+                    ))}
+                    </span>
+                    </>
+                )}
+                </div>
+            ) : (
+                <div style={{ fontSize: "11px", lineHeight: 1.4, color: "rgba(255,255,255,0.5)" }}>
+                No cities or neighbouring regions are known for this region.
+                </div>
+            )}
+            </>
+        )}
 
         {controlStatus && (
             <>
