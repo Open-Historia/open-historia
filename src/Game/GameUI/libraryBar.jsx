@@ -66,7 +66,7 @@ import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
-import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { isBlockedContributor, scenarioCopyOfHubFile, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
   ScenarioCommunityCard,
@@ -2567,16 +2567,25 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
-      const { downloadHubBundle } = await import("./communityHub.jsx");
       const origin = game.importedScenarioOrigin;
-      const bundle = await downloadHubBundle(origin.bundleUrl);
-      // Stamp where it came from, exactly as the Community tab's own import does
-      // (communityHub.jsx). Without it the scenario looks editor-made to every
-      // later export, which would try to carry the whole map inside the next game
-      // exported from it — hundreds of megabytes, built in the page.
-      bundle.hubOrigin = { bundleUrl: origin.bundleUrl, postId: origin.postId, syncedAt: origin.syncedAt };
-      const imported = await importScenarioBundle(bundle);
-      await saveGame(game.id, { scenarioId: imported.scenario.id });
+      // A copy of that very file already in the library (fetched from the
+      // Community tab since, or by an earlier try) is the map: every retry
+      // importing another one piled up copies tens of MB each.
+      let scenarioId = scenarioCopyOfHubFile(origin, scenarios)?.id ?? "";
+      if (!scenarioId) {
+        const { downloadHubBundle } = await import("./communityHub.jsx");
+        const bundle = await downloadHubBundle(origin.bundleUrl);
+        // Stamp where it came from, exactly as the Community tab's own import does
+        // (communityHub.jsx). Without it the scenario looks editor-made to every
+        // later export, which would try to carry the whole map inside the next game
+        // exported from it — hundreds of megabytes, built in the page.
+        bundle.hubOrigin = { bundleUrl: origin.bundleUrl, postId: origin.postId, syncedAt: origin.syncedAt };
+        const imported = await importScenarioBundle(bundle);
+        scenarioId = imported.scenario.id;
+      }
+      // The import may land under another id than the one the game names (the
+      // sender's id taken here already): the game follows the map it gets.
+      await saveGame(game.id, { scenarioId });
       await refreshLibraryCatalog({ force: true });
       setMissingScenarioGame(null);
       setMenuOpen(false);

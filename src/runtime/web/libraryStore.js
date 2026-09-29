@@ -1044,7 +1044,12 @@ const createGame = async (body = {}) => {
 const updateGame = async (id, body = {}) => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
-  writeGameMeta(record, pickMetaUpdates(body));
+  // Server twin: re-pointing a game at another scenario, only one held here.
+  const scenarioId = body.scenarioId === undefined ? "" : trimmed(body.scenarioId);
+  if (body.scenarioId !== undefined && (!scenarioId || !(await getScenario(scenarioId)))) {
+    throw new Error(`Scenario not found: ${scenarioId}`);
+  }
+  writeGameMeta(record, { ...pickMetaUpdates(body), ...(scenarioId ? { scenarioId } : {}) });
   applyJsonMutations(record, body, true, "game");
   await putGame(record);
   if (body.setActive) await setActiveGame(id);

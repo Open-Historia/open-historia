@@ -96,6 +96,20 @@ export const fetchableHubOrigin = (origin) => {
   return { bundleUrl: normalized.bundleUrl, postId: normalized.postId, syncedAt: normalized.syncedAt };
 };
 
+// This library's copy of one hub file: a scenario downloaded from the same post,
+// at the same file (bundleUrl changes with every re-upload), and not edited
+// since. The scenario named `preferredId` wins a tie. Null when there is none,
+// so a game played on that file is never pointed at an older or edited copy.
+export const scenarioCopyOfHubFile = (origin, scenarios, preferredId = "") => {
+  const wanted = normalizeHubOrigin(origin);
+  if (!wanted) return null;
+  const copies = (Array.isArray(scenarios) ? scenarios : []).filter((entry) => {
+    const have = normalizeHubOrigin(entry?.hubOrigin);
+    return Boolean(have) && !have.editedAt && have.postId === wanted.postId && have.bundleUrl === wanted.bundleUrl;
+  });
+  return copies.find((entry) => entry.id === preferredId) ?? copies[0] ?? null;
+};
+
 export const normalizeHubSuggestionRef = (raw) => {
   if (!raw || typeof raw !== "object") return null;
   const id = text(raw.id, 80);

@@ -30,6 +30,7 @@ import {
   normalizeHubPublished,
   normalizeHubReviews,
   openHubSuggestions,
+  scenarioCopyOfHubFile,
   withContributorBlocked,
 } from "./hubProvenance.js";
 
@@ -192,6 +193,22 @@ test("the store keeps the link through an edit, records bookkeeping quietly, and
   assert.equal(result.exported.hubOrigin, null, "an edited copy's game carries the map itself");
   assert.equal(result.afterUnlink.hubOrigin, null, "Unlink clears the link");
   assert.deepEqual(result.afterUnlink.hubPublished.postIds, [55]);
+});
+
+test("a hub file's copy is an unedited scenario from the same post at the same file", () => {
+  const scenarios = [
+    { id: "new-scenario", hubOrigin: null },
+    { id: "older", hubOrigin: { ...ORIGIN, bundleUrl: "https://github.com/user-attachments/files/0/world.zip" } },
+    { id: "edited", hubOrigin: { ...ORIGIN, editedAt: "2026-09-01T10:00:00.000Z" } },
+    { id: "other-post", hubOrigin: { ...ORIGIN, postId: 43 } },
+    { id: "copy-a", hubOrigin: ORIGIN },
+    { id: "copy-b", hubOrigin: { ...ORIGIN, postId: "42" } },
+  ];
+  assert.equal(scenarioCopyOfHubFile(ORIGIN, scenarios)?.id, "copy-a", "the first unedited copy of that very file");
+  assert.equal(scenarioCopyOfHubFile(ORIGIN, scenarios, "copy-b")?.id, "copy-b", "the id the game names wins a tie");
+  assert.equal(scenarioCopyOfHubFile(ORIGIN, scenarios.slice(0, 4)), null, "an older, an edited or another post's copy is not it");
+  assert.equal(scenarioCopyOfHubFile(null, scenarios), null);
+  assert.equal(scenarioCopyOfHubFile(ORIGIN, null), null);
 });
 
 test("the web store writes provenance through the same rules", () => {

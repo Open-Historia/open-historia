@@ -71,7 +71,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | GET | `/api/games/:gameId` | One game's summary + all 7 core JSON assets + its scenario summary | `server/server.js:368` |
 | POST | `/api/games` | Create a game from a scenario (or seed from `seedGameId`) → 201 | `server/server.js:376` |
 | PUT | `/api/games/active` | Set the active game (stamps `lastPlayedAt`/`playCount`) | `server/server.js:384` |
-| PUT | `/api/games/:gameId` | Update meta / `world` / `game` / `prompts` / `storage.*` | `server/server.js:392` |
+| PUT | `/api/games/:gameId` | Update meta / `world` / `game` / `prompts` / `storage.*`; `scenarioId` re-points the game at a scenario this library holds (anything else is refused) | `server/server.js:392` |
 | GET | `/api/games/:gameId/assets/:assetKey` | Stream a game upload asset (only `cover`) | `server/server.js:400` |
 | PUT | `/api/games/:gameId/assets/:assetKey` | Upload a game asset (raw body) | `server/server.js:409` |
 | DELETE | `/api/games/:gameId` | Soft-delete a game to `.trash` | `server/server.js:427` |

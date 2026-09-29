@@ -2359,6 +2359,7 @@ const updateGame = (
     name,
     prompts,
     promptsPatch,
+    scenarioId,
     setActive,
     storage,
     subtitle,
@@ -2372,8 +2373,17 @@ const updateGame = (
     throw new Error(`Game not found: ${gameId}`);
   }
 
+  // Re-pointing a game at another scenario: "Import & play" on a game whose map
+  // this library lacked, once the map is here. Only ever at a scenario this
+  // library holds, checked before anything is written.
+  const nextScenarioId = scenarioId === undefined ? "" : String(scenarioId ?? "").trim();
+  if (scenarioId !== undefined && (!nextScenarioId || !fs.existsSync(getScenarioMetaPath(nextScenarioId)))) {
+    throw new Error(`Scenario not found: ${nextScenarioId}`);
+  }
+
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
+    ...(nextScenarioId ? { scenarioId: nextScenarioId } : {}),
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
                 archived: typeof archived === "boolean" ? archived : currentMeta.archived,
                 features: features !== undefined ? normalizeFeatureOverrides(features) : currentMeta.features,
