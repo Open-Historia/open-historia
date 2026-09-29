@@ -1,4 +1,4 @@
-/*! Open Historia — which events the territory director is asked about © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — the territory director's rules: what it is asked, what it may keep © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/nativeTerritoryDirector.rules.test.js
 //
 // Runs without node_modules: nativeTerritoryDirector.js imports nothing.
@@ -69,4 +69,109 @@ test("a control change the event itself denies is not asked about", async () => 
 test("a peace event can still clear a contest, so it is still asked about", async () => {
   const peace = event("Peace returns to the valley", "The two powers make peace and the claims along the valley lapse.");
   assert.deepEqual(await candidateIndexes([peace]), [0]);
+});
+
+// --- What the director's answer may do to the map ---------------------------
+//
+// The rules below decide whether land changes sovereignty or only occupation. A
+// regex slip here turns every trench advance into a permanent border, or stops
+// treaties moving borders at all.
+
+const answering = (eventOrders) => async () => ({ payload: { eventOrders, summary: "" } });
+const controlOps = (out, index) => out[index].impacts.regionControlOps;
+const transfers = (out, index) => out[index].impacts.regionTransfers;
+
+test("a wartime capture written as a legal transfer becomes occupation, with no analyzer at all", async () => {
+  const capture = event("German army captures Liège", "German troops capture the city after a short siege.", {
+    regionTransfers: [{ regionId: "Liège", regionName: "Liège", fromCode: "Belgium", toCode: "German Empire" }],
+  });
+  const [out] = await directGeneratedTerritoryOps({ events: [capture], world });
+  assert.deepEqual(out.impacts.regionTransfers, []);
+  assert.equal(out.impacts.regionControlOps.length, 1);
+  assert.deepEqual(
+    { op: out.impacts.regionControlOps[0].op, regionId: out.impacts.regionControlOps[0].regionId, fromCode: out.impacts.regionControlOps[0].fromCode, toCode: out.impacts.regionControlOps[0].toCode },
+    { op: "control", regionId: "Liège", fromCode: "Belgium", toCode: "German Empire" },
+  );
+});
+
+test("a treaty cession stays a legal transfer, even when the war that led to it is mentioned", async () => {
+  const cession = event("Treaty cedes Alsace", "After German troops captured Strasbourg, France cedes Alsace to the German Empire by treaty.", {
+    regionTransfers: [{ regionId: "Alsace", fromCode: "France", toCode: "German Empire" }],
+  });
+  const out = await directGeneratedTerritoryOps({
+    events: [cession],
+    world,
+    // A control flip on top of a settlement the transfer already records is dropped.
+    analyzeBatch: answering([{ eventIndex: 0, regionControlOps: [{ op: "control", regionId: "Alsace", fromCode: "France", toCode: "German Empire" }] }]),
+  });
+  assert.equal(transfers(out, 0).length, 1);
+  assert.deepEqual(controlOps(out, 0), []);
+});
+
+test("a capture the event denies cannot flip control, but the fighting can still contest it", async () => {
+  const stalled = event("Fighting at Kars", "Russian forces fail to take control of Kars after days of fighting around the citadel.");
+  const out = await directGeneratedTerritoryOps({
+    events: [stalled],
+    world,
+    analyzeBatch: answering([{
+      eventIndex: 0,
+      regionControlOps: [
+        { op: "control", regionId: "Kars", fromCode: "Ottoman Empire", toCode: "Russian Empire" },
+        { op: "contest", regionId: "Kars", fromCode: "Ottoman Empire", actorCode: "Russian Empire" },
+      ],
+    }]),
+  });
+  assert.deepEqual(controlOps(out, 0).map((op) => op.op), ["contest"]);
+});
+
+test("clearAll needs a final settlement; a ceasefire clears only the named claimant", async () => {
+  const ceasefire = event("Ceasefire in the Chaco", "Bolivia and Paraguay agree to a ceasefire and their columns withdraw.");
+  const settlement = event("Chaco settlement signed", "An armistice becomes a final settlement: all claims withdrawn along the Chaco boundary.");
+  const clearAll = { op: "clear_contest", regionId: "Chaco", fromCode: "Paraguay", clearAll: true };
+  const clearOne = { op: "clear_contest", regionId: "Chaco", fromCode: "Paraguay", claimantCode: "Bolivia" };
+  const out = await directGeneratedTerritoryOps({
+    events: [ceasefire, settlement],
+    world,
+    analyzeBatch: answering([
+      { eventIndex: 0, regionControlOps: [clearAll, clearOne] },
+      { eventIndex: 1, regionControlOps: [clearAll] },
+    ]),
+  });
+  assert.deepEqual(controlOps(out, 0), [clearOne]);
+  assert.deepEqual(controlOps(out, 1), [clearAll]);
+});
+
+test("an op the event already carries, or the answer repeats, is added once", async () => {
+  const existing = { op: "control", regionId: "Namur", fromCode: "Belgium", toCode: "German Empire" };
+  const fall = event("Namur falls", "Namur falls to the German Empire after its forts are overrun.", { regionControlOps: [existing] });
+  const other = { op: "control", regionId: "Maubeuge", fromCode: "France", toCode: "German Empire" };
+  const out = await directGeneratedTerritoryOps({
+    events: [fall],
+    world,
+    analyzeBatch: answering([{ eventIndex: 0, regionControlOps: [{ ...existing, regionId: "namur" }, other, { ...other }] }]),
+  });
+  assert.deepEqual(controlOps(out, 0), [existing, other]);
+});
+
+test("ops without the fields a flip or contest needs, for unknown kinds, or for events out of range are dropped", async () => {
+  const battle = event("Battle of Tannenberg", "German forces capture much of the Russian Second Army's ground in heavy fighting.");
+  const out = await directGeneratedTerritoryOps({
+    events: [battle],
+    world,
+    analyzeBatch: answering([
+      { eventIndex: 0, regionControlOps: [
+        { op: "control", regionId: "Tannenberg", fromCode: "German Empire", toCode: "German Empire" },
+        { op: "contest", regionId: "", fromCode: "Russian Empire", actorCode: "German Empire" },
+        { op: "annex", regionId: "Tannenberg", fromCode: "Russian Empire", toCode: "German Empire" },
+      ] },
+      { eventIndex: 4, regionControlOps: [{ op: "control", regionId: "Riga", fromCode: "Russian Empire", toCode: "German Empire" }] },
+    ]),
+  });
+  assert.deepEqual(controlOps(out, 0), []);
+});
+
+test("a failed analysis leaves the events as the simulator wrote them", async () => {
+  const battle = event("Battle on the Marne", "French and British forces counterattack along the river.");
+  const out = await directGeneratedTerritoryOps({ events: [battle], world, analyzeBatch: async () => { throw new Error("model unavailable"); } });
+  assert.deepEqual(out, [battle]);
 });
