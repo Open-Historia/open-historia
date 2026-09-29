@@ -712,6 +712,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // real ESRI/NOAA basemap — a custom uploaded image or vector background has
   // no DEM data to deform against, so terrain stays off in those cases even if
   // the player has the setting enabled.
+  // The globe is not excluded: MapLibre 5 draws terrain on the globe, and a
+  // projection change remounts the map (it is in mapInstanceKey), so the old
+  // worry about GL state carried across projections no longer applies.
   const terrain = useMemo(
     () =>
       terrainEnabled && !effectiveCustomBg && !effectiveBgDeclared

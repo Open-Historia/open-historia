@@ -51,13 +51,13 @@ Fields `useWorldState` derives from `world.json`:
 
 ## 2. `<Map>` setup and key props
 
-Defined in `World.jsx` (`src/Game/Map/World.jsx:286`). The `<Map>` has `key={projection}`, so **toggling globe↔mercator unmounts and remounts the entire map** (and all its GL images — which is why disputed stripe tiles are rebuilt reactively, see [§5](#5-disputed--striped-regions)).
+Defined in `World.jsx`. The `<Map>` has `key={mapInstanceKey}`, so **any change to the key unmounts and remounts the whole MapLibre instance** (and all its GL images — which is why disputed stripe tiles are rebuilt reactively, see [§6](#6-disputed--striped-regions)). The key is `buildBasemapRenderKey` (`runtime/assets.js`), `"<projection>:<basemapId>:<backgroundKind>"` (`backgroundKind` is `builtin`, `declared`, `image` or `vector`), with `:natgeo-dark-loading` / `:natgeo-dark-ready` appended for National Geographic - Dark. So the map remounts on a globe↔mercator toggle, a basemap change, a scenario background's payload arriving, and once more when the NatGeo Dark vector style is ready (a clean remount instead of a style swap under a live React `<Source>` tree).
 
 | Prop | Value | Why |
 |---|---|---|
-| `key` | `projection` | Remount on projection change |
-| `initialViewState` | `{longitude:0, latitude:0, zoom:3.5, bearing:0, pitch:0}` | Kept in `viewStateRef` and updated on every `onMove` so a remount restores the camera |
-| `minZoom` | `2.25` | Deliberate floor (see [§10](#10-zoom-caps--why-theyre-deliberate)) |
+| `key` | `mapInstanceKey` | Remount on projection, basemap or background change |
+| `initialViewState` | `viewStateRef.current`, first `{longitude:0, latitude:0, zoom:3.5, bearing:0, pitch:0}` | Updated on every `onMove`, so a remount keeps the camera |
+| `minZoom` | `2.25` | Deliberate floor (see [§11](#11-zoom-caps--why-theyre-deliberate)) |
 | `maxZoom` | `16` | Deliberate ceiling; PMTiles overzoom past their z8 max |
 | `maxBounds` | `[[-Inf,-80],[Inf,85]]` | Lock latitude to the usable band; longitude free (world copies wrap) |
 | `doubleClickZoom` | `false` | Double-click is reserved for gameplay |
@@ -67,66 +67,83 @@ Defined in `World.jsx` (`src/Game/Map/World.jsx:286`). The `<Map>` has `key={pro
 | `attributionControl` | `false` | Hidden |
 | `fadeDuration` | `0` | No label cross-fade flicker |
 | `collectResourceTiming` | `false` | Skip perf-entry overhead |
-| `crossSourceCollisions` | `false` | Symbols from different sources don't fight for placement (cities vs labels vs markers) |
-| `renderWorldCopies` | on | Wrap the map E/W infinitely |
-| `maxTileCacheSize` | `256` | **Caps per-source retained-tile GPU textures** |
+| `crossSourceCollisions` | `true` | MapLibre's default, kept for visual fidelity: cities, labels and markers do not overlap while the camera moves. The R5.0 performance win came from collapsing the country-label layer fan-out, not from this |
+| `renderWorldCopies` | on | Wrap the map E/W infinitely. A click on a copy reports an unwrapped longitude (e.g. 210); the click handler wraps it before placing a unit (§9) |
+| `maxTileCacheSize` | `256` | **Caps per-source retained-tile GPU textures** (below) |
+| `pixelRatio` | `1` | **One fixed renderer density** (below) |
 | `projection` | `useMemo(() => ({type: projection}))` | `"globe"` or `"mercator"` |
-| `terrain` | memoized (below) | 3D terrain, flat non-custom maps only |
-| `mapStyle` | `worldStyle` (`buildWorldStyle(...)`) | Base ESRI/terrain OR custom background |
+| `terrain` | memoized (below) | 3D terrain on built-in basemaps |
+| `mapStyle` | `worldStyle` | `buildWorldStyle(...)` ([§3](#3-the-base-style-buildworldstyle)), or the NatGeo Dark style |
 
-Handlers: `onMove` → stores `viewState` in `viewStateRef` + `applyDynamicPixelRatio`; `onIdle` → fires `onInitialIdle` once (boot signal) and clears the loading toast; `onLoading` → shows a "Loading tiles…" toast with an 8s safety timeout.
+Handlers:
+
+- `onLoad` — a trace entry, and the basemap transition bar moves to 84%.
+- `onIdle` — every idle: `markMapIdle()` (the loading screen a game opens under waits for the idle after the polity layers, see [Readiness signals](#readiness-signals)), `oh:map-motion` off, the basemap transition advanced or finished (below), and the "Loading tiles…" toast hidden. The first idle also fires `onInitialIdle`.
+- `onMoveStart` / `onMoveEnd` — dispatch `oh:map-motion` (`window.__OH_MAP_MOVING__`). With the debug switch on they also run the per-pan frame sampler (below).
+- `onMove` — keeps `viewStateRef` current.
+
+`onLoading` is not a react-map-gl event and is not used; the toast has its own listener (below).
+
+### Fixed pixel ratio (`pixelRatio={1}`)
+
+R5.1 uses one renderer density for the whole session. R5.0 switched between 1× and native DPR around z4.5/z5.0, and `setPixelRatio()` rebuilds the render targets — a hitch exactly as the player zoomed through that boundary. The 1× framebuffer performs well, and on a 2×–3× phone screen native density is 4–9 times the pixels (heat, RAM). It is a constructor option, so every instance starts at 1×: the ratio used to be set on the first instance's first idle, and a basemap or background remount brought the new map up at native density for the rest of the session.
 
 ### `maxTileCacheSize={256}` (the OOM cap)
 
-Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to `applyDynamicPixelRatio` (which bounds framebuffer pixels, not tiles).
+Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to the fixed 1× density (which bounds framebuffer pixels, not tiles).
 
-### Dynamic pixel ratio (`applyDynamicPixelRatio`, `World.jsx:212`)
+### `terrain` memo
 
-Zoomed far out, the whole world (every region, border, label) draws at once and native resolution wastes frames on invisible detail. So:
+`terrain = { source: "terrain-source", exaggeration: 15 }` when `terrainEnabled && !customBg && !bgDeclared`: a custom image or vector background has no DEM to deform. **The globe is included on purpose.** An older guard (`!isGlobe`) kept terrain off the globe, on the grounds that MapLibre could not draw it there and that it could corrupt the shader cache across projection changes; `9b414f54` dropped it because MapLibre 5 does draw terrain on the globe, and every projection change remounts the map (the projection is part of the key), so no GL state survives one.
 
-| Zoom | Mode | `map.setPixelRatio(...)` |
-|---|---|---|
-| ≤ 4.5 | `low` | `min(devicePixelRatio, 1) * 0.75` |
-| ≥ 5 | `native` | `window.devicePixelRatio` |
-| 4.5–5 | unchanged | hysteresis band to prevent flapping |
+### Instrumentation (`mapInstrumentation.js`)
 
-Applied on `onMove` **and** `onIdle`, so the soft ratio is in effect from the very first settled frame at world zoom, not only after the first pan.
+`attachMapInstrumentation` is attached to every map instance World mounts (the effect is keyed on `mapInstanceKey`) and detached from the old one:
 
-### `terrain` memo (`World.jsx:197`)
+- **Always:** the canvas's `webglcontextlost` / `webglcontextrestored` (a trace entry and a console warning; the context a removed map loses on purpose is recorded as released, not lost), and `sourcedataloading` filtered to the basemap's own style sources (`isBasemapTileLoading`) for the toast.
+- **With `window.__OH_PERF_VERBOSE__ = true`** (`isMapPerfVerbose()` in `runtime/mapPerfTrace.js`; the same switch as `assets.js`'s performance console output, read when a map mounts): the per-event trace listeners (`sourcedata`, `data`, `styledata`, `styledataloading`, `render`, `idle`, `zoomstart`, `zoomend`), and on every pan a `requestAnimationFrame` sampler that detects frames ≥ 100 ms (`recordMapFreeze`) and logs an `[OH MAP PERF R5.3]` summary (`window.__OH_LAST_MAP_PERF__`). Off by default: it costs a callback on every frame of every pan.
 
-`terrain = { source: "terrain-source", exaggeration: 15 }` **only** when `terrainEnabled && !isGlobe && !customBg && !bgDeclared`. Globe terrain is unsupported by MapLibre and can corrupt the shader cache across projection changes, so it's disabled on the globe and on any custom-background map (which has no terrain source).
+`runtime/mapPerfTrace.js` keeps the last 500 trace entries in a ring buffer (`getMapTrace()`, `window.__OH_MAP_TRACE__`); `Nations.jsx` and `useWorldState.js` record into it too.
+
+### "Loading tiles…" and "Changing basemap…"
+
+- **Loading tiles…** — a small pill at the bottom. A basemap tile starting to load marks a loading spell (React state is touched once per spell); the pill shows only if tiles are still loading 700 ms later (`LOADING_TOAST_DELAY_MS`), so local tiles never flash it. The next idle hides it; an 8 s timer is the backstop. Hidden while the basemap transition is up.
+- **Changing basemap…** — a blurred cover with a progress bar, from a basemap change after the first idle until the new map is idle. For NatGeo Dark it waits for the real vector style's remount, not the fallback's idle. If the polity text renderer (PTR) was drawing the names before the change (`ptrMountedBeforeBasemapCommit`), it also waits for `polity-text-renderer` on the new style, so the player never sees an unlabelled frame. A 20 s watchdog always lifts it.
 
 ---
 
 ## 3. The base style (`buildWorldStyle`)
 
-`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled)` (`World.jsx`) returns a MapLibre style JSON. It picks **one of four** branches:
+`buildWorldStyle(basemapId, customBg, backgroundDeclared, isGlobe, terrainEnabled)` (`World.jsx`) returns a MapLibre style JSON. The basemap it is given is `resolveBasemapId`: the player's pick in Settings → Map (`map_basemap_style`, this browser only) when it is a built-in id, else the scenario's `world.basemap`, else `DEFAULT_BASEMAP_ID = "ocean"`. A player pick also replaces the scenario's own background.
 
 | # | Condition | Sources | Layers |
 |---|---|---|---|
 | 1 | `customBg.kind === "image"` | `custom-bg` (image, corners per `WORLD_IMAGE_COORDS_*`) | `custom-bg-base` (solid `#0b1a2b`), `custom-bg-layer` (raster) |
 | 2 | `customBg.kind === "vector"` | `custom-bg-vec` (geojson) | `custom-bg-sea` (bg), `custom-bg-fill` (per-feature `fill`), `custom-bg-line` |
 | 3 | `backgroundDeclared` (payload not loaded yet) | none | `custom-bg-loading` (solid `#0b1a2b`) |
-| 4 | default (stock world) | ESRI satellite + terrain (below) | satellite + hillshade |
+| 4 | relief basemaps: `atlas-relief`, `atlas-relief-dark`, `ocean-dark`, `midnight-terrain` | `pax-world-relief` (NOAA ETOPO1 relief, `maxzoom 3`) + `satellite-lowres` / `satellite` rendering ESRI World Terrain Base | `strategy-map-base` (background), `satellite-lowres-layer`, `satellite-layer`, `pax-world-relief-layer` |
+| 5 | any other built-in raster id | `satellite-lowres` / `satellite` for that ESRI service | `strategy-map-base`, `satellite-lowres-layer`, `satellite-layer` |
 
-Branches 1–3 **drop ESRI entirely** so a custom-map game never flashes satellite Earth or fires basemap tile requests it won't use. Branch 3 is the pre-load placeholder: `useCustomBackground` flips `declared:true` from the light `world.json` poll *before* the heavy background payload loads.
+**National Geographic - Dark** is not a `buildWorldStyle` branch. `World()` loads Esri's public NatGeo vector style (`natGeoDarkStyle.js`, `loadNatGeoDarkStyle`, cached for the session), darkens its cartography, drops its sovereign-country labels and lays World Physical Map (`oh-natgeo-dark-physical`) under it. While it loads, the map shows branch 4 as Atlas Relief Dark; when it arrives the map remounts. If it fails, the dark relief stays.
+
+Branches 1–3 **drop ESRI entirely** so a custom-map game never flashes satellite Earth or fires basemap tile requests it won't use. Branch 3 is the pre-load placeholder: `useCustomBackground` flips `declared:true` from the world's background descriptor, which arrives with `world.json`, *before* the heavy background payload loads.
 
 Every branch sets `sky: { "atmosphere-blend": 0 }` — MapLibre's uniform atmosphere is off because `GlobeEffects` supplies directional surface light instead, and transparent space lets the stars/sun show through the canvas.
 
-### Default stock style (branch 4)
+### Built-in raster basemaps (branches 4–5)
 
 | Source id | Type | Tiles / template | Notes |
 |---|---|---|---|
-| `satellite-lowres` | raster | `esriTileTemplate(basemapId)` | z0–2 always have real data; `maxzoom:2` |
-| `satellite` | raster | `basemapProtocolTemplate(basemapId)` → `ohbase://…` | High-res via the **ohbase protocol** so ESRI "Map Data Not Yet Available" placeholders get replaced with upscaled ancestor tiles; `maxzoom` = the basemap's native max |
-| `terrain-source` | raster-dem | `TERRAIN_TILE_TEMPLATE` (AWS terrarium) | `encoding:"terrarium"`, `maxzoom:5` |
-| `hillshade-source` | raster-dem | same terrarium tiles | for the `hills` layer |
+| `satellite-lowres` | raster | `esriTileTemplate(id)` | z0–2 always have real data; `maxzoom:2`. Sits under the detailed layer so a region still loading looks coarse rather than black |
+| `satellite` | raster | `basemapProtocolTemplate(id)` → `ohbase://…` | High-res via the **ohbase protocol** so ESRI "Map Data Not Yet Available" placeholders get replaced with upscaled ancestor tiles; `maxzoom` = the basemap's native max |
+| `pax-world-relief` | raster | ETOPO1 shaded relief (branch 4 only) | `maxzoom 3`, overzoomed above; glazed over the terrain layer and faded out between z3 and z4.85 |
+| `terrain-source` | raster-dem | `TERRAIN_TILE_TEMPLATE` (AWS terrarium) | Only with `terrainEnabled`: `encoding:"terrarium"`, `maxzoom:5`. One DEM for both the `terrain` prop and the `hills` hillshade layer (exaggeration 0.1) |
 
-Layers: `satellite-lowres-layer`, `satellite-layer` (both with `SATELLITE_PAINT` grading — brightness cap, slight desaturation/contrast so it sits against the dark UI), and `hills` (hillshade, exaggeration 0.1). The default basemap is `DEFAULT_BASEMAP_ID = "ocean"`; Settings → Map has a basemap picker (Continuum's), stored in this browser as `map_basemap_style`; empty (the default) keeps the scenario author's background and basemap, and a built-in id replaces both for this player only. `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
+Branch 4 renders World Terrain Base (`"terrain"`) rather than the id it was given, with per-variant grades from `getPaxReliefPaints` (`PAX_*_PAINT`); branch 5 grades `imagery` with `SATELLITE_PAINT` and everything else with `ATLAS_PAINT`. `strategy-map-base` is `#0b1017`, darker for the dark variants (`#030a14` Ocean Dark, `#050609` Atlas Relief Dark, `#000205` Midnight Terrain). `ensureBasemapProtocol()` (called at module load) registers the `ohbase://` protocol handler; `configureMapRuntime()` runs first, since MapLibre's worker pool is made with the first map. Basemap helpers live in `src/runtime/assets.js` (`ESRI_BASEMAPS`, `esriTileTemplate`, `basemapProtocolTemplate`, `basemapMaxZoom`).
 
 ### World-image corner coordinates
 
-Two constants (`World.jsx:44`) give the image-source corners:
+Two constants in `World.jsx` give the image-source corners:
 
 - `WORLD_IMAGE_COORDS_FLAT` — ±85.0511° (the Mercator projection limit).
 - `WORLD_IMAGE_COORDS_GLOBE` — ±89.9° (the globe shows to the poles; **not** exactly ±90 because `mercatorYfromLat(±90)` is ±Infinity and `ImageSource.setCoordinates` throws — the `custom-bg-base` layer fills the negligible sliver).
@@ -346,7 +363,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | `custom-regions-fill-far maxzoom 7` | seed-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
 | Polity names end at z7.5 | `LABEL_MAX_ZOOM` (every label layer's `maxzoom` and ramp, `Nations.jsx`), `POLITY_TEXT_MAX_ZOOM` (`labels/polityTextLayout.js`) | Names fade over the last half zoom and stop at 7.5; past that the map is provinces and cities |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |
-| Pixel-ratio switch z4.5 / z5 | `applyDynamicPixelRatio` | Soften the whole-world view; hysteresis prevents flapping |
+| No pixel-ratio switch | `pixelRatio={1}` on `<Map>` | R5.0 switched density at z4.5/z5 and hitched at the boundary; one fixed 1× density since R5.1 (§2) |
 | Cities `minzoom 3.4`, city thresholds step by zoom | `Cities.jsx` | Thin out symbols as you zoom out |
 | Label `text-opacity` fades to 0 by z8 | `labelLayerPaint` | Country/owner labels hand the screen to city labels on zoom in |
 | Markers labels `minzoom 2.6` | `MarkersLayer.jsx` | Structure names appear slightly earlier than cities |
