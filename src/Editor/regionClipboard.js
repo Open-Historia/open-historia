@@ -8,8 +8,9 @@
 // Copy takes the selected regions of the map that is open (as GeoJSON, lon/lat)
 // together with everything those regions need to make sense somewhere else:
 // for every country they name as owner or claimant, that country's registry
-// record, colour, flag and tags from the source map, and the region types they
-// use. Paste puts them into whatever map is open then, taking their land out of
+// record, colour, flag and tags from the source map, the region types they
+// use, and the record (what it is, its colour) of every group whose area they
+// are in. Paste puts them into whatever map is open then, taking their land out of
 // the regions already there (OlMap.pasteRegions does the carving; this module
 // decides what travels and what the target keeps).
 //
@@ -17,6 +18,8 @@
 // open the built-in map, copy a country, close the Workshop, open their own
 // scenario's map and paste. Everything in here except the persistence is pure
 // and unit-tested (regionClipboard.test.js).
+
+import { findGroupKey } from "../runtime/groups.js";
 
 export const CLIPBOARD_VERSION = 1;
 
@@ -36,9 +39,11 @@ export const buildClipboardPayload = ({ regions, doc, colors = {}, sourceName = 
   const features = Array.isArray(regions?.features) ? regions.features.filter((f) => isRecord(f) && isRecord(f.geometry)) : [];
   const owners = new Set();
   const typeIds = new Set();
+  const groupNames = new Set();
   for (const feature of features) {
     const props = isRecord(feature.properties) ? feature.properties : {};
     if (props.owner) owners.add(String(props.owner));
+    if (props.group) groupNames.add(String(props.group));
     for (const claimant of Array.isArray(props.claimants) ? props.claimants : []) {
       if (claimant) owners.add(String(claimant));
     }
@@ -61,6 +66,13 @@ export const buildClipboardPayload = ({ regions, doc, colors = {}, sourceName = 
   const types = (Array.isArray(doc?.types) ? doc.types : [])
     .filter((type) => isRecord(type) && typeIds.has(String(type.id)))
     .map((type) => clone(type));
+  // A group named on a region but missing from the registry has no record to
+  // carry; the target's export gives it a default one, as the source's did.
+  const groups = {};
+  for (const name of groupNames) {
+    const key = findGroupKey(doc?.groups, name);
+    if (key && isRecord(doc.groups[key])) groups[key] = clone(doc.groups[key]);
+  }
   return {
     version: CLIPBOARD_VERSION,
     copiedAt: now.toISOString(),
@@ -68,14 +80,16 @@ export const buildClipboardPayload = ({ regions, doc, colors = {}, sourceName = 
     regions: { type: "FeatureCollection", features: features.map((f) => clone(f)) },
     polities,
     types,
+    groups,
   };
 };
 
 // What the target document takes from a paste. The target's own choices win:
 // a country it already knows keeps its record, colour, flag and tags, and only
-// the missing pieces arrive; a region type it lacks is added. Pure, so the
-// caller applies the patches with the document's setters.
-export const planClipboardMerge = (payload, { polities = {}, colors = {}, flags = {}, tags = {}, types = [] } = {}) => {
+// the missing pieces arrive; a region type it lacks is added, and so is a
+// group's record where the target has no group by that name (in any case).
+// Pure, so the caller applies the patches with the document's setters.
+export const planClipboardMerge = (payload, { polities = {}, colors = {}, flags = {}, tags = {}, types = [], groups = {} } = {}) => {
   const upserts = {};
   const colorOverrides = {};
   const flagAdds = {};
@@ -93,7 +107,12 @@ export const planClipboardMerge = (payload, { polities = {}, colors = {}, flags 
   const typeAdds = (Array.isArray(payload?.types) ? payload.types : [])
     .filter((type) => isRecord(type) && type.id != null && !have.has(String(type.id)))
     .map((type) => clone(type));
-  return { upserts, colorOverrides, flags: flagAdds, tags: tagAdds, types: typeAdds };
+  const groupAdds = {};
+  for (const [key, record] of Object.entries(isRecord(payload?.groups) ? payload.groups : {})) {
+    if (!isRecord(record) || findGroupKey(groups, key) || findGroupKey(groupAdds, key)) continue;
+    groupAdds[key] = clone(record);
+  }
+  return { upserts, colorOverrides, flags: flagAdds, tags: tagAdds, types: typeAdds, groups: groupAdds };
 };
 
 // Ids for pasted regions: a region keeps its id when the target has no region

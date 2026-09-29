@@ -183,10 +183,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
   const pasteClipboard = () => {
     if (!api || !clipboard) return false;
-    // The document's side first (countries, colours, flags, tags, types this
-    // map lacks), then the map's: OlMap carves and adds, one undo step.
-    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types });
+    // The document's side first (countries, colours, flags, tags, types and
+    // groups this map lacks), then the map's: OlMap carves and adds, one undo step.
+    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
     if (plan.types.length) d.setTypes((list) => [...list, ...plan.types]);
+    if (Object.keys(plan.groups).length) d.setGroups((registry) => ({ ...plan.groups, ...registry }));
     for (const [key, record] of Object.entries(plan.upserts)) d.upsertPolity(key, record);
     for (const [key, rgb] of Object.entries(plan.colorOverrides)) d.setColorOverride(key, rgb);
     for (const [key, flag] of Object.entries(plan.flags)) d.setFlag(key, flag);

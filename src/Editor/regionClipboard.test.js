@@ -96,7 +96,36 @@ test("on paste the target keeps what it has and takes only what it lacks", () =>
   assert.deepEqual(plan.flags, { Gondor: "data:image/png;base64,AAAA" }, "a flag the target lacks arrives even for a known country");
   assert.deepEqual(plan.tags, { Gondor: ["monarchy"] }, "tags arrive only where the target has none");
   assert.deepEqual(plan.types.map((t) => t.id), ["steppe"]);
-  assert.deepEqual(planClipboardMerge(null, {}), { upserts: {}, colorOverrides: {}, flags: {}, tags: {}, types: [] });
+  assert.deepEqual(planClipboardMerge(null, {}), { upserts: {}, colorOverrides: {}, flags: {}, tags: {}, types: [], groups: {} });
+});
+
+test("a copy carries the records of the groups its regions are in, and the target's own group wins on paste", () => {
+  const doc = {
+    ...sourceDoc,
+    groups: {
+      Cartel: { name: "Cartel", description: "Drug traffickers", color: "#aa3300" },
+      Militia: { name: "Militia", description: "A local militia", color: "#336699" },
+      Unused: { name: "Unused", description: "Not in the copy", color: "#000000" },
+    },
+  };
+  const grouped = {
+    type: "FeatureCollection",
+    features: [
+      region("c1", "Gondor", { group: "Cartel" }),
+      region("c2", "Gondor", { group: "cartel" }),
+      region("m1", "Rohan", { group: "Militia" }),
+      region("x1", "Rohan", { group: "Unregistered" }),
+    ],
+  };
+  const payload = buildClipboardPayload({ regions: grouped, doc, colors: sourceColors });
+  assert.deepEqual(Object.keys(payload.groups).sort(), ["Cartel", "Militia"], "each group once, by its registry key; a group with no record carries none");
+  assert.deepEqual(payload.groups.Cartel, { name: "Cartel", description: "Drug traffickers", color: "#aa3300" });
+  payload.groups.Cartel.color = "#ffffff";
+  assert.equal(doc.groups.Cartel.color, "#aa3300", "the copy is detached from the source");
+
+  const plan = planClipboardMerge(payload, { groups: { militia: { name: "militia", description: "Mine", color: "#00ff00" } } });
+  assert.deepEqual(plan.groups, { Cartel: { name: "Cartel", description: "Drug traffickers", color: "#ffffff" } }, "the target's militia, in any case, stays the target's");
+  assert.deepEqual(planClipboardMerge({ groups: { Cartel: null } }, {}).groups, {});
 });
 
 test("a pasted region keeps a free id and gets a fresh one for a taken id", () => {

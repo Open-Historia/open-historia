@@ -46,8 +46,8 @@ const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySe
         Build a map from pieces of others. Select regions on any map and copy them; open the map you are building and
         paste. Pasted regions take their land from whatever is already there: a region underneath keeps what is not
         covered, one covered entirely is removed. Countries this map does not know yet arrive with their colour, flag and
-        tags; ones it already has keep yours. The clipboard survives closing the Workshop and switching scenarios, and a
-        paste is one undo step.
+        tags; ones it already has keep yours. Groups arrive the same way, with what they are and their colour. The
+        clipboard survives closing the Workshop and switching scenarios, and a paste is one undo step.
       </div>
 
       {selectionCount > 0 && (
