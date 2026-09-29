@@ -21,7 +21,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
-import { addGameDays, diffGameDays } from "./gameDates.js";
+import { addGameDays, diffGameDays, isGameDate } from "./gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -137,6 +137,9 @@ const lifecycleEventTitle = (action, subject, name) => {
   if (action === "suspended") return `${subject} Is Suspended from ${name}`;
   if (action === "reinstated") return `${subject} Returns to ${name}`;
   if (action === "rejected") return `${subject} Declines ${name}`;
+  if (action === "invitation-lapsed") return `Invitation for ${subject} to Join ${name} Lapses`;
+  if (action === "application-lapsed") return `Application by ${subject} to Join ${name} Lapses`;
+  if (action === "motion-lapsed") return `Pending Motion in ${name} Lapses`;
   return `${subject} ${action} ${name}`;
 };
 
@@ -150,6 +153,9 @@ const lifecycleEventDescription = (action, { founder, polity, name, reason }) =>
   if (action === "suspended") return `${polity} is suspended from ${name}${reason ? `: ${reason}` : "."}`;
   if (action === "reinstated") return `${polity} returns to ${name}${reason ? `: ${reason}` : "."}`;
   if (action === "rejected") return `${polity} declines ${name}${reason ? `: ${reason}` : "."}`;
+  if (action === "invitation-lapsed") return `The invitation for ${polity} to join ${name} lapsed without an answer.`;
+  if (action === "application-lapsed") return `The application by ${polity} to join ${name} lapsed without a decision.`;
+  if (action === "motion-lapsed") return `A pending motion in ${name} lapsed without a decision.`;
   return `${polity} ${String(action).toLocaleLowerCase()} ${name}${reason ? `: ${reason}` : "."}`;
 };
 
@@ -231,6 +237,14 @@ const createLifecycleProposal = (institution, lifecycleCase, world, date, { op, 
   }, id, world);
   institution.proposals = { ...(institution.proposals || {}), [proposal.id]: proposal };
   return proposal;
+};
+
+// A case that closes without a decision takes its ballot off the agenda, so a
+// later vote cannot act on a case that is no longer there.
+const withdrawLifecycleProposal = (institution, proposalId, date) => {
+  const proposal = institution.proposals?.[clean(proposalId)];
+  if (!proposal || !["draft", "debate", "amendment", "formalized", "voting"].includes(lower(proposal.status))) return;
+  institution.proposals = { ...institution.proposals, [proposal.id]: { ...proposal, status: "withdrawn", lastUpdatedDate: clean(date) || proposal.lastUpdatedDate || "" } };
 };
 
 const foundingChat = ({ institution, invitees, founder, playerCountry, caseIds, date }) => {
@@ -832,6 +846,28 @@ export const applyInstitutionLifecycleCommandCore = ({
     return { world, chats, events, institution: membership.institution, action: "withdrawn" };
   }
 
+  // The government that opened a case may take it back while it is still open:
+  // an application nobody answers, an invitation it no longer means. Its ballot,
+  // if one is open, is withdrawn with it.
+  if (type === "retract") {
+    const actor = canonicalPolity(command.initiatedBy || command.actorPolity || player, world);
+    const caseId = clean(command.caseId);
+    if (!actor || !caseId) throw new Error("Retracting a lifecycle case requires the initiating polity and caseId.");
+    const authority = lifecycleAuthority({ actor, player, authority: command.authority });
+    if (!authority.allowed) throw new Error(authority.reason);
+    const result = mutateInstitution(world, baseInstitution.id, (institution) => {
+      const current = caseMap(institution)[caseId];
+      if (!current || !caseIsOpen(current)) return { error: `Lifecycle case ${caseId} is not open.` };
+      if (!samePolity(current.initiatedBy, actor)) return { error: `Only ${current.initiatedBy || "the initiating government"} may retract lifecycle case ${caseId}.` };
+      const lifecycleCase = { ...current, status: "withdrawn", resolvedDate: clean(date), updatedDate: clean(date), reason: clean(command.reason) || current.reason || "" };
+      institution.lifecycleCases = { ...caseMap(institution), [caseId]: lifecycleCase };
+      withdrawLifecycleProposal(institution, current.proposalId, date);
+      return { lifecycleCase };
+    });
+    if (result.error) throw new Error(result.error);
+    return { world: result.world, chats, events, institution: result.institution, lifecycleCase: result.lifecycleCase, action: "retracted" };
+  }
+
   if (["expel", "suspend", "reinstate", "dissolve"].includes(type)) {
     if (type === "expel" && lower(baseInstitution.charter?.lifecycle?.expulsion?.mode) === "not-permitted") {
       throw new Error(`${baseInstitution.name} charter does not permit expulsion.`);
@@ -1022,6 +1058,29 @@ const noticeHasRun = (effectiveDate, date) => {
   return days !== null && days >= 0;
 };
 
+// An open case with no movement for this long lapses: an invitation nobody
+// answers, an application or motion whose ballot never finishes. Without it
+// such a case blocks a fresh application and sits in every prompt that lists
+// pending institution business.
+export const INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS = 365;
+
+const lastCaseActivity = (institution, entry) => [
+  entry?.updatedDate,
+  entry?.createdDate,
+  institution?.proposals?.[clean(entry?.proposalId)]?.lastUpdatedDate,
+].filter(isGameDate).reduce((latest, candidate) => (!latest || diffGameDays(latest, candidate) > 0 ? candidate : latest), "");
+
+const caseHasLapsed = (institution, entry, date) => {
+  // A notice withdrawal is not waiting on anyone: its own date settles it.
+  if (entry.kind === "withdrawal" && entry.effectiveDate) return false;
+  const days = diffGameDays(lastCaseActivity(institution, entry), date);
+  return days !== null && days >= INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS;
+};
+
+const lapsedAction = (kind) => (["invitation", "founding-invitation"].includes(kind) ? "invitation-lapsed"
+  : kind === "application" ? "application-lapsed"
+    : "motion-lapsed");
+
 export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date = "", playerCountry = "" } = {}) => {
   let world = clone(worldInput || {});
   world = { ...world, institutions: normalizeInstitutions(world.institutions, world) };
@@ -1045,6 +1104,19 @@ export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date =
       applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
       events.push(lifecycleEvent({ institution: institutions.byId[institutionId], action: "left", polity: lifecycleCase.polity, actor: lifecycleCase.polity, date: lifecycleCase.effectiveDate, reason: lifecycleCase.reason, playerCountry: player }));
     }
+    const current = world.institutions.byId[institutionId];
+    const lapsed = institutionPendingLifecycleCases(current).filter((entry) => caseHasLapsed(current, entry, date));
+    if (!lapsed.length) continue;
+    const institution = clone(current);
+    for (const lifecycleCase of lapsed) {
+      institution.lifecycleCases = { ...caseMap(institution), [lifecycleCase.id]: { ...lifecycleCase, status: "expired", resolvedDate: clean(date), updatedDate: clean(date) } };
+      withdrawLifecycleProposal(institution, lifecycleCase.proposalId, date);
+      applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "expired" });
+      events.push(lifecycleEvent({ institution, action: lapsedAction(lifecycleCase.kind), polity: lifecycleCase.polity, actor: lifecycleCase.initiatedBy, date, playerCountry: player }));
+    }
+    const institutions = { ...world.institutions, byId: { ...world.institutions.byId } };
+    institutions.byId[institutionId] = normalizeInstitutionRecord(institution, institutionId, world);
+    world = { ...world, institutions };
   }
   return { world, applied, events, playerCountry };
 };

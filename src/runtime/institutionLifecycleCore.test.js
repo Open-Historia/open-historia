@@ -513,3 +513,84 @@ test("a polity that leaves an institution a second time gets a second event", ()
   assert.equal(titles.filter((title) => title === "Republic of Estonia Leaves Open Union").length, 2);
   assert.equal(new Set(leftAgain.events.map((event) => event.id)).size, leftAgain.events.length);
 });
+
+const foreignApplication = () => {
+  const founded = foundBaltic([]);
+  const institutionId = founded.institution.id;
+  const world = { ...founded.world, institutions: founded.world.institutions };
+  world.institutions.byId[institutionId] = { ...world.institutions.byId[institutionId], members: [{ polity: "Republic of Estonia", status: "member", role: "leader", sinceDate: "2014-08-20" }], leaders: ["Republic of Estonia"] };
+  const application = applyInstitutionLifecycleCommandCore({
+    world, playerCountry: "Republic of Latvia", date: "2014-09-05",
+    command: { type: "apply", institutionId, requestedStatus: "member", reason: "Riga seeks accession." },
+  });
+  return { institutionId, application };
+};
+
+test("the government that opened a case may retract it, and its ballot is withdrawn with it", () => {
+  const { institutionId, application } = foreignApplication();
+  const caseId = application.lifecycleCase.id;
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-10-01",
+    command: { type: "retract", institutionId, caseId, initiatedBy: "Republic of Estonia", authority: "npc" },
+  }), /Only Republic of Latvia may retract/);
+  const retracted = applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-10-01",
+    command: { type: "retract", institutionId, caseId, authority: "player" },
+  });
+  assert.equal(retracted.action, "retracted");
+  assert.equal(retracted.lifecycleCase.status, "withdrawn");
+  assert.equal(retracted.institution.proposals[application.proposal.id].status, "withdrawn");
+  assert.throws(() => applyInstitutionLifecycleCommandCore({
+    world: retracted.world, playerCountry: "Republic of Latvia", date: "2014-10-02",
+    command: { type: "retract", institutionId, caseId, authority: "player" },
+  }), /is not open/);
+  // A retracted application no longer blocks a new one.
+  const again = applyInstitutionLifecycleCommandCore({
+    world: retracted.world, playerCountry: "Republic of Latvia", date: "2014-10-03",
+    command: { type: "apply", institutionId, requestedStatus: "member" },
+  });
+  assert.equal(again.lifecycleCase.status, "pending-approval");
+});
+
+test("retracting a withdrawal notice keeps the membership", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "2015-01-01",
+    command: { type: "withdraw", institutionId: founded.institution.id, authority: "player" },
+  });
+  const retracted = applyInstitutionLifecycleCommandCore({
+    world: notice.world, playerCountry: "Republic of Latvia", date: "2015-01-10",
+    command: { type: "retract", institutionId: founded.institution.id, caseId: notice.lifecycleCase.id, authority: "player" },
+  });
+  const later = advanceInstitutionLifecycleCore({ world: retracted.world, date: "2015-06-01", playerCountry: "Republic of Latvia" });
+  assert.equal(later.applied.length, 0);
+  assert.equal(later.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), true);
+});
+
+test("an open case with no movement for a year lapses, with an event and its ballot withdrawn", async () => {
+  const { advanceInstitutionLifecycleCore, INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS } = await import("./institutionLifecycleCore.js");
+  assert.equal(INSTITUTION_LIFECYCLE_CASE_EXPIRY_DAYS, 365);
+  const { institutionId, application } = foreignApplication();
+  const invited = applyInstitutionLifecycleCommandCore({
+    world: application.world, playerCountry: "Republic of Latvia", date: "2014-12-01",
+    command: { type: "invite", institutionId, initiatedBy: "Republic of Estonia", polity: "Republic of Poland", authority: "npc" },
+  });
+  const early = advanceInstitutionLifecycleCore({ world: invited.world, date: "2015-09-04", playerCountry: "Republic of Latvia" });
+  assert.equal(early.applied.length, 0);
+  const lapsed = advanceInstitutionLifecycleCore({ world: invited.world, date: "2015-09-05", playerCountry: "Republic of Latvia" });
+  assert.deepEqual(lapsed.applied.map((entry) => entry.action), ["expired"]);
+  const institution = lapsed.world.institutions.byId[institutionId];
+  assert.equal(institution.lifecycleCases[application.lifecycleCase.id].status, "expired");
+  assert.equal(institution.proposals[application.proposal.id].status, "withdrawn");
+  assert.equal(institution.lifecycleCases[invited.lifecycleCase.id].status, "pending");
+  assert.equal(lapsed.events.length, 1);
+  assert.equal(lapsed.events[0].title, "Application by Republic of Latvia to Join Baltic Union Lapses");
+  assert.equal(lapsed.events[0].playerRelated, true);
+  const invitationLapsed = advanceInstitutionLifecycleCore({ world: lapsed.world, date: "2015-12-01", playerCountry: "Republic of Latvia" });
+  assert.equal(invitationLapsed.events[0].title, "Invitation for Republic of Poland to Join Baltic Union Lapses");
+  assert.equal(invitationLapsed.events[0].playerRelated, false);
+});

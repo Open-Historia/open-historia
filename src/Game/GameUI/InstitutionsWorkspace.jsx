@@ -204,7 +204,7 @@ const fieldStyle = {
   background: "rgba(0,0,0,.2)", color: "white", padding: ".48rem .56rem", fontSize: ".68rem", fontFamily: "inherit",
 };
 
-const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null }) => {
+const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, canOpenNegotiation = false, canRetract = false, busy = false, opening = false, onRespond = null, onOpenNegotiation = null, onRetract = null }) => {
   const kind = humanize(entry?.kind || "membership case");
   const status = humanize(entry?.status || "pending");
   const tone = ["accepted", "resolved"].includes(lower(entry?.status)) ? "good"
@@ -229,6 +229,9 @@ const LifecycleCaseCard = ({ entry, institutionName = "", canRespond = false, ca
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("seek-observer")} style={{ border: "1px solid rgba(167,139,250,.22)", borderRadius: 7, background: "rgba(139,92,246,.08)", color: "#ddd6fe", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Seek observer status</button>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("delay")} style={{ border: "1px solid rgba(245,158,11,.2)", borderRadius: 7, background: "rgba(245,158,11,.06)", color: "#fde68a", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Decide later</button>
       <button className="oh-tap-row" disabled={busy} onClick={() => onRespond?.("reject")} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Reject</button>    </div>}
+    {canRetract && <div data-player-lifecycle-retract-controls="true" style={{ display: "flex", justifyContent: "flex-end", marginTop: ".5rem", paddingTop: ".45rem", borderTop: "1px solid rgba(255,255,255,.06)" }}>
+      <button className="oh-tap-row" disabled={busy} onClick={() => onRetract?.()} style={{ border: "1px solid rgba(239,68,68,.2)", borderRadius: 7, background: "rgba(239,68,68,.06)", color: "#fca5a5", padding: ".26rem .42rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Retract</button>
+    </div>}
   </div>;
 };
 
@@ -589,6 +592,9 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const respondToLifecycleCase = (entry, decision) => lifecycleCommand(`respond:${entry?.id}:${decision}`, {
     type: "respond", caseId: entry?.id, actorPolity: playerCountry, decision, reason: clean(lifecycleReason), authority: "player",
   });
+  const retractLifecycleCase = (entry) => lifecycleCommand(`retract:${entry?.id}`, {
+    type: "retract", caseId: entry?.id, initiatedBy: playerCountry, authority: "player",
+  });
   const openLifecycleNegotiation = async (entry) => {
     if (!entry?.id || !selectedView?.institution?.id) return;
     const groupedCases = lower(entry?.kind) === "founding-invitation"
@@ -716,7 +722,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
 
         {selectedPendingLifecycle.length > 0 && <section>
           <div style={{ fontSize: ".64rem", fontWeight: 850, letterSpacing: ".075em", textTransform: "uppercase", color: "rgba(253,230,138,.68)", marginBottom: ".45rem" }}>Pending membership business</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} />)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: ".45rem" }}>{selectedPendingLifecycle.map((entry) => <LifecycleCaseCard key={entry.id} entry={entry} institutionName={institution.name} busy={Boolean(busy)} opening={busy === `open-lifecycle:${entry.id}`} canRespond={lower(entry?.polity) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canOpenNegotiation={lower(entry?.initiatedBy) === lower(playerCountry) && ["invitation", "founding-invitation"].includes(lower(entry?.kind)) && ["pending", "negotiating"].includes(lower(entry?.status))} canRetract={lower(entry?.initiatedBy) === lower(playerCountry) && ["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))} onRespond={(decision) => respondToLifecycleCase(entry, decision)} onOpenNegotiation={() => openLifecycleNegotiation(entry)} onRetract={() => retractLifecycleCase(entry)} />)}</div>
         </section>}
 
         <section>
