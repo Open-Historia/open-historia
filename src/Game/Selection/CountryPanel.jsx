@@ -17,6 +17,7 @@ import {
     sortEventsNewestFirst,
 } from "../../runtime/countryInfoPanel.js";
 import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
+import { getStoredLanguage } from "../../runtime/i18n.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
@@ -276,12 +277,14 @@ const CountryInfoPanel = () => {
     }, [identity, aliases, loaded, worldState]);
 
     // The campaign, polity, round and prompt language a briefing answers for.
+    // callAI writes in the player's UI language (languageDirective), so a
+    // language switch asks afresh.
     const briefingKeyFor = (game) => briefingCacheKey({
         gameId: getLibraryState()?.activeGameId ?? "",
         polity: polityKey || country?.code,
         date: game?.date,
         round: game?.round,
-        language: worldState?.language || game?.language || "English",
+        language: getStoredLanguage(),
     });
     const reportKey = identity ? briefingKeyFor(loaded.game) : "";
 
