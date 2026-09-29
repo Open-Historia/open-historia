@@ -1,7 +1,7 @@
 /*! Open Historia — reports tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/runtime/reports.test.js
 //
-// Runs without node_modules: reports.js imports nothing.
+// Runs without node_modules: reports.js and audience.js import nothing.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,6 +15,7 @@ import {
     normalizeReports,
     reportsFor,
 } from "./reports.js";
+import { audienceSeesScoped, viewerAudience } from "../Game/AI/audience.js";
 
 const KNOWN = new Map([["france", "France"], ["germany", "Germany"], ["french republic", "France"]]);
 const resolvePolity = (name) => KNOWN.get(String(name).trim().toLowerCase()) ?? "";
@@ -95,9 +96,13 @@ test("an audience reads the reports addressed to it, newest first; the narrator 
         { op: "create", title: "Berlin memo", body: "…", visibleTo: ["Germany"] },
         { op: "create", title: "Communiqué", body: "…" },
     ], { resolvePolity }).reports;
-    const seesAs = (polity) => (visibleTo) => visibleTo === null || visibleTo.some((name) => name === polity);
+    // The rule a leader's prompt and a group chat's document blocks bind: audience.js.
+    const seesAs = (polity) => (visibleTo) => audienceSeesScoped(viewerAudience([polity]), visibleTo);
     assert.deepEqual(reportsFor(list, seesAs("France")).map((report) => report.title), ["Communiqué", "Secret Protocol to the Treaty of Amity"]);
+    assert.deepEqual(reportsFor(list, seesAs(" france ")).map((report) => report.title), ["Communiqué", "Secret Protocol to the Treaty of Amity"]);
     assert.deepEqual(reportsFor(list, seesAs("Italy")).map((report) => report.title), ["Communiqué"]);
+    // Names are exact: a near name holds nothing private.
+    assert.deepEqual(reportsFor(list, seesAs("French")).map((report) => report.title), ["Communiqué"]);
     assert.equal(reportsFor(list, null).length, 3);
 });
 

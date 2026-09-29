@@ -98,7 +98,7 @@ import {
 } from "./projectsDirective.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
-import { SIMULATION_AUDIENCE } from "./audience.js";
+import { SIMULATION_AUDIENCE, audienceSeesScoped, viewerAudience } from "./audience.js";
 import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
@@ -12274,9 +12274,9 @@ export const runChatActionBatch = async ({
   // of being present in the combined request. This also keeps institutional
   // councils on the same reports/documents architecture as ordinary diplomacy.
   const documentBlocks = aiParticipants.map((speaker) => {
-    const key = normalizeString(speaker).toLowerCase();
-    const text = key ? describeReportsForPrompt(bundle.world?.reports, {
-      sees: (visibleTo) => visibleTo === null || normalizeArray(visibleTo).some((name) => normalizeString(name).toLowerCase() === key),
+    const audience = viewerAudience([speaker]);
+    const text = normalizeString(speaker) ? describeReportsForPrompt(bundle.world?.reports, {
+      sees: (visibleTo) => audienceSeesScoped(audience, visibleTo),
       heading: `### ${speaker}'s government documents`,
       limit: 8,
       bodyChars: 220,

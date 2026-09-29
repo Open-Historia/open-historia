@@ -92,7 +92,7 @@ import {
     openAiMessagesFromHistory,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
-import { viewerAudience } from "./audience.js";
+import { audienceSeesScoped, viewerAudience } from "./audience.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
@@ -3378,10 +3378,10 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // The documents this leader's government holds (runtime/reports.js), by the
     // same audience rule as everything it may read: its own, and what was
     // published. Never who else stole a copy.
-    const speakerKey = String(speaker || "").trim().toLowerCase();
-    const papers = speakerKey
+    const speakerAudience = viewerAudience([speaker]);
+    const papers = String(speaker || "").trim()
         ? describeReportsForPrompt(normalizeReports(worldData?.reports), {
-            sees: (visibleTo) => visibleTo === null || visibleTo.some((name) => String(name).trim().toLowerCase() === speakerKey),
+            sees: (visibleTo) => audienceSeesScoped(speakerAudience, visibleTo),
             heading: "[Documents Your Government Holds]",
             limit: 8,
             bodyChars: 220,

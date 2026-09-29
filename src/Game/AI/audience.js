@@ -69,13 +69,6 @@ export const normalizeAudience = (value) => {
   return clean(value) ? viewerAudience([value]) : SIMULATION_AUDIENCE;
 };
 
-// A stable key for caches and cursors: two audiences with the same identity are
-// shown the same things.
-export const audienceIdentity = (audience) => {
-  if (isSimulationAudience(audience)) return "simulation";
-  return `viewer:${audiencePolities(audience).map(fold).sort().join("|")}`;
-};
-
 /**
  * Does one participant entry refer to `polity`?
  *
@@ -114,9 +107,6 @@ export const audienceSeesChat = (audience, chat, { player = "" } = {}) => {
   if (clean(player) && audienceIncludes(audience, player)) return true;
   return audienceAmong(audience, chat?.countries);
 };
-
-export const filterChatsForAudience = (chats, audience, options) =>
-  (Array.isArray(chats) ? chats : []).filter((chat) => audienceSeesChat(audience, chat, options));
 
 /**
  * May this audience see something carrying a distribution list?

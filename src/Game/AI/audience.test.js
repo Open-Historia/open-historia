@@ -16,12 +16,10 @@ import assert from "node:assert/strict";
 import {
   SIMULATION_AUDIENCE,
   audienceAmong,
-  audienceIdentity,
   audienceIncludes,
   audiencePolities,
   audienceSeesChat,
   audienceSeesScoped,
-  filterChatsForAudience,
   isSimulationAudience,
   normalizeAudience,
   polityMatches,
@@ -61,13 +59,6 @@ test("an object that is not an audience is never promoted to the narrator", () =
   }
 });
 
-test("identity is stable under order and case, and differs between audiences", () => {
-  assert.equal(audienceIdentity(SIMULATION_AUDIENCE), "simulation");
-  assert.equal(audienceIdentity(viewerAudience(["Nigeria", "Angola"])), audienceIdentity(viewerAudience(["angola", "NIGERIA"])));
-  assert.notEqual(audienceIdentity(angola), audienceIdentity(viewerAudience(["Nigeria"])));
-  assert.notEqual(audienceIdentity(viewerAudience([])), "simulation");
-});
-
 test("a participant matches by name or by code, and a blank never matches a blank", () => {
   assert.equal(polityMatches({ code: "AGO", name: "Angola" }, "angola"), true);
   assert.equal(polityMatches({ code: "AGO", name: "Angola" }, "AGO"), true);
@@ -81,8 +72,8 @@ test("a participant matches by name or by code, and a blank never matches a blan
 
 test("the narrator reads every chat; a polity reads only the rooms it was in", () => {
   const chats = [chat("Angola"), chat("Nigeria"), chat("Angola", "Nigeria"), { countries: [] }, {}];
-  assert.equal(filterChatsForAudience(chats, SIMULATION_AUDIENCE).length, 5);
-  assert.deepEqual(filterChatsForAudience(chats, angola), [chats[0], chats[2]]);
+  assert.equal(chats.filter((entry) => audienceSeesChat(SIMULATION_AUDIENCE, entry)).length, 5);
+  assert.deepEqual(chats.filter((entry) => audienceSeesChat(angola, entry)), [chats[0], chats[2]]);
   // A chat with no recorded participants is hidden from every polity.
   assert.equal(audienceSeesChat(angola, { countries: [] }), false);
   assert.equal(audienceSeesChat(angola, null), false);
