@@ -1,6 +1,6 @@
 # Game Map & Rendering
 
-The in-game map is a single MapLibre GL instance (via `react-map-gl/maplibre`) mounted by `src/Game/Map/World.jsx`, with every gameplay layer added as a React child that declares its own `<Source>`/`<Layer>`. All political state flows in from `world.json` (polled every 5s by `useWorldState`) and `colors.json` (the owner→rgb palette); nothing on the map is server-rendered — owners are recoloured, labels rebuilt, and units/markers re-fed from that JSON every poll. The same code renders two ways: a flat Web-Mercator map and a decorative 3D globe (with a real-sun terminator and starfield), switched by the `projection` prop, which remounts the whole `<Map>`.
+The in-game map is a single MapLibre GL instance (via `react-map-gl/maplibre`) mounted by `src/Game/Map/World.jsx`, with every gameplay layer added as a React child that declares its own `<Source>`/`<Layer>`. All political state flows in from `world.json` and `colors.json` (the owner→rgb palette). Neither is polled: `useWorldState` and `unitsController` read once and then take each write from the `oh:world-updated` / `oh:game-updated` events it dispatches, and the palette is re-read on `oh:colors-updated` ([World state §9](world-state.md#9-state-distribution-three-stores-no-panel-polls)). Nothing on the map is server-rendered — owners are recoloured, labels rebuilt, and units/markers re-fed from that JSON whenever it changes. The same code renders two ways: a flat Web-Mercator map and a decorative 3D globe (with a real-sun terminator and starfield), switched by the `projection` prop, which remounts the whole `<Map>`.
 
 Everything below is in `src/Game/Map/` unless noted.
 
@@ -355,7 +355,7 @@ Status drives styling — **pending** (player-requested, not yet AI-confirmed) u
 
 ### Controller — `unitsController.js`
 
-A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | admin-place`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
+A module-level store, separate from `useWorldState` and, like it, event-driven: `startUnitsSync` reads `world.json` and `game.json` once and installs listeners for `oh:world-updated` and `oh:game-updated`; there is no poll. It holds `units`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | admin-place`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
 
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
@@ -367,7 +367,7 @@ Player deploy is purely local **and** queues a machine-readable `action` (via `q
 
 The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMode()`:
 
-- **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`; the admin placement tool (`placeUnitAdmin`) rides the same dispatcher.
+- **deploy mode** (set by the Forces panel) intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`. The click's longitude is wrapped first (`lngLat.wrap()`), since a click on a world copy past the date line reports e.g. 210. The handler also has an `admin-place` branch (`placeUnitAdmin`), but **nothing sets that mode** at present, so it is unreachable.
 - **normal click** priority: unit (`units-fill`) → feature (the `markers-shapes-*` tiers, then `cities-shapes` / `cities-capitals`; city text is not queried, so a big label cannot steal a province click) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
 
 The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system).
@@ -409,7 +409,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js` (with `
 ## 12. Data-flow summary
 
 ```
-world.json ──(useWorldState, 5s)──► customRegions, regionOwnershipOverrides,
+world.json ──(useWorldState, write events)──► customRegions, regionOwnershipOverrides,
    │                                 regionClaimants, polityOverrides, markers,
    │                                 labelFont/Color, basemap, background, units
    │

@@ -1,6 +1,6 @@
 # In-Game UI (HUD, Panels & Buttons)
 
-The in-game UI is a flat set of `position: fixed` React components layered over a full-screen MapLibre canvas — there is no single container div, each widget positions itself against the viewport edges and competes for the stacking order through an explicit z-index ladder. `src/Game/GameUI/main.jsx` is the shell: it mounts every HUD element, owns the panel-open booleans, and computes `rightShift` (the horizontal offset that slides the bottom-right cluster left when the advisor drawer opens). Everything the UI reads or writes flows through the runtime state stores (`readJson`/`writeJson`, `readGameData`/`readWorldState`, `useLibraryState`) and the AI layer (`src/Game/AI/*`) — the components hold almost no game data of their own, they poll the stores on a 5-second cadence and push edits back.
+The in-game UI is a flat set of `position: fixed` React components layered over a full-screen MapLibre canvas — there is no single container div, each widget positions itself against the viewport edges and competes for the stacking order through an explicit z-index ladder. `src/Game/GameUI/main.jsx` is the shell: it mounts every HUD element, owns the panel-open booleans, and computes `rightShift` (the horizontal offset that slides the bottom-right cluster left when the advisor drawer opens). Everything the UI reads or writes flows through the runtime state stores (`readJson`/`writeJson`, `readGameData`/`readWorldState`, `useLibraryState`) and the AI layer (`src/Game/AI/*`) — the components hold almost no game data of their own. They subscribe to the shared runtime store (`useRuntimeState`), which canonical writes push to, with a 60 s backstop read (`RUNTIME_BACKSTOP_MS`), and push edits back; see §14 and [World state §9](world-state.md#9-state-distribution-three-stores-no-panel-polls).
 
 - Shell & mount point: `src/App.jsx` (`GameApp`) renders `<UI>` = `src/Game/GameUI/main.jsx` once `isReady`, passing `mapRef`, `isGlobeEnabled`, `isTerrainEnabled`, and their setters.
 - Related pages: [World state](world-state.md) · [AI gameplay pipeline](ai-overview.md) · [Map rendering](game-map.md) · [Library & scenarios runtime](runtime-services.md) · [Diplomacy & chat](ai-overview.md)
@@ -109,9 +109,9 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 
 | Concern | Detail | Connects to |
 |---|---|---|
-| Data | `chats` from `readChatsState`/`writeChatsState`; player country + date polled from `JSON_URLS.game` every 5 s | `src/runtime/gameState.js` |
+| Data | `chats` from `readChatsState`/`writeChatsState`; player country + date from `useRuntimeState("game", selectGameIdentity)` | `src/runtime/gameState.js`, `src/runtime/runtimeStore.js` |
 | Country list | `loadCountryNames()` (PMTiles-derived), filtered to exclude the player | `src/runtime/assets.js` |
-| Live sync | While open, polls stored chats every 5 s and merges additions (jump invitations, idle drip) without clobbering the active conversation | — |
+| Live sync | While open, subscribes to the store's `chat` slice (`subscribeRuntime("chat")`, refreshed once on open) and merges additions (jump invitations, idle drip) without clobbering the active conversation. The list's puppet and overlord markers are re-read every 15 s | `src/runtime/runtimeStore.js` |
 | Send | One-on-one sends directly to the sole AI counterpart via `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }`. Group/institution conversations use `runChatActionBatch` as the single canonical AI request: that batch decides which AI participants speak/react/vote/stay silent and their order. There is no standalone speaker-selection request or sequential group fallback. | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js`, `src/Game/AI/chatActions.js` |
 | Group turn UI | A group turn is revealed from the one-request action batch a line at a time; the player may cut in before later planned lines are written. No queued "Let X speak" legacy phase remains. | `ConversationView`, `planChatReveal` |
 | Conversation view | A date separator opens every new game day; the last 12 messages render first with a "Show earlier" button; stacked flags on list rows; a leader's message is dated through `gameDates.js` (it used to show a day early west of Greenwich); a document delivered through diplomacy is a message like any other, its `📄` heading in bold ([§6.2-bis](#62-bis-documents-where-they-arrive)) | `ConversationView`, `ChatListItem` |
@@ -293,7 +293,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |
 | Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`) | `src/runtime/countryFlags.js` |
 
-`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because the date widget already shows the country). It polls `JSON_URLS.game` + world every 5 s and applies the same landless-suppression logic; falls back emoji → `FallbackBadge` initials for non-ISO polities.
+`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because the date widget already shows the country). It reads the world once (forced) when a campaign activates, then follows `oh:game-updated`, `oh:world-updated` and `oh:runtime-json-updated` (for `flags.json`), and applies the same landless-suppression logic; falls back emoji → `FallbackBadge` initials for non-ISO polities.
 
 ---
 
@@ -303,7 +303,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 
 ### 6.1 The pill
 
-Shows player country + formatted date (`«` opens Events history, `»` opens the Skip panel; `»` becomes a spinner during a jump). `rightShift`/`topOffset` come from `Main`. Polls `readGameData`/`readEventsState`/`readWorldState` every 5 s, but **never regresses** — a stale poll with a lower round/date than what's on screen is skipped (`gameStampRef`), so a just-completed jump is never reverted.
+Shows player country + formatted date (`«` opens Events history, `»` opens the Skip panel; `»` becomes a spinner during a jump). `rightShift`/`topOffset` come from `Main`. Reads game, events and world from the shared store (`useRuntimeState`). The store **never regresses**: a background read of `game.json` with a lower round/date than the newest turn published is dropped (`gameStamp` in `runtime/runtimeStore.js`), so a just-completed jump is never reverted.
 
 ### 6.2 Timeline skip panel (`»`)
 
@@ -373,7 +373,7 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 | Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
 | **🎯 Standing goal** (`StandingGoal`) | Under the date line: *Set a standing goal*, or the goal with **Edit**; editing offers Save (Enter), Cancel (Esc) and **Clear goal**. Locked while a turn runs (polls `isSimulationBusy()`), since the turn writes the world the goal lives in. The advisor, the time skip and the suggestions steer by it; a leader never sees it | `withPlayerGoal` → `writeWorldState` (`src/runtime/playerGoal.js`); read with `useRuntimeState("world", playerGoalOf)` |
 
-Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
+Only `status === "planned"` actions render. Country + date come from `useRuntimeState("game", selectGameHeader)` (display only); the list follows the store's `actions` slice (`subscribeRuntime("actions")`). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
 
 ---
 
@@ -383,7 +383,7 @@ Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game`
 
 | Element | Behavior | Connects to |
 |---|---|---|
-| Data | Its own 5 s `setInterval` while open: `readWorldState({force:true})` + `JSON_URLS.game`, signature-gated so a poll that changed nothing does not re-render the list under the cursor | `src/runtime/gameState.js` |
+| Data | Slices of the shared store: `useRuntimeState("world", selectProjects)` and `selectPolities`, `useRuntimeState("game", selectGameStamp)`; a slice wakes the panel only when it changed, so a write that touched nothing here does not re-render the list under the cursor | `src/runtime/runtimeStore.js` |
 | Cards | Kind glyph, name, status pill, owner, summary, tag chips, progress bar (`Bar`, copied from `stats.jsx:153`), timeline row, next milestone, last update | — |
 | Derived badges | ⚠ Overdue / ⏳ Due in Nd / Milestone slipped / No recent progress — all from `deriveProjectFlags` against the game clock, never from what the model wrote, so they cannot go stale | `src/runtime/projects.js` |
 | Sort & filter | `PROJECT_SORTS` dropdown, Mine/Foreign/All, and tag chips built from the live vocabulary (`collectProjectTags`). Open work always sorts above closed work whatever the chosen sort |
@@ -434,7 +434,7 @@ Every tool that changes the world records one sentence of it in `world.gmChanges
 
 The log viewer that used to be a Cheats tool is now **View log** in Settings → Diagnostics (section 10).
 
-Ownership/name resolution is done in **one namespace** (country display name) — the file's comments call out the recurring bug where a GADM code (`RUS`) and a name (`Russia`) never compared equal. All map changes repaint within ~5 s (the map's own poll).
+Ownership/name resolution is done in **one namespace** (country display name) — the file's comments call out the recurring bug where a GADM code (`RUS`) and a name (`Russia`) never compared equal. The map repaints on the write itself: its stores follow the `oh:world-updated` event every `writeWorldState` dispatches.
 
 `loadPolities()` (`cheats.jsx:103`) enumerates the countries actually in the game (polity overrides ∪ current region owners ∪ owners of rendered geometry — custom regions when present, else the stock catalog), each resolved to a display name.
 

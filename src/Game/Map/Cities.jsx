@@ -379,8 +379,8 @@ const useGameYear = () => {
 
 const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
-    // city set (presets, editor maps). Consumed from the shared world-state hook
-    // so the map doesn't fire its own independent 5s poll.
+    // city set (presets, editor maps). Consumed from the shared world-state hook,
+    // which follows world writes, rather than a read of its own.
     const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
     const [customData, setCustomData] = useState(null);
     // Whether the asset arrived, not whether it held any cities.

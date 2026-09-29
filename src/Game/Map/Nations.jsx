@@ -827,11 +827,6 @@ const WorldMap = ({ isGlobe = false }) => {
     };
   }, [isGlobe, map, polityLabelCollections, polityOverrides]);
 
-  // On custom maps the stock modern-country labels are replaced wholesale by the
-  // owner labels (no more "Russia"/"Ukraine" floating over the Soviet Union).
-  // Keyed on the FLAG (not customActive): while a custom world's geometry is
-  // still loading, and before the world is known at all, stock labels must
-  // not flash in.
   // Derived political artifacts are valid only for the last worker-acknowledged
   // ownership revision. Canonical region fills never wait for them. While an
   // owner is dirty, hide only borders/labels touching that owner; unrelated

@@ -553,8 +553,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   });
   // A custom uploaded map (image or vector) replaces the ESRI basemap; otherwise
   // the scenario's basemap does, unless the player picked one in Settings → Map.
-  // `declared` flips on from the light world.json poll (before the heavy payload)
-  // so the map drops ESRI immediately rather than flashing satellite Earth.
+  // `declared` flips on from the background descriptor in world.json (before
+  // the heavy payload) so the map drops ESRI immediately rather than flashing
+  // satellite Earth.
   const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
   const isGlobe = projection === "globe";
   // The player's basemap pick (Settings → Map) is local to this browser and
