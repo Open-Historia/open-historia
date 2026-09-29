@@ -208,6 +208,8 @@ test("every kind of change has a line in the comment", () => {
   for (const kind of KNOWN_KINDS) {
     const change = kind === "field"
       ? { id: kind, area: "details", kind, path: ["meta", "name"] }
+      : kind === "history"
+      ? { id: kind, area: "details", kind, part: "event", entry: "e1" }
       : { id: kind, area: "details", kind };
     assert.ok(summarizeChangesForComment([change]).length > 0, `a suggestion of one ${kind} change says what it is`);
   }

@@ -630,7 +630,7 @@ A model knows that a tank army is "massing east of Kharkiv"; it does not know th
 | `timelineCurator` | `submit_timeline_curator` | `curateGeneratedEvents` (`nativeTimelineCurator.js`, from `applySimulationResult`) | Judges each fresh event against recent canon before it persists; deterministic gates (hard impacts, retrieved prior matches, saturation) decide what may be dropped, default KEEP. |
 | `unitDirector` | `submit_unit_director` | `directGeneratedUnitOps` (`nativeUnitDirector.js`, from `finishTimelineJump`) | Keeps existing NPC formations coherent with the turn's military events: proposes spawn/move/strength/remove ops that native rules sanitize before they ride the normal unitOps path. |
 | `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` | Optional unprompted diplomatic note. |
-| `pregameHistory` | `submit_pregame_history` | `maybeGeneratePregameHistory` | Backstory events before the start date. |
+| `pregameHistory` | `submit_pregame_history` | `generateScenarioPrehistory` (Workshop), `maybeGeneratePregameHistory` (a scenario without a pre-history) | Backstory events before the start date, and the Round-One ledgers. A scenario keeps the result (`world.prehistory`), so a game applies it without a request ([prompts §7.10](ai-prompts.md#710-pregamehistory--backstory-generator)). |
 | `projects` | `submit_project_ops` | `generateProjectOps` (internal; run by `simulateTimelineJump`) | The Projects & Operations board, kept in step with the events a jump just produced. |
 
 ### Why `projects` is its own call

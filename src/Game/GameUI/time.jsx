@@ -66,6 +66,7 @@ import {
     revealNeedsStaging,
     turnRecordId,
 } from "./turnReveal.js";
+import { prehistoryHasContent } from "../../runtime/scenarioPrehistory.js";
 
 dayjs.extend(advancedFormat);
 
@@ -2125,14 +2126,16 @@ const DateWidget = ({
         return () => window.removeEventListener("oh:rolled-back", handleRolledBack);
     }, []);
 
-    // Pre-game history: a fresh game (round 1, no events, no turns) whose
-    // scenario wrote a "World Before Round One" briefing gets its backstory
-    // generated once, the first time the player actually enters it. Waits out
-    // the main menu so tokens are never spent on a game the player is only
-    // hovering past; every other guard (busy lock, still-the-same-game check,
-    // the done-marker) lives in maybeGeneratePregameHistory itself. The menu
-    // state is a dependency because nothing else re-renders this when the
-    // player finally enters the game.
+    // Pre-game history: a fresh game (round 1, no events, no turns) gets its
+    // backstory once, the first time the player actually enters it — its
+    // scenario's own pre-history (runtime/scenarioPrehistory.js), or, for a
+    // scenario made before scenarios kept one, generated from its "World
+    // Before Round One" briefing. Waits out the main menu so tokens are never
+    // spent on a game the player is only hovering past; every other guard
+    // (busy lock, still-the-same-game check, the done-marker) lives in
+    // maybeGeneratePregameHistory itself. The menu state is a dependency
+    // because nothing else re-renders this when the player finally enters the
+    // game.
     const mainMenuOpen = useMainMenuOpen();
     const pregameAttemptedRef = React.useRef(false);
     useEffect(() => {
@@ -2143,7 +2146,7 @@ const DateWidget = ({
             (Number(gameData.round) || 1) === 1 &&
             (events?.length ?? 0) === 0 &&
             (worldState.simulationHistory?.length ?? 0) === 0;
-        if (!fresh || !String(worldState.startingTimelineText ?? "").trim()) {
+        if (!fresh || (!String(worldState.startingTimelineText ?? "").trim() && !prehistoryHasContent(worldState.prehistory))) {
             return;
         }
         if (isMainMenuOpen()) {

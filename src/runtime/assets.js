@@ -1489,14 +1489,39 @@ export const loadCountryNames = async ({ force = false } = {}) => {
 // The map already pays the unavoidable parse cost of regions.geojson once.
 // Project a tiny metadata-only catalog while that geometry is in memory so
 // country panels/AI/cheats never reparse it just to learn province names.
-export const primeCustomRegionCatalogEntries = (
-  rawEntries,
-  {
-    url = JSON_URLS.regionsGeojson,
-    invalidateCatalog = true,
-  } = {},
-) => {
-  const startedAt = perfNow();
+// A regions file's features as the catalog's raw rows (the primers below).
+const customRegionRawEntries = (geojson) => {
+  const rawEntries = [];
+  for (const feature of geojson?.features ?? []) {
+    const props = feature?.properties ?? {};
+    // The same id vocabulary the AI's Preview resolver reads from these features
+    // (resolveRegionTransfers in gameplay.js), so an id Preview accepted is never
+    // "missing" from the compact catalog when Apply revalidates it.
+    const rawId = props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id;
+    const id = rawId != null ? String(rawId) : "";
+    if (!id) continue;
+    const centroid = props?.centroid?.coordinates;
+    rawEntries.push({
+      // A drawn region's baked owner is its `owner` property; carrying it as the
+      // catalog's base country lets the prompt tell a real change from the seed.
+      country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
+      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
+      id,
+      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
+      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
+      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
+      tags: Array.isArray(props?.tags) ? props.tags : [],
+      type: props?.type ?? "",
+      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
+      bounds: geometryBounds(feature?.geometry),
+      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
+    });
+  }
+  return rawEntries;
+};
+
+// Raw rows as the compact catalog keeps them.
+const compactCustomRegionEntries = (rawEntries) => {
   const entries = [];
   for (const raw of rawEntries ?? []) {
     const id = raw?.id != null ? String(raw.id) : "";
@@ -1529,6 +1554,18 @@ export const primeCustomRegionCatalogEntries = (
         : {}),
     });
   }
+  return entries;
+};
+
+export const primeCustomRegionCatalogEntries = (
+  rawEntries,
+  {
+    url = JSON_URLS.regionsGeojson,
+    invalidateCatalog = true,
+  } = {},
+) => {
+  const startedAt = perfNow();
+  const entries = compactCustomRegionEntries(rawEntries);
   primedCustomRegionCatalog = entries;
   primedCustomRegionCatalogKey = String(url || "");
   if (invalidateCatalog) {
@@ -1599,32 +1636,7 @@ export const primeCustomRegionCatalog = (
   geojson,
   options = {},
 ) => {
-  const rawEntries = [];
-  for (const feature of geojson?.features ?? []) {
-    const props = feature?.properties ?? {};
-    // The same id vocabulary the AI's Preview resolver reads from these features
-    // (resolveRegionTransfers in gameplay.js), so an id Preview accepted is never
-    // "missing" from the compact catalog when Apply revalidates it.
-    const rawId = props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id;
-    const id = rawId != null ? String(rawId) : "";
-    if (!id) continue;
-    const centroid = props?.centroid?.coordinates;
-    rawEntries.push({
-      // A drawn region's baked owner is its `owner` property; carrying it as the
-      // catalog's base country lets the prompt tell a real change from the seed.
-      country: props.country ? String(props.country) : props.owner ? String(props.owner) : "",
-      countryCode: props.gid0 ? String(props.gid0) : props.GID_0 ? String(props.GID_0) : "",
-      id,
-      name: props.name ?? props.NAME_1 ?? props.name_1 ?? id,
-      lng: Array.isArray(centroid) ? centroid[0] : props?.lng ?? props?.longitude,
-      lat: Array.isArray(centroid) ? centroid[1] : props?.lat ?? props?.latitude,
-      tags: Array.isArray(props?.tags) ? props.tags : [],
-      type: props?.type ?? "",
-      adjacencies: Array.isArray(props?.adjacencies) ? props.adjacencies : [],
-      bounds: geometryBounds(feature?.geometry),
-      claimants: Array.isArray(props?.claimants) ? props.claimants : [],
-    });
-  }
+  const rawEntries = customRegionRawEntries(geojson);
   return primeCustomRegionCatalogEntries(rawEntries, options);
 };
 
@@ -1665,6 +1677,17 @@ export const loadScenarioRegionCatalog = async ({ force = false } = {}) => {
   });
 };
 
+// The region catalog for a map that is not the active game's — a scenario's,
+// in the Workshop (gameplay.js generateScenarioPrehistory): the stock regions
+// with the map's own over them, read from its regions file. Nothing is primed
+// or cached, so the active game's catalog is left as it was.
+export const buildRegionCatalogForMap = async (regionsGeojson) => {
+  const seen = new Map();
+  await readStockRegionEntries(seen);
+  mergeCustomRegionEntries(seen, compactCustomRegionEntries(customRegionRawEntries(regionsGeojson)));
+  return sortedRegionCatalog(seen);
+};
+
 // The server's derived projection of the restore points: id/round/dates only.
 // snapshots.json itself carries every prior world and hits 8+ MB late in a game.
 export const loadRollbackSnapshotIndex = async () => {
@@ -1675,6 +1698,88 @@ export const loadRollbackSnapshotIndex = async () => {
   }).catch(() => null);
   return Array.isArray(data?.entries) ? data.entries : [];
 };
+
+// The stock world's regions into `seen` (id -> { country, countryCode, id,
+// name }), from the tile archive. Shared by the active game's catalog and by a
+// catalog built for any map (buildRegionCatalogForMap).
+const readStockRegionEntries = async (seen) => {
+  // The stock world's regions, from the tile archive — ONE of two sources,
+  // and the optional one. This used to return an empty catalog the moment
+  // the archive could not be read, before the scenario's own regions below
+  // had been looked at: a hand-drawn map with every region named in its
+  // geojson lost all of them to a missing tile file, and with them every
+  // lookup, every place name the engine reads, and every prompt's region
+  // list. The archive is tried; the scenario's geometry is always merged.
+  let layer = null;
+  try {
+    const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
+    const tileData = await pmtiles.getZxy(0, 0, 0);
+    const tile = tileData?.data ? await decodeVectorTile(tileData.data) : null;
+    layer = tile?.layers?.regions ?? null;
+  } catch (error) {
+    console.warn("The stock region tiles could not be read; the catalog carries the scenario's own regions only.", error);
+  }
+
+  for (let index = 0; index < (layer ? layer.length : 0); index += 1) {
+    const props = layer.feature(index).properties;
+    const id = props?.GID_1 || props?.gid_1 || props?.HASC_1 || props?.fid;
+    // A few GADM regions carry the literal placeholder "NA" as their name (England
+    // among them). Correct the known ones and treat the rest as nameless, so the
+    // `!name` skip below drops them instead of teaching the model a region called
+    // "NA" that it can never meaningfully transfer.
+    const name = resolveRegionName(id, props?.NAME_1 || props?.name_1 || props?.NAME || props?.name);
+    const countryCode = props?.GID_0 || props?.gid_0 || "";
+    const country = resolveCountryDisplayName(
+      props?.COUNTRY || props?.Country || props?.country,
+      countryCode,
+    );
+
+    if (!id || !name) {
+      continue;
+    }
+
+    const key = String(id);
+    if (!seen.has(key)) {
+      seen.set(key, {
+        country,
+        countryCode,
+        id: key,
+        name: String(name),
+      });
+    }
+  }
+};
+
+// A map's own regions over the stock ones: a drawn region is added, a stock one
+// takes the map's name and country.
+const mergeCustomRegionEntries = (seen, customEntries) => {
+  for (const entry of customEntries ?? []) {
+    const id = String(entry?.id ?? "");
+    if (!id) continue;
+    const existing = seen.get(id);
+    if (existing) {
+      if (entry.name) existing.name = String(entry.name);
+      if (entry.country) existing.country = String(entry.country);
+      if (entry.countryCode) existing.countryCode = String(entry.countryCode);
+      continue;
+    }
+    seen.set(id, {
+      country: entry.country ? String(entry.country) : "",
+      countryCode: entry.countryCode ? String(entry.countryCode) : "",
+      id,
+      name: entry.name ? String(entry.name) : id,
+    });
+  }
+};
+
+const sortedRegionCatalog = (seen) => Array.from(seen.values()).sort((left, right) => {
+  const countrySort = left.country.localeCompare(right.country);
+  if (countrySort !== 0) {
+    return countrySort;
+  }
+
+  return left.name.localeCompare(right.name);
+});
 
 export const loadRegionCatalog = async ({ force = false } = {}) => {
   // Keyed on BOTH sources: switching games/scenarios (new runtime token) must
@@ -1690,51 +1795,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
     try {
       const seen = new Map();
 
-      // The stock world's regions, from the tile archive — ONE of two sources,
-      // and the optional one. This used to return an empty catalog the moment
-      // the archive could not be read, before the scenario's own regions below
-      // had been looked at: a hand-drawn map with every region named in its
-      // geojson lost all of them to a missing tile file, and with them every
-      // lookup, every place name the engine reads, and every prompt's region
-      // list. The archive is tried; the scenario's geometry is always merged.
-      let layer = null;
-      try {
-        const pmtiles = getPmtilesArchive(PMTILES_ARCHIVES.regions);
-        const tileData = await pmtiles.getZxy(0, 0, 0);
-        const tile = tileData?.data ? await decodeVectorTile(tileData.data) : null;
-        layer = tile?.layers?.regions ?? null;
-      } catch (error) {
-        console.warn("The stock region tiles could not be read; the catalog carries the scenario's own regions only.", error);
-      }
-
-      for (let index = 0; index < (layer ? layer.length : 0); index += 1) {
-        const props = layer.feature(index).properties;
-        const id = props?.GID_1 || props?.gid_1 || props?.HASC_1 || props?.fid;
-        // A few GADM regions carry the literal placeholder "NA" as their name (England
-        // among them). Correct the known ones and treat the rest as nameless, so the
-        // `!name` skip below drops them instead of teaching the model a region called
-        // "NA" that it can never meaningfully transfer.
-        const name = resolveRegionName(id, props?.NAME_1 || props?.name_1 || props?.NAME || props?.name);
-        const countryCode = props?.GID_0 || props?.gid_0 || "";
-        const country = resolveCountryDisplayName(
-          props?.COUNTRY || props?.Country || props?.country,
-          countryCode,
-        );
-
-        if (!id || !name) {
-          continue;
-        }
-
-        const key = String(id);
-        if (!seen.has(key)) {
-          seen.set(key, {
-            country,
-            countryCode,
-            id: key,
-            name: String(name),
-          });
-        }
-      }
+      await readStockRegionEntries(seen);
 
       // Regions the stock tiles don't know — shapes DRAWN in the map editor
       // (reg_* ids) and seed-only regions — get their names from the active
@@ -1762,23 +1823,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
           });
         }
 
-        for (const entry of customEntries ?? []) {
-          const id = String(entry?.id ?? "");
-          if (!id) continue;
-          const existing = seen.get(id);
-          if (existing) {
-            if (entry.name) existing.name = String(entry.name);
-            if (entry.country) existing.country = String(entry.country);
-            if (entry.countryCode) existing.countryCode = String(entry.countryCode);
-            continue;
-          }
-          seen.set(id, {
-            country: entry.country ? String(entry.country) : "",
-            countryCode: entry.countryCode ? String(entry.countryCode) : "",
-            id,
-            name: entry.name ? String(entry.name) : id,
-          });
-        }
+        mergeCustomRegionEntries(seen, customEntries);
       } catch {
         customRegionsResolved = false;
       }
@@ -1788,14 +1833,7 @@ export const loadRegionCatalog = async ({ force = false } = {}) => {
         regionCatalogPromise = null;
       }
 
-      return Array.from(seen.values()).sort((left, right) => {
-        const countrySort = left.country.localeCompare(right.country);
-        if (countrySort !== 0) {
-          return countrySort;
-        }
-
-        return left.name.localeCompare(right.name);
-      });
+      return sortedRegionCatalog(seen);
     } catch (error) {
       console.error("Failed to load region catalog (will retry):", error);
       // One failed load used to pin an EMPTY catalog for the rest of the

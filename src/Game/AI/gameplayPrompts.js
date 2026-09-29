@@ -214,7 +214,7 @@ export const PROMPT_SECTION_DEFINITIONS = [
   },
   {
     description:
-      "Runs once when a new game with a World Before Round One briefing first opens: writes the backstory events that led up to the start date.",
+      "Writes a scenario's pre-game history when its designer clicks Generate in the Workshop's Pre-history tab: the backstory events that led up to the start date. A scenario made before scenarios kept one still runs it once, when a new game first opens.",
     key: "pregameHistory",
     label: "Pre-Game History",
     type: "task",

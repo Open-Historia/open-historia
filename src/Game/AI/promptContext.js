@@ -1625,10 +1625,14 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 // ids) of the player and of `speakingAs` only, and headers that say what the
 // list is rather than instructions for a jump. The jump's vocabulary of up to
 // 480 `name (id)` pairs was about ten kilobytes on every chat message.
+//
+// `nationTags`: the map's own tags, for a map that is not the active game's
+// (buildPromptContext's mapSource).
 export const buildWorldSummary = async (bundle, regionCatalog = null, {
   regionListsViaTools = false,
   conversation = false,
   speakingAs = "",
+  nationTags = null,
 } = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
@@ -1652,6 +1656,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
       return `- ${region?.name || regionId}${bakedOwner ? ` (${bakedOwner})` : ""} -> ${ownerCode}`;
     }).join("\n");
   const polities = Object.values(world.polityOverrides);
+
   // The region vocabulary the jump prompt promises ("every ... region ... separated
   // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
   // so on a stock map the model saw ZERO region names and invented ones that then
@@ -1702,7 +1707,7 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, {
   // without any rule saying so. Capped at 40 countries for prompt budget; drop
   // whole countries rather than truncate one list, since "- SOV: socialist," reads
   // as corrupt data to the model.
-  const baseTags = await getNationTags().catch(() => ({}));
+  const baseTags = nationTags ?? await getNationTags().catch(() => ({}));
   const tagged = resolveAllCountryTags(baseTags, world);
   const taggedCodes = orderByFocus(Object.keys(tagged), (code) => [code, toCountryName(code)], focusCodes);
   const tagSummary = taggedCodes.length === 0
@@ -1799,6 +1804,9 @@ export const buildPromptContext = async (bundle, {
   // the world summary's map section is sized and worded for talk, not for a
   // jump's regionTransfers (buildWorldSummary).
   conversation = false,
+  // A map that is not the active game's — a scenario's, in the Workshop
+  // (gameplay.js generateScenarioPrehistory): { regionCatalog, nationTags }.
+  mapSource = null,
   requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
@@ -1831,7 +1839,7 @@ export const buildPromptContext = async (bundle, {
     "playerPolityRegions",
     "numberOfRegions",
   );
-  const regionCatalog = needsRegionCatalog ? await loadRegions() : [];
+  const regionCatalog = needsRegionCatalog ? (mapSource?.regionCatalog ?? await loadRegions()) : [];
 
   let worldSummary = "";
   if (wants("worldSummary", "worldSummaryNoCity")) {
@@ -1839,6 +1847,7 @@ export const buildPromptContext = async (bundle, {
       regionListsViaTools: lookups,
       conversation,
       speakingAs: respondingPolityName,
+      nationTags: mapSource?.nationTags ?? null,
     });
   }
 

@@ -14,6 +14,7 @@ import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGu
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
 import { buildScenarioSnapshot, isDetailFieldPath, politicsEntries, POLITICS_FIELDS, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
+import { normalizeScenarioPrehistory } from "./scenarioPrehistory.js";
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -35,6 +36,11 @@ export const detailValueIn = (snapshot, change) => {
       const value = snapshot.politics?.[change.field];
       if (change.container === "value" || !change.entry) return value ?? null;
       return politicsEntries(value, change.container, ledgerKeyOfChange(change)).get(change.entry) ?? null;
+    }
+    case "history": {
+      const history = snapshot.history ?? null;
+      if (change.part === "setup") return history ? { prompt: history.prompt, summary: history.summary, updates: history.updates } : null;
+      return history?.events.find((event) => event.id === change.entry) ?? null;
     }
     case "stats":
       return snapshot.stats ?? null;
@@ -111,12 +117,12 @@ const applyPoliticsChange = (current, change) => {
 
 // A change that puts back `before` (detailValueIn before accepting; for a
 // cover, the author's { hash, contentType, base64 } or null) where `change`
-// went: what Undo applies. A Politics entry is applied by its op, so the
+// went: what Undo applies. A Politics entry or a pre-history event is applied by its op, so the
 // inverse's op follows `before`: an entry that was not there is taken out
 // again, and one the change took out goes back in.
 export const inverseOf = (change, before) => {
   const inverse = { ...change, from: change.to, to: before };
-  if (change.kind === "politics" && change.container !== "value" && change.entry) {
+  if (((change.kind === "politics" && change.container !== "value") || change.kind === "history") && change.entry) {
     inverse.op = before === null || before === undefined ? "remove" : change.op === "remove" ? "add" : "change";
     inverse.to = before ?? null;
   }
@@ -138,6 +144,7 @@ export const applyToSnapshot = (snapshot, change) => {
     snapshot.politics = { ...(snapshot.politics ?? {}), [change.field]: applyPoliticsChange(snapshot.politics?.[change.field], change) };
   } else if (change.kind === "stats") snapshot.stats = value ?? null;
   else if (change.kind === "institutionLogos") snapshot.institutionLogos = value ?? null;
+  else if (change.kind === "history") snapshot.history = applyHistoryChange(snapshot.history, change);
   else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
 };
 
@@ -194,6 +201,20 @@ export const diffWords = (before, after) => {
   });
   flush();
   return grouped;
+};
+
+// One pre-history change into the author's record (or a new one): an event by
+// its id, or the summary, prompt and Day-one facts together. The author's other
+// events stay; the record is kept oldest first.
+const applyHistoryChange = (current, change) => {
+  const record = normalizeScenarioPrehistory(current ?? {}, { draft: true });
+  if (change.part === "setup") {
+    if (!isRecord(change.to)) return normalizeScenarioPrehistory({ ...record, prompt: "", summary: "", updates: {} });
+    return normalizeScenarioPrehistory({ ...record, prompt: change.to.prompt, summary: change.to.summary, updates: change.to.updates });
+  }
+  const events = record.events.filter((event) => event.id !== change.entry);
+  if (change.op !== "remove" && isRecord(change.to)) events.push({ ...clone(change.to), id: change.entry });
+  return normalizeScenarioPrehistory({ ...record, events });
 };
 
 // The save that applies `accepted` (details changes) to the scenario described
@@ -254,6 +275,9 @@ export const buildDetailSave = (accepted, details) => {
       // tab writes it (materializeScenarioCanon): accepting one makes the
       // author's canon current, or its divergence and packs would be ignored.
       if (change.field === "canonContext" && isRecord(change.to)) worldPatch.canonModelVersion = CANON_MODEL_VERSION;
+    } else if (change.kind === "history") {
+      const current = Object.prototype.hasOwnProperty.call(worldPatch, "prehistory") ? worldPatch.prehistory : data.world?.prehistory;
+      worldPatch.prehistory = applyHistoryChange(current, change);
     } else if (change.kind === "stats" || change.kind === "institutionLogos") {
       if (change.to === null || change.to === undefined) clears.push(change.kind);
       else uploads.push({ key: change.kind, json: change.to });

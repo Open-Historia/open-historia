@@ -41,7 +41,7 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
 export const KNOWN_KINDS = new Set([
-  "field", "politics", "stats", "institutionLogos", "cover",
+  "field", "politics", "history", "stats", "institutionLogos", "cover",
   "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
   "group-add", "group-remove", "group-change",
@@ -59,15 +59,18 @@ const POLITICS_LEDGERS = new Set(["byPolity", "byId"]);
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 // Its field, like a field change's path, becomes a key of the author's world:
 // only a Politics part this build writes.
+// An entry (a Politics record, a pre-history event) becomes an object key too.
+const safeEntryKey = (entry) => entry === undefined || entry === null || (typeof entry === "string" && !UNSAFE_KEYS.has(entry));
 const validPoliticsChange = (change) => POLITICS_FIELDS.includes(change.field)
   && (change.within === undefined || POLITICS_LEDGERS.has(change.within))
-  && (change.entry === undefined || change.entry === null || (typeof change.entry === "string" && !UNSAFE_KEYS.has(change.entry)));
+  && safeEntryKey(change.entry);
 const validChange = (change) => isRecord(change)
   && typeof change.id === "string" && change.id
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
   && (change.kind !== "field" || isDetailFieldPath(change.path))
   && (change.kind !== "politics" || validPoliticsChange(change))
+  && (change.kind !== "history" || ((change.part === "event" || change.part === "setup") && safeEntryKey(change.entry)))
   && (change.kind !== "borders" || Array.isArray(change.regions));
 
 export const normalizeSuggestion = (raw) => {
