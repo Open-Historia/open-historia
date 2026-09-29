@@ -182,13 +182,19 @@ export const advanceRecurringDate = (date, repeat, notBefore = "") => {
   const floor = parseYmd(notBefore);
   const floorKey = floor ? buildYmd(floor) : "";
 
+  // Weekly is plain arithmetic: the first whole number of weeks that lands
+  // strictly after the floor. (Stepping it through the month loop below would
+  // re-seed each step with the original day and never get ahead of the clock.)
+  if (cadence === "weekly") {
+    const behind = floorKey ? diffGameDays(formatGameDate(start), floorKey) : null;
+    const weeks = behind === null ? 1 : Math.max(1, Math.floor(behind / 7) + 1);
+    return addGameDays(formatGameDate(start), weeks * 7);
+  }
+
   let next = { ...start };
-  // Bounded: a weekly commitment missed for a decade is ~520 rolls, and the cap
-  // keeps a nonsense date (year 0001) from spinning here forever.
+  // Bounded: the cap keeps a nonsense date (year 0001) from spinning here forever.
   for (let guard = 0; guard < 600; guard += 1) {
-    next = cadence === "weekly"
-      ? parseGameDate(addGameDays(formatGameDate(next), 7))
-      : { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
+    next = { year: next.year, month: next.month + REPEAT_MONTHS[cadence], day: start.day };
 
     const candidate = buildYmd(next);
     if (!floorKey || compareGameDates(candidate, floorKey) > 0) return candidate;
