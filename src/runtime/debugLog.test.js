@@ -587,7 +587,7 @@ test("I6 the copied incident report carries the context and every field", () => 
     assert.equal(buildIncidentReport(null), "");
 });
 
-test("I7 a render crash's report keeps the whole stack and component stack", () => {
+test("I8 a render crash's report keeps the whole stack and component stack", () => {
     reset();
     // The crash screen had only Reload, and its log entry keeps four frames of
     // the component stack and none of the error's own.
@@ -1031,4 +1031,76 @@ test("K2 the offset is written the way a person reads it", () => {
     assert.equal(utcOffsetLabel(at(240)), "UTC-04:00", "four hours west");
     assert.equal(utcOffsetLabel(at(0)), "UTC+00:00");
     assert.equal(utcOffsetLabel(at(-330)), "UTC+05:30", "and half hours");
+});
+
+// ---- Group B: what one entry may cost ---------------------------------------
+//
+// The console capture passed a warning's whole first argument as the message,
+// and only the detail was ever cut: a failed JSON task put up to 12,000
+// characters of the model's campaign prose into the normal log. And every entry
+// read every value in localStorage, the log's own megabyte included, several
+// times over to find the stored keys.
+
+test("B1 a long console warning is cut to the entry limit, as a detail is", () => {
+    reset();
+    installDebugLogCapture();
+    const prose = `[ai] campaign JSON could not be parsed: ${"The legions crossed the Rhine at dawn. ".repeat(320)}`;
+    const quiet = mock.method(process.stderr, "write", () => true);
+    try {
+        console.warn(prose);
+    } finally {
+        quiet.mock.restore();
+    }
+    const entry = getDebugLogEntries().at(-1);
+    assert.ok(entry.message.startsWith("[ai] campaign JSON could not be parsed:"));
+    assert.ok(entry.message.length < 700, `${entry.message.length} characters kept`);
+    assert.match(entry.message, /… \(\+\d+ chars\)$/, "and it says how much was cut");
+
+    // Detailed mode keeps as much of a message as of a detail.
+    setDebugLogVerbose(true);
+    logDebugEvent("warn", prose);
+    assert.equal(getDebugLogEntries().at(-1).message, prose);
+});
+
+test("B2 a key the cut runs through is still redacted", () => {
+    reset();
+    store.set("gateway_api_key", "correcthorsebatterystaple");
+    logDebugEvent("warn", `${"x".repeat(590)} correcthorsebatterystaple and more`);
+    const entry = getDebugLogEntries().at(-1);
+    assert.equal(entry.message.includes("correcthor"), false, entry.message.slice(580));
+});
+
+test("B3 redaction reads only the entries named like secrets, never the log itself", () => {
+    reset();
+    store.set("oh_debug_log_v1", "x".repeat(200_000));
+    store.set("i18n_v2_de", "{}");
+    store.set("gemini_api_key", "hunter2hunter2hunter2");
+    const reads = new Map();
+    const getItem = globalThis.localStorage.getItem;
+    globalThis.localStorage.getItem = (key) => {
+        reads.set(key, (reads.get(key) ?? 0) + 1);
+        return getItem(key);
+    };
+    try {
+        logDebugEvent("ai", "request with hunter2hunter2hunter2 failed", "detail hunter2hunter2hunter2");
+    } finally {
+        globalThis.localStorage.getItem = getItem;
+    }
+    assert.equal(reads.get("oh_debug_log_v1"), undefined, "the log's megabyte is never read to redact an entry");
+    assert.equal(reads.get("i18n_v2_de"), undefined);
+    assert.ok(reads.get("gemini_api_key") >= 1);
+    const entry = getDebugLogEntries().at(-1);
+    assert.equal(`${entry.message} ${entry.detail}`.includes("hunter2"), false);
+});
+
+test("B4 a key replaced in place is redacted at once, and one key inside another is redacted whole", () => {
+    reset();
+    store.set("gateway_api_key", "firstsecretword1");
+    assert.equal(redactSecrets("a firstsecretword1 b").includes("firstsecret"), false);
+    // Same number of stored entries, a different value: still found.
+    store.set("gateway_api_key", "secondsecretword2");
+    assert.equal(redactSecrets("a secondsecretword2 b").includes("secondsecret"), false);
+    store.set("other_token", "secondsecretword2andmore");
+    const out = redactSecrets("x secondsecretword2andmore y");
+    assert.equal(out.includes("andmore"), false, out);
 });
