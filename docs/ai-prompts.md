@@ -15,8 +15,8 @@ Every LLM call the game makes is a template in `src/Game/AI/defaultPrompts.json`
 | Task runner, call-time directives, validators, fallbacks, task entry points | `src/Game/AI/gameplay.js` | `runJsonTask`, `buildTemplateVariables`, `simulateTimelineJump`, etc. |
 | JSON Schemas + tools + payload validator | `src/Game/AI/gameplaySchemas.js` | `GAMEPLAY_SCHEMAS`, `GAMEPLAY_TOOLS`, `validateGameplayPayload` |
 | Provider dispatch, `callAI`, advisor/leader assembly | `src/Game/AI/main.jsx` | `callAI`, `buildAdvisorSystemPrompt`, `buildDiplomaticSystemPrompt` |
-| Language directive (appended to *every* call) | `src/runtime/i18n.js` | `languageDirective` at line 137 |
-| Difficulty directive (appended to task + leader prompts) | `src/runtime/difficulty.js` | `difficultyDirective` at line 73 |
+| Language directive (appended to *every* call) | `src/runtime/i18n.js` | `languageDirective` |
+| Difficulty directive (appended to task + leader prompts) | `src/runtime/difficulty.js` | `difficultyDirective` |
 | Where the active game's prompt overrides are read from | `src/runtime/assets.js` | `JSON_URLS.prompts = /api/runtime/json/prompts` |
 | Per-scenario / per-game prompt editor UI ("Prompts" tab) | `src/Game/GameUI/libraryBar.jsx` | `PromptSectionEditor`, `handlePromptChange`, `serializePromptPack` on save |
 
@@ -92,7 +92,7 @@ These do **not** go through `runJsonTask` or `buildTemplateVariables`; they buil
 
 Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityReputationContext` is empty and the military-feasibility doctrine (§5) is **not** appended to their unit text.
 
-**The conversation is sent once, as the turns.** `ALL_ADVISOR_MESSAGES` (advisor) and `THIS_CHAT_HISTORY` (leader) used to render the transcript into the system prompt as well as sending it as the message turns — the same conversation twice, and, because it sat near the end of the system prompt, everything after it changed with every message, so no provider's prefix cache could reuse it. Both variables now render `CONVERSATION_IN_TURNS` (`main.jsx`), a pointer the templates' own sentences read naturally around, and a leader's own thread is also left out of the digest of its other chats (`buildDiplomaticSystemPrompt(…, { chatId })`). Measured on the Fault Lines save (`.lab/probes/conversation-anatomy.mjs`): an advisor message 124.4 K → 103.7 K characters with its system prompt identical from one message to the next (was 59%); a leader 70.2 K → 67.3 K, 100% (was 88%). Checked live: an advisor still recalls a code word from three exchanges back. The group-chat batch (`runChatActionBatch`) always sent its thread once.
+**The conversation is sent once, as the turns.** `ALL_ADVISOR_MESSAGES` (advisor) and `THIS_CHAT_HISTORY` (leader) used to render the transcript into the system prompt as well as sending it as the message turns — the same conversation twice, and, because it sat near the end of the system prompt, everything after it changed with every message, so no provider's prefix cache could reuse it. Both variables now render `CONVERSATION_IN_TURNS` (`main.jsx`), a pointer the templates' own sentences read naturally around, and a leader's own thread is also left out of the digest of its other chats (`buildDiplomaticSystemPrompt(…, { chatId })`). Measured on the Fault Lines save (the probe `conversation-anatomy.mjs`, in the private lab, not in this repo): an advisor message 124.4 K → 103.7 K characters with its system prompt identical from one message to the next (was 59%); a leader 70.2 K → 67.3 K, 100% (was 88%). Checked live: an advisor still recalls a code word from three exchanges back. The group-chat batch (`runChatActionBatch`) always sent its thread once.
 
 **A player's message can carry a catch-up note** (`AI/conversationCatchUp.js`): written by the advisor panel when the world moved on since the last exchange — what became of the advisor's last reply (a chart not drawn, a block that half landed), the time that passed and the newest events since, and the Game Master's changes by hand. It rides ahead of what the player typed, is stored on the message, and is sent with it again after a reload (`loadHistory`).
 
@@ -166,42 +166,42 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | Variable | Inserts | Computed at |
 |---|---|---|
 | `playerPolity` | `game.country` or "Unknown polity" | `promptContext.js` |
-| `playerPolityRegions` | Player's owned-region names, "No player polity…", "No explicit… override list", or the LANDLESS block | `buildPlayerPolityRegionsText` `promptContext.js` (LANDLESS text 287) |
-| `playerBattalionSummaries` | `buildUnitsSummaryText(world)` (up to 60 units, coords/type/owner/strength/status) | `promptContext.js` / builder `195` |
-| `unitsSummary` | Same unit text; **`buildTemplateVariables` appends `buildMilitaryFeasibilityText`** (era-reach/type/distance doctrine) only when units exist or the actions text matches the military regex | `promptContext.js`; override `gameplay.js`; feasibility builder `319` |
+| `playerPolityRegions` | Player's owned-region names, "No player polity…", "No explicit… override list", or the LANDLESS block | `buildPlayerPolityRegionsText` `promptContext.js` (the LANDLESS text too) |
+| `playerBattalionSummaries` | `buildUnitsSummaryText(world)` (up to 60 units, coords/type/owner/strength/status) | `promptContext.js` |
+| `unitsSummary` | Same unit text; **`buildTemplateVariables` appends `buildMilitaryFeasibilityText`** (era-reach/type/distance doctrine) only when units exist or the actions text matches the military regex | `promptContext.js`; override `gameplay.js`; feasibility builder `buildMilitaryFeasibilityText` |
 | `forcePosture` | Every power's formations with whose territory each is in, the distance to the nearest foreign border and its standing orders (`world.units` + `world.pendingUnitOrders`); positions only if the territory index fails. Built only when a prompt renders it (border proximity is the costliest thing in a prompt build) | `buildForcePostureText` `forcePosture.js`, called from `promptContext.js` |
-| `playerPolityReputationContext` | "International reputation: N/100 (poor/mixed/well-regarded)." from `world.internationalReputation[player]`, else last viewed stat sheet, else 50 | `buildPlayerPolityReputationText` `gameplay.js` (added `371`) |
+| `playerPolityReputationContext` | "International reputation: N/100 (poor/mixed/well-regarded)." from `world.internationalReputation[player]`, else last viewed stat sheet, else 50 | `buildPlayerPolityReputationText` `gameplay.js` |
 | `worldSummary` | Multi-section snapshot: player line + tags, round, date, language, difficulty, world-before-round-one, simulation rules, up-to-24 territorial overrides, up-to-16 polity overrides (incl. `note` lore), up-to-40 country tag lines, the interactive event in progress | `buildWorldSummary` `promptContext.js` |
 | `worldSummaryNoCity` | **Identical** to `worldSummary` | `promptContext.js` |
 | `citiesSummary` | City coordinate lines: custom-city scenarios use the era geojson (tier/pop sorted, ≤200); otherwise the stock significant slice (capitals + pop ≥ 2M, cached) | `buildCityCatalogText` `promptContext.js` |
 | `markersSummary` | `world.markers` structures (≤60) with kind/owner/coords/note | `buildMarkersSummaryText` `promptContext.js` |
 | `numberOfRegions` | `String(regionCatalog.length)` | `promptContext.js` |
 | `recentEvents` | Unconsolidated event history, `eventLimit` window (10 default; 16 on advisor/leader path) | `buildEventHistoryText` `promptContext.js` |
-| `recentEventsLong` | `buildCampaignHistoryText`: "STORY SO FAR" (consolidated) + "RECENT EVENTS" (≤`longEventLimit`, 24) | `promptContext.js` / builder `95` |
-| `consolidatedHistory` | `buildConsolidatedHistoryText(world)` — the `consolidatedHistory[]` summaries | `promptContext.js` / builder `86` |
+| `recentEventsLong` | `buildCampaignHistoryText`: "STORY SO FAR" (consolidated) + "RECENT EVENTS" (≤`longEventLimit`, 24) | `promptContext.js` |
+| `consolidatedHistory` | `buildConsolidatedHistoryText(world)` — the `consolidatedHistory[]` summaries | `promptContext.js` |
 | `recentRoundsWithDates` | `from → to` date pairs from `world.simulationHistory` (≤8) | `buildRecentRoundsWithDates` `promptContext.js` |
 | `chatHistory` | Current chat's `speaker: text` lines, or "No chat history." | `promptContext.js` |
-| `chatHistoryLong` | `buildDetailedChatHistoryText(unconsolidatedChats, {limit: chatLimit})` | `promptContext.js` / builder `114` |
-| `chatSummary` | One-line-per-chat last-message summary | `buildChatSummaryText` `promptContext.js` / builder `103` |
+| `chatHistoryLong` | `buildDetailedChatHistoryText(unconsolidatedChats, {limit: chatLimit})` | `promptContext.js` |
+| `chatSummary` | One-line-per-chat last-message summary | `buildChatSummaryText` `promptContext.js` |
 | `chatParticipants` | Current chat's participant names, comma-joined | `promptContext.js` (overridden with a bulleted list in `buildDiplomaticSystemPrompt`, `main.jsx`) |
 | `chatsToConsolidate` | Explicit batch, else detailed transcript (≤12 chats, ≤50 msgs) | `promptContext.js` |
 | `chat` | `JSON.stringify(unconsolidatedChats)` | `promptContext.js` |
 | `lastSpeaker` | Current chat's last speaker name | `promptContext.js` |
 | `respondingPolityName` | Option override, else first non-player participant | `promptContext.js` |
-| `advisorMessages` | `buildAdvisorHistoryText(bundle.advisor, {limit: advisorLimit=18})` | `promptContext.js` / builder `127` |
-| `actions` | `formatActionsForPrompt(bundle.actions)` (title + display text) | `promptContext.js` / builder `156` |
-| `plannedActions` | `buildActionHistoryText(bundle.actions)` (planned only) | `promptContext.js` / builder `140` |
+| `advisorMessages` | `buildAdvisorHistoryText(bundle.advisor, {limit: advisorLimit=18})` | `promptContext.js` |
+| `actions` | `formatActionsForPrompt(bundle.actions)` (title + display text) | `promptContext.js` |
+| `plannedActions` | `buildActionHistoryText(bundle.actions)` (planned only) | `promptContext.js` |
 | `allActions` | `buildActionHistoryText(…, {includeResolved:true})` | `promptContext.js` |
 | `actionInput` | The `actionInput` option (raw player text) | `promptContext.js` |
 | `date` | `game.gameDate` (raw) | `promptContext.js` |
-| `dateReadable` | `formatDateReadable(date)` → "D MMMM YYYY" (dayjs); raw text if unparseable | `promptContext.js` / builder `165` |
+| `dateReadable` | `formatDateReadable(date)` → "D MMMM YYYY" (dayjs); raw text if unparseable | `promptContext.js` |
 | `startDate` | `game.startDate` | `promptContext.js` |
 | `round` | `String(game.round || 1)` | `promptContext.js` |
 | `targetDate` | `targetDate` option or `date` | `promptContext.js` |
 | `targetDateReadable` | `formatDateReadable(target)` | `promptContext.js` |
 | `language` | `world.language ‖ game.language ‖ "English"` | `promptContext.js` |
 | `difficulty` | `game.difficulty || "standard"` | `promptContext.js` |
-| `difficultyGuidanceChats` | `buildDifficultyGuidance(difficulty, "chats")` | `promptContext.js` / builder `170` |
+| `difficultyGuidanceChats` | `buildDifficultyGuidance(difficulty, "chats")` | `promptContext.js` |
 | `difficultyGuidanceJumpForward` | `buildDifficultyGuidance(difficulty, "jump")` | `promptContext.js` |
 | `simulationRules` | `world.simulationRules` or "No extra simulation rules were provided." | `promptContext.js` |
 | `worldBeforeRoundOne` | `world.startingTimelineText` or "No pre-game world briefing…" | `promptContext.js` |
@@ -243,7 +243,7 @@ Concatenated onto the system prompt in `runJsonTask` / `callAI` **after** the te
 | **[GM Territorial Semantics — live override]** + **[GM Geographic Completeness]** + **[GM Physical-World Completeness]** — control vs sovereignty for the GM, one operation per narrated place, marker lifecycle audit | `gameMaster` | `gameplay.js` `runJsonTask` |
 | **[International Reputation]** — how the world regards the player biases behavior; record changes via `polityChanges.reputation` (0–100) | `actions`, `interactiveCreation`, `interactiveExecutor` (a time skip has it in its live records) | `gameplay.js` |
 | **Language** — write all human-readable text in the UI language; keep JSON keys/ISO codes/dates unchanged | every `callAI` call (advisor, leader, all tasks, intel briefing) when language ≠ `en` | `callAI` `main.jsx`; text `i18n.js` |
-| **Military feasibility** — era-reach/unit-type/distance doctrine; folded into `${CURRENT_UNITS}` not appended separately | conditional: only when units exist or actions text matches the military regex | `buildMilitaryFeasibilityText` `gameplay.js`, injected `372` |
+| **Military feasibility** — era-reach/unit-type/distance doctrine; folded into `${CURRENT_UNITS}` not appended separately | conditional: only when units exist or actions text matches the military regex | `buildMilitaryFeasibilityText` `gameplay.js` |
 | **Leader turn instruction** — "speak only as `<polity>`… optionally append `REACTION:<emoji>`" (a user-role turn, not system) | leader only | `main.jsx` |
 
 Difficulty text (`difficulty.js`): `very-easy`, `easy`, `medium` (default; `"standard"`/empty normalize to medium), `hard`, `very-hard`, `impossible`. `buildDifficultyGuidance` (`promptContext.js`) is a *separate* softer paragraph used inside the jump/chat prompt bodies via `DIFFICULTY_DESCRIPTION_*`.
@@ -277,7 +277,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Prompt:** `tasks.jumpForward`. **Entry:** `simulateTimelineJump({days, mode:"jump", signal})` `gameplay.js`.
 - **Inputs:** full state bundle; `targetDate`; event-count band from `eventCountRangeForDays(days)` (a month 10-15, §6a) with a floor of one event per queued action; duration label; `${CURRENT_UNITS/MAP_STRUCTURES/CITY_COORDINATES}`; the live records (§6a).
 - **Tool/schema:** `submit_jump_result` / `JUMP_FORWARD_SCHEMA` (`gameplaySchemas.js`). Payload: `events[]` (each `date/title/description` + `impacts`), `stopDate`, `summary`, `clearActions`, top-level `diplomaticOutreach[]`. No scene: now and then the skip offers one of its events as an interactive event instead, at no cost (`runtime/interactiveOffer.js`).
-- **Validation:** `validatePayload` (`gameplay.js`) — strict on attempt 1 / salvage on final: event-count range, `validateTimelineDates` then `clampTimelineDates` on salvage, then `validateGeneratedWorldChanges` resolving region names → ids (`resolveRegionTransfers` `831`) with a corrective owner-region list (`buildTransferFeedback` `940`) and the **capture-reluctance guard** (`CAPTURE_LANGUAGE` `994`, guard `1020`). **Fallback:** `fallbackJumpSimulation`. Timeout: unbounded unless the "Limit AI generation" map setting is on (then 5 min); `signal` aborts cleanly.
+- **Validation:** `validatePayload` (`gameplay.js`) — strict on attempt 1 / salvage on final: event-count range, `validateTimelineDates` then `clampTimelineDates` on salvage, then `validateGeneratedWorldChanges` resolving region names → ids (`resolveRegionTransfers`) with a corrective owner-region list (`buildTransferFeedback`) and the **capture-reluctance guard** (`CAPTURE_LANGUAGE`). **Fallback:** `fallbackJumpSimulation`. Timeout: unbounded unless the "Limit AI generation" map setting is on (then 5 min); `signal` aborts cleanly.
 - **Applied by:** `applySimulationResult` — appends events, bumps round/date, resolves planned actions, applies impacts, opens generated chats, writes a `simulationHistory` entry, snapshots for rollback.
 
 - **What the jump is told** (both jump templates; pinned by `jumpPromptCraft.test.js`; the whole layout is §6a):
@@ -291,13 +291,13 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Same engine, but **stop early** at the first strategically notable / player-relevant / memorable event and set it `notable:true` (a notable event is preferred when the skip offers an interactive event).
 - **Prompt:** `tasks.autoJumpForward`. **Entry:** `simulateAutoJump({days=365, signal})` → `simulateTimelineJump(mode:"auto")` `gameplay.js`.
 - **Tool/schema:** `submit_jump_result` / `AUTO_JUMP_FORWARD_SCHEMA` (= `JUMP_FORWARD_SCHEMA`, `gameplaySchemas.js`).
-- **Validation:** same validator; in `auto` mode `stopDate` may be any date after origin and ≤ target (`validateTimelineDates` `153`); the event-count range is not strictly enforced.
+- **Validation:** same validator; in `auto` mode `stopDate` may be any date after origin and ≤ target (`validateTimelineDates`); the event-count range is not strictly enforced.
 
 ### 7.3 `actions` — strategic action suggestions
 - **Purpose:** Produce 6–9 "Topics of Concern," each with 2–5 concrete actions (kind `action`, or `chat` for outreach).
 - **Prompt:** `tasks.actions`. **Entry:** `generateActionSuggestions({force})` `gameplay.js`.
 - **Tool/schema:** `submit_actions` / `ACTIONS_SCHEMA` (`gameplaySchemas.js`): `topics[] { title, description, actions[] { title, text, kind, invitees, chatStarter } }`.
-- **Validation/fallback:** accepts array/`topics`/`suggestions` shapes; empty → `fallbackActionSuggestions` (`678`, from `DEFAULT_SUGGESTION_TOPICS`). Result stored on `world.actionSuggestions`.
+- **Validation/fallback:** accepts array/`topics`/`suggestions` shapes; empty → `fallbackActionSuggestions` (from `DEFAULT_SUGGESTION_TOPICS`). Result stored on `world.actionSuggestions`.
 
 ### 7.4 `descriptionToAction` — freeform text → structured command
 - **Purpose:** Turn the player's raw sentence into one action (or a chat invitation), ~50% longer, tone-matched, ≤650 chars.
@@ -312,7 +312,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.6 `eventConsolidator` — compress history
 - **Purpose:** Fold a batch of events + closed chats into one continuity summary (~≤360 words) so old detail leaves the context window without losing map/diplomacy facts.
-- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (`535`, auto-run by `compactHistoryIfNeeded` `554` after jumps) and `consolidateRecentHistory({limit})`.
+- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (auto-run by `compactHistoryIfNeeded` after jumps) and `consolidateRecentHistory({limit})`.
 - **Tool/schema:** `submit_event_consolidation` / `EVENT_CONSOLIDATOR_SCHEMA`: `{ summary }`.
 - **Fallback:** concatenate raw event lines + `buildChatSummaryText`. Triggers: `CONSOLIDATION_*` thresholds (`gameplay.js`).
 
@@ -425,7 +425,7 @@ Shared `impacts` object (`impactsSchema` `gameplaySchemas.js`) carried by jump/a
 | `markerOps` | `build{marker{name,kind(free lowercase),ownerCode?,status?,at\|lng+lat,note?,foundedAt?}}` (or flat beside `op`) · `update{markerId\|name, …, at?}` · `remove{name}` | `markerOpSchema`. `at` as for units. Structures never move borders (no `regionTransfers`). |
 | `reports` | `create{reportId?,title,body,visibleTo[],from?,dateline?}` · `share{reportId,visibleTo[],from?}` | `reportOpSchema`. The document itself, in its own voice, held by the polities named; `visibleTo` empty = published; `from` whose it is (or, on a share, who passed it on). Holders are resolved at validation against the country catalog (unknown: strict error / receipt note; none known: dropped). `[Reports — documents, not summaries]` + `[Reports on File]` (with who stole a copy) ride on the jump; a leader gets `[Documents Your Government Holds]`, the advisor `[Documents Our Government Holds]`. |
 
-Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `createdChats`, not tied to an event). The schema validator (`validateGameplayPayload` `852`) additionally enforces non-blank `stopDate`/event fields, "at least one event, summary, or meaningful interactive event," and distinct interactive event choices.
+Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `createdChats`, not tied to an event). The schema validator (`validateGameplayPayload`) additionally enforces non-blank `stopDate`/event fields, "at least one event, summary, or meaningful interactive event," and distinct interactive event choices.
 
 ---
 
@@ -440,7 +440,7 @@ Jump payloads also carry a top-level `diplomaticOutreach[]` (same shape as `crea
 
 ### Add a new task
 1. **Schema + tool:** define `MY_TASK_SCHEMA` and `MY_TASK_TOOL = makeTool("submit_my_task", …)` in `gameplaySchemas.js`; register both in `GAMEPLAY_SCHEMAS` and `GAMEPLAY_TOOLS` under the new key; add any task-specific checks to `validateGameplayPayload`.
-2. **Prompt text:** add `tasks.myTask` to `defaultPrompts.json` ending with the JSON output contract. It is auto-picked-up: `PROMPT_TASK_KEYS = Object.keys(tasks)` and `normalizePromptPack` iterate it (`gameplayPrompts.js`, `246`).
+2. **Prompt text:** add `tasks.myTask` to `defaultPrompts.json` ending with the JSON output contract. It is auto-picked-up: `PROMPT_TASK_KEYS = Object.keys(tasks)` and `normalizePromptPack` iterate it (`gameplayPrompts.js`).
 3. **Entry point:** in `gameplay.js`, build variables (`buildTemplateVariables(bundle, {…})`) and call `runJsonTask("myTask", { userMessage, variables, fallback?, validatePayload?, timeoutMs? })`. Wrap state-writing tasks in `beginSimulation/endSimulation`.
 4. **Call-time directives:** only for text that depends on runtime state; a rule in the template reaches every campaign (§2).
 5. **(Optional) editor:** add a `PROMPT_SECTION_DEFINITIONS` entry (`type:"task"`) **and** at least one guidance segment in `promptGuidance.js`; a section without segments stays hidden, and only the segments are editable.

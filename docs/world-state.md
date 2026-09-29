@@ -504,17 +504,17 @@ Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tag
 
 ## 11. Read / write API surface (`gameState.js`)
 
-| Function | Line | Notes |
-|---|---|---|
-| `readWorldState({force})` | | `readJson(world)` → `normalizeWorldState`. |
-| `writeWorldState(world, opts)` | | normalize → `enqueueContentStrings(polityOverrides)` → `writeJson(pretty)`. |
-| `readGameData` / `writeGameData` |, | `normalizeGameData` on both ends. |
-| `readActionsState` / `writeActionsState` |, | `normalizeActions`. |
-| `readEventsState` / `writeEventsState` |, | `normalizeEvents`; write enqueues content strings. |
-| `readChatsState` / `writeChatsState` |, | `normalizeChats`. |
-| `readGameStateBundle` | | `Promise.all` of all five. |
-| `applyEventImpactsToWorld` | | Pure fold of impacts → `{colors, world}`. |
-| `applyUnitOps` / `applyMarkerOps` |, | Pure list mutators. |
-| `isPolityLandless` | | Territory check. |
+| Function | Notes |
+|---|---|
+| `readWorldState({force})` | `readJson(world)` → `normalizeWorldState`. |
+| `writeWorldState(world, opts)` | normalize → `enqueueContentStrings(polityOverrides)` → `writeJson(pretty)`. |
+| `readGameData` / `writeGameData` | `normalizeGameData` on both ends. |
+| `readActionsState` / `writeActionsState` | `normalizeActions`. |
+| `readEventsState` / `writeEventsState` | `normalizeEvents`; write enqueues content strings. |
+| `readChatsState` / `writeChatsState` | `normalizeChats`. |
+| `readGameStateBundle` | `Promise.all` of all five. |
+| `applyEventImpactsToWorld` | Pure fold of impacts → `{colors, world}`. |
+| `applyUnitOps` / `applyMarkerOps` | Pure list mutators. |
+| `isPolityLandless` | Territory check. |
 
 All reads/writes route through `src/runtime/assets.js` `readJson`/`writeJson`, which layer value-caching, request batching, Cache-Storage persistence with a HEAD freshness check, and derived-cache invalidation (`invalidateDerivedCachesForWrite`, `assets.js`) on top of the raw `/api/runtime/json/*` endpoints.

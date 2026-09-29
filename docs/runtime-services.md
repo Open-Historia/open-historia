@@ -30,7 +30,7 @@ Related pages: [World state](world-state.md) · [Game state](world-state.md) · 
 
 The single source of truth for the player's **games**, **scenarios**, and which of each is active. It holds one module-scope object (`libraryState`), exposes it through a `useSyncExternalStore` subscription, and wraps every catalog mutation as an `/api/*` call that refreshes the store afterwards.
 
-### State shape (`INITIAL_LIBRARY_STATE`, `library.js:13`)
+### State shape (`INITIAL_LIBRARY_STATE`, `library.js`)
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -47,7 +47,7 @@ The single source of truth for the player's **games**, **scenarios**, and which 
 | `selectedScenario` / `selectedScenarioId` | object/string \| null | The scenario selected in the library UI |
 | `token` | string | Cache-busting asset token (`catalog.token` → `activeGame.cacheToken` → `""`) |
 
-`runtimeScenario` resolution (`library.js:119`) is layered: the scenario matching `catalog.runtimeScenario.id`, else the raw `catalog.runtimeScenario`, else the active game's `scenarioId` scenario. This is the scenario whose `countryNameOverrides` and `cacheToken` become live.
+`runtimeScenario` resolution (`library.js`) is layered: the scenario matching `catalog.runtimeScenario.id`, else the raw `catalog.runtimeScenario`, else the active game's `scenarioId` scenario. This is the scenario whose `countryNameOverrides` and `cacheToken` become live.
 
 ### Store API
 
@@ -86,11 +86,11 @@ All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws 
 | `uploadGameAsset(id, key, file)` | PUT | `/api/games/:id/assets/:key` | Raw body; force refresh |
 | `clearGameAsset(id, key)` | DELETE | `/api/games/:id/assets/:key` | Force refresh |
 
-`toUploadBuffer()` (`library.js:235`) accepts `Blob`, `ArrayBuffer`, a typed-array view, or coerces anything else to a UTF-8 buffer, so callers can upload files or serialized JSON identically.
+`toUploadBuffer()` (`library.js`) accepts `Blob`, `ArrayBuffer`, a typed-array view, or coerces anything else to a UTF-8 buffer, so callers can upload files or serialized JSON identically.
 
 ### Country-name override resolver (in this module)
 
-`resolveCountryNameOverride(overrides, name, code)` (`library.js:41`) is the ordered lookup used to rename countries per-scenario. It reads `runtimeScenario.countryNameOverrides` and returns the first hit:
+`resolveCountryNameOverride(overrides, name, code)` (`library.js`) is the ordered lookup used to rename countries per-scenario. It reads `runtimeScenario.countryNameOverrides` and returns the first hit:
 
 1. by **code** (uppercased via `normalizeLookupKey`) — e.g. `overrides["RUS"]`
 2. by **exact name** — `overrides["Russia"]`
@@ -99,8 +99,8 @@ All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws 
 
 Two exits into the shared asset layer:
 
-- `syncLibraryRuntime()` (`library.js:68`) runs on every `setLibraryState` and once at module load (`library.js:388`). It pushes the token to `setRuntimeAssetEndpoints({ token })` and installs the resolver via `setCountryNameResolver((name, code) => resolveCountryNameOverride(runtimeScenario.countryNameOverrides, name, code))`. From then on every `resolveCountryDisplayName` call inside `assets.js`/`countryLabels.js`/`polityNames.js` honors the active scenario's renames.
-- `resolveScenarioCountryName(name, code)` (`library.js:385`) is the direct synchronous export for callers that already have a `name`/`code` pair.
+- `syncLibraryRuntime()` (`library.js`) runs on every `setLibraryState` and once at module load (`library.js`). It pushes the token to `setRuntimeAssetEndpoints({ token })` and installs the resolver via `setCountryNameResolver((name, code) => resolveCountryNameOverride(runtimeScenario.countryNameOverrides, name, code))`. From then on every `resolveCountryDisplayName` call inside `assets.js`/`countryLabels.js`/`polityNames.js` honors the active scenario's renames.
+- `resolveScenarioCountryName(name, code)` (`library.js`) is the direct synchronous export for callers that already have a `name`/`code` pair.
 
 ### Boot / data flow
 
@@ -112,7 +112,7 @@ Two exits into the shared asset layer:
 
 A **parallel, scenario-only** variant of the library store for contexts that have no concept of "games" (the editor / standalone scenario flows). Structurally it mirrors `library.js` — same `parseApiResponse`/`requestJson`/`toUploadBuffer`, same `resolveCountryNameOverride` (identical 3-step code→name→normalized lookup) — but its state centers on a single active scenario.
 
-### State (`INITIAL_SCENARIO_STATE`, `scenarios.js:9`)
+### State (`INITIAL_SCENARIO_STATE`, `scenarios.js`)
 
 `activeScenario`, `activeScenarioId`, `baseSaves`, `error`, `loaded`, `loading`, `scenarios`, `token`. There is no `games`, `activeGame`, `countryNames`, `selectedScenario`, or `runtimeScenario`; the resolver and token both read from `activeScenario` instead.
 
@@ -128,7 +128,7 @@ A **parallel, scenario-only** variant of the library store for contexts that hav
 | `uploadScenarioAsset` / `clearScenarioAsset` | PUT / DELETE | `/api/scenarios/:id/assets/:key` |
 | `resolveScenarioCountryName(name, code)` | — | Reads `activeScenario.countryNameOverrides` |
 
-`syncScenarioRuntime()` (`scenarios.js:59`) does the same `setRuntimeAssetEndpoints` + `setCountryNameResolver` wiring as the library store, keyed on `activeScenario`. Only one of the two stores should be driving `assets.js` at a time (whichever build is mounted), since both call the same global setters.
+`syncScenarioRuntime()` (`scenarios.js`) does the same `setRuntimeAssetEndpoints` + `setCountryNameResolver` wiring as the library store, keyed on `activeScenario`. Only one of the two stores should be driving `assets.js` at a time (whichever build is mounted), since both call the same global setters.
 
 ---
 
@@ -136,13 +136,13 @@ A **parallel, scenario-only** variant of the library store for contexts that hav
 
 Codes (`"RUS"`, `"KHAL"`) are the load-bearing identifiers in the data; the player must only ever see full names. The resolver is a single mutable function slot in `assets.js` that the library/scenario stores install into.
 
-| Export (`assets.js`) | Line | Role |
-|---|---|---|
-| `setCountryNameResolver(resolver)` | `284` | Installs the active resolver (`(name, code) => string`); non-functions reset to identity |
-| `resolveCountryDisplayName(name, code)` | `288` | The single call site used across the asset layer — delegates to the installed resolver |
-| `setRuntimeAssetEndpoints({ token })` | `204` | Rebuilds every `JSON_URLS.*` and `PMTILES_ARCHIVES.*` with `?v=<token>`, and **sweeps stale caches** on token change |
+| Export (`assets.js`) | Role |
+|---|---|
+| `setCountryNameResolver(resolver)` | Installs the active resolver (`(name, code) => string`); non-functions reset to identity |
+| `resolveCountryDisplayName(name, code)` | The single call site used across the asset layer — delegates to the installed resolver |
+| `setRuntimeAssetEndpoints({ token })` | Rebuilds every `JSON_URLS.*` and `PMTILES_ARCHIVES.*` with `?v=<token>`, and **sweeps stale caches** on token change |
 
-Default resolver is identity (`countryNameResolver = (name) => name`, `assets.js:40`) until a store installs one. `loadCountryNames` (`assets.js:965`) and `loadRegionCatalog` decode the countries PMTiles z0 tile and run each raw `Country/NAME` through `resolveCountryDisplayName(name, code)`, so scenario renames flow into the country dropdowns and map labels without those modules knowing about scenarios.
+Default resolver is identity (`countryNameResolver = (name) => name`, `assets.js`) until a store installs one. `loadCountryNames` (`assets.js`) and `loadRegionCatalog` decode the countries PMTiles z0 tile and run each raw `Country/NAME` through `resolveCountryDisplayName(name, code)`, so scenario renames flow into the country dropdowns and map labels without those modules knowing about scenarios.
 
 **Token sweep (memory + correctness).** When the token changes, `setRuntimeAssetEndpoints` deletes the previous generation's entries from `jsonValueCache`, `jsonRequestCache`, `jsonLoadedUrls`, the PMTiles archive/header/directory caches, and clears the key-based `runtimeJsonValueCache`/`runtimeJsonRequestCache` — **before** rebuilding the URLs, because the old URL strings are the only handles to those entries. This prevents both the ~190 MB-per-switch GeoJSON leak and serving one scenario's bytes under another's cached PMTiles header. See [Assets](assets-and-data.md) for the full cache model.
 
@@ -174,7 +174,7 @@ Owns the UI-language *choice* and static catalog. The choice is stored on the **
 | `isRtlLanguage(code)` | Membership in `RTL_LANGUAGES` = `{ ar, he, fa, ur }` |
 | `languageDirective()` | System-prompt fragment appended to every AI call so replies arrive natively in-language |
 
-Storage rule: writing `en` (or empty) **removes** the key rather than storing it (`writeLocalLanguage`, `i18n.js:81`), so "English" is represented by absence. `languageDirective()` returns `""` for English; otherwise it instructs the model to write all natural-language text in the target language while keeping JSON keys/ISO codes/date formats intact — this is why AI output does not need re-translation (see [AI system](ai-overview.md)).
+Storage rule: writing `en` (or empty) **removes** the key rather than storing it (`writeLocalLanguage`, `i18n.js`), so "English" is represented by absence. `languageDirective()` returns `""` for English; otherwise it instructs the model to write all natural-language text in the target language while keeping JSON keys/ISO codes/date formats intact — this is why AI output does not need re-translation (see [AI system](ai-overview.md)).
 
 ---
 
@@ -190,7 +190,7 @@ Puts the running game into the player's language. The full design (the three kin
 
 | Export | Purpose |
 |---|---|
-| `startTranslator()` | Called once from `src/main.jsx:24`. Syncs language from server (reload if changed), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
+| `startTranslator()` | Called once from `src/main.jsx`. Syncs language from server (reload if changed), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
 | `stopTranslator()` | Disconnects the observer, clears timers, removes the progress pill |
 
 Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on change) → bail if `en` → `loadPromptTranslations()` (pack languages) → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectContentStrings()` (again on `oh:active-game-changed`) → show progress if >10 pending → `processQueue()`.
@@ -213,7 +213,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 
 ### Translation engine + config
 
-`translateBatch()` (`translator.js:305`) late-imports `callAI` from `../Game/AI/main.jsx` and sends a strict JSON-array prompt (same length/order, keep numbers/emoji/placeholders, proper names unchanged). `processQueue()` sends **one batch at a time** (`planTranslationBatch`), writes results into both `cache` and `unsyncedEntries`, and backs off on repeated failure. It used to send 60 strings × 3 batches in parallel, which made a first pass over a new language dozens of requests nobody pressed a button for — on a free key, where a few hundred a day is the whole allowance, and where three concurrent requests is also the surest way to trip the per-MINUTE limit. A batch is now up to 240 strings or 6,000 source characters, whichever comes first: a quarter of the requests for the same language, one request in flight. On a failure the size halves (down to `BATCH_MIN_STRINGS`) and recovers on the next success, so a model that cannot hold a big batch still finishes. Live check (`.lab/probes/live-translation-probe.mjs`, Gemini, Japanese — the worst case for output tokens): 240 strings, 9.3 KB in, a complete 240-entry array back in 9 s.
+`translateBatch()` (`translator.js`) late-imports `callAI` from `../Game/AI/main.jsx` and sends a strict JSON-array prompt (same length/order, keep numbers/emoji/placeholders, proper names unchanged). `processQueue()` sends **one batch at a time** (`planTranslationBatch`), writes results into both `cache` and `unsyncedEntries`, and backs off on repeated failure. It used to send 60 strings × 3 batches in parallel, which made a first pass over a new language dozens of requests nobody pressed a button for — on a free key, where a few hundred a day is the whole allowance, and where three concurrent requests is also the surest way to trip the per-MINUTE limit. A batch is now up to 240 strings or 6,000 source characters, whichever comes first: a quarter of the requests for the same language, one request in flight. On a failure the size halves (down to `BATCH_MIN_STRINGS`) and recovers on the next success, so a model that cannot hold a big batch still finishes. Live check (the probe `live-translation-probe.mjs`, in the private lab, not in this repo; Gemini, Japanese — the worst case for output tokens): 240 strings, 9.3 KB in, a complete 240-entry array back in 9 s.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -258,10 +258,10 @@ Builds the GeoJSON that draws country **names** on the map (not the DOM). Reads 
 
 ### How it connects
 
-- **Names** run through `translateLabel(resolveCountryDisplayName(rawName, code))` (`countryLabels.js:499`) — so labels honor both the scenario country-name overrides *and* the UI language.
+- **Names** run through `translateLabel(resolveCountryDisplayName(rawName, code))` (`countryLabels.js`) — so labels honor both the scenario country-name overrides *and* the UI language.
 - **`ownedCodes`** (a `Set`): when non-empty, countries owning no territory in the scenario are skipped, so a nonexistent-era nation doesn't float its modern name over unclaimed land. A distinct owner set caches separately (owner-hash suffix on the cache key).
-- **Cache key** (`computeCountryLabelCacheKey`, `countryLabels.js:461`) folds tile-byte FNV hash + byte length + archive URL + **`getStoredLanguage()`**, so caches never leak across UI languages. Persisted via `writeRuntimeJson` / read via `readRuntimeJson` (see [Assets](assets-and-data.md)). Cache version is `country-labels-v3` (bumped to v3 when glyph `lat` was added for the globe text-size fix, issue #6).
-- **Empty-result guard** (`countryLabels.js:642`): an empty build is treated as a degraded z0 read — served once, never cached — so a transient miss can't poison every future boot.
+- **Cache key** (`computeCountryLabelCacheKey`, `countryLabels.js`) folds tile-byte FNV hash + byte length + archive URL + **`getStoredLanguage()`**, so caches never leak across UI languages. Persisted via `writeRuntimeJson` / read via `readRuntimeJson` (see [Assets](assets-and-data.md)). Cache version is `country-labels-v3` (bumped to v3 when glyph `lat` was added for the globe text-size fix, issue #6).
+- **Empty-result guard** (`countryLabels.js`): an empty build is treated as a degraded z0 read — served once, never cached — so a transient miss can't poison every future boot.
 
 Geometry helpers (`getCentroid`, `getPrincipalAxisAngle`, `buildCurvedLabelPath`, `buildCurvedLabelGlyphFeatures`, `tileToLngLat`, …) convert tile coordinates to lng/lat and decide curved-vs-point; each glyph carries its own `lat` so `Nations.jsx` can correct globe-projection text inflation at high latitude.
 

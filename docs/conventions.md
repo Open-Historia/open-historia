@@ -46,7 +46,7 @@ The repo ships to players through **rolling per-channel GitHub Releases**, drive
 
 No installer is built on a push: each release is cut by a dispatch or a tag. The installers carry the client prebuilt and the server inside Electron; the world map is not packaged and downloads on first launch (`electron/main.cjs` runs `scripts/fetch-map-assets.mjs --ensure`). The zip bundle and its `Launch`/`Update` scripts (`app-bundle.yml`, the `app-stable`/`app-beta` releases) were retired in `b34a0e38`.
 
-`deploy-site.yml` skips its build for `**.md`, `mobile/**`, and `.github/**` changes (docs/app can't change what the site serves) and refuses to deploy any file over Cloudflare Pages' 25 MiB limit (`deploy-site.yml:21-27`, `:58-68`).
+`deploy-site.yml` skips its build for `**.md`, `mobile/**`, and `.github/**` changes (docs/app can't change what the site serves) and refuses to deploy any file over Cloudflare Pages' 25 MiB limit (`deploy-site.yml`).
 
 There is also an **`alpha`** staging branch and a large number of feature branches (typically a `feature`, `feature-alpha`, `feature-beta`, `feature-main` family per change). Feature work is developed on a topic branch, staged, then merged toward the release channels. When in doubt about the target branch for a PR, ask the maintainer rather than guessing — the channel topology (dev → alpha → beta → main) is maintainer-managed.
 
@@ -101,7 +101,7 @@ Almost every source file (~111 across `src/`, `server/`, `scripts/`) opens with 
  */
 ```
 
-Even config, workflows, and `.gitattributes` carry the banner (`.github/workflows/*.yml:1`, `vite.config.ts:1`, `eslint.config.js` excepted). **When you add a new file, add a banner** in the same style with a short parenthetical describing the file's role. When you edit an existing file, keep its banner.
+Even config, workflows, and `.gitattributes` carry the banner (`.github/workflows/*.yml`, `vite.config.ts`, `eslint.config.js` excepted). **When you add a new file, add a banner** in the same style with a short parenthetical describing the file's role. When you edit an existing file, keep its banner.
 
 The whole project — including the map editor and its tooling — is licensed **AGPL-3.0-or-later** under the top-level `LICENSE`. The previous MIT carve-out for `src/Editor/`, `scripts/extract-regions.mjs`, and `server/mapEditorStore.js` was retired when the project relicensed; `src/Editor/LICENSE` no longer exists. Third-party code retains its own license — Azgaar's Fantasy Map Generator, vendored into `fmg/dist`, is MIT.
 
@@ -109,10 +109,10 @@ The whole project — including the map editor and its tooling — is licensed *
 
 The single most distinctive convention: **comments explain *why*, name the trap, and often cite the failure mode** — not what the next line literally does. They are frequently multi-sentence and read like short design notes. Representative examples worth imitating:
 
-- `vite.config.ts:7-23` — a full paragraph on why the pmtiles are dropped from the bundle, including that "the trap is that it only fires on a machine that has actually played."
-- `server/security.js:1-4`, `:11-14` — the banner explains *why* the helpers are split out (unit-testable without the server), and each function comment states the exact attack it blocks ("Rejects `../`, a path separator (including the `%2f` Express decodes back into `/`)…").
-- `.github/workflows/deploy-site.yml:5-15` — explains *why* CI deploys the site rather than connecting Pages to the repo, and the map-binary trap it sidesteps.
-- `server/ownerMigration.test.js:3-7` — notes fixtures are "TRANSCRIBED FROM THE REAL SHIPPED DATA, not invented."
+- `vite.config.ts` — a full paragraph on why the pmtiles are dropped from the bundle, including that "the trap is that it only fires on a machine that has actually played."
+- `server/security.js` — the banner explains *why* the helpers are split out (unit-testable without the server), and each function comment states the exact attack it blocks ("Rejects `../`, a path separator (including the `%2f` Express decodes back into `/`)…").
+- `.github/workflows/deploy-site.yml` — explains *why* CI deploys the site rather than connecting Pages to the repo, and the map-binary trap it sidesteps.
+- `server/ownerMigration.test.js` — notes fixtures are "TRANSCRIBED FROM THE REAL SHIPPED DATA, not invented."
 
 Match this: when you write a non-obvious line, leave a comment that would stop the next person from "fixing" it back into a bug.
 
@@ -122,7 +122,7 @@ Match this: when you write a non-obvious line, leave a comment that would stop t
 |------|--------|-------|
 | ESLint 9 (flat config) | `eslint.config.js` | Runs on `**/*.{ts,tsx}` with `js.configs.recommended`, `typescript-eslint`, `react-hooks`, and `react-refresh` (Vite). `dist` is globally ignored. Run: `npm run lint`. |
 | TypeScript 5.9 | `tsconfig*.json` | `.ts`/`.tsx` are type-checked and linted; much of the game UI is `.jsx` (not strictly typed). Both coexist. |
-| React 19 + React Compiler | `vite.config.ts:77-82` | The build enables `babel-plugin-react-compiler`. Don't hand-write memoization that fights the compiler; follow the Rules of Hooks (react-hooks lint enforces this). |
+| React 19 + React Compiler | `vite.config.ts` | The build enables `babel-plugin-react-compiler`. Don't hand-write memoization that fights the compiler; follow the Rules of Hooks (react-hooks lint enforces this). |
 
 Note ESLint only targets `.ts`/`.tsx` — the many `.jsx`/`.js` files are not linted by the current config, so rely on review and the comment culture there.
 
@@ -163,7 +163,7 @@ node server/server.js   # terminal 1 — the API/server on :3000
 npm run dev             # terminal 2 — Vite dev server (HMR)
 ```
 
-Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the editor's save/load and the game's runtime endpoints work under HMR. You need the Express server running alongside `vite` — the dev server alone has no backend.
+Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts`), so the editor's save/load and the game's runtime endpoints work under HMR. You need the Express server running alongside `vite` — the dev server alone has no backend.
 
 ### Other run/build scripts (`package.json:scripts`)
 
@@ -178,7 +178,7 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the 
 | `npm run lint` | ESLint over the repo. |
 | `npm run preview` / `preview:web` | Serve a built bundle for inspection. |
 
-`--mode web` builds the browser-playable website; **any other mode builds the local/desktop app** (`vite.config.ts:63-64`). The web flag is compiled to a literal (`import.meta.env.VITE_OH_WEB`) so Rollup dead-code-eliminates the web runtime out of the desktop build (`vite.config.ts:66-76`).
+`--mode web` builds the browser-playable website; **any other mode builds the local/desktop app** (`vite.config.ts`). The web flag is compiled to a literal (`import.meta.env.VITE_OH_WEB`) so Rollup dead-code-eliminates the web runtime out of the desktop build (`vite.config.ts`).
 
 ### The desktop app
 
@@ -222,14 +222,14 @@ These strings are wired into external contracts (release assets players download
 
 | Identifier | Where | Why it's frozen |
 |-----------|-------|-----------------|
-| **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
-| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
-| **`android`** (rolling release tag) | `android-apk.yml:74-76` | The APK is republished to this single rolling release; the app updates itself from it. |
+| **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
+| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
+| **`android`** (rolling release tag) | `android-apk.yml` | The APK is republished to this single rolling release; the app updates itself from it. |
 | **`desktop-stable` / `desktop-beta`** (release tags) | `package.json` `build.publish`, `electron-builder.beta.yml` `publish`, `desktop-installer.yml`, `desktop-beta.yml` | The installed apps read their update feed (`latest*.yml`) from these URLs, which are baked into every install; the README links `desktop-stable`. |
 | **Installer asset names** (`Open-Historia-Setup.exe`, `Open-Historia-mac-{x64,arm64}.zip`, `Open-Historia-x86_64.AppImage`, `Open-Historia-amd64.deb`, and the `Open-Historia-Beta-*` set) | `artifactName` in `package.json` `build` and `electron-builder.beta.yml`; `latest.json` in both desktop workflows | The update feeds and `latest.json` name them, and the README and site link them by name. |
 | **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
-| **`app.paxhistoria`** (Capacitor `hostname`) | `mobile/capacitor.config.json:7` | The WebView origin the Android app serves under. |
-| **`Build: N`** convention | `android-apk.yml:32-35,72` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
+| **`app.paxhistoria`** (Capacitor `hostname`) | `mobile/capacitor.config.json` | The WebView origin the Android app serves under. |
+| **`Build: N`** convention | `android-apk.yml` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
 
 When a map file legitimately changes, you upload a *new* asset and update its `sha256`/`bytes` in `scripts/map-assets.json` — you don't rename the contract-facing names.
 

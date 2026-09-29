@@ -8,6 +8,8 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 
 > **Editing AI prompts?** The **[Prompt-Making Guide](ai-prompts.md)** is the canonical reference — every placeholder/variable, all 13 tasks plus the advisor/leader roots, end-to-end prompt assembly, the override/frozen-prompt model, and recipes for adding a variable or a task. Start there before touching any prompt text.
 
+> **References are by name.** These pages point at code by file and symbol (a function, constant or route), never by line number: line numbers drift with every commit, and the old `file.js:123` anchors had drifted by hundreds of lines. Search the file for the name.
+
 ## Contents
 
 ### Getting Started
@@ -38,4 +40,4 @@ New to the codebase? Read **[Architecture Overview](architecture.md)** first —
 - [Android App](mobile.md) — The Capacitor app with everything on the device: the `--mode android` bundle, the map inside the APK, file saving through the share sheet, native HTTP for LAN models, the `android` release channel and the build.
 
 ### Delivery
-- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the four workflows, `build:site`, the admin-panel deploy engine, and the Workers.
+- [Delivery, Deploy & Releases](delivery-and-deploy.md) — Full CI/release/deploy topology: build scripts, main/beta/alpha channels + PR-triplet, the release assets, the desktop, Android, site and test workflows, `build:site`, the admin-panel deploy engine, and the Workers.

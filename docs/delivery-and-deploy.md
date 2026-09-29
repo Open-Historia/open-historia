@@ -2,13 +2,13 @@
 
 Open Historia ships to four surfaces from one repo: a **downloadable desktop app** (the local server inside Electron), an **Android app** (the web build on the device, no server), the **playable website** (`openhistoria.com`, static app on Cloudflare Pages), plus supporting **Cloudflare Workers** (import counter, node registry). Which surface a commit reaches, and when, is decided by *which long-lived channel branch it lands on* (`main` / `beta` / `alpha`) and *which GitHub Actions workflow or local deploy engine fires*. This page maps every build script, workflow, release, and the local admin-panel deploy path, and traces how a single change flows out to players.
 
-The Vite build has one pivotal switch — `--mode web` — that produces a *completely different* artifact from the default build (`vite.config.ts:65`). Almost everything below hangs off that distinction: desktop vs. web.
+The Vite build has one pivotal switch — `--mode web` — that produces a *completely different* artifact from the default build (`vite.config.ts`). Almost everything below hangs off that distinction: desktop vs. web.
 
 ---
 
 ## 1. Build scripts (`package.json`)
 
-Every delivery path starts with one of these npm scripts (`package.json:9`). The mode (`web` or not) is the load-bearing difference — it flips `import.meta.env.VITE_OH_WEB` into a compile-time literal so Rollup dead-code-eliminates the whole web (or desktop) runtime from the other build (`vite.config.ts:75`).
+Every delivery path starts with one of these npm scripts (`package.json`). The mode (`web` or not) is the load-bearing difference — it flips `import.meta.env.VITE_OH_WEB` into a compile-time literal so Rollup dead-code-eliminates the whole web (or desktop) runtime from the other build (`vite.config.ts`).
 
 | Script | Command | Output dir | Mode | Base | Purpose |
 |---|---|---|---|---|---|
@@ -16,9 +16,9 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 | `build:web` | `seed-web-defaults.mjs` → `vite build --mode web --outDir dist-web --emptyOutDir` | `dist-web/` | `web` | `/` | The browser game as a standalone Pages site (base `/`). Used by `WEB-DEPLOY.md`'s manual path. |
 | `build:site` | `seed-web-defaults.mjs` → `vite build --mode web --base /play/ --outDir dist-web` → `assemble-site.mjs` | `dist-site/` | `web` | `/play/` | The **combined** `openhistoria.com`: landing page at `/`, game under `/play/`. This is what actually deploys to production. |
 | `build:android` | `node scripts/seed-web-defaults.mjs && vite build --mode android --outDir dist-android --emptyOutDir` | `dist-android/` | `VITE_OH_WEB` + `VITE_OH_NATIVE` | `.env.android` | The Android app's bundle. `mobile/scripts/stage-www.mjs` then lays the verified map data under `www/assets`. |
-| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts:87`). |
+| `dev` / `dev:web` | `vite` / `seed-web-defaults.mjs && vite --mode web` | — | — | — | Local dev. `dev` proxies `/api` → `localhost:3000` (`vite.config.ts`). |
 
-**The map-binary trap** (`vite.config.ts:10-60`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
+**The map-binary trap** (`vite.config.ts`): the ~160 MB pmtiles/geojson live in `public/` so the dev and Express servers can serve them off disk, but Vite copies `publicDir` wholesale into the bundle. Neither build wants them there (the desktop streams them via `/api/runtime/pmtiles/:assetKey`; the web build fetches them from content nodes). The `oh-drop-map-binaries` Vite plugin deletes them from the output in `closeBundle()` — pmtiles from both builds, plus the editor seeds (`regions-seed.geojson`, `cities-seed.json`) from the *web* build only. This matters because Cloudflare Pages rejects any file over 25 MiB, and `regions.pmtiles` is ~101 MB — so without the drop, `build:site` produces a site Pages refuses. The trap "only fires on a machine that has actually played" (the files are gitignored and only arrive from the `map-data` Release), which is why CI and fresh clones build fine and the failure looks random.
 
 ---
 
@@ -155,12 +155,12 @@ Produces `dist-site/`: landing page at `/`, game under `/play/`.
 
 | Constant / step | Location | Behavior |
 |---|---|---|
-| `siteDir` = `site/` | `assemble-site.mjs:10` | Marketing landing page source (`index.html`, `_redirects`) copied to `dist-site/` root |
-| `gameDir` = `dist-web/` | `assemble-site.mjs:11` | Web game (base `/play/`) copied to `dist-site/play/` |
-| `outDir` = `dist-site/` | `assemble-site.mjs:12` | The deployable output |
-| `ROOT_PAGES` | `assemble-site.mjs:22` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
-| `ROOT_ASSETS` | `assemble-site.mjs:34` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, PWA icons, `screenshot.png`). Copied to `/` if present; **silently skipped** if renamed (a missing image is a cosmetic 404, not build-fatal) |
-| Guard | `assemble-site.mjs:41` | Fatal if `dist-web/index.html` is missing (build the game first) |
+| `siteDir` = `site/` | `assemble-site.mjs` | Marketing landing page source (`index.html`, `_redirects`) copied to `dist-site/` root |
+| `gameDir` = `dist-web/` | `assemble-site.mjs` | Web game (base `/play/`) copied to `dist-site/play/` |
+| `outDir` = `dist-site/` | `assemble-site.mjs` | The deployable output |
+| `ROOT_PAGES` | `assemble-site.mjs` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
+| `ROOT_ASSETS` | `assemble-site.mjs` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, PWA icons, `screenshot.png`). Copied to `/` if present; **silently skipped** if renamed (a missing image is a cosmetic 404, not build-fatal) |
+| Guard | `assemble-site.mjs` | Fatal if `dist-web/index.html` is missing (build the game first) |
 
 The `--base /play/` split is why absolute `/logo.png` in the game needs a duplicate at the site root: under `/play/` an absolute URL resolves against the origin, not the base.
 
@@ -172,7 +172,7 @@ The website is now deployed with a **button in the admin panel**, which runs on 
 
 ### Why a git worktree, not an in-place build
 
-`deploySite()` (`panel/lib/deploy-site.mjs:123`) never builds the maintainer's checkout. It maintains a **throwaway worktree pinned to `<remote>/main`** for three reasons (`deploy-site.mjs:6-19`):
+`deploySite()` (`panel/lib/deploy-site.mjs`) never builds the maintainer's checkout. It maintains a **throwaway worktree pinned to `<remote>/main`** for three reasons (`deploy-site.mjs`):
 
 1. "Deploy from main" must mean *main* — the maintainer's `work-repo` usually sits on a feature branch.
 2. It sidesteps the map-binary trap for free — a freshly hard-reset worktree never has the gitignored pmtiles, so they can't be swept into `dist-site`.
@@ -193,11 +193,11 @@ The website is now deployed with a **button in the admin panel**, which runs on 
 
 ### Steps (`deploySite`)
 
-1. **Fetch** `upstream/main`; record the target commit (`deploy-site.mjs:130`).
-2. **Prepare a clean tree** — if the worktree is registered, `git reset --hard upstream/main` + `git clean -fd` (no `-x`, so gitignored `node_modules` survives for a fast install); otherwise `git worktree add --force --detach` (`deploy-site.mjs:135`).
+1. **Fetch** `upstream/main`; record the target commit (`deploy-site.mjs`).
+2. **Prepare a clean tree** — if the worktree is registered, `git reset --hard upstream/main` + `git clean -fd` (no `-x`, so gitignored `node_modules` survives for a fast install); otherwise `git worktree add --force --detach` (`deploy-site.mjs`).
 3. **Install** `npm install --no-audit --no-fund` in the worktree.
 4. **Build** `npm run build:site`.
-5. **Size guard** — recursive scan of `dist-site`; refuse to deploy if any file > 24 MiB (`deploy-site.mjs:153`).
+5. **Size guard** — recursive scan of `dist-site`; refuse to deploy if any file > 24 MiB (`deploy-site.mjs`).
 6. **Deploy** `wrangler pages deploy dist-site --project-name=open-historia --branch=main --commit-dirty=true` (build output is untracked in the throwaway worktree by design). Parses the printed `*.pages.dev` URL from stdout.
 7. **Deploy the Workers** (§6.1) unless skipped — the site is already live, so a worker failure is collected and reported, not treated as "nothing deployed."
 
@@ -205,11 +205,11 @@ Auth uses whatever `wrangler login` OAuth token (or `CLOUDFLARE_API_TOKEN`) is a
 
 ### The button (`server.js` + panel HTML)
 
-- `POST /api/deploy-site` (`panel/server.js:154`) sets a `deploying` mutex (409 if already running), then **streams** the log as `text/plain` one line per chunk; the final line is `DEPLOY_OK <url>` or `DEPLOY_FAILED <message>` so the client can tell how it ended.
-- **CSRF guard** (`server.js:130`): `admin-panel.html` opens from `file://` (origin `null`), so the Deploy button hits this endpoint cross-origin. Allowed only when Origin is absent/`null` or a `localhost`/`127.0.0.1`/`[::1]` host — never a real website. Origin can't be forged by a browser, making it a reliable guard.
-- The 🚀 button ("Deploy website + workers") lives at `panel/public/index.html:51` and `admin-panel.html:73`; it confirms, POSTs, and renders the live log.
+- `POST /api/deploy-site` (`panel/server.js`) sets a `deploying` mutex (409 if already running), then **streams** the log as `text/plain` one line per chunk; the final line is `DEPLOY_OK <url>` or `DEPLOY_FAILED <message>` so the client can tell how it ended.
+- **CSRF guard** (`server.js`): `admin-panel.html` opens from `file://` (origin `null`), so the Deploy button hits this endpoint cross-origin. Allowed only when Origin is absent/`null` or a `localhost`/`127.0.0.1`/`[::1]` host — never a real website. Origin can't be forged by a browser, making it a reliable guard.
+- The 🚀 button ("Deploy website + workers") lives at `panel/public/index.html` and `admin-panel.html`; it confirms, POSTs, and renders the live log.
 
-### 6.1 Workers that ride every site deploy (`WORKERS`, `deploy-site.mjs:44`)
+### 6.1 Workers that ride every site deploy (`WORKERS`, `deploy-site.mjs`)
 
 Two Cloudflare Workers deploy alongside the site so merged worker code can never sit undeployed while the website moves on (this happened once — the import-counter shipped in a PR and served stale code for days because nothing ran `wrangler deploy`). Each is skipped with a log line if its `wrangler.toml` is absent.
 
@@ -224,14 +224,14 @@ Two Cloudflare Workers deploy alongside the site so merged worker code can never
 
 ### 7.1 Import counter — `tools/import-counter/`
 
-A tiny Worker that counts community-scenario imports. The game server pings it once per successful install via `server/server.js` → `/api/hub/import-log` (`server/server.js:657`), giving real numbers even for scenarios GitHub can't count (issue attachments).
+A tiny Worker that counts community-scenario imports. The game server pings it once per successful install via `server/server.js` → `/api/hub/import-log` (`server/server.js`), giving real numbers even for scenarios GitHub can't count (issue attachments).
 
 | Item | Value |
 |---|---|
 | Worker name | `oh-import-counter` (`tools/import-counter/wrangler.toml`) |
 | Entry | `worker.js` |
 | Storage | KV binding `IMPORTS` (counts live in each key's metadata so `/counts` is one list call) |
-| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js:654`) |
+| Default URL baked into the app | `https://oh-import-counter.nichojkrol.workers.dev` (`server/server.js`) |
 | Override | `OH_IMPORT_COUNTER_URL` env on the game server |
 | Dedup | Website: once per **account _and_ IP** (skip if either seen); app/anonymous web: once per **IP**. Raw IPs never stored — hashed with `HASH_SALT` |
 | Read routes | `/counts` (all), `/count/<hub-issue-number>` (one) |
@@ -247,7 +247,7 @@ The web-mode control plane (source of truth: the admin repo). Serves the signed 
 | `IMPORT_COUNTER` | Service binding → `oh-import-counter` | Direct binding because a Worker can't reach another same-account Worker via its public `workers.dev` URL (subrequest silently never arrives) |
 | `EMAIL` | Email Sending | Magic-link emails, sent by the Worker itself |
 
-The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js:66`). No game rebuild is needed for a directory change.
+The **admin panel** (`open-historia-admin/panel/server.js`) is the human interface to the registry: it lists nodes, accepts/pauses/bans/rate-limits/redirects them, and after **any** change rebuilds the node directory, signs it with the offline root key (`oh-root.key.pem`), and POSTs it to the registry, which serves it live to players and nodes (`panel/server.js`). No game rebuild is needed for a directory change.
 
 The web game points at the registry through build-time env (`.env.web`):
 
@@ -327,10 +327,10 @@ Key asymmetries a newcomer should internalize:
 ## 12. Traps & invariants
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
-- **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
+- **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts`, `deploy-site.yml`, `deploy-site.mjs`).
 - **Neither Android application id may ever change** (`io.github.arkniem.paxhistoria`; the beta's `io.github.arkniem.paxhistoria.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
-- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
+- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
 - **`--branch=main` / `--branch=<BRANCH>` is what makes a Pages upload production** — omit it and the live domain keeps the old build while the deploy still reports success.
 

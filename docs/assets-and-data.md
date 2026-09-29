@@ -26,7 +26,7 @@ Every runtime asset the map depends on, with its physical filename, MIME, and ho
 | World state | `world` | `world.json` (per-game/scenario) | Game dir, else scenario | `GET /api/runtime/json/world` | The live simulation document — see [World state](world-state.md) |
 | Runtime game JSON | `game`, `events`, `chat`, `actions`, `advisor`, `prompts`, `snapshots` | under game `storage/` | Game dir | `GET/PUT /api/runtime/json/<key>` | Per-game session state; polled ~5s |
 
-The client-side URL and PMTiles-archive tables are declared in `src/runtime/assets.js:63` (`JSON_URLS`) and `src/runtime/assets.js:122` (`PMTILES_ARCHIVES` / `PMTILES_PROTOCOL_URLS`). The server-side filename maps live in `server/libraryStore.js` — `PMTILES_ASSET_FILES` (`:281`), `SCENARIO_GEOJSON_ASSET_FILES` (`:291`), `OPTIONAL_JSON_ASSET_FILES` (`:258`), and `JSON_ASSET_DEFAULTS` (`:326`).
+The client-side URL and PMTiles-archive tables are declared in `src/runtime/assets.js` (`JSON_URLS`) and `src/runtime/assets.js` (`PMTILES_ARCHIVES` / `PMTILES_PROTOCOL_URLS`). The server-side filename maps live in `server/libraryStore.js` — `PMTILES_ASSET_FILES`, `SCENARIO_GEOJSON_ASSET_FILES`, `OPTIONAL_JSON_ASSET_FILES`, and `JSON_ASSET_DEFAULTS`.
 
 **Basemap raster** (satellite/streets/terrain imagery) is *not* one of these files — it streams live from public ESRI/ArcGIS Online and AWS terrain tile servers (§8), so it is not part of the `map-data` Release.
 
@@ -45,7 +45,7 @@ An asset can be resolved from up to four places. Which one wins depends on the b
 
 ### `OH_DATA_DIR` and the data-dir resolver
 
-`server/dataDir.js:16` exports the single writable root every store shares:
+`server/dataDir.js` exports the single writable root every store shares:
 
 ```
 DATA_DIR = process.env.OH_DATA_DIR ? resolve(OH_DATA_DIR) : <server>/data
@@ -64,18 +64,18 @@ Because step 1 can serve different bytes after a scenario switch, the client rot
 
 ### JSON resolution order (server)
 
-`readRuntimeJsonAsset(assetKey)` — `server/libraryStore.js:2218`:
+`readRuntimeJsonAsset(assetKey)` — `server/libraryStore.js`:
 
-- **Custom geometry** (`regionsGeojson`/`citiesGeojson`, in `SCENARIO_GEOJSON_ASSET_FILES`): resolved from the active game's scenario dir. A non-default scenario with no `regions.geojson` of its own **borrows the `default` scenario's** Modern-Day geometry (`:2237`); missing entirely → `EMPTY_FEATURE_COLLECTION`.
-- **Per-game state** (`world`, `events`, `game`, `colors`, `flags`, `tags`, `snapshots`, …): active game dir first (`:2258`), then the selected scenario dir (`:2271`).
-- **Optional JSON fallback** (`:2285`): only `colors` has a built-in fallback — the immutable app palette resolved from `dist/assets/colors.json` or `public/assets/colors.json` (`COLORS_ASSET_CANDIDATES`, `:356`). `flags`/`tags` with no file → `{}`.
+- **Custom geometry** (`regionsGeojson`/`citiesGeojson`, in `SCENARIO_GEOJSON_ASSET_FILES`): resolved from the active game's scenario dir. A non-default scenario with no `regions.geojson` of its own **borrows the `default` scenario's** Modern-Day geometry; missing entirely → `EMPTY_FEATURE_COLLECTION`.
+- **Per-game state** (`world`, `events`, `game`, `colors`, `flags`, `tags`, `snapshots`, …): active game dir first, then the selected scenario dir.
+- **Optional JSON fallback**: only `colors` has a built-in fallback — the immutable app palette resolved from `dist/assets/colors.json` or `public/assets/colors.json` (`COLORS_ASSET_CANDIDATES`). `flags`/`tags` with no file → `{}`.
 - Otherwise → `JSON_ASSET_DEFAULTS[assetKey] ?? {}`.
 
 ---
 
 ## 3. The `map-data` GitHub Release + manifest
 
-The heavy binaries used to live in Git LFS; the org's free LFS *bandwidth* is 1 GB/month shared, and a full checkout pulls ~200 MB, so a few installs exhausted it and every subsequent download 403'd. They now ship as **assets on a GitHub Release** (`Open-Historia/open-historia`, tag `map-data`), whose download bandwidth is free and unmetered. See `scripts/fetch-map-assets.mjs:1` for the full rationale.
+The heavy binaries used to live in Git LFS; the org's free LFS *bandwidth* is 1 GB/month shared, and a full checkout pulls ~200 MB, so a few installs exhausted it and every subsequent download 403'd. They now ship as **assets on a GitHub Release** (`Open-Historia/open-historia`, tag `map-data`), whose download bandwidth is free and unmetered. See `scripts/fetch-map-assets.mjs` for the full rationale.
 
 ### `scripts/map-assets.json`
 
@@ -117,7 +117,7 @@ Makes the local tree match the manifest. Called by the desktop app on launch (`e
 | Verify | `node scripts/fetch-map-assets.mjs` | Re-fetch anything whose SHA-256 differs (picks up a re-uploaded map, repairs truncation) |
 | Ensure | `node scripts/fetch-map-assets.mjs --ensure` | Faster: trusts size, only fetches missing / wrong-size files |
 
-Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path, `fetch-map-assets.mjs:92`) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path, `fetch-map-assets.mjs`) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
 
 ### `scripts/trim-pmtiles.mjs` — the zoom levels nothing draws
 
@@ -151,14 +151,14 @@ The client talks only to these same-origin routes (`server/server.js`). In the *
 
 | Route | Handler | Purpose |
 |---|---|---|
-| `GET /api/runtime/json/:assetKey` | `readRuntimeJsonAsset` | Serve a runtime JSON doc; `Cache-Control: no-store` (`server.js:459`) |
-| `PUT /api/runtime/json/:assetKey` | `writeRuntimeJsonAsset` | Persist to the active game; echoes back the normalized record (`server.js:470`) |
-| `GET /api/runtime/pmtiles/:assetKey` | `resolveRuntimeBinaryAsset` | Stream a pmtiles archive (range-capable via `streamBinaryFile`) (`server.js:481`) |
-| `HEAD /api/runtime/pmtiles/:assetKey` | `resolveRuntimeBinaryAsset` | `Content-Length` for the client freshness check; `Accept-Ranges: bytes` (`server.js:490`) |
-| `GET/PUT/DELETE /api/scenarios/:id/assets/:assetKey` | scenario asset store | Upload/serve per-scenario overrides (pmtiles, geojson, flags, tags, cover) (`server.js:333`) |
-| `GET/PUT/DELETE /api/games/:id/assets/:assetKey` | game asset store | Per-game images (`server.js:400`) |
+| `GET /api/runtime/json/:assetKey` | `readRuntimeJsonAsset` | Serve a runtime JSON doc; `Cache-Control: no-store` (`server.js`) |
+| `PUT /api/runtime/json/:assetKey` | `writeRuntimeJsonAsset` | Persist to the active game; echoes back the normalized record (`server.js`) |
+| `GET /api/runtime/pmtiles/:assetKey` | `resolveRuntimeBinaryAsset` | Stream a pmtiles archive (range-capable via `streamBinaryFile`) (`server.js`) |
+| `HEAD /api/runtime/pmtiles/:assetKey` | `resolveRuntimeBinaryAsset` | `Content-Length` for the client freshness check; `Accept-Ranges: bytes` (`server.js`) |
+| `GET/PUT/DELETE /api/scenarios/:id/assets/:assetKey` | scenario asset store | Upload/serve per-scenario overrides (pmtiles, geojson, flags, tags, cover) (`server.js`) |
+| `GET/PUT/DELETE /api/games/:id/assets/:assetKey` | game asset store | Per-game images (`server.js`) |
 
-`writeRuntimeJsonAsset` (`libraryStore.js:2314`) auto-creates a game from the selected scenario if none is active, canonicalizes country refs for `world`/`game`/`colors`, then writes to the game dir and returns the re-read record. That echoed record is what the client caches (§5, `writeJson`).
+`writeRuntimeJsonAsset` (`libraryStore.js`) auto-creates a game from the selected scenario if none is active, canonicalizes country refs for `world`/`game`/`colors`, then writes to the game dir and returns the re-read record. That echoed record is what the client caches (§5, `writeJson`).
 
 ---
 
@@ -168,17 +168,17 @@ The browser's single module for reading, writing, warming, priming, and caching 
 
 ### Endpoint wiring — `setRuntimeAssetEndpoints`
 
-`assets.js:204`. Called on boot and on every scenario/game/library switch with a new `token`. It:
+`assets.js`. Called on boot and on every scenario/game/library switch with a new `token`. It:
 
-1. **Sweeps the old generation's caches BEFORE rebuilding the URLs** (`:218`) — the old URL strings are the only handles to those entries, so this must run first or the parsed GeoJSON (~190 MB on a 55 MB `regions.geojson`) is stranded forever.
-2. Rebuilds every `JSON_URLS.*` = `withRuntimeToken("/api/runtime/json/<key>")` (`:260`).
-3. Rebuilds `PMTILES_ARCHIVES.*` = `buildAbsoluteUrl("/api/runtime/pmtiles/<key>")` (`:275`) and the `pmtiles://…` protocol URLs (`:279`).
+1. **Sweeps the old generation's caches BEFORE rebuilding the URLs** — the old URL strings are the only handles to those entries, so this must run first or the parsed GeoJSON (~190 MB on a 55 MB `regions.geojson`) is stranded forever.
+2. Rebuilds every `JSON_URLS.*` = `withRuntimeToken("/api/runtime/json/<key>")`.
+3. Rebuilds `PMTILES_ARCHIVES.*` = `buildAbsoluteUrl("/api/runtime/pmtiles/<key>")` and the `pmtiles://…` protocol URLs.
 
-The token also gates the PMTiles cache rotation (`:239`): dropping `binaryValueCache`, `binaryRequestCache`, `pmtilesArchives`, the `Protocol` tile registry, and the `pmtilesCache` header — both to free the ~162 MB of warmed buffers and because `/api/runtime/pmtiles/:key` can serve *different bytes* after a switch (a stale directory applied to new bytes would decode garbage).
+The token also gates the PMTiles cache rotation: dropping `binaryValueCache`, `binaryRequestCache`, `pmtilesArchives`, the `Protocol` tile registry, and the `pmtilesCache` header — both to free the ~162 MB of warmed buffers and because `/api/runtime/pmtiles/:key` can serve *different bytes* after a switch (a stale directory applied to new bytes would decode garbage).
 
 ### Reading JSON — `readJson`
 
-`assets.js:544`. Options: `{ cache, defaultValue, force, signal }`.
+`assets.js`. Options: `{ cache, defaultValue, force, signal }`.
 
 | Behaviour | Detail |
 |---|---|
@@ -188,28 +188,28 @@ The token also gates the PMTiles cache rotation (`:239`): dropping `binaryValueC
 | Failure fallback | With `defaultValue`, serves a clone but **does not cache** it (transient failure must not pin a default) |
 | Parse bookkeeping | `jsonLoadedUrls.add(url)` records a genuine parse *inside* the try — lets `loadRegionCatalog` tell "no custom regions" apart from "fetch failed, retry" |
 
-`isNoStoreJsonUrl(url)` (`assets.js:158`) returns true for `regionsGeojson` and `citiesGeojson`. These FeatureCollections are huge and their only long-lived reader keeps them in React state (`Nations.jsx`/`Cities.jsx`, both `force:true`), so caching a second parsed copy is pure waste. It **must** be evaluated synchronously (the comment at `:154` explains why an after-`await` check resurrects the leak on scenario switch).
+`isNoStoreJsonUrl(url)` (`assets.js`) returns true for `regionsGeojson` and `citiesGeojson`. These FeatureCollections are huge and their only long-lived reader keeps them in React state (`Nations.jsx`/`Cities.jsx`, both `force:true`), so caching a second parsed copy is pure waste. It **must** be evaluated synchronously (the comment on `isNoStoreJsonUrl` explains why an after-`await` check resurrects the leak on scenario switch).
 
 ### Writing JSON — `writeJson` / `primeJson`
 
-- `writeJson(url, data)` (`assets.js:618`) `PUT`s the payload, then caches **what the store echoed back** (the normalized record), not what was sent — legacy-record rewrites on the way in used to be pinned out of view. It calls `primeJson`, `invalidateDerivedCachesForWrite`, and `persistResponse`.
-- `primeJson(url, data)` (`assets.js:602`) seeds the value cache (or deletes it for no-store URLs) and marks `jsonLoadedUrls`. Used to make a write immediately visible without a round-trip.
-- `invalidateDerivedCachesForWrite(url)` (`assets.js:177`) drops the memoized `colors`/`flags`/`tags`/`world`-derived promises on a matching write and fires the `oh:colors-updated` DOM event so the live map repaints without a reload.
+- `writeJson(url, data)` (`assets.js`) `PUT`s the payload, then caches **what the store echoed back** (the normalized record), not what was sent — legacy-record rewrites on the way in used to be pinned out of view. It calls `primeJson`, `invalidateDerivedCachesForWrite`, and `persistResponse`.
+- `primeJson(url, data)` (`assets.js`) seeds the value cache (or deletes it for no-store URLs) and marks `jsonLoadedUrls`. Used to make a write immediately visible without a round-trip.
+- `invalidateDerivedCachesForWrite(url)` (`assets.js`) drops the memoized `colors`/`flags`/`tags`/`world`-derived promises on a matching write and fires the `oh:colors-updated` DOM event so the live map repaints without a reload.
 
 ### Reading/priming binary — PMTiles
 
-| Function | Line | Role |
-|---|---|---|
-| `getPmtilesArchive(url)` | `818` | Return cached `PMTiles` or register a new one |
-| `warmPmtilesArchive(url)` | `829` | Download the full archive into `binaryValueCache`, then prime. **Web build** tries the hash-verified node swarm first (`contentTrust.js`), falls through to the origin |
-| `primePmtilesArchive(url, buffer)` | `823` | Store the ArrayBuffer and register a `MemorySource`-backed archive |
-| `registerPmtilesArchive(url)` | `390` | `new PMTiles(source, pmtilesCache)` + register on the `Protocol` |
+| Function | Role |
+|---|---|
+| `getPmtilesArchive(url)` | Return cached `PMTiles` or register a new one |
+| `warmPmtilesArchive(url)` | Download the full archive into `binaryValueCache`, then prime. **Web build** tries the hash-verified node swarm first (`contentTrust.js`), falls through to the origin |
+| `primePmtilesArchive(url, buffer)` | Store the ArrayBuffer and register a `MemorySource`-backed archive |
+| `registerPmtilesArchive(url)` | `new PMTiles(source, pmtilesCache)` + register on the `Protocol` |
 
-`MemorySource` (`assets.js:364`) wraps an in-memory `Uint8Array` and satisfies `getBytes(offset, length)` locally, so once an archive is warmed the PMTiles library slices it in memory instead of issuing range requests. `createPmtilesArchive` (`:382`) uses a `MemorySource` when the bytes are in `binaryValueCache`, else the URL (range fetches). Directory/header decode caching is the shared `pmtilesCache = new SharedPromiseCache(256)` (`:141`).
+`MemorySource` (`assets.js`) wraps an in-memory `Uint8Array` and satisfies `getBytes(offset, length)` locally, so once an archive is warmed the PMTiles library slices it in memory instead of issuing range requests. `createPmtilesArchive` uses a `MemorySource` when the bytes are in `binaryValueCache`, else the URL (range fetches). Directory/header decode caching is the shared `pmtilesCache = new SharedPromiseCache(256)`.
 
 ### `resolveCountryDisplayName` and the resolver
 
-`assets.js:288`. `resolveCountryDisplayName(name, code)` delegates to a swappable `countryNameResolver` installed via `setCountryNameResolver` (`:284`) — the i18n / localization layer registers a resolver so PMTiles feature names (`Country`/`NAME`/…) render translated. It defaults to identity. Used by both `loadCountryNames` and `loadRegionCatalog` when decoding the z0 tile.
+`assets.js`. `resolveCountryDisplayName(name, code)` delegates to a swappable `countryNameResolver` installed via `setCountryNameResolver` — the i18n / localization layer registers a resolver so PMTiles feature names (`Country`/`NAME`/…) render translated. It defaults to identity. Used by both `loadCountryNames` and `loadRegionCatalog` when decoding the z0 tile.
 
 ### Cache inventory
 
@@ -230,15 +230,15 @@ The token also gates the PMTiles cache rotation (`:239`): dropping `binaryValueC
 
 ## 6. Persistent Cache Storage + freshness
 
-`fetchWithPersistence(url)` (`assets.js:336`) layers a `CacheStorage` cache (`PRELOAD_CACHE_NAME = "open-historia-preload-v2"`, `:11`) over the network so warmed assets survive reloads:
+`fetchWithPersistence(url)` (`assets.js`) layers a `CacheStorage` cache (`PRELOAD_CACHE_NAME = "open-historia-preload-v2"`) over the network so warmed assets survive reloads:
 
 1. Look up the persisted `Response`.
 2. If present, issue a **`HEAD`** and compare `Content-Length` against the cached copy's. Equal (or the server can't answer, i.e. offline) → serve cached. Differ → refetch (an update replaced the file on disk).
 3. Miss → `fetch(url, {cache:"force-cache"})`, then `persistResponse(url, clone)`.
 
-The `v1` → `v2` cache-name bump (`:9`) exists because `v1` had no freshness check and could serve months-old map data forever; the bump flushes everyone once and the `HEAD` check keeps it fresh thereafter. `jsonHeadersFor` (`:32`) stamps the real UTF-8 byte length on client-written responses so the `HEAD` comparison isn't silently disabled by a missing `Content-Length`.
+The `v1` → `v2` cache-name bump exists because `v1` had no freshness check and could serve months-old map data forever; the bump flushes everyone once and the `HEAD` check keeps it fresh thereafter. `jsonHeadersFor` stamps the real UTF-8 byte length on client-written responses so the `HEAD` comparison isn't silently disabled by a missing `Content-Length`.
 
-The **web build** uses a parallel key namespace: `buildRuntimeCacheUrl(key)` (`:333`) → `…/__runtime-cache/<key>.json`, read/written by `readRuntimeJson` / `writeRuntimeJson` (`:666`, `:705`) which are keyed by *asset key* (not URL) and therefore cleared wholesale on a token change (they'd otherwise serve the previous game's state).
+The **web build** uses a parallel key namespace: `buildRuntimeCacheUrl(key)` → `…/__runtime-cache/<key>.json`, read/written by `readRuntimeJson` / `writeRuntimeJson` which are keyed by *asset key* (not URL) and therefore cleared wholesale on a token change (they'd otherwise serve the previous game's state).
 
 ---
 
@@ -246,8 +246,8 @@ The **web build** uses a parallel key namespace: `buildRuntimeCacheUrl(key)` (`:
 
 Under `import.meta.env.VITE_OH_WEB` there is no node server:
 
-- **Route interception:** `src/runtime/web/router.js:31` installs a `fetch` interceptor for same-origin `/api/*`. `/api/runtime/pmtiles/:key` (`router.js:51`) checks a scenario override in IndexedDB (`getScenarioPmtilesOverride`), else fetches `${VITE_OH_PMTILES_URL || "/assets"}/<key>.pmtiles`. The hosted site sets `VITE_OH_PMTILES_URL` to the **registry Worker's CORS+range proxy**, because Cloudflare Pages can't host the 60–100 MB archives directly (same-origin would 404 to the SPA fallback).
-- **Verified content swarm:** `warmPmtilesArchive` (`assets.js:855`) dynamically imports `src/runtime/web/contentTrust.js` and calls `fetchVerifiedBuffer(url)`. It maps the URL to a manifest asset id (`assetIdFromUrl`, `contentTrust.js:72`), fetches `<node>/oh/v1/content/<sha256>` from the vetted node swarm, and verifies **every byte** against the signed `content-manifest.json` (`:140`). A bad/broken node can at worst force a retry — it can never deliver tampered bytes — and any failure falls through to the canonical origin, so a node outage is invisible. The signed node **directory** (`VITE_OH_DIRECTORY_URL`) is a deny-list/control doc; live addresses come from `nodes-live.json`. This whole block is stripped from the local download.
+- **Route interception:** `src/runtime/web/router.js` installs a `fetch` interceptor for same-origin `/api/*`. `/api/runtime/pmtiles/:key` (`router.js`) checks a scenario override in IndexedDB (`getScenarioPmtilesOverride`), else fetches `${VITE_OH_PMTILES_URL || "/assets"}/<key>.pmtiles`. The hosted site sets `VITE_OH_PMTILES_URL` to the **registry Worker's CORS+range proxy**, because Cloudflare Pages can't host the 60–100 MB archives directly (same-origin would 404 to the SPA fallback).
+- **Verified content swarm:** `warmPmtilesArchive` (`assets.js`) dynamically imports `src/runtime/web/contentTrust.js` and calls `fetchVerifiedBuffer(url)`. It maps the URL to a manifest asset id (`assetIdFromUrl`, `contentTrust.js`), fetches `<node>/oh/v1/content/<sha256>` from the vetted node swarm, and verifies **every byte** against the signed `content-manifest.json`. A bad/broken node can at worst force a retry — it can never deliver tampered bytes — and any failure falls through to the canonical origin, so a node outage is invisible. The signed node **directory** (`VITE_OH_DIRECTORY_URL`) is a deny-list/control doc; live addresses come from `nodes-live.json`. This whole block is stripped from the local download.
 - **Worker fetches:** the `window.fetch` patch is invisible to workers — MapLibre's tile workers and the political-cartography worker (`src/Game/Map/vnext/polityBoundariesWorker.js`) fetch with their own global — so the scenario's regions GeoJSON is re-served to the `custom-regions-source` and the worker through a `blob:` URL: `prepareWorkerFetchableUrl(url)` (`assets.js`) fetches the runtime URL on the page and stages the bytes as a blob; `useWorkerFetchableUrl` (`src/Game/Map/useWorkerFetchableUrl.js`) hands that URL to `Nations.jsx`, which keeps the runtime URL as the identity for geometry epochs, catalog keys and readiness. MapLibre forwards a non-http(s) URL from its workers to the main thread, and a dedicated worker resolves a blob URL its page created. Copies are released (revoked after a grace period) when the token rotates or the asset is written. The desktop keeps the plain URL.
 - **Origin check:** the origin fallback in `warmPmtilesArchive` is held to the same signed manifest through `verifyOriginBuffer(url, buffer)` (`contentTrust.js`): `checked` is false — the bytes trusted as before — when the manifest is unsigned or missing, does not list the asset, or the active scenario serves its own archive under the runtime URL (`hasScenarioPmtilesOverride`, `libraryStore.js`); a scenario's own archive is never fetched from the swarm either. Only a signed hash that contradicts the bytes fails the archive.
 
@@ -257,7 +257,7 @@ See the [Node network](delivery-and-deploy.md) notes for the swarm/registry arch
 
 ## 8. Startup preload + the ~162 MB prime
 
-`src/runtime/preload.js` warms the map before React fully mounts, inside a **30 s time budget** (`STARTUP_TIME_BUDGET_MS`, `:16`). Tasks run serially, each with an `AbortController` wired to the remaining budget; the budget expiring aborts the current task and leaves the rest to load lazily in-game.
+`src/runtime/preload.js` warms the map before React fully mounts, inside a **30 s time budget** (`STARTUP_TIME_BUDGET_MS`). Tasks run serially, each with an `AbortController` wired to the remaining budget; the budget expiring aborts the current task and leaves the rest to load lazily in-game.
 
 | # | id | Label | Weight | Warms | Skipped on custom map? |
 |---|---|---|---|---|---|
@@ -269,9 +269,9 @@ See the [Node network](delivery-and-deploy.md) notes for the swarm/registry arch
 | 6 | `cities` | Caching city layer | 10 | `cities.pmtiles` (~1.5 MB) | no |
 | 7 | `regions` | Caching regional borders | 24 | `regions.pmtiles` (~105.8 MB) | **no** — paints owners above z6.5 even on custom maps |
 
-**The ~162 MB prime:** warming tasks 3+6+7 pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — the code cites regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js:231`; on-disk manifest sizes total ~170 MB). This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further network I/O. The cost is that this ~162 MB must be **freed on scenario switch** — which is exactly what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does. See the [RAM & paint audit](architecture.md) notes for the broader memory backlog (the geojson double-store, pinned PMTiles).
+**The ~162 MB prime:** warming tasks 3+6+7 pulls all three archives fully into `binaryValueCache` as in-memory `ArrayBuffer`s — the code cites regions ≈101 MB + countries ≈60 MB + cities ≈1.5 MB ≈ **162 MB** resident (`assets.js`; on-disk manifest sizes total ~170 MB). This is a deliberate memory-for-latency trade: a fully-warmed `MemorySource` archive answers tile requests without further network I/O. The cost is that this ~162 MB must be **freed on scenario switch** — which is exactly what the PMTiles cache rotation in `setRuntimeAssetEndpoints` (§5) does. See the [RAM & paint audit](architecture.md) notes for the broader memory backlog (the geojson double-store, pinned PMTiles).
 
-Task results feed a weighted progress bar: `normalizeTaskResult` (`preload.js:165`) sums the `.size` of each warmed asset into `loadedBytes`, and `progress = completedWeight / TOTAL_WEIGHT`.
+Task results feed a weighted progress bar: `normalizeTaskResult` (`preload.js`) sums the `.size` of each warmed asset into `loadedBytes`, and `progress = completedWeight / TOTAL_WEIGHT`.
 
 ---
 
@@ -279,36 +279,36 @@ Task results feed a weighted progress bar: `normalizeTaskResult` (`preload.js:16
 
 These read the z0 PMTiles tile (or a JSON doc) once per scenario and cache the derived result on the scenario token. They power AI prompts, pickers, and labels.
 
-| Accessor | Line | Reads | Produces | Cache key |
-|---|---|---|---|---|
-| `getNationColors()` | `900` | `colors.json` | owner-name → hex map | `JSON_URLS.colors` |
-| `getNationFlags()` | `949` | `flags.json` | owner-code → PNG data URL (`{}` default) | `JSON_URLS.flags` |
-| `getNationTags()` | `933` | `tags.json` | owner-code → `string[]` **starting** tags (merge with `world.countryTags`) | `JSON_URLS.tags` |
-| `loadCountryNames()` | `965` | `countries.pmtiles` z0 tile + `world.polityOverrides` | sorted `{code,name}[]` country index | `PMTILES_ARCHIVES.countries` |
-| `loadRegionCatalog()` | `1036` | `regions.pmtiles` z0 tile + `regions.geojson` custom names | sorted `{id,name,country,countryCode}[]` | `PMTILES_ARCHIVES.regions` + `JSON_URLS.regionsGeojson` |
+| Accessor | Reads | Produces | Cache key |
+|---|---|---|---|
+| `getNationColors()` | `colors.json` | owner-name → hex map | `JSON_URLS.colors` |
+| `getNationFlags()` | `flags.json` | owner-code → PNG data URL (`{}` default) | `JSON_URLS.flags` |
+| `getNationTags()` | `tags.json` | owner-code → `string[]` **starting** tags (merge with `world.countryTags`) | `JSON_URLS.tags` |
+| `loadCountryNames()` | `countries.pmtiles` z0 tile + `world.polityOverrides` | sorted `{code,name}[]` country index | `PMTILES_ARCHIVES.countries` |
+| `loadRegionCatalog()` | `regions.pmtiles` z0 tile + `regions.geojson` custom names | sorted `{id,name,country,countryCode}[]` | `PMTILES_ARCHIVES.regions` + `JSON_URLS.regionsGeojson` |
 
 Common invariants: each drops its promise on failure so the next call **retries** instead of pinning an empty catalog for the session; each is invalidated by `invalidateDerivedCachesForWrite` when its underlying asset is written.
 
-- **`loadCountryNames`** decodes the `countries` vector-tile layer, dedupes by resolved display name (`resolveCountryDisplayName`), then merges `world.polityOverrides` — a nameless override never degrades a real name to a bare code (`:1008`).
-- **`loadRegionCatalog`** decodes the stock `regions` layer, then **overlays the scenario's own `regions.geojson`**: the world's own name for a region wins (a world that renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about South Konisburg everywhere, `:1109`), and editor-drawn `reg_*` shapes the stock tiles don't know get named from the custom geometry. It uses `jsonLoadedUrls.has(regionsGeojson)` (`:1101`) — not a truthiness test on the payload — to distinguish "no custom regions" (stock names correct) from "fetch failed" (retry), because the server answers a geometry-less scenario with a 200 empty FeatureCollection. The stock tile read is in its own `try`: when the archive cannot be read at all (a 404, a corrupt download, a test sandbox without it) the catalog carries the scenario's own regions rather than nothing — it used to return `[]`, which emptied every lookup, geography resolver and placement gazetteer on a hand-drawn world whose regions were all sitting in its own geojson.
+- **`loadCountryNames`** decodes the `countries` vector-tile layer, dedupes by resolved display name (`resolveCountryDisplayName`), then merges `world.polityOverrides` — a nameless override never degrades a real name to a bare code.
+- **`loadRegionCatalog`** decodes the stock `regions` layer, then **overlays the scenario's own `regions.geojson`**: the world's own name for a region wins (a world that renamed "Warmińsko-Mazurskie" to "South Konisburg" talks about South Konisburg everywhere), and editor-drawn `reg_*` shapes the stock tiles don't know get named from the custom geometry. It uses `jsonLoadedUrls.has(regionsGeojson)` — not a truthiness test on the payload — to distinguish "no custom regions" (stock names correct) from "fetch failed" (retry), because the server answers a geometry-less scenario with a 200 empty FeatureCollection. The stock tile read is in its own `try`: when the archive cannot be read at all (a 404, a corrupt download, a test sandbox without it) the catalog carries the scenario's own regions rather than nothing — it used to return `[]`, which emptied every lookup, geography resolver and placement gazetteer on a hand-drawn world whose regions were all sitting in its own geojson.
 
-`decodeVectorTile(data)` (`assets.js:885`) lazily imports `@mapbox/vector-tile` + `pbf` and is the shared decoder for both catalogs.
+`decodeVectorTile(data)` (`assets.js`) lazily imports `@mapbox/vector-tile` + `pbf` and is the shared decoder for both catalogs.
 
 ---
 
 ## 10. Basemap raster + terrain (asset-adjacent)
 
-Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js:82`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"` (`:94`). The selected id is read from `localStorage["map_basemap_style"]` (`selectedBasemapId`, `:112`).
+Not part of the `map-data` Release, but resolved through this module. `ESRI_BASEMAPS` (`assets.js`) lists ten public, token-free ArcGIS Online services with per-layer `maxZoom`; `DEFAULT_BASEMAP_ID = "ocean"`. The selected id is read from `localStorage["map_basemap_style"]` (`selectedBasemapId`).
 
 | Concern | Mechanism |
 |---|---|
-| Low-zoom source | Direct ESRI XYZ template `esriTileTemplate(id)` (`:104`) |
-| High-zoom source | `ohbase://<id>/{z}/{y}/{x}` protocol (`basemapProtocolTemplate`, `:109`), registered by `ensureBasemapProtocol` (`:537`) |
-| Placeholder swap | ESRI serves an identical "Map Data Not Yet Available" JPEG (HTTP 200) past a layer's coverage; `basemapTileLoader` (`:513`) byte-detects it (learned from two ocean tiles, `loadPlaceholderRef` `:454`) and synthesizes an upscaled crop of the nearest real ancestor (`synthesizeFromAncestor`, `:471`) |
-| Terrain | `TERRAIN_TILE_TEMPLATE` → AWS `elevation-tiles-prod` terrarium PNGs (`:119`) |
-| Runtime tuning | `configureMapRuntime` (`:398`) sizes MapLibre worker count + parallel image requests from `hardwareConcurrency` |
+| Low-zoom source | Direct ESRI XYZ template `esriTileTemplate(id)` |
+| High-zoom source | `ohbase://<id>/{z}/{y}/{x}` protocol (`basemapProtocolTemplate`), registered by `ensureBasemapProtocol` |
+| Placeholder swap | ESRI serves an identical "Map Data Not Yet Available" JPEG (HTTP 200) past a layer's coverage; `basemapTileLoader` byte-detects it (learned from two ocean tiles, `loadPlaceholderRef`) and synthesizes an upscaled crop of the nearest real ancestor (`synthesizeFromAncestor`) |
+| Terrain | `TERRAIN_TILE_TEMPLATE` → AWS `elevation-tiles-prod` terrarium PNGs |
+| Runtime tuning | `configureMapRuntime` sizes MapLibre worker count + parallel image requests from `hardwareConcurrency` |
 
-Raster tiles are warmed via `warmRemoteResources` / `warmRemoteResource` (`assets.js:775`, `:732`) with bounded concurrency (default 6), caching only the *size* per URL (the bytes live in the browser HTTP cache under `force-cache`).
+Raster tiles are warmed via `warmRemoteResources` / `warmRemoteResource` (`assets.js`) with bounded concurrency (default 6), caching only the *size* per URL (the bytes live in the browser HTTP cache under `force-cache`).
 
 ---
 

@@ -9,7 +9,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 
 ## 1. The GameUI shell — `src/Game/GameUI/main.jsx`
 
-`Main` is the default export (`src/Game/GameUI/main.jsx:128`). It is mounted by `App.jsx` and **keyed on the active game id** (`key={\`ui-${activeGameId}\`}`, `src/App.jsx:179`) so the entire UI tree remounts when a game activates. That remount is why several open/closed flags live at module scope instead of component state (see [§4.1](#41-menuopendefault--the-remount-trap)).
+`Main` is the default export (`src/Game/GameUI/main.jsx`). It is mounted by `App.jsx` and **keyed on the active game id** (`key={\`ui-${activeGameId}\`}`, `src/App.jsx`) so the entire UI tree remounts when a game activates. That remount is why several open/closed flags live at module scope instead of component state (see [§4.1](#41-menuopendefault--the-remount-trap)).
 
 ### 1.1 Props
 
@@ -38,7 +38,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 
 | Effect | Behavior | Connects to |
 |---|---|---|
-| WebGL probe | On mount, `checkWebGL()`; on failure shows the popup | `src/Game/GameUI/main.jsx:55` |
+| WebGL probe | On mount, `checkWebGL()`; on failure shows the popup | `src/Game/GameUI/main.jsx` |
 | **Idle diplomacy drip** | Every 60 s, if the tab is visible and a game exists, lazy-imports `../AI/gameplay.js` and calls `maybeSendIdleDiplomacy()` | `src/Game/AI/gameplay.js`; drops a message into the diplomatic chat store unprompted |
 | Advisor lazy-load latch | `isAdvisorOpen` → `setShouldLoadAdvisor(true)` (one-way) | Keeps the Chart.js/markdown chunk out of first paint |
 | Fullscreen persist + sync | Writes `localStorage["Fullscreen"]`; listens `fullscreenchange`/`webkitfullscreenchange` | `toggleFullscreen()` probes prefixed APIs (mobile Safari safe) |
@@ -75,20 +75,20 @@ Every fixed element declares its own `zIndex`. From back to front (source-verifi
 
 | z-index | Element | File |
 |---:|---|---|
-| 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**) | `libraryBar.jsx:1993` / `:2061` |
-| 9998 | Timeline panels (`panelSurface`), **Actions** panel, **Chat** panel | `time.jsx:149`, `actions.jsx:427`, `chat.jsx:851` |
+| 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**) | `libraryBar.jsx` |
+| 9998 | Timeline panels (`panelSurface`), **Actions** panel, **Chat** panel | `time.jsx`, `actions.jsx`, `chat.jsx` |
 | 9999 | `DateWidget` pill, bottom `Toolbar`, `Search`, `Other` flag badge, 🧭 `AdvisorButton`, ☰ `SettingsButton`, `SettingsMenu`, `ForcesPanel` body, `WebGLWarningPopup` | shared `baseStyle`/`widgetSurface` |
-| 10000 | Forces **mode banner** (deploy hint) | `forces.jsx:156` |
-| 10028 | "Loading games and scenarios…" indicator | `libraryBar.jsx:2565` |
-| 10040 | **Advisor drawer** | `advisor.jsx:320` |
-| 10045 | **Cheats panel** | `cheats.jsx:280` |
-| 10046 | **Main menu** (full page) | `libraryBar.jsx:2302` |
-| 10048 | **Editor drawer** (game/scenario editor) | `libraryBar.jsx:741` |
-| 10050 | **Map editor** overlay | `libraryBar.jsx:2125` |
-| 10060 | **Country / faction picker** modal | `libraryBar.jsx:2152` |
-| 10070 | Cheats **click-capture toast** | `cheats.jsx:256` |
-| 20000 | **Server stopped** full-screen overlay | `libraryBar.jsx:2113` |
-| 99999 | Chat reaction tooltip (React portal to `document.body`) | `chat.jsx:260` |
+| 10000 | Forces **mode banner** (deploy hint) | `forces.jsx` |
+| 10028 | "Loading games and scenarios…" indicator | `libraryBar.jsx` |
+| 10040 | **Advisor drawer** | `advisor.jsx` |
+| 10045 | **Cheats panel** | `cheats.jsx` |
+| 10046 | **Main menu** (full page) | `libraryBar.jsx` |
+| 10048 | **Editor drawer** (game/scenario editor) | `libraryBar.jsx` |
+| 10050 | **Map editor** overlay | `libraryBar.jsx` |
+| 10060 | **Country / faction picker** modal | `libraryBar.jsx` |
+| 10070 | Cheats **click-capture toast** | `cheats.jsx` |
+| 20000 | **Server stopped** full-screen overlay | `libraryBar.jsx` |
+| 99999 | Chat reaction tooltip (React portal to `document.body`) | `chat.jsx` |
 
 Design intent captured in comments: the advisor drawer (10040) sits above every HUD button/panel so nothing covers it on phones, but below the editor/picker/server-down overlays. The editor drawer (10048) deliberately lands **above** the main menu (10046) because the menu's `+`/Edit buttons open it. The in-game cluster sits at 9997 — below the settings menu and date widget (9998/9999) — so opening either covers it rather than the reverse.
 
@@ -96,12 +96,12 @@ Design intent captured in comments: the advisor drawer (10040) sits above every 
 
 ## 3. Bottom toolbar & diplomacy — `src/Game/GameUI/chat.jsx`
 
-`Toolbar` (`chat.jsx:962`) is the bottom-left 2-button cluster (`bottom/left: 0.5rem`, z 9999). It's memoized and driven by `activePanel`/`onTogglePanel` from `Main`.
+`Toolbar` (`chat.jsx`) is the bottom-left 2-button cluster (`bottom/left: 0.5rem`, z 9999). It's memoized and driven by `activePanel`/`onTogglePanel` from `Main`.
 
 | Button | Component | Opens | Notes |
 |---|---|---|---|
-| 💬 Chat | `Chat` (`chat.jsx:886`) | `ChatPanel` (bottom-left, z 9998) | Unread badge plus incoming-message notifications: one event-driven watcher (runtime JSON writes, `oh:diplomacy-chats-updated`, tab visibility, a 30 s safety interval) keeps a per-chat cursor (`oh:chat-notification-cursors-v2`), toasts a foreign message that lands while its thread is not on screen (top-right, 12 s, click opens the thread), plays a two-note chime (`oh:chat-notification-sound-v1`, 🔊 toggle), keeps a 🔔 notification center bottom-left until the panel opens (bell and toasts stay off the main menu — `useMainMenuOpen` from `libraryBar.jsx`), and can raise desktop notifications once permitted; `window.__OH_DIPLO_NOTIFICATIONS__` (`status`, `test`, `testExistingChat`, `testSound`, `enableDesktop`, `clear`) exercises it |
-| ✦ Actions | `Actions` (`actions.jsx:700`) | `ActionsPanel` | See [§7](#7-actions-panel--srcgamegameuiactionsjsx) |
+| 💬 Chat | `Chat` (`chat.jsx`) | `ChatPanel` (bottom-left, z 9998) | Unread badge plus incoming-message notifications: one event-driven watcher (runtime JSON writes, `oh:diplomacy-chats-updated`, tab visibility, a 30 s safety interval) keeps a per-chat cursor (`oh:chat-notification-cursors-v2`), toasts a foreign message that lands while its thread is not on screen (top-right, 12 s, click opens the thread), plays a two-note chime (`oh:chat-notification-sound-v1`, 🔊 toggle), keeps a 🔔 notification center bottom-left until the panel opens (bell and toasts stay off the main menu — `useMainMenuOpen` from `libraryBar.jsx`), and can raise desktop notifications once permitted; `window.__OH_DIPLO_NOTIFICATIONS__` (`status`, `test`, `testExistingChat`, `testSound`, `enableDesktop`, `clear`) exercises it |
+| ✦ Actions | `Actions` (`actions.jsx`) | `ActionsPanel` | See [§7](#7-actions-panel--srcgamegameuiactionsjsx) |
 
 Both launchers use `hasOpened` latches so the panel body isn't mounted until first opened.
 
@@ -115,7 +115,7 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 | Send | One-on-one sends directly to the sole AI counterpart via `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }`. Group/institution conversations use `runChatActionBatch` as the single canonical AI request: that batch decides which AI participants speak/react/vote/stay silent and their order. There is no standalone speaker-selection request or sequential group fallback. | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js`, `src/Game/AI/chatActions.js` |
 | Group turn UI | A group turn is revealed from the one-request action batch a line at a time; the player may cut in before later planned lines are written. No queued "Let X speak" legacy phase remains. | `ConversationView`, `planChatReveal` |
 | Conversation view | A date separator opens every new game day; the last 12 messages render first with a "Show earlier" button; stacked flags on list rows; a leader's message is dated through `gameDates.js` (it used to show a day early west of Greenwich); a document delivered through diplomacy is a message like any other, its `📄` heading in bold ([§6.2-bis](#62-bis-documents-where-they-arrive)) | `ConversationView`, `ChatListItem` |
-| External trigger | `requestDiplomaticChat(country)` bridge (`chat.jsx:697`) lets the map region popup open/reuse a 1-on-1 chat | Map selection layer |
+| External trigger | `requestDiplomaticChat(country)` bridge (`chat.jsx`) lets the map region popup open/reuse a 1-on-1 chat | Map selection layer |
 | Reactions | Leader reactions attach an emoji to the player's last message; hover tooltip is a portal at z 99999 | — |
 | Catch-up line | A line the player sends after the world moved on carries a note for the leader (`buildLeaderCatchUp` → `conversationCatchUp.js buildThreadCatchUp`, from the moment the player has been shown): the bubble shows `⏳ Since 1 December 2015 · 3 events · 1 border change`, the whole note on hover. Stored on the message (`catchUp`, `catchUpLabel`), sent ahead of the words one-to-one and in the group batch | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js` |
 
@@ -123,14 +123,14 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 
 ## 4. Main menu & library — `src/Game/GameUI/libraryBar.jsx`
 
-`LibraryTopBar` (exported at `libraryBar.jsx:1042`) is a single large component that renders the whole main menu, both editor drawers, the country picker, the map-editor host, and the in-game floating cluster. It subscribes to `useLibraryState()` (`src/runtime/library.js`) for `games`, `scenarios`, `activeGame`, `activeGameId`, `selectedScenarioId`, `countryNames`, `loaded`, `loading`, `error`.
+`LibraryTopBar` (exported at `libraryBar.jsx`) is a single large component that renders the whole main menu, both editor drawers, the country picker, the map-editor host, and the in-game floating cluster. It subscribes to `useLibraryState()` (`src/runtime/library.js`) for `games`, `scenarios`, `activeGame`, `activeGameId`, `selectedScenarioId`, `countryNames`, `loaded`, `loading`, `error`.
 
 ### 4.1 `menuOpenDefault` — the remount trap
 
-`menuOpenDefault` (`libraryBar.jsx:97`) is a **module-scoped boolean**, not state. The whole UI remounts on game activation (App keys on `activeGameId`), so per-component `useState("open")` would reset the menu back open mid game-start. Every open/close goes through `setMenuOpen` (`libraryBar.jsx:1060`), which writes the module var **first**, then the React state. Flows that activate a game (`startGameForCountry`, `handleGameActivate`, `applyMapToScenario`, …) call `setMenuOpen(false)` **before** awaiting the request, so the remounted instance mounts closed over the new game.
+`menuOpenDefault` (`libraryBar.jsx`) is a **module-scoped boolean**, not state. The whole UI remounts on game activation (App keys on `activeGameId`), so per-component `useState("open")` would reset the menu back open mid game-start. Every open/close goes through `setMenuOpen` (`libraryBar.jsx`), which writes the module var **first**, then the React state. Flows that activate a game (`startGameForCountry`, `handleGameActivate`, `applyMapToScenario`, …) call `setMenuOpen(false)` **before** awaiting the request, so the remounted instance mounts closed over the new game.
 
-- `isMainMenuOpen()` (exported, `libraryBar.jsx:100`) lets background work (e.g. `maybeGeneratePregameHistory` in `time.jsx`) skip while the player is only browsing.
-- `openLibraryTab(tab)` (exported, `libraryBar.jsx:89`) + module `_openLibraryTab` bridge lets outside callers open the menu on a specific tab.
+- `isMainMenuOpen()` (exported, `libraryBar.jsx`) lets background work (e.g. `maybeGeneratePregameHistory` in `time.jsx`) skip while the player is only browsing.
+- `openLibraryTab(tab)` (exported, `libraryBar.jsx`) + module `_openLibraryTab` bridge lets outside callers open the menu on a specific tab.
 
 ### 4.2 Menu chrome
 
@@ -160,7 +160,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 
 ### 4.4 Cards
 
-**`GameCard`** (`libraryBar.jsx:519`) — cover image + accent gradient; shows country/date/round, pending-action & event counts. Buttons:
+**`GameCard`** (`libraryBar.jsx`) — cover image + accent gradient; shows country/date/round, pending-action & event counts. Buttons:
 
 | Button | Handler | Effect |
 |---|---|---|
@@ -168,7 +168,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 | Edit | `onEdit`→`openGameEditor` | `loadGameDetails` → editor drawer |
 | Clone Game | `onClone`→`handleGameClone` | `createGame({seedGameId, setActive})` → editor |
 
-**`ScenarioCard`** (`libraryBar.jsx:360`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Cover art receives a stronger dark scrim and the title/body copy uses a dedicated multi-layer text shadow so authored scenario text stays legible over bright or detailed images without an opaque text panel. Buttons:
+**`ScenarioCard`** (`libraryBar.jsx`) — asset badges (Cities/Colors/Countries/Regions PMTiles), game count. Cover art receives a stronger dark scrim and the title/body copy uses a dedicated multi-layer text shadow so authored scenario text stays legible over bright or detailed images without an opaque text panel. Buttons:
 
 | Button | Handler | Effect |
 |---|---|---|
@@ -180,7 +180,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 
 ### 4.5 Country / faction picker (New Game flow)
 
-`handleScenarioPlay` (`libraryBar.jsx:1276`) opens a modal (z 10060) instead of starting immediately. Two nested steps:
+`handleScenarioPlay` (`libraryBar.jsx`) opens a modal (z 10060) instead of starting immediately. Two nested steps:
 
 | Step / state | UI | Resolves to |
 |---|---|---|
@@ -193,7 +193,7 @@ The Games tab's empty state ("No games yet") offers **Start from a scenario** / 
 
 ### 4.6 Editor drawer (game & scenario editor)
 
-`EditorDrawer` (`libraryBar.jsx:692`) — the fixed right-side form (z 10048, `width: min(34rem, …)`), the primary scenario/game authoring surface. Driven by `editorKind` (`"scenario"`|`"game"`), `editorDetails`, `editorState`, `editorSection`, `promptSectionKey`.
+`EditorDrawer` (`libraryBar.jsx`) — the fixed right-side form (z 10048, `width: min(34rem, …)`), the primary scenario/game authoring surface. Driven by `editorKind` (`"scenario"`|`"game"`), `editorDetails`, `editorState`, `editorSection`, `promptSectionKey`.
 
 Section tabs (`SectionTabs`): scenarios show `overview | world | features | prompts | assets | bundles`; games drop `bundles`.
 
@@ -212,7 +212,7 @@ Save is careful: scenario/game meta writes merge `currentGame`/`currentWorld` so
 
 ### 4.7 Hub update detection
 
-When the Scenarios tab shows any unedited hub import (`hubOrigin` without `editedAt`), an effect (`libraryBar.jsx:2145`) calls `fetchHubPosts()` (`src/runtime/hubPosts.js`, cached five minutes) and builds `hubPostById`. `scenarioUpdateAvailable(scenario)` returns true when the post's current `bundleUrl` differs from the imported one → the card's primary button flips to **⬆ Update**. `handleScenarioUpdate` calls `downloadHubBundle` + `updateScenarioFromBundle(id, bundle)`, replacing the copy in place (existing games keep working) and re-stamping `hubOrigin` with the post's title and author. An **edited** copy is never offered an update, which would overwrite the player's work: its player suggests their changes to the post instead (§4.8).
+When the Scenarios tab shows any unedited hub import (`hubOrigin` without `editedAt`), an effect (`libraryBar.jsx`) calls `fetchHubPosts()` (`src/runtime/hubPosts.js`, cached five minutes) and builds `hubPostById`. `scenarioUpdateAvailable(scenario)` returns true when the post's current `bundleUrl` differs from the imported one → the card's primary button flips to **⬆ Update**. `handleScenarioUpdate` calls `downloadHubBundle` + `updateScenarioFromBundle(id, bundle)`, replacing the copy in place (existing games keep working) and re-stamping `hubOrigin` with the post's title and author. An **edited** copy is never offered an update, which would overwrite the player's work: its player suggests their changes to the post instead (§4.8).
 
 ### 4.8 Suggested changes
 
@@ -232,9 +232,9 @@ A player who downloaded a community scenario and changed it can send the changes
 - **Your post on the hub** (the player's own post): the suggestions waiting, grouped by contributor (each **Review**, **View the comment on GitHub ↗**, and **Reject all from @login**), the reviewed and dismissed ones behind **Reviewed suggestions (N)**, **Check for suggestions** (a forced read), **Open a suggestion file** (a `.zip` someone sent another way), the **Blocked contributors** with **Unblock**, and **Unlink the post** (stops looking; the post stays on the hub).
 - **Link my post**: a scenario published before this version carries no key; the player gives the post's address or number (`handleLinkPost`).
 
-**Suggest changes** (`SuggestChangesDialog`, `ScenarioSuggestions.jsx:426`). Unsaved edits in the drawer are saved first, with a confirm (`handleSuggestChanges`). The dialog downloads the post's bundle and exports the copy (`exportScenarioBundle`), and `diffScenarioBundles` (`src/runtime/scenarioChanges.js`) lists what changed, in two parts: **Changes outside the map** and **Changes on the map**. An unchanged copy says so. The player may add a name and a note. **Save the file and open the post** then does three things. It opens the post at its comment box first, while the click still counts as the player's. It copies the comment (`buildSuggestionComment`) to the clipboard. It saves `<scenario>-suggestion.zip` (`buildSuggestionZip`). **Only save the file** skips the post. The dialog then shows the steps: paste the comment, drag the file in, click Comment. The comment's text is also shown there, for when the clipboard was refused.
+**Suggest changes** (`SuggestChangesDialog`, `ScenarioSuggestions.jsx`). Unsaved edits in the drawer are saved first, with a confirm (`handleSuggestChanges`). The dialog downloads the post's bundle and exports the copy (`exportScenarioBundle`), and `diffScenarioBundles` (`src/runtime/scenarioChanges.js`) lists what changed, in two parts: **Changes outside the map** and **Changes on the map**. An unchanged copy says so. The player may add a name and a note. **Save the file and open the post** then does three things. It opens the post at its comment box first, while the click still counts as the player's. It copies the comment (`buildSuggestionComment`) to the clipboard. It saves `<scenario>-suggestion.zip` (`buildSuggestionZip`). **Only save the file** skips the post. The dialog then shows the steps: paste the comment, drag the file in, click Comment. The comment's text is also shown there, for when the clipboard was refused.
 
-**The author learns of it.** When the menu opens, the effect at `libraryBar.jsx:2221` reads the post list once (`fetchHubPosts`, cached five minutes; the effect itself runs at most once every five minutes). `refreshPublishedRecord` (`hubPosts.js`) finds the posts carrying the scenario's key. It then reads a post's comments only when the post's comment count has moved. A comment is a suggestion when it has a `.zip` attachment, and either the file name says "suggestion" or the comment carries the marker line `Open-Historia-Suggestion: sug-…`. Where the author sees it:
+**The author learns of it.** When the menu opens, the effect at `libraryBar.jsx` reads the post list once (`fetchHubPosts`, cached five minutes; the effect itself runs at most once every five minutes). `refreshPublishedRecord` (`hubPosts.js`) finds the posts carrying the scenario's key. It then reads a post's comments only when the post's comment count has moved. A comment is a suggestion when it has a `.zip` attachment, and either the file name says "suggestion" or the comment carries the marker line `Open-Historia-Suggestion: sug-…`. Where the author sees it:
 
 - `SuggestionsBanner` above the Games and Scenarios tabs: **💬 People have suggested changes to your scenarios**, one button per scenario;
 - the card's badge;
@@ -242,7 +242,7 @@ A player who downloaded a community scenario and changed it can send the changes
 
 A deleted comment takes its suggestion with it.
 
-**The changelog** (`SuggestionReviewDialog`, `ScenarioSuggestions.jsx:589`). The dialog downloads the suggestion's file through `/api/hub/file`, exports the author's scenario as it is now, and marks each change outside the map with one of three states:
+**The changelog** (`SuggestionReviewDialog`, `ScenarioSuggestions.jsx`). The dialog downloads the suggestion's file through `/api/hub/file`, exports the author's scenario as it is now, and marks each change outside the map with one of three states:
 
 - *open*;
 - *You changed this too* (a conflict: the author rewrote it since posting; accepting replaces their version);
@@ -262,7 +262,7 @@ When the menu is closed, `LibraryTopBar` renders a compact cluster (z 9997): a s
 
 ## 5. Advisor drawer & stats — `src/Game/GameUI/advisor.jsx` + `stats.jsx`
 
-`AdvisorPanel` (`advisor.jsx:186`) is the right-docked drawer (z 10040, full `100vh`). It slides in/out via `transform: translateX(...)` (a prior `right: calc(-min()…)` was invalid CSS and silently never slid). Two tabs, both kept mounted so flipping is instant:
+`AdvisorPanel` (`advisor.jsx`) is the right-docked drawer (z 10040, full `100vh`). It slides in/out via `transform: translateX(...)` (a prior `right: calc(-min()…)` was invalid CSS and silently never slid). Two tabs, both kept mounted so flipping is instant:
 
 | Tab | Component | Behavior |
 |---|---|---|
@@ -275,13 +275,13 @@ The drawer is user-resizable by dragging its **left edge**. Width lives in `Main
 
 | Constant / fn | Value / behavior | File |
 |---|---|---|
-| `ADVISOR_MIN_WIDTH` | `280` | `main.jsx:21` |
-| `ADVISOR_DEFAULT_WIDTH` | `320` (the old fixed 20rem) | `main.jsx:22` |
-| `clampAdvisorWidth(px)` | clamps to `[min(280, vw−16), vw−16]` | `main.jsx:23` |
-| `readAdvisorWidth()` | reads `localStorage["oh-advisor-width"]`, else default | `main.jsx:27` |
-| `handleAdvisorResize(px)` | sets state + writes `localStorage["oh-advisor-width"]` | `main.jsx:238` |
+| `ADVISOR_MIN_WIDTH` | `280` | `main.jsx` |
+| `ADVISOR_DEFAULT_WIDTH` | `320` (the old fixed 20rem) | `main.jsx` |
+| `clampAdvisorWidth(px)` | clamps to `[min(280, vw−16), vw−16]` | `main.jsx` |
+| `readAdvisorWidth()` | reads `localStorage["oh-advisor-width"]`, else default | `main.jsx` |
+| `handleAdvisorResize(px)` | sets state + writes `localStorage["oh-advisor-width"]` | `main.jsx` |
 
-The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it captures the pointer and, on each `pointermove`, calls `onResize(window.innerWidth - ev.clientX)` (docked right, so width = viewport − pointer x). `Main` clamps + persists. `rightShift = isAdvisorOpen ? \`calc(${advisorWidth}px + 0.5rem)\` : "0.5rem"` (`main.jsx:253`) is passed to the date widget, the flag badge (`Other`), and the 🧭 button so they slide left exactly the drawer's width when it's open.
+The drag handler lives in the drawer (`advisor.jsx`): on `pointerdown` it captures the pointer and, on each `pointermove`, calls `onResize(window.innerWidth - ev.clientX)` (docked right, so width = viewport − pointer x). `Main` clamps + persists. `rightShift = isAdvisorOpen ? \`calc(${advisorWidth}px + 0.5rem)\` : "0.5rem"` (`main.jsx`) is passed to the date widget, the flag badge (`Other`), and the 🧭 button so they slide left exactly the drawer's width when it's open.
 
 ### 5.2 `StatsPane` — `src/Game/GameUI/stats.jsx`
 
@@ -299,7 +299,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 
 ## 6. Date widget & timeline — `src/Game/GameUI/time.jsx`
 
-`DateWidget` (`time.jsx:1226`) is the top-right pill (z 9999) plus two slide-up panels (z 9998). It's the time-advance control center.
+`DateWidget` (`time.jsx`) is the top-right pill (z 9999) plus two slide-up panels (z 9998). It's the time-advance control center.
 
 ### 6.1 The pill
 
@@ -355,13 +355,13 @@ Each card's **N map changes** pill is a button: it opens a *What changed on the 
 
 ### 6.4 Pregame history
 
-If a fresh game (round 1, no events/turns) has a "World Before Round One" briefing and the menu is closed, `maybeGeneratePregameHistory()` runs once (`time.jsx:1351`). The `isMainMenuOpen()` gate ensures tokens aren't spent on a game the player is only hovering past in the menu.
+If a fresh game (round 1, no events/turns) has a "World Before Round One" briefing and the menu is closed, `maybeGeneratePregameHistory()` runs once (`time.jsx`). The `isMainMenuOpen()` gate ensures tokens aren't spent on a game the player is only hovering past in the menu.
 
 ---
 
 ## 7. Actions panel — `src/Game/GameUI/actions.jsx`
 
-`ActionsPanel` (`actions.jsx:225`) — bottom-left slide-up (z 9998). The player's planned-action queue for the current turn. An order that deploys or recalls a spy ("deploy a spy in Germany") is executed by the next time skip through the event's `impacts.spyOps` ([Espionage Orders] in `docs/ai-prompts.md`); the Spy tab still shows and manages the agents.
+`ActionsPanel` (`actions.jsx`) — bottom-left slide-up (z 9998). The player's planned-action queue for the current turn. An order that deploys or recalls a spy ("deploy a spy in Germany") is executed by the next time skip through the event's `impacts.spyOps` ([Espionage Orders] in `docs/ai-prompts.md`); the Spy tab still shows and manages the agents.
 
 | Control | Effect | Connects to |
 |---|---|---|
@@ -373,18 +373,18 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 | Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
 | **🎯 Standing goal** (`StandingGoal`) | Under the date line: *Set a standing goal*, or the goal with **Edit**; editing offers Save (Enter), Cancel (Esc) and **Clear goal**. Locked while a turn runs (polls `isSimulationBusy()`), since the turn writes the world the goal lives in. The advisor, the time skip and the suggestions steer by it; a leader never sees it | `withPlayerGoal` → `writeWorldState` (`src/runtime/playerGoal.js`); read with `useRuntimeState("world", playerGoalOf)` |
 
-Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
+Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx`) lives in the toolbar.
 
 ---
 
 ## 7-bis. Projects & Operations panel — `src/Game/GameUI/projects.jsx`
 
-`ProjectsPanel` (`projects.jsx:697`) — bottom-left slide-up (z 9998), the third `activePanel` slot after Chat and Actions. Its launcher `Projects` (the `ProjectsDockIcon` glyph) sits in the same `Toolbar` (`chat.jsx:2962`), which widened to hold three buttons (`12.8rem` at this commit). Entries are created and edited by the AI, by design; the player owns exactly two things on the board — a project's priority (`PrioritySwitch`) and whether to abandon it — see [World state](world-state.md) §2e-bis.
+`ProjectsPanel` (`projects.jsx`) — bottom-left slide-up (z 9998), the third `activePanel` slot after Chat and Actions. Its launcher `Projects` (the `ProjectsDockIcon` glyph) sits in the same `Toolbar` (`chat.jsx`), which widened to hold three buttons (`12.8rem` at this commit). Entries are created and edited by the AI, by design; the player owns exactly two things on the board — a project's priority (`PrioritySwitch`) and whether to abandon it — see [World state](world-state.md) §2e-bis.
 
 | Element | Behavior | Connects to |
 |---|---|---|
 | Data | Its own 5 s `setInterval` while open: `readWorldState({force:true})` + `JSON_URLS.game`, signature-gated so a poll that changed nothing does not re-render the list under the cursor | `src/runtime/gameState.js` |
-| Cards | Kind glyph, name, status pill, owner, summary, tag chips, progress bar (`Bar`, copied from `stats.jsx:153`), timeline row, next milestone, last update | — |
+| Cards | Kind glyph, name, status pill, owner, summary, tag chips, progress bar (`Bar`, copied from `stats.jsx`), timeline row, next milestone, last update | — |
 | Derived badges | ⚠ Overdue / ⏳ Due in Nd / Milestone slipped / No recent progress — all from `deriveProjectFlags` against the game clock, never from what the model wrote, so they cannot go stale | `src/runtime/projects.js` |
 | Sort & filter | `PROJECT_SORTS` dropdown, Mine/Foreign/All, and tag chips built from the live vocabulary (`collectProjectTags`). Open work always sorts above closed work whatever the chosen sort |
 | Closed view | An **exclusive** switch, not an "also include" filter: off shows only running work, on shows only completed/failed/cancelled. It previously widened the list to everything, which — because the sort ranks open above closed — buried the closed entries under a screen of active ones and made the button look broken. `isProjectClosed` (`runtime/projects.js`) is the one definition the filter, the count and the sort all share | `src/runtime/projects.js` |
@@ -397,7 +397,7 @@ Two authors create the board's entries (the player only sets a priority or aband
 
 ## 8. Forces panel — `src/Game/GameUI/forces.jsx`
 
-`ForcesPanel` (`forces.jsx:85`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now primarily from the Cheats panel's "Manual force deployment"). Manual troop control is treated as a cheat.
+`ForcesPanel` (`forces.jsx`) — bottom-left panel (z 9999), a **controlled** component (open state owned by `Main.isForcesOpen`; opened from the toolbar historically, now primarily from the Cheats panel's "Manual force deployment"). Manual troop control is treated as a cheat.
 
 | Element | Behavior | Connects to |
 |---|---|---|
@@ -411,7 +411,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 
 ## 9. Cheats panel — `src/Game/GameUI/cheats.jsx`
 
-`CheatsPanel` (`cheats.jsx:164`) — right-side panel (z 10045), opened from the game menu's Tools tab → **Cheats** (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup.
+`CheatsPanel` (`cheats.jsx`) — right-side panel (z 10045), opened from the game menu's Tools tab → **Cheats** (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup.
 
 | Tool id | Does | Writes / calls |
 |---|---|---|
@@ -436,7 +436,7 @@ The log viewer that used to be a Cheats tool is now **View log** in Settings →
 
 Ownership/name resolution is done in **one namespace** (country display name) — the file's comments call out the recurring bug where a GADM code (`RUS`) and a name (`Russia`) never compared equal. All map changes repaint within ~5 s (the map's own poll).
 
-`loadPolities()` (`cheats.jsx:103`) enumerates the countries actually in the game (polity overrides ∪ current region owners ∪ owners of rendered geometry — custom regions when present, else the stock catalog), each resolved to a display name.
+`loadPolities()` (`cheats.jsx`) enumerates the countries actually in the game (polity overrides ∪ current region owners ∪ owners of rendered geometry — custom regions when present, else the stock catalog), each resolved to a display name.
 
 ---
 
@@ -485,13 +485,13 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 
 ## 11. Search — `src/Game/GameUI/search.jsx`
 
-`Search` (`search.jsx:144`, memoized) — a small 2.4rem square just right of the three-launcher toolbar (13.8rem from the left, z 9999), its bottom edge level with the bottoms of the dock's buttons rather than the dock, so it reads as a utility beside the launchers and not another one; expands to an input (rightward on desktop, a full-width 3rem bar above the toolbar on mobile). Its position is derived from the dock's geometry in `hudDock.js`, which the `Toolbar` reads too: the two used to be separate literals, and when a fourth launcher (the since-removed Dossier) widened the dock the search control sat on top of it. Adding or removing a launcher moves it on its own. Debounced (200 ms) autocomplete against **Nominatim** (`nominatim.openstreetmap.org/search`), results deduped + cached in-module. Picking a result (click / Enter / ↑↓) calls `mapRef.current.flyTo({center:[lon,lat], zoom:5})`. Purely a camera control — it does not touch game state.
+`Search` (`search.jsx`, memoized) — a small 2.4rem square just right of the three-launcher toolbar (13.8rem from the left, z 9999), its bottom edge level with the bottoms of the dock's buttons rather than the dock, so it reads as a utility beside the launchers and not another one; expands to an input (rightward on desktop, a full-width 3rem bar above the toolbar on mobile). Its position is derived from the dock's geometry in `hudDock.js`, which the `Toolbar` reads too: the two used to be separate literals, and when a fourth launcher (the since-removed Dossier) widened the dock the search control sat on top of it. Adding or removing a launcher moves it on its own. Debounced (200 ms) autocomplete against **Nominatim** (`nominatim.openstreetmap.org/search`), results deduped + cached in-module. Picking a result (click / Enter / ↑↓) calls `mapRef.current.flyTo({center:[lon,lat], zoom:5})`. Purely a camera control — it does not touch game state.
 
 ---
 
 ## 12. Legacy: `src/Game/GameUI/scenarios.jsx`
 
-`ScenarioTopBar` (`scenarios.jsx:686`) is an **older, standalone** scenario deck + editor (full-width top bar z 10030, deck z 10029, editor z 10031) that reads from a separate `../../runtime/scenarios.js` store (`useScenarioState`) rather than `library.js`. It is **not imported anywhere** in `src/` — it has been superseded by `LibraryTopBar` + `EditorDrawer` in `libraryBar.jsx`. Its `ScenarioEditor` still shows the older flat prompt fields (Advisor Prompt / Leader Prompt / **Advanced AI Prompt Pack** JSON textarea) rather than the sectioned `PromptSectionEditor`. Treat it as reference/dead code unless you're wiring the old top-bar mode back in; new work goes in `libraryBar.jsx`.
+`ScenarioTopBar` (`scenarios.jsx`) is an **older, standalone** scenario deck + editor (full-width top bar z 10030, deck z 10029, editor z 10031) that reads from a separate `../../runtime/scenarios.js` store (`useScenarioState`) rather than `library.js`. It is **not imported anywhere** in `src/` — it has been superseded by `LibraryTopBar` + `EditorDrawer` in `libraryBar.jsx`. Its `ScenarioEditor` still shows the older flat prompt fields (Advisor Prompt / Leader Prompt / **Advanced AI Prompt Pack** JSON textarea) rather than the sectioned `PromptSectionEditor`. Treat it as reference/dead code unless you're wiring the old top-bar mode back in; new work goes in `libraryBar.jsx`.
 
 ---
 

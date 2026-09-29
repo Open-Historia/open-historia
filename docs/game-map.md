@@ -51,7 +51,7 @@ Fields `useWorldState` derives from `world.json`:
 
 ## 2. `<Map>` setup and key props
 
-Defined in `World.jsx` (`src/Game/Map/World.jsx:286`). The `<Map>` has `key={projection}`, so **toggling globe↔mercator unmounts and remounts the entire map** (and all its GL images — which is why disputed stripe tiles are rebuilt reactively, see [§5](#5-disputed--striped-regions)).
+Defined in `World.jsx` (`src/Game/Map/World.jsx`). The `<Map>` has `key={projection}`, so **toggling globe↔mercator unmounts and remounts the entire map** (and all its GL images — which is why disputed stripe tiles are rebuilt reactively, see [§5](#5-disputed--striped-regions)).
 
 | Prop | Value | Why |
 |---|---|---|
@@ -80,7 +80,7 @@ Handlers: `onMove` → stores `viewState` in `viewStateRef` + `applyDynamicPixel
 
 Left unset, MapLibre sizes this cache dynamically to roughly `(ceil(w/256)+1)*(ceil(h/256)+1)*5` tiles **per source** — ~270 at 1080p but ~800 on a 4K viewport. With `renderWorldCopies`, panning E/W feeds successive wrapped world-copy tiles into that cache, so retained GPU textures climb until the tab OOMs. `256` caps the 4K case ~3× while being a no-op on phones. In-view tiles are a separate structure and are never evicted by this, so on-screen tiles are never re-fetched. This is orthogonal to `applyDynamicPixelRatio` (which bounds framebuffer pixels, not tiles).
 
-### Dynamic pixel ratio (`applyDynamicPixelRatio`, `World.jsx:212`)
+### Dynamic pixel ratio (`applyDynamicPixelRatio`, `World.jsx`)
 
 Zoomed far out, the whole world (every region, border, label) draws at once and native resolution wastes frames on invisible detail. So:
 
@@ -92,7 +92,7 @@ Zoomed far out, the whole world (every region, border, label) draws at once and 
 
 Applied on `onMove` **and** `onIdle`, so the soft ratio is in effect from the very first settled frame at world zoom, not only after the first pan.
 
-### `terrain` memo (`World.jsx:197`)
+### `terrain` memo (`World.jsx`)
 
 `terrain = { source: "terrain-source", exaggeration: 15 }` **only** when `terrainEnabled && !isGlobe && !customBg && !bgDeclared`. Globe terrain is unsupported by MapLibre and can corrupt the shader cache across projection changes, so it's disabled on the globe and on any custom-background map (which has no terrain source).
 
@@ -126,7 +126,7 @@ Layers: `satellite-lowres-layer`, `satellite-layer` (both with `SATELLITE_PAINT`
 
 ### World-image corner coordinates
 
-Two constants (`World.jsx:44`) give the image-source corners:
+Two constants (`World.jsx`) give the image-source corners:
 
 - `WORLD_IMAGE_COORDS_FLAT` — ±85.0511° (the Mercator projection limit).
 - `WORLD_IMAGE_COORDS_GLOBE` — ±89.9° (the globe shows to the poles; **not** exactly ±90 because `mercatorYfromLat(±90)` is ±Infinity and `ImageSource.setCoordinates` throws — the `custom-bg-base` layer fills the negligible sliver).
@@ -164,7 +164,7 @@ Two constants (`World.jsx:44`) give the image-source corners:
 | `AUTHORED_GEOMETRY_FILTER` | `custom OR edited==true` | geometry that lives **only** in the GeoJSON |
 | `STOCK_GEOMETRY_FILTER` | `GADM AND edited!=true` | unedited GADM → paints via tiles |
 
-The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile-zoom 5; hand-off happens just past that. The **`edited` split** matters: a GADM region the editor *reshaped* has a dotted id but its true shape is now in the GeoJSON, while the stock tile still carries the *original* shape. Painting both stacks two 0.72 fills and darkens the reshaped area, so edited GADM ids are pulled out of the tile layers (`editedStockIds`, computed in `Nations.jsx:949`) and rendered from the GeoJSON like author-drawn shapes.
+The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile-zoom 5; hand-off happens just past that. The **`edited` split** matters: a GADM region the editor *reshaped* has a dotted id but its true shape is now in the GeoJSON, while the stock tile still carries the *original* shape. Painting both stacks two 0.72 fills and darkens the reshaped area, so edited GADM ids are pulled out of the tile layers (`editedStockIds`, computed in `Nations.jsx`) and rendered from the GeoJSON like author-drawn shapes.
 
 ### 4.3 Fill / outline paint objects
 
@@ -182,7 +182,7 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 
 ## 5. Owner colouring — the single resolver
 
-There is **one** owner→rgb resolver, `resolveOwnerRgb(owner)` (`Nations.jsx:727`), used by every paint path (region fills, stripes, and — via `ownerColorCss` — labels). Owners are **names now** (`"Russia"`, `"Roman Empire"`), not GADM codes. Resolution order:
+There is **one** owner→rgb resolver, `resolveOwnerRgb(owner)` (`Nations.jsx`), used by every paint path (region fills, stripes, and — via `ownerColorCss` — labels). Owners are **names now** (`"Russia"`, `"Roman Empire"`), not GADM codes. Resolution order:
 
 1. `colorMap[owner]` — exact hit in `colors.json` (loaded by `getNationColors`).
 2. `parseColorToRgb(polityOverrides[owner].color)` — the live polity registry from `world.json` (stores CSS strings; `colors.json` stores `[r,g,b]` triplets, so `parseColorToRgb` bridges the two namespaces).
@@ -205,10 +205,10 @@ A region whose `claimants` list names contesting countries renders **diagonally 
 
 | Piece | Location | Role |
 |---|---|---|
-| `stripeImageId(rgbList)` | `Nations.jsx:158` | Encodes the rgb list into an image id: `oh-stripes-r_g_b-r_g_b…` |
-| `parseStripeImageId(id)` | `Nations.jsx:160` | Decodes it back |
-| `buildStripeImage(rgbList)` | `Nations.jsx:173` | Raw RGBA diagonal-stripe tile; band = `(x+y) mod period` (tiles seamlessly), `STRIPE_BAND_PX = 8` |
-| `styleimagemissing` handler | `Nations.jsx:512` | On demand, builds and `addImage`s any stripe tile the style asks for |
+| `stripeImageId(rgbList)` | `Nations.jsx` | Encodes the rgb list into an image id: `oh-stripes-r_g_b-r_g_b…` |
+| `parseStripeImageId(id)` | `Nations.jsx` | Decodes it back |
+| `buildStripeImage(rgbList)` | `Nations.jsx` | Raw RGBA diagonal-stripe tile; band = `(x+y) mod period` (tiles seamlessly), `STRIPE_BAND_PX = 8` |
+| `styleimagemissing` handler | `Nations.jsx` | On demand, builds and `addImage`s any stripe tile the style asks for |
 
 Because the image id **encodes its own colours**, the `styleimagemissing` handler can rebuild *any* combination — including after a globe↔mercator remount wipes all GL images. This is why stripes are reactive rather than pre-registered.
 
@@ -223,7 +223,7 @@ A group (`world.groups`, `world.groupAreas`; `src/runtime/groups.js`) controls a
 
 The shapes come from the regions worker, asked outside the political pipeline — a group moves no owner and no border — with a `group-areas` message that `Nations.jsx` sends once this worker has published `catalog-ready` (and again when repaired shapes land, and whenever `useWorldState`'s `groups` / `groupAreas` change); only the newest answer is drawn. `vnext/groupAreas.js` cuts the outline from the frontier topology, never from a polygon union: an edge is on it when a region outside the group shares it or no region does (the coast), unless it is a seam whose two sides were simplified apart and recovered as a run between two members. On the built-in map that is one closed ring for Syria, 67 for Indonesia's islands and ≤17 ms for Russia. The tint is each member region's shape (the repaired one where there is one), one surface per group. The region card (`Selection/Regions.jsx`) says **Group control** with the group's colour, name and description.
 
-`DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx:338`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
+`DISPUTED_TERRITORY_CLAIMANT` (`Nations.jsx`) maps GADM's `Z01`–`Z09` disputed codes (Kashmir, Aksai Chin, Arunachal Pradesh…) to a claimant country so the map shows `"Disputed (India)"` instead of a bare `"Z01"` label.
 
 ---
 
@@ -241,11 +241,11 @@ Two label render paths, selected by the world flag:
 
 `loadCountryLabelCollections({ force, ownedCodes })` reads the **z0 tile** of `countries.pmtiles`, decodes it, and for each country builds either a **curved** multi-glyph label (one Point feature per letter, following the country's principal axis — `buildCurvedLabelPath` + `buildCurvedLabelGlyphFeatures`) or a single **point** label when the shape is too compact/round to curve text along. Names run through `resolveCountryDisplayName` + `translateLabel` (labels are baked into map features, not DOM, so they must be pre-translated). `ownedCodes` filters out countries owning no territory this scenario (so modern names don't float over medieval land). Results are cached in runtime JSON, keyed on `tile-hash + byteLength + archiveUrl + language + owner-set` (`COUNTRY_LABELS_CACHE_KEY = "country-labels-v3"`; an empty build is served once but never cached, since an empty z0 read is almost always a degraded tile, not a label-less world).
 
-### Owner labels for custom maps — `buildOwnerLabelCollection` (`Nations.jsx:343`)
+### Owner labels for custom maps — `buildOwnerLabelCollection` (`Nations.jsx`)
 
 The stock pipeline labels *modern* countries, which is wrong on scenario maps (it printed "Russia"/"Ukraine" over the USSR). Instead, one label per **owner per contiguous landmass**:
 
-1. `buildRegionAdjacency` (`Nations.jsx:278`) — which regions physically touch, by hashing every vertex on a ~11 m (`1e-4°`) grid. Geometry-only, so it's memoized per world and survives ownership changes.
+1. `buildRegionAdjacency` (`Nations.jsx`) — which regions physically touch, by hashing every vertex on a ~11 m (`1e-4°`) grid. Geometry-only, so it's memoized per world and survives ownership changes.
 2. Union-find groups same-owner **adjacent** regions into one territory each. Contiguity (not distance) is what keeps a colony separate from its metropole (France's mainland vs French West Africa) while keeping a touching chain like Siberia a single label.
 3. `mergeOwnerClusters` then does a small centroid mop-up (`CLUSTER_JOIN_DEGREES = 10`) to fold islands into nearby mainland and heal adjacency near-misses.
 4. Each cluster becomes a Point feature named by `polityOverrides[owner].name || countryNameByCode.get(owner) || owner`, run through `resolveCountryDisplayName` + `translateLabel`, uppercased. Every owner keeps its largest cluster; extra clusters must clear `MIN_CLUSTER_AREA = 1.5` (deg²).
@@ -319,7 +319,7 @@ Player deploy is purely local **and** queues a machine-readable `action` (via `q
 
 ### Interaction dispatch — `Nations.jsx` `handleRegionClick`
 
-The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMode()`:
+The map's single `click` handler (`Nations.jsx`) routes by `getInteractionMode()`:
 
 - **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`; the admin placement tool (`placeUnitAdmin`) rides the same dispatcher.
 - **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`/`cities-labels`) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.

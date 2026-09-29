@@ -1,6 +1,6 @@
 # Map Editor
 
-The Map Editor is a standalone OpenLayers map-authoring surface (reachable at `/?editor=1`, or embedded from a scenario's library bar) that lets a user re-own, reshape, recolour, and re-populate the world map and export it as a game-playable seed. It runs in its own React tree with its own map instance, deliberately isolated from the game's MapLibre map so the two can never disturb each other (`src/Editor/MapEditor.jsx:6`). Region *geometry* lives outside React in an OpenLayers vector source and is driven imperatively; everything else (types, cities, colours, flags, tags, metadata) lives in a document-state hook.
+The Map Editor is a standalone OpenLayers map-authoring surface (reachable at `/?editor=1`, or embedded from a scenario's library bar) that lets a user re-own, reshape, recolour, and re-populate the world map and export it as a game-playable seed. It runs in its own React tree with its own map instance, deliberately isolated from the game's MapLibre map so the two can never disturb each other (`src/Editor/MapEditor.jsx`). Region *geometry* lives outside React in an OpenLayers vector source and is driven imperatively; everything else (types, cities, colours, flags, tags, metadata) lives in a document-state hook.
 
 The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** keeps stock GADM region ids so the game renders from the shipped `regions.pmtiles`, and **tier 2 (custom geometry)** ships an exported `regions.geojson` the game renders directly. Understanding that split (`src/Editor/exportPreset.js`) is the key to the whole subsystem.
 
@@ -10,18 +10,18 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 
 | Entry | Where | What it does |
 |---|---|---|
-| `/?editor=1` | `src/App.jsx:200` | Standalone mode. `App` reads the URL param once at render and mounts `<MapEditor />` (lazy-loaded) with no props — no `onClose`, no `onApplyToScenario`. Authoring-only; export happens via the Documents menu's download buttons. |
-| Scenario "Edit map" button | `src/Game/GameUI/libraryBar.jsx:2511` (`onOpenMapEditor`) | Embedded mode. Sets `mapEditorScenario`, opens the editor, and streams the scenario's current map assets into `mapEditorSeed`. |
-| Embedded `<MapEditor>` mount | `src/Game/GameUI/libraryBar.jsx:2133` | Passes `onClose`, `scenarioName`, `initialMap={mapEditorSeed}`, and `onApplyToScenario`. Presence of `onApplyToScenario` is what flips the editor into "scenario mode". |
+| `/?editor=1` | `src/App.jsx` | Standalone mode. `App` reads the URL param once at render and mounts `<MapEditor />` (lazy-loaded) with no props — no `onClose`, no `onApplyToScenario`. Authoring-only; export happens via the Documents menu's download buttons. |
+| Scenario "Edit map" button | `src/Game/GameUI/libraryBar.jsx` (`onOpenMapEditor`) | Embedded mode. Sets `mapEditorScenario`, opens the editor, and streams the scenario's current map assets into `mapEditorSeed`. |
+| Embedded `<MapEditor>` mount | `src/Game/GameUI/libraryBar.jsx` | Passes `onClose`, `scenarioName`, `initialMap={mapEditorSeed}`, and `onApplyToScenario`. Presence of `onApplyToScenario` is what flips the editor into "scenario mode". |
 
-`MapEditor`'s prop contract (`src/Editor/MapEditor.jsx:40`):
+`MapEditor`'s prop contract (`src/Editor/MapEditor.jsx`):
 
 | Prop | Meaning |
 |---|---|
 | `onClose` | Present in embedded mode → renders the top-right **✕ Close** button. |
 | `scenarioName` | Label shown in the Apply button tooltip. |
-| `onApplyToScenario(seed)` | Callback that writes the built game seed into the scenario. Its presence sets `scenarioMode = true` (`:45`), which forces `seedKind="deferred"` so the default world is **not** auto-seeded underneath the scenario's own map. |
-| `initialMap` | The scenario's current map (regions/owners/cities/palette/flags/tags/background/basemap), hydrated once it arrives (`:339`). |
+| `onApplyToScenario(seed)` | Callback that writes the built game seed into the scenario. Its presence sets `scenarioMode = true`, which forces `seedKind="deferred"` so the default world is **not** auto-seeded underneath the scenario's own map. |
+| `initialMap` | The scenario's current map (regions/owners/cities/palette/flags/tags/background/basemap), hydrated once it arrives. |
 | `review` | `{ suggestion, decisions, onSaved(decisions) }`: a suggestion's map changes to review in this map (§25). The **Suggested changes** panel opens once the map has loaded, the bottom bar gains a **Suggested changes: N** chip, and `onSaved` is called after each save with the decisions. |
 
 ---
@@ -64,12 +64,12 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 
 ## 3. Architecture & data flow
 
-Two stores, split by weight (`src/Editor/useMapDocument.js:6`):
+Two stores, split by weight (`src/Editor/useMapDocument.js`):
 
 - **Document state** (React, in `useMapDocument`) — metadata, region `types`, point `features` (cities), `colorOverrides`, `flags`, `tags`. Cheap, serialisable, the source of truth for everything except geometry.
 - **Region geometry** (OpenLayers `VectorSource`, in `OlMap`) — ~3,662 filled/stroked polygons, far too heavy for React state. Materialised into the document only on **save/export** via `api.serializeRegions()`.
 
-`MapEditor` receives the imperative region API through `OlMap`'s `onReady={setApi}` callback (`src/Editor/MapEditor.jsx:453`). Panels never touch the map directly; they call `api.*` methods, which mutate OL features and call `layer.changed()` to restyle. Region mutations fire `onRegionsChanged` → `setSaveStatus("dirty")` → debounced autosave.
+`MapEditor` receives the imperative region API through `OlMap`'s `onReady={setApi}` callback (`src/Editor/MapEditor.jsx`). Panels never touch the map directly; they call `api.*` methods, which mutate OL features and call `layer.changed()` to restyle. Region mutations fire `onRegionsChanged` → `setSaveStatus("dirty")` → debounced autosave.
 
 ```
 DocumentsMenu / BottomBar ─┐
@@ -83,7 +83,7 @@ TypeManager / Features … ──┼──► MapEditor ──► OlMap  ──�
 
 ## 4. Document model (`useMapDocument.js`)
 
-`createDocument()` (`:59`) shape:
+`createDocument()` shape:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -105,7 +105,7 @@ TypeManager / Features … ──┼──► MapEditor ──► OlMap  ──�
 
 **Colours are keyed by country NAME, not GADM code** — this is true of `colorOverrides`, `flags`, `tags`, and region `owner` alike. See §10.
 
-The hook exposes a derived `colors` = `{ ...fetchedPalette, ...colorOverrides }` (`:194`) so an edited colour paints immediately exactly as it will in-game; `basePalette` is the fetched palette alone (`/assets/colors.json`, `:110`) so the UI can offer a **Reset** when an override exists. `mergeColors(extra)` layers a scenario's own polity colours on top. The stock palette's fetch merges **under** what is already there (`setColors((current) => ({ ...fetched, ...current }))`). Hydration can merge the scenario's colours before that fetch lands, and a fetch that replaced them used to wipe them: the next save then wrote generated colours over every country the author had coloured.
+The hook exposes a derived `colors` = `{ ...fetchedPalette, ...colorOverrides }` so an edited colour paints immediately exactly as it will in-game; `basePalette` is the fetched palette alone (`/assets/colors.json`) so the UI can offer a **Reset** when an override exists. `mergeColors(extra)` layers a scenario's own polity colours on top. The stock palette's fetch merges **under** what is already there (`setColors((current) => ({ ...fetched, ...current }))`). Hydration can merge the scenario's colours before that fetch lands, and a fetch that replaced them used to wipe them: the next save then wrote generated colours over every country the author had coloured.
 
 Setters (all set `saveStatus="dirty"`):
 
@@ -113,7 +113,7 @@ Setters (all set `saveStatus="dirty"`):
 |---|---|
 | `setColorOverride(country, rgb)` | `null` rgb deletes the key. |
 | `setFlag(country, dataUrl)` | `null` deletes. Value is an already-downscaled PNG data URL. |
-| `setTags(country, list)` | Uses `.length` (not truthiness) so an empty `[]` deletes rather than persisting `[]` for every touched country (`:160`). |
+| `setTags(country, list)` | Uses `.length` (not truthiness) so an empty `[]` deletes rather than persisting `[]` for every touched country. |
 | `setTypes`, `setFeatures`, `setUnits` | Accept updater fn or value. |
 | `patchMetadata` / `setBasemap` / `setName` / `setAuthor` | Metadata patches. |
 
@@ -123,13 +123,13 @@ Setters (all set `saveStatus="dirty"`):
 
 ## 5. The OpenLayers surface (`OlMap.jsx`)
 
-Created once in a `[]`-dep effect and driven through refs so it survives React re-renders (`:232`). Props flow in through refs (`typesByIdRef`, `colorsRef`, `selectedIdsRef`, `activeToolRef`, `paintOwnerRef`, …) so the map stays valid without recreating.
+Created once in a `[]`-dep effect and driven through refs so it survives React re-renders. Props flow in through refs (`typesByIdRef`, `colorsRef`, `selectedIdsRef`, `activeToolRef`, `paintOwnerRef`, …) so the map stays valid without recreating.
 
 ### Layers (z-index ladder)
 
 | Layer | Type | zIndex | Source / notes |
 |---|---|---|---|
-| Base basemap | `TileLayer` (XYZ ESRI / OSM) | 0 | Swapped by `basemap` prop; **not created** while a custom image/vector background is active (`:1019`). |
+| Base basemap | `TileLayer` (XYZ ESRI / OSM) | 0 | Swapped by `basemap` prop; **not created** while a custom image/vector background is active. |
 | Custom background | vector/raster `VectorLayer`/`WebGLTileLayer`/`TileLayer`, or image `ImageLayer`(`ImageStatic`) | 5 | Uploaded map; image is stretched across the whole world extent (`WORLD_EXTENT_3857`). |
 | Regions | `VectorImageLayer` | 10 | `regionSource`, `imageRatio:2`, `wrapX:false`; style = `makeRegionStyle(...)`. |
 | Region labels | `VectorLayer` (declutter) | 20 | Same source; `minZoom:4`; label per named region unless `type.includedInLabels === false`. |
@@ -138,15 +138,15 @@ Created once in a `[]`-dep effect and driven through refs so it survives React r
 | Reference frame | `VectorLayer` | 41 | Dashed outline + corner handles while the Reference panel is open. |
 | Suggestion review markup | `VectorLayer` (`name: "suggestion-review"`) | 57 | Only while a suggestion is reviewed (§25). |
 
-**Two performance-critical choices** (documented at `:232` and `:250`): `wrapX:false` on the source/layers (stops OL redrawing the world sideways *and* fixes ±180° editing), and `VectorImageLayer` for regions (rasterise-once/re-blit instead of re-rasterising thousands of paths per frame). Serialisation uses `writeFeaturesObject` (not `JSON.parse(writeFeatures(...))`) to avoid building an ~83MB string on every 2s autosave (`:785`).
+**Two performance-critical choices** (both explained in comments in `OlMap.jsx`): `wrapX:false` on the source/layers (stops OL redrawing the world sideways *and* fixes ±180° editing), and `VectorImageLayer` for regions (rasterise-once/re-blit instead of re-rasterising thousands of paths per frame). Serialisation uses `writeFeaturesObject` (not `JSON.parse(writeFeatures(...))`) to avoid building an ~83MB string on every 2s autosave.
 
-### Click handling (`map.on("singleclick")`, `:372`)
+### Click handling (`map.on("singleclick")`)
 
-Only these tools consume a click: `select`, `delete`, `paint`, `feature`, `dissolve`. `map.forEachFeatureAtPixel` hit-tests the region layer (tolerance 2). Ctrl/Cmd/Shift = additive selection. Double-click with Select selects the **whole country** (all regions sharing the owner) and returns `false` to suppress OL's DoubleClickZoom (`:480`).
+Only these tools consume a click: `select`, `delete`, `paint`, `feature`, `dissolve`. `map.forEachFeatureAtPixel` hit-tests the region layer (tolerance 2). Ctrl/Cmd/Shift = additive selection. Double-click with Select selects the **whole country** (all regions sharing the owner) and returns `false` to suppress OL's DoubleClickZoom.
 
-### The imperative region API (returned by `onReady`, `:601`)
+### The imperative region API (returned by `onReady`)
 
-This is the surface every panel drives. Each mutating call pushes an undo/redo command onto an 80-entry stack (`pushCmd`, `:225`) and calls `notifyRegions()` (→ dirty).
+This is the surface every panel drives. Each mutating call pushes an undo/redo command onto an 80-entry stack (`pushCmd`) and calls `notifyRegions()` (→ dirty).
 
 | Method | Purpose |
 |---|---|
@@ -173,28 +173,28 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `undo()` / `redo()` | Drive the command stack. |
 | `restyle()` | Force `layer.changed()`. |
 
-Keyboard: **Ctrl/⌘+Z** undo, **Ctrl/⌘+Shift+Z / Ctrl+Y** redo, **Delete/Backspace** removes the selection — all suppressed while typing in an input (`:545`).
+Keyboard: **Ctrl/⌘+Z** undo, **Ctrl/⌘+Shift+Z / Ctrl+Y** redo, **Delete/Backspace** removes the selection — all suppressed while typing in an input.
 
 ---
 
 ## 6. Tools (`Toolbar.jsx` + `OlMap.jsx` interaction effect)
 
-Single-choice; the active tool mounts/unmounts OL interactions in the `[activeTool]` effect (`src/Editor/OlMap.jsx:854`).
+Single-choice; the active tool mounts/unmounts OL interactions in the `[activeTool]` effect (`src/Editor/OlMap.jsx`).
 
 The strip sits in a band between the documents chip and the Save / Apply / Close group (on a phone, the whole window) and wraps into more rows when the band is narrower than the strip; it publishes its bottom edge as the CSS variable `--editor-toolbar-bottom`, which every side panel (`Panel.jsx`) uses as its top, so a wrapped strip never sits under a panel and no tool ever sits under a Save button.
 
 | Tool | id | Interaction / behaviour |
 |---|---|---|
 | Select | `select` | Click = select region; Ctrl/Shift = additive; double-click = whole country. |
-| Lasso select | `lasso` | Freehand `Draw` polygon; on `drawend` selects every region whose interior point falls inside (`selectWithinPolygon`, `:868`). |
+| Lasso select | `lasso` | Freehand `Draw` polygon; on `drawend` selects every region whose interior point falls inside (`selectWithinPolygon`). |
 | Pan | `pan` | No interaction added; default map drag. |
-| Draw region | `draw` | `Draw` (Polygon, `trace:true`, `traceSource:source`) + `Snap`. Clicking a border traces along it. **On `drawend` the new polygon is carved OUT of every region it overlaps** (`subtractFrom`, R-tree extent query for candidates) so no ground is owned twice; carved neighbours get `edited:true` (`:889`). Inside → hole; across an edge → bite; fully over → deletes the underlying region. |
-| Edit vertices | `modify` | `Modify` + `Snap`. On `modifyend` sets `edited:true` on dragged features (`:963`). |
+| Draw region | `draw` | `Draw` (Polygon, `trace:true`, `traceSource:source`) + `Snap`. Clicking a border traces along it. **On `drawend` the new polygon is carved OUT of every region it overlaps** (`subtractFrom`, R-tree extent query for candidates) so no ground is owned twice; carved neighbours get `edited:true`. Inside → hole; across an edge → bite; fully over → deletes the underlying region. |
+| Edit vertices | `modify` | `Modify` + `Snap`. On `modifyend` sets `edited:true` on dragged features. |
 | Move | `move` | `Translate` on the region layer. |
 | Delete | `delete` | Click removes a region (a city hit under the cursor wins). |
-| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one (`:428`). |
-| Paint owner | `paint` | Click stamps the current **Paint owner** value (a country NAME, trimmed, never case-folded) onto the clicked region (`:394`). A floating owner input + swatch appears at the top (`MapEditor.jsx:553`). |
-| City tool | `feature` | Click empty map → `onFeatureCreate` (drops a city + opens `CityPopup`); click a city → `onFeatureEdit`. Carries the underlying region's owner/regionId (`:410`). |
+| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one. |
+| Paint owner | `paint` | Click stamps the current **Paint owner** value (a country NAME, trimmed, never case-folded) onto the clicked region. A floating owner input + swatch appears at the top (`MapEditor.jsx`). |
+| City tool | `feature` | Click empty map → `onFeatureCreate` (drops a city + opens `CityPopup`); click a city → `onFeatureEdit`. Carries the underlying region's owner/regionId. |
 | Unit tool | `unit` | Click empty map → `onUnitCreate` (drops a starting unit owned by the region's owner and opens `UnitPopup`); click a unit → `onUnitEdit`. The Delete tool removes a unit under the cursor. See §9b. |
 | Box-select features | `feature-box` | Drag a rectangle (`DragBox`) over cities and features → `onFeatureSelectionChange(ids)`; Shift adds to the selection. Selected features draw a yellow ring, and the Features panel's selection bar tags or deletes them together (§9). |
 | Undo / Redo / Fit | — | Toolbar buttons wired to `api.undo/redo/fitToData`. |
@@ -205,7 +205,7 @@ The **`edited` flag** is the linchpin of tier-2 correctness: a reshaped GADM reg
 
 ## 7. Editing a region's attributes (`SelectionInspector.jsx`)
 
-Shown whenever ≥1 region is selected. Writes go straight through `api.setRegionAttrs(selection, patch)` (`:57`), which live-restyles. Fields:
+Shown whenever ≥1 region is selected. Writes go straight through `api.setRegionAttrs(selection, patch)`, which live-restyles. Fields:
 
 | Field | Applies | Notes |
 |---|---|---|
@@ -226,7 +226,7 @@ Note the owner/colour/flag/tag edits are keyed to the *country name*, so editing
 
 ## 8. Region types (`TypeManager.jsx`)
 
-A "type" carries render + gameplay settings and is referenced by each region's `typeId`. Seeded with `DEFAULT_TYPES` = Land + Coastal (`useMapDocument.js:18`). Editing a type live-restyles (OlMap restyles on the `types` prop). Type schema:
+A "type" carries render + gameplay settings and is referenced by each region's `typeId`. Seeded with `DEFAULT_TYPES` = Land + Coastal (`useMapDocument.js`). Editing a type live-restyles (OlMap restyles on the `types` prop). Type schema:
 
 | Field | Used by | Meaning |
 |---|---|---|
@@ -238,7 +238,7 @@ A "type" carries render + gameplay settings and is referenced by each region's `
 | `overrideColor` | `olStyle.js` | Force a fixed fill instead of the owner colour (`null` = off). |
 | `pathfindingSpeed`, `interactable`, `passable`, `showToDefaultPrompt` | game | Gameplay flags. |
 | `includedInLabels` | `OlMap` label layer | `false` suppresses the region label. |
-| `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js:88`) | Hides the type outside the zoom band. |
+| `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js`) | Hides the type outside the zoom band. |
 
 At least one type must always exist (delete is disabled at length 1).
 
@@ -246,7 +246,7 @@ At least one type must always exist (delete is disabled at length 1).
 
 ## 9. Cities / point features
 
-Point features (mostly cities) live in `doc.features`. Feature schema (`citiesImport.js:31`, `MapEditor.jsx` create paths):
+Point features (mostly cities) live in `doc.features`. Feature schema (`citiesImport.js`, `MapEditor.jsx` create paths):
 
 | Field | Meaning |
 |---|---|
@@ -264,7 +264,7 @@ Point features (mostly cities) live in `doc.features`. Feature schema (`citiesIm
 - **Feature Manager** (`FeatureManager.jsx`) — searchable list; per-feature name/symbol/tags, locate, delete, **Delete All**, and **Import all cities** / **Major only** which pull from `public/assets/cities-seed.json` (~70k, deduped by `name|coord`). **Import from file…** adds the author's own point features — GeoJSON Point/MultiPoint features (other geometries are counted as skipped), a Workshop document or its `features` array, or a JSON list of rows with lon/lat (`featureImport.js`: names from name/title/city/label, tags from tags/kind/category, a country from country/owner); exact duplicates of features already listed are dropped, and the panel reports what was added. **Selection:** every row has a checkbox (Shift-click selects a range), the **Box-select features** tool selects by dragging a rectangle on the map, and the selection bar above the list adds a tag to every selected feature at once, removes one from all of them, deletes them all, or clears the selection. The selection (`featureSelection` in `MapEditor.jsx`) is shared by the map and the panel, so a box drawn on the map ticks the rows and a ticked row rings its marker.
 - **Search bar** (`SearchBar.jsx`) — unified search over this map's cities, its regions, and the ~70k world place index; world results get a **＋ Add** button to drop them as a city.
 
-Prominence tier (`exportPreset.js:100`, `cityTier`): `capital`→4, ≥1M→3, ≥100k→2, else 1. This gates when a city label appears in-game (`Cities.jsx`).
+Prominence tier (`exportPreset.js`, `cityTier`): `capital`→4, ≥1M→3, ≥100k→2, else 1. This gates when a city label appears in-game (`Cities.jsx`).
 
 ---
 
@@ -294,34 +294,34 @@ Pieces of one map can be pasted into another. **Copy to clipboard** in the selec
 
 This is the single most important invariant and the source of most historical bugs.
 
-**A region's `owner` is the owning country's DISPLAY NAME** ("Russia", "Roman Empire"), not a GADM code. So are the keys of `colorOverrides`, `flags`, and `tags`. The region **id** stays a GADM identifier (`DEU.2_1`) or an editor id (`reg_…`) and is the thing tier detection tests — it does **not** move with owner renames (`isGid1`, `exportPreset.js:21`).
+**A region's `owner` is the owning country's DISPLAY NAME** ("Russia", "Roman Empire"), not a GADM code. So are the keys of `colorOverrides`, `flags`, and `tags`. The region **id** stays a GADM identifier (`DEU.2_1`) or an editor id (`reg_…`) and is the thing tier detection tests — it does **not** move with owner renames (`isGid1`, `exportPreset.js`).
 
 Where names come from and stay clean:
 
-1. **Seed load** (`regionImport.js:68`) — each stock region's owner is resolved from its `gid0` through `COUNTRY_NAMES` (`gid0 → name`), **not** the seed's own `country` string (which disagrees: "México" vs "Mexico", truncated names). The seed's `country` is unset after resolution so a second copy can't drift.
+1. **Seed load** (`regionImport.js`) — each stock region's owner is resolved from its `gid0` through `COUNTRY_NAMES` (`gid0 → name`), **not** the seed's own `country` string (which disagrees: "México" vs "Mexico", truncated names). The seed's `country` is unset after resolution so a second copy can't drift.
 2. **Paint / inspector** — owner text is trimmed but the STORED key is **never case-folded** (`OlMap.jsx`, `SelectionInspector.jsx`). The inspector's lookup of an existing polity is case-insensitive (it stores that polity's own key, not the typed spelling); a genuinely new name is stored exactly as typed.
 3. **Legacy documents** — `migrateDocumentOwners` (§23) rekeys code→name on open.
 
-**Export polity logic** (`exportPreset.js:184`): `STOCK_COUNTRY_NAMES = new Set(Object.values(COUNTRY_NAMES))`. For each owner:
+**Export polity logic** (`exportPreset.js`): `STOCK_COUNTRY_NAMES = new Set(Object.values(COUNTRY_NAMES))`. For each owner:
 - If the stock world already knows the name (`STOCK_COUNTRY_NAMES.has(owner)`) → no polity entry needed; the game names/colours/flags it itself.
 - Otherwise → emit a `polityOverrides[owner]` entry so the game and the model learn the country exists at all.
 - **Verbatim flag**: if the invented name *collides with a real GADM code* (`COUNTRY_NAMES[owner]` truthy — e.g. a map-maker literally names a country `"USA"`), the entry gets `verbatim: true` so the server's `resolveOwnerName` (`server/ownerMigration.js`) keeps it literal instead of canonicalising `"USA" → "United States"`. A plain invented name ("Freedonia") needs no flag — it already resolves to itself.
 
-Colours priority in the seed (`:181`): `colorOverrides[owner]` (a human's chosen colour, wins) → `palette[owner]` → `codeToColor(owner)` (deterministic hash, mirrors the game's fallback).
+Colours priority in the seed: `colorOverrides[owner]` (a human's chosen colour, wins) → `palette[owner]` → `codeToColor(owner)` (deterministic hash, mirrors the game's fallback).
 
 ---
 
 ## 11. Region colours & disputed striping (`olStyle.js`)
 
-One style function for all regions, memoised per `typeId|owner|selected|zoomBand|claimants` (`makeRegionStyle`, `:102`). Fill = `type.overrideColor` → owner colour (`palette[owner] || codeToColor(owner)`) → neutral gray. Alpha switches on owned vs unowned; a selected region gets +0.22 alpha, an accent stroke, and zIndex 999. The palette-swap guard clears the cache when the palette identity changes (so a scenario's `colors.json` arriving late doesn't leave stale fills).
+One style function for all regions, memoised per `typeId|owner|selected|zoomBand|claimants` (`makeRegionStyle`). Fill = `type.overrideColor` → owner colour (`palette[owner] || codeToColor(owner)`) → neutral gray. Alpha switches on owned vs unowned; a selected region gets +0.22 alpha, an accent stroke, and zIndex 999. The palette-swap guard clears the cache when the palette identity changes (so a scenario's `colors.json` arriving late doesn't leave stale fills).
 
-**Disputed regions** with claimants get a diagonally striped `CanvasPattern` (`makeStripePattern`, `:48`): administrator colour first, then each deduped claimant, `(x+y) mod period` bands. Requires ≥2 distinct colours.
+**Disputed regions** with claimants get a diagonally striped `CanvasPattern` (`makeStripePattern`): administrator colour first, then each deduped claimant, `(x+y) mod period` bands. Requires ≥2 distinct colours.
 
 ---
 
 ## 12. Flags (`FlagPicker.jsx`)
 
-A full-screen overlay (community-hub purple, not editor blue) mounted at `MapEditor`'s root — **not** inside the inspector, because the panel's `backdrop-filter` makes a containing block that would trap a `position:fixed` overlay (`FlagPicker.jsx:31`). Opened via `flagPickerFor` state, wired to `d.setFlag(flagPickerFor, value)`.
+A full-screen overlay (community-hub purple, not editor blue) mounted at `MapEditor`'s root — **not** inside the inspector, because the panel's `backdrop-filter` makes a containing block that would trap a `position:fixed` overlay (`FlagPicker.jsx`). Opened via `flagPickerFor` state, wired to `d.setFlag(flagPickerFor, value)`.
 
 Tabs:
 - **In the game** — *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`listBuiltInFlags()`).
@@ -354,13 +354,13 @@ Heavy parsers (`shpjs`, `jszip`) are dynamically imported so they only load on d
 
 ## 14. Reference image / tracing aid (`ReferencePanel.jsx` + OlMap ref-image effects)
 
-A semi-transparent image above the region fills (z40) that a map-maker aligns a source map to and traces over. Upload → placed at 60% of the view width; **Opacity**, **Visible**, **Center on view**, **Remove**. While the Reference panel is open, a dashed frame with corner handles appears (z41) — drag inside to move, drag a corner to resize (free aspect). **Session-only**: it lives entirely in component state (`refImage`) and a ref (`refImageExtentRef`), never saved to the document and never exported (`MapEditor.jsx:63`, `OlMap.jsx:1089`).
+A semi-transparent image above the region fills (z40) that a map-maker aligns a source map to and traces over. Upload → placed at 60% of the view width; **Opacity**, **Visible**, **Center on view**, **Remove**. While the Reference panel is open, a dashed frame with corner handles appears (z41) — drag inside to move, drag a corner to resize (free aspect). **Session-only**: it lives entirely in component state (`refImage`) and a ref (`refImageExtentRef`), never saved to the document and never exported (`MapEditor.jsx`, `OlMap.jsx`).
 
 ---
 
 ## 15. Fantasy Map Generator (`fmg/`)
 
-A right-edge **🗺 GENERATE** drawer (`FmgPanel.jsx`) with inputs: seed, landmass template (`continents`/`archipelago`/`pangea`/…), detail (points), countries, cultures, cities, and "regions from provinces". **Generate** calls `generateFromFmg` (`MapEditor.jsx:123`), which runs Azgaar's Fantasy Map Generator headlessly (`fmgDriver.js`, vendored FMG at `/fmg`) and converts the result via `fmgToEditorSeed`. The import: `api.loadRegions(seed.regions)`, cities → `doc.features`, `mergeColors(seed.colors)`, and the biome basemap saved as a vector custom background (also added to "Your basemaps"). Marks the doc dirty and fits the view.
+A right-edge **🗺 GENERATE** drawer (`FmgPanel.jsx`) with inputs: seed, landmass template (`continents`/`archipelago`/`pangea`/…), detail (points), countries, cultures, cities, and "regions from provinces". **Generate** calls `generateFromFmg` (`MapEditor.jsx`), which runs Azgaar's Fantasy Map Generator headlessly (`fmgDriver.js`, vendored FMG at `/fmg`) and converts the result via `fmgToEditorSeed`. The import: `api.loadRegions(seed.regions)`, cities → `doc.features`, `mergeColors(seed.colors)`, and the biome basemap saved as a vector custom background (also added to "Your basemaps"). Marks the doc dirty and fits the view.
 
 ---
 
@@ -392,20 +392,20 @@ Server REST at `/api/mapeditor/documents` (web build routes through `runtime/web
 - The stamps are committed only once the save has landed, so a failed save is retried with the same contents.
 
 Save robustness:
-- **Debounced autosave** every 2s while `dirty`, keyed on `d.doc` (a fresh object per change) rather than a hand-listed field set — the old field list went stale and silently lost colour/flag/tag edits (`:289`).
-- **`beforeunload`** guard while `dirty`/`saving` (`:304`).
-- **`visibilitychange`/`pagehide` flush** via refs (avoids stale-closure loss on mobile suspend) (`:320`).
-- **Close** tries to save first and only prompts if the save fails (`:508`).
+- **Debounced autosave** every 2s while `dirty`, keyed on `d.doc` (a fresh object per change) rather than a hand-listed field set — the old field list went stale and silently lost colour/flag/tag edits.
+- **`beforeunload`** guard while `dirty`/`saving`.
+- **`visibilitychange`/`pagehide` flush** via refs (avoids stale-closure loss on mobile suspend).
+- **Close** tries to save first and only prompts if the save fails.
 
 ---
 
 ## 18. Exporting to a game seed (`exportPreset.js` → `buildGameSeed`)
 
-`buildGameSeed(doc, regionsFC, palette, {playerCountry})` (`:156`) is called for **Export for game** (download) and **Apply & Play**. Steps:
+`buildGameSeed(doc, regionsFC, palette, {playerCountry})` is called for **Export for game** (download) and **Apply & Play**. Steps:
 
 1. Walk regions → build `regionOwnershipOverrides = {regionId: ownerName}`, collect owners, count custom-id regions.
-2. `detectCustomGeometry(regionsFC, kind)` (`:87`) → **tier 2** if `kind==="blank"`, or any region has a non-GADM id (`reg_…`), `mergedFrom`, or `edited`. Otherwise **tier 1**.
-3. `normalizeRegionsForGame` (`:43`) → rebuild an FC whose **properties** (MapLibre reads `["get","id"]`) carry `id, owner, gid0, name, typeId`, plus `claimants` and `edited` when present. Feature id is kept in properties only (a non-integer top-level id spams warnings).
+2. `detectCustomGeometry(regionsFC, kind)` → **tier 2** if `kind==="blank"`, or any region has a non-GADM id (`reg_…`), `mergedFrom`, or `edited`. Otherwise **tier 1**.
+3. `normalizeRegionsForGame` → rebuild an FC whose **properties** (MapLibre reads `["get","id"]`) carry `id, owner, gid0, name, typeId`, plus `claimants` and `edited` when present. Feature id is kept in properties only (a non-integer top-level id spams warnings).
 4. Build `colors`, `polityOverrides` (§10), `regionClaimants` (every region's `claimants`, deduplicated, at most four — the AI, the region popup and the cheats read disputes from the world, so a dispute that lived only in the map file striped the map and was never named to the model), cities (`buildCitiesForGame`), and background descriptor + heavy payload (`buildBackgroundForGame`).
 
 ### Seed shape (return value)
@@ -440,7 +440,7 @@ Save robustness:
 
 ## 19. How edits reach the game — Save / Save & Exit / Apply & Play (`libraryBar.jsx` `applyMapToScenario`)
 
-In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`; keeps the scenario's player country while the map still has it, by its exact name, since the seed's own `game.country` is only the map's first owner: `playerCountryAfterSave.js`, which fixed saves resetting every scenario's start country) then uploads each seed piece as a scenario asset:
+In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`; keeps the scenario's player country while the map still has it, by its exact name, since the seed's own `game.country` is only the map's first owner: `playerCountryAfterSave.js`, which fixed saves resetting every scenario's start country) then uploads each seed piece as a scenario asset:
 
 | Seed field | Scenario asset | Empty behaviour |
 |---|---|---|
@@ -457,7 +457,7 @@ The `null`-means-clear contract is why hydration (§20) must reload the scenario
 
 ## 20. Opening a scenario's current map (hydration)
 
-When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. `MapEditor`'s hydrate effect (`:339`, runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features, then:
+When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. `MapEditor`'s hydrate effect (runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features, then:
 - `api.loadRegions(initialMap.regions)` if the scenario has custom geometry, **else** `api.reseedWorldWithOwners(initialMap.ownershipOverrides)` (stock world + overrides = its tier-1 map).
 
 `scenarioMode` forces `seedKind="deferred"` so `OlMap` doesn't auto-seed the default world under the scenario's map.
@@ -470,7 +470,7 @@ When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`)
 
 ## 21. Document migration (`documentMigration.js`)
 
-`migrateDocumentOwners(doc)` runs on every **open** (`MapEditor.openDoc`, `:245`). A doc is legacy while `ownerSchema < OWNER_SCHEMA`. Migration rekeys `colorOverrides`/`flags`/`tags` and every region `owner` from GADM code → name via `COUNTRY_NAMES` (`rekeyOwnerMap`), strips region `country`, and stamps `ownerSchema = OWNER_SCHEMA`. It lives in the editor (not the store) because a document is the one path where legacy owners can enter a scenario already wearing a "migrated" badge (an applied doc inherits the target's `ownerSchema`, so the store's migration would never run). No-op once migrated — safe to call every open.
+`migrateDocumentOwners(doc)` runs on every **open** (`MapEditor.openDoc`). A doc is legacy while `ownerSchema < OWNER_SCHEMA`. Migration rekeys `colorOverrides`/`flags`/`tags` and every region `owner` from GADM code → name via `COUNTRY_NAMES` (`rekeyOwnerMap`), strips region `country`, and stamps `ownerSchema = OWNER_SCHEMA`. It lives in the editor (not the store) because a document is the one path where legacy owners can enter a scenario already wearing a "migrated" badge (an applied doc inherits the target's `ownerSchema`, so the store's migration would never run). No-op once migrated — safe to call every open.
 
 ---
 
@@ -483,11 +483,11 @@ The editor was split into a standalone repo (`Open-Historia/open-historia-map-ed
 ## 23. Gotchas & invariants (quick reference)
 
 - **Owner is the polity's NAME, everywhere, and a rename re-keys it.** Never re-introduce a code path or case-fold stored owner text (`OlMap.jsx`, `SelectionInspector.jsx`). Matching typed text to an EXISTING key case-insensitively is a lookup, not a fold — the key stored is the registry's. Changing a name goes through `renamePolity` (`MapEditor.jsx`), never through editing the record's `name` alone.
-- **`buildPayload` is a whitelist** — a new doc field that isn't listed silently fails to persist (`MapEditor.jsx:180`).
-- **`edited`/`mergedFrom`/non-GADM id ⇒ tier 2.** These are the only signals that ship geometry (`exportPreset.js:87`).
-- **`flags`/`tags`/`background` null = "clear the scenario asset."** Always re-hydrate them on open so a round-trip is a no-op (`MapEditor.jsx:352`, `libraryBar.jsx:2525`).
-- **`wrapX:false` + `VectorImageLayer`** are correctness+performance load-bearing; don't revert (`OlMap.jsx:232`,`:250`).
-- **Reference image is session-only** — never let it into saves or exports (`MapEditor.jsx:63`).
+- **`buildPayload` is a whitelist** — a new doc field that isn't listed silently fails to persist (`MapEditor.jsx`).
+- **`edited`/`mergedFrom`/non-GADM id ⇒ tier 2.** These are the only signals that ship geometry (`exportPreset.js`).
+- **`flags`/`tags`/`background` null = "clear the scenario asset."** Always re-hydrate them on open so a round-trip is a no-op (`MapEditor.jsx`, `libraryBar.jsx`).
+- **`wrapX:false` + `VectorImageLayer`** are correctness+performance load-bearing; don't revert (`OlMap.jsx`).
+- **Reference image is session-only** — never let it into saves or exports (`MapEditor.jsx`).
 - **Render-path changes must be verified by booting the app** — build+grep proves nothing (see the runtime-verification memory).
 - Region geometry is verified in-app; a headless WebGL context can't pixel-check the game map.
 
