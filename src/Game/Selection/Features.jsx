@@ -385,9 +385,13 @@ const FeaturePopup = () => {
           {!isCity && approximate ? (
             // Each case one whole sentence, so a language can reorder it (docs/i18n.md).
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,210,120,0.9)" }}>
-              {approximate.near
-                ? `${approximate.asked} isn't on this map, so this was placed near ${approximate.near} in ${approximate.country}.`
-                : `${approximate.asked} isn't on this map, so this was placed in ${approximate.country}.`}
+              {approximate.unnamed
+                ? (approximate.near
+                  ? `No place was given for this, so it was placed near ${approximate.near} in ${approximate.country}.`
+                  : `No place was given for this, so it was placed in ${approximate.country}.`)
+                : approximate.near
+                  ? `${approximate.asked} isn't on this map, so this was placed near ${approximate.near} in ${approximate.country}.`
+                  : `${approximate.asked} isn't on this map, so this was placed in ${approximate.country}.`}
             </div>
           ) : null}
           {!isCity && settleable ? (

@@ -22,7 +22,7 @@ const same = (a, b) => text(a).toLowerCase() === text(b).toLowerCase() && text(a
 // that was placed exactly.
 export const approximateMark = (marker) => {
     const mark = marker?.approximate;
-    return mark?.asked && mark?.country ? mark : null;
+    return (mark?.asked || mark?.unnamed === true) && mark?.country ? mark : null;
 };
 
 // Accept and Move are offered on the player's own approximate structures and on

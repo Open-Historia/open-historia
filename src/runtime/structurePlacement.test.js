@@ -34,6 +34,15 @@ test("the popup is given the mark to word its note from, and nothing for an exac
     assert.equal(approximateMark({ ...base, approximate: { asked: "", country: "Burkina Faso" } }), null);
 });
 
+// A structure given no place at all carries a mark with nothing asked, so the
+// popup can say so and still offer Accept and Move.
+test("a structure given no place keeps its mark through a save, and the popup gets it", () => {
+    const unnamed = { asked: "", country: "Burkina Faso", near: "Ouagadougou", unnamed: true };
+    const [marker] = applyMarkerOps([], [{ op: "build", marker: { ...base, approximate: unnamed } }]);
+    assert.deepEqual(marker.approximate, unnamed);
+    assert.deepEqual(approximateMark(marker), unnamed);
+});
+
 test("accepting keeps it where it is and clears the mark", () => {
     const [marker] = acceptStructure([base], "structure-1");
     assert.equal(marker.approximate, undefined);

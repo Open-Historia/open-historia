@@ -682,7 +682,8 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "",
         if (!spot) return exact;
         return {
             ...done(spot.point, "approximate", gazetteer, country.name),
-            approximate: { asked: asText(phrase), country: country.name, near: spot.near },
+            // `unnamed`: no place was given at all, so nothing was not found.
+            approximate: { asked: asText(phrase), country: country.name, near: spot.near, ...(asText(phrase) ? {} : { unnamed: true }) },
         };
     } catch {
         return exact; // one odd polygon must not cost the turn its other placements
@@ -719,6 +720,9 @@ export const describeApproximatePlacement = ({ title = "", name = "", phrase = "
     const mark = placed?.approximate;
     if (!mark) return "";
     const where = mark.near ? `near ${mark.near}, in ${mark.country}` : `in ${mark.country}`;
+    if (mark.unnamed) {
+        return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} was given no place. It was placed ${where} instead. Give every new unit and structure \`at\`.`;
+    }
     return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} could not be placed at "${asText(phrase)}"`
         + `${asText(reason) ? ` — ${asText(reason)}` : ""}. It was placed ${where} instead. Name a city or province this map knows to place it exactly.`;
 };

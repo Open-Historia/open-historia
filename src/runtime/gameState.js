@@ -1478,8 +1478,10 @@ const normalizeApproximateMark = (value) => {
   if (!value || typeof value !== "object") return null;
   const asked = normalizeOptionalString(value.asked);
   const country = normalizeOptionalString(value.country);
-  if (!asked || !country) return null;
-  return { asked, country, near: normalizeOptionalString(value.near) };
+  // `unnamed`: the thing was given no place at all, so nothing was asked for.
+  const unnamed = value.unnamed === true;
+  if (!(asked || unnamed) || !country) return null;
+  return { asked, country, near: normalizeOptionalString(value.near), ...(unnamed ? { unnamed } : {}) };
 };
 
 export const normalizeMarkers = (markers) =>

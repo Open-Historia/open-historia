@@ -450,6 +450,20 @@ test("two things placed approximately in one country land in different spots", (
     assert.notDeepEqual([first.lng, first.lat], [second.lng, second.lat]);
 });
 
+// Seen in a replayed turn (2026-09-29): the structure director built a forward
+// operating base with no `at`, and its event named nowhere the map knows. It
+// goes into its owner's land like an unknown town, marked as given no place.
+test("a thing given no place at all goes into its owner's land, marked unnamed", () => {
+    const spot = approx("", { owner: "Westmark", context: "Engineers break ground on a base at Nowhereville." });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.deepEqual(spot.approximate, { asked: "", country: "Westmark", near: "Midburg", unnamed: true });
+    assert.equal(
+        describeApproximatePlacement({ title: "A Base Is Begun", name: "Nowhereville Base", phrase: "", placed: spot }),
+        'Event "A Base Is Begun": Nowhereville Base was given no place. It was placed near Midburg, in Westmark instead. Give every new unit and structure `at`.',
+    );
+    assert.equal(approx("", { owner: "Atlantis" }).approximate, undefined, "no owner's land, nowhere to go");
+});
+
 test("the model is told what it named, and where the thing went instead", () => {
     const placed = approx("Nowhereville, Westmark", { owner: "Eastland" });
     assert.equal(

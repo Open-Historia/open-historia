@@ -2389,6 +2389,18 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
+    // A new unit or structure given no place at all is put where its own event
+    // says it is, in its owner's land. Seen in a replayed turn (2026-09-29): the
+    // structure director built a forward operating base with no `at` while its
+    // event named where it was, and it was dropped.
+    if (!entry.phrase && !entry.regionId && (entry.spawn || entry.build)
+      && !(Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey])))) {
+      const named = entry.context && entry.owner ? normalizeArray(gazetteer.placesNamedIn(entry.context, entry.owner))[0] : null;
+      if (named) {
+        entry.phrase = named.name;
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a new thing"} was given no place, so it was placed in ${named.name}, where its event says it is. Give every new unit and structure \`at\`.`);
+      }
+    }
     // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
     // the region it belongs to is not. `regionId` is the fallback, and for an
     // operation that gives only an id it is the whole answer. It used to be
@@ -2416,7 +2428,9 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
     // own land. Seen in a live game (2026-09-27): a base at "Djibo, Burkina Faso"
     // was dropped because the map has no Djibo.
     const approximated = (() => {
-      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !entry.phrase) return null;
+      // A structure given no place at all still goes into its owner's land, marked
+      // so (placement.js `unnamed`); a unit with none is raised at home, below.
+      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !(entry.phrase || (entry.build && !entry.regionId))) return null;
       const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
       return attempt?.approximate && !attempt.error ? attempt : null;
     })();
