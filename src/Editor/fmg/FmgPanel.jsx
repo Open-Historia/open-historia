@@ -8,13 +8,13 @@
 
 import React, { useState } from "react";
 import { panelSurface, inputStyle } from "../editorStyles.js";
+import { MAX_CULTURES, SYNC_TEMPLATES } from "./fmgDriver.js";
 
-// FMG's heightmap templates (drive its landmass shape). Kept in sync with the
-// driver's template mapping; "random" lets FMG pick.
-const TEMPLATES = [
-  "random", "continents", "archipelago", "pangea", "isthmus", "atoll",
-  "mediterranean", "peninsula", "volcano", "highIsland", "lowIsland",
-];
+// FMG's heightmap templates (drive its landmass shape): the driver's own list.
+// "random" is not FMG's choice: the driver picks one of its world-scale shapes
+// from the seed's digits (the same seed, the same shape), or at random when the
+// seed is blank or has no digits.
+const TEMPLATES = ["random", ...SYNC_TEMPLATES];
 const SIZES = [
   { id: "small", label: "Small (fast)", points: 4000 },
   { id: "medium", label: "Medium", points: 10000 },
@@ -40,7 +40,7 @@ const FmgPanel = ({ open, onToggle, busy, log = [], onGenerate }) => {
       template,
       points: SIZES.find((s) => s.id === size)?.points || 10000,
       states: Math.max(1, Number(states) || 12),
-      cultures: Math.max(1, Number(cultures) || 8),
+      cultures: Math.min(MAX_CULTURES, Math.max(1, Number(cultures) || 8)),
       cities: Math.max(0, Math.round(Number(cities) || 0)),
       useProvinces,
     });
@@ -128,7 +128,7 @@ const FmgPanel = ({ open, onToggle, busy, log = [], onGenerate }) => {
             </div>
             <div style={{ ...field, flex: 1 }}>
               <span style={label}>Cultures</span>
-              <input type="number" min={1} max={40} value={cultures} onChange={(e) => setCultures(e.target.value)} style={inputStyle} />
+              <input type="number" min={1} max={MAX_CULTURES} value={cultures} onChange={(e) => setCultures(e.target.value)} style={inputStyle} />
             </div>
           </div>
 
