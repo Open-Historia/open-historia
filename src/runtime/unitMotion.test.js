@@ -17,6 +17,7 @@ import {
   maxTravelKm,
   patrolPoint,
   stepToward,
+  wrapLng,
 } from "./unitMotion.js";
 
 // ---- haversineKm (moved here from gameState.js; keep its assertions) --------
@@ -187,4 +188,14 @@ test("hashSeed is stable and unsigned", () => {
   assert.equal(hashSeed("unit-1|3|0"), hashSeed("unit-1|3|0"));
   assert.ok(hashSeed("unit-1|3|0") >= 0);
   assert.notEqual(hashSeed("a"), hashSeed("b"));
+});
+
+test("wrapLng brings a world-copy longitude back into range", () => {
+  assert.equal(wrapLng(210), -150);
+  assert.equal(wrapLng(-200), 160);
+  assert.equal(wrapLng(179.5), 179.5);
+  assert.equal(wrapLng(180), 180);
+  assert.equal(wrapLng(-180), -180);
+  assert.equal(wrapLng(900), -180);
+  assert.ok(Math.abs(wrapLng(1e300)) <= 180, "a huge value ends");
 });

@@ -1208,15 +1208,18 @@ const WorldMap = ({ isGlobe = false }) => {
     };
 
     const mode = getInteractionMode();
+    // The map draws world copies either side of the date line and a click on
+    // one reports its unwrapped longitude (e.g. 210); a unit is stored in range.
+    const clicked = event.lngLat?.wrap?.() ?? event.lngLat;
 
     if (mode.kind === "admin-place") {
-      placeUnitAdmin(mode.unitId, event.lngLat.lng, event.lngLat.lat);
+      placeUnitAdmin(mode.unitId, clicked.lng, clicked.lat);
       clearInteractionMode();
       return;
     }
 
     if (mode.kind === "deploy") {
-      deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
+      deployUnit({ ...mode.params, lng: clicked.lng, lat: clicked.lat });
       clearInteractionMode();
       return;
     }

@@ -29,11 +29,13 @@ export const haversineKm = (lat1, lng1, lat2, lng2) => {
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(s)));
 };
 
-const wrapLng = (lng) => {
-  let value = lng;
-  while (value > 180) value -= 360;
-  while (value < -180) value += 360;
-  return value;
+// Any longitude back into -180..180. A click on a world copy east or west of
+// the date line (renderWorldCopies) comes in as e.g. 210.
+// Arithmetic rather than a loop that steps by 360: a huge finite value from a
+// save or the model would otherwise never finish.
+export const wrapLng = (lng) => {
+  if (lng >= -180 && lng <= 180) return lng;
+  return ((((lng + 180) % 360) + 360) % 360) - 180;
 };
 
 const clampLat = (lat) => Math.max(-85, Math.min(85, lat));

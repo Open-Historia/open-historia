@@ -45,6 +45,7 @@ import {
   maxTravelKm,
   patrolPoint,
   stepToward,
+  wrapLng,
 } from "./unitMotion.js";
 import { compareGameDates, normalizeGameDate } from "./gameDates.js";
 
@@ -1172,7 +1173,9 @@ export const normalizeUnitEntry = (entry, index = 0) => {
     return null;
   }
 
-  const lng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  const rawLng = finiteOrNull(entry.lng ?? entry.lon ?? entry.longitude);
+  // A position on a world copy past the date line is the same place in range.
+  const lng = rawLng === null ? null : wrapLng(rawLng);
   const lat = finiteOrNull(entry.lat ?? entry.latitude);
   // Full country name, never a code — same identity everywhere (see ownerNames.js).
   const ownerCode = toCountryName(normalizeOptionalString(entry.ownerCode || entry.owner || entry.code));

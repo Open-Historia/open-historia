@@ -22,6 +22,7 @@ import {
   normalizeUnitEntry,
   recenterPatrolOrders,
 } from "../../runtime/gameState.js";
+import { wrapLng } from "../../runtime/unitMotion.js";
 
 let units = [];
 // Standing orders the ENGINE is advancing (world.pendingUnitOrders).
@@ -374,10 +375,10 @@ export const updateUnitAdmin = async (unitId, patch = {}) => {
 // unit's coordinates while preserving its identity, owner, strength and status.
 export const placeUnitAdmin = async (unitId, lng, lat) => {
   const id = String(unitId ?? "").trim();
-  const nextLng = Number(lng);
+  const nextLng = wrapLng(Number(lng));
   const nextLat = Number(lat);
   if (!id || !Number.isFinite(nextLng) || !Number.isFinite(nextLat)) return null;
-  if (nextLng < -180 || nextLng > 180 || nextLat < -90 || nextLat > 90) return null;
+  if (nextLat < -90 || nextLat > 90) return null;
   if (!units.some((unit) => unit.id === id)) return null;
   return updateUnitAdmin(id, { lng: nextLng, lat: nextLat });
 };
@@ -451,7 +452,7 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
   await queueOrder(
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
       `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +
-      `lat ${lat.toFixed(2)}, lng ${lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
+      `lat ${unit.lat.toFixed(2)}, lng ${unit.lng.toFixed(2)}. Currently pending — confirm it into the order of battle, ` +
       `reposition it, or reject it as the front and logistics allow.`,
     { unitId: unit.id, remove: true },
   );
