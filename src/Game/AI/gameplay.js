@@ -101,6 +101,7 @@ import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
 import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
 import { formalAgendaProposals } from "./formalAgenda.js";
+import { abandonWorkerJob, createWorkerFailureStreak } from "./statsWorkerJobs.js";
 import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
@@ -9350,9 +9351,14 @@ let countryStatsWorker = null;
 let countryStatsWorkerBroken = false;
 let countryStatsWorkerRequestId = 0;
 const countryStatsWorkerPending = new Map();
+// Set aside for the session after three failures in a row, not one
+// (statsWorkerJobs.js); failing to construct it at all still sets it aside.
+const countryStatsWorkerFailures = createWorkerFailureStreak(3);
 
-const resetCountryStatsWorker = ({ broken = false, reason = null } = {}) => {
-  if (broken) countryStatsWorkerBroken = true;
+// `failed`: the worker itself went wrong (not a cancel), which counts towards
+// setting it aside.
+const resetCountryStatsWorker = ({ failed = false, reason = null } = {}) => {
+  if (failed && countryStatsWorkerFailures.failed()) countryStatsWorkerBroken = true;
   countryStatsWorker?.terminate?.();
   countryStatsWorker = null;
 
@@ -9388,6 +9394,7 @@ const getCountryStatsWorker = () => {
         return;
       }
       const id = Number(event?.data?.id);
+      if (!event?.data?.error) countryStatsWorkerFailures.succeeded();
       const pending = countryStatsWorkerPending.get(id);
       if (!pending) return;
       countryStatsWorkerPending.delete(id);
@@ -9407,7 +9414,7 @@ const getCountryStatsWorker = () => {
 
     worker.onerror = (event) => {
       resetCountryStatsWorker({
-        broken: true,
+        failed: true,
         reason: new Error(event?.message || "Country Stats worker failed."),
       });
     };
@@ -9459,19 +9466,19 @@ const buildCountryStatsPreparationBackground = async (
   try {
     const result = await new Promise((resolve, reject) => {
       const abort = () => {
-        countryStatsWorkerPending.delete(id);
-
-        // There is only one active Stats generation job in the UI. Terminating the
-        // worker is the only way to PREEMPT a CPU-bound request immediately rather
-        // than waiting for its synchronous loop to finish before a cancel message can
-        // be processed. The next country lazily receives a fresh worker.
-        resetCountryStatsWorker({
-          broken: false,
-          reason:
-            signal?.reason instanceof Error
-              ? signal.reason
-              : new DOMException("Country Stats calculation cancelled.", "AbortError"),
-        });
+        // Terminating the worker is the only way to PREEMPT a CPU-bound request
+        // immediately rather than waiting for its synchronous loop to finish
+        // before a cancel message can be processed. The next country lazily
+        // receives a fresh worker. Only when no other job is waiting on it,
+        // though (statsWorkerJobs.js): a background first reading shares it.
+        if (abandonWorkerJob(countryStatsWorkerPending, id)) {
+          resetCountryStatsWorker({
+            reason:
+              signal?.reason instanceof Error
+                ? signal.reason
+                : new DOMException("Country Stats calculation cancelled.", "AbortError"),
+          });
+        }
 
         reject(
           signal?.reason instanceof Error
@@ -9558,7 +9565,7 @@ const buildCountryStatsPreparationBackground = async (
       "[OH PERF] Country Stats worker unavailable/self-load failed; using cooperative main-thread fallback.",
       error,
     );
-    resetCountryStatsWorker({ broken: true, reason: error });
+    resetCountryStatsWorker({ failed: true, reason: error });
 
     await yieldToUiFrame(signal);
     const territorialBasis = await buildTargetStatsTerritorialBasis(
@@ -9597,14 +9604,16 @@ const persistCountryStatsBackground = async ({
 
   const result = await new Promise((resolve, reject) => {
     const abort = () => {
-      countryStatsWorkerPending.delete(id);
-      resetCountryStatsWorker({
-        broken: false,
-        reason:
-          signal?.reason instanceof Error
-            ? signal.reason
-            : new DOMException("Country Stats persistence cancelled.", "AbortError"),
-      });
+      // As for preparation: the worker is stopped only when no other job is
+      // waiting on it (statsWorkerJobs.js).
+      if (abandonWorkerJob(countryStatsWorkerPending, id)) {
+        resetCountryStatsWorker({
+          reason:
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new DOMException("Country Stats persistence cancelled.", "AbortError"),
+        });
+      }
       reject(
         signal?.reason instanceof Error
           ? signal.reason
