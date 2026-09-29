@@ -831,6 +831,7 @@ const WITHHELD_ROUTE_WORDS = Object.freeze({
   SATURATED_ROUTINE_MILITARY_CHURN: "one more routine military update on a thread that already had several",
   SATURATED_INCREMENTAL_REDUNDANCY: "one more small update on a thread that already had several",
   LOW_TRAJECTORY_FEED_SATURATION: "one more low-consequence update on a thread that already had several",
+  PLAYER_AGENCY_AUTHORITY: "rejected because it made a sovereign choice for the player's country that no order or player message authorized",
 });
 const WITHHELD_ROUTES_WITH_REASON = new Set(["NON_BELLIGERENT_WARTIME_CAUSALITY", "UNSUPPORTED_REVERSAL"]);
 
@@ -1053,13 +1054,15 @@ const validateSegmentStorylines = (candidate, {
 // event ids are already bound into its ledger records (validateSegmentLedgers),
 // so storyline ids are attached to the events in place, never by re-labelling.
 // The screen keeps only the actionIds of orders still queued, so it needs the
-// turn's orders: without them it takes every event's citations away.
+// turn's orders: without them it takes every event's citations away. It needs
+// the chats too: a player's own message is what authorizes a treaty they agreed.
 const screenSegmentPayload = (payload, {
   analysis,
   priorEvents,
   world,
   game,
   actions,
+  chats,
   state,
   originDate,
   targetDate,
@@ -1093,6 +1096,7 @@ const screenSegmentPayload = (payload, {
     world,
     game,
     actions,
+    chats,
     analysis,
   });
   if (screened.dropped?.length) {
@@ -7076,6 +7080,7 @@ const applySimulationResult = async ({
       world: baseWorld,
       game: baseGame,
       actions: baseActions,
+      chats: baseChats,
       analysis: breadthRepair.analysis,
     });
     const repairCuration = await curateGeneratedEventsWithHidden({
@@ -13318,6 +13323,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
         world: ledgerWorld,
         game: bundle.game,
         actions: bundle.actions,
+        chats: bundle.chats,
         state,
         originDate: state.segmentOrigin,
         targetDate: segmentTarget,

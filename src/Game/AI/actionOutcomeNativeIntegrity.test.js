@@ -85,10 +85,14 @@ test("a citation of an order no longer queued is still taken away", () => {
   assert.deepEqual(screened.events[0].impacts.actionIds, []);
 });
 
-test("every screen of a turn's events in the jump is given the turn's orders", () => {
+test("every screen of a turn's events in the jump is given the turn's orders and chats", () => {
   const source = fs.readFileSync(new URL("./gameplay.js", import.meta.url), "utf8");
   const calls = [...source.matchAll(/screenGeneratedWorldEvents\(\{([\s\S]*?)\}\);/g)];
   const segmentCalls = [...source.matchAll(/screenSegmentPayload\(payload, \{([\s\S]*?)\}\);/g)];
   assert.ok(calls.length >= 2 && segmentCalls.length >= 1, "the jump's screens moved; update this test");
-  for (const [, args] of [...calls, ...segmentCalls]) assert.match(args, /\bactions\b/);
+  for (const [, args] of [...calls, ...segmentCalls]) {
+    assert.match(args, /\bactions\b/);
+    // A player's own chat message is what authorizes a treaty they agreed.
+    assert.match(args, /\bchats\b/);
+  }
 });

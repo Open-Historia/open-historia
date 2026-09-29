@@ -2470,7 +2470,11 @@ const eventMentionedPolities = (event, resolver) => {
   );
 };
 
-const subjectPolityFromEvent = (event, resolver) => {
+// The polity an event shows acting: its one semantic actor, its one
+// combatant, or the one polity its title opens with. A polity that is merely
+// the only one the title mentions ("NATO Deploys Battalion to Latvia") is not
+// shown acting; subjectPolityFromEvent still falls back to it.
+const leadingSubjectPolity = (event, resolver) => {
   const actorPolities = semanticActorPolities(event, resolver);
   if (actorPolities.length === 1) return actorPolities[0];
 
@@ -2487,7 +2491,14 @@ const subjectPolityFromEvent = (event, resolver) => {
   }
   const uniqueTitleMatches = uniqueStrings(titleMatches);
   if (uniqueTitleMatches.length === 1) return uniqueTitleMatches[0];
+  return "";
+};
 
+const subjectPolityFromEvent = (event, resolver) => {
+  const leading = leadingSubjectPolity(event, resolver);
+  if (leading) return leading;
+
+  const title = normalizeString(event?.title);
   const mentionedTitle = resolver.mentionedPolities(title);
   if (mentionedTitle.length === 1) return mentionedTitle[0];
   const mentionedAll = resolver.mentionedPolities(`${title} ${normalizeString(event?.description)}`);
@@ -2730,7 +2741,16 @@ const deriveNativeEventAgency = (event, {
       if (!crossesSovereign && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
         return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
       }
-      return { agency: null, reason: crossesSovereign ? "player-fresh-sovereign-choice-without-authority" : "player-event-not-safely-classifiable", source: "native-unresolved-player" };
+      if (!crossesSovereign) return { agency: null, reason: "player-event-not-safely-classifiable", source: "native-unresolved-player" };
+      // The screen drops only the first verdict: the player's country is shown
+      // making the choice, not merely the one country the event names.
+      return {
+        agency: null,
+        reason: resolver.equivalent(leadingSubjectPolity(event, resolver), playerCanonical)
+          ? "player-fresh-sovereign-choice-without-authority"
+          : "fresh-sovereign-choice-mentions-player",
+        source: "native-unresolved-player",
+      };
     }
     return {
       source: "native-foreign-polity",
@@ -2795,7 +2815,9 @@ const deriveNativeEventAgency = (event, {
     return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
   }
   if (playerMentioned && crossesSovereign) {
-    return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
+    // Only mentioned: nothing shows the player's country is the one choosing,
+    // so the screen logs this verdict but never enforces it.
+    return { agency: null, reason: "fresh-sovereign-choice-mentions-player", source: "native-unresolved-player" };
   }
 
   if (EXOGENOUS_EVENT_RE.test(fullText)) {
@@ -3446,6 +3468,25 @@ const applyLowTrajectoryFeedGuard = ({
   return { events: kept, dropped, hidden };
 };
 
+// The native verdicts that mean the world made the player's own sovereign
+// choice: the player's country is the one acting (or a named party to a joint
+// commitment) and neither a queued order nor a player-authored message backs
+// it. The screen drops these. Other player verdicts (the player is only
+// mentioned, or the event could not be classified) are logged, never enforced.
+const PLAYER_SOVEREIGN_CHOICE_VERDICTS = new Set([
+  "player-fresh-sovereign-choice-without-authority",
+  "joint-player-sovereign-choice-without-authority",
+]);
+
+const playerSovereignChoiceReason = (event, verdict, actions) => {
+  if (!PLAYER_SOVEREIGN_CHOICE_VERDICTS.has(normalizeString(verdict?.reason))) return "";
+  // An event citing a queued order is the model's answer to something the
+  // player asked for; dropping it would carry the order over as overdue.
+  const queued = currentActionIds(actions);
+  if (normalizeArray(event?.impacts?.actionIds).some((id) => queued.has(normalizeString(id)))) return "";
+  return `${verdict.reason}: the human-controlled polity makes a fresh sovereign choice that no queued order or player-authored message authorizes`;
+};
+
 export const screenGeneratedWorldEvents = ({
   events = [],
   priorEvents = [],
@@ -3469,6 +3510,9 @@ export const screenGeneratedWorldEvents = ({
   let strippedPolityUpdates = 0;
   let mergedDuplicatePolityUpdates = 0;
   let strippedNoOpRegionControlOps = 0;
+  // What native provenance concluded about each event that involves the player
+  // without authority, enforced or not: the console trail for tuning the rule.
+  const playerVerdicts = [];
   // One identity index for the whole batch: every check below reads it.
   const resolver = createWorldActorResolver(world, normalizeString(game?.country));
 
@@ -3489,7 +3533,7 @@ export const screenGeneratedWorldEvents = ({
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
     const eventWrapper = { events: [controlSanitized.event] };
-    bindWorldEventAuthorityRefs(eventWrapper, {
+    const binding = bindWorldEventAuthorityRefs(eventWrapper, {
       world,
       gameCountry: normalizeString(game?.country),
       actions,
@@ -3497,6 +3541,11 @@ export const screenGeneratedWorldEvents = ({
       resolver,
     });
     const event = eventWrapper.events[0];
+
+    const playerVerdict = binding.unresolved.find((row) => row.source === "native-unresolved-player");
+    if (playerVerdict) {
+      playerVerdicts.push({ id: normalizeString(event?.id), title: normalizeString(event?.title), reason: playerVerdict.reason });
+    }
 
     const agencyReason = eventAgencyAuthorityReason(event, {
       world,
@@ -3533,6 +3582,17 @@ export const screenGeneratedWorldEvents = ({
       continue;
     }
 
+    const sovereignReason = playerVerdict ? playerSovereignChoiceReason(event, playerVerdict, actions) : "";
+    if (sovereignReason) {
+      dropped.push({
+        id: normalizeString(event?.id),
+        title: normalizeString(event?.title),
+        route: "PLAYER_AGENCY_AUTHORITY",
+        reason: sovereignReason,
+      });
+      continue;
+    }
+
     const routineReason = routineMilitaryNoDeltaReason(event);
 
     if (routineReason) {
@@ -3559,6 +3619,13 @@ export const screenGeneratedWorldEvents = ({
   });
   if (feedGuard.dropped.length) dropped.push(...feedGuard.dropped);
   hidden.push(...feedGuard.hidden);
+
+  if (playerVerdicts.length) {
+    console.info(
+      `[OH Native Event Provenance v${NATIVE_EVENT_PROVENANCE_VERSION}] player-agency verdicts:`,
+      playerVerdicts,
+    );
+  }
 
   const result = {
     events: feedGuard.events,

@@ -95,3 +95,90 @@ test("screening a segment on a two-hundred-polity map takes well under a few sec
   assert.ok(kept.includes("e1") && kept.includes("e2"), kept.join(","));
   assert.ok(!kept.includes("e5"));
 });
+
+// --- The player's sovereign choices belong to the player ---
+
+const latviaWorld = {
+  polityOverrides: {
+    "Republic of Latvia": { code: "Republic of Latvia", name: "Republic of Latvia", aliases: ["Latvia"], status: "active" },
+    "Republic of Estonia": { code: "Republic of Estonia", name: "Republic of Estonia", aliases: ["Estonia"], status: "active" },
+    "Russian Federation": { code: "Russian Federation", name: "Russian Federation", aliases: ["Russia"], status: "active" },
+  },
+  institutions: { byId: {} },
+  wars: [],
+  storylines: [],
+  projects: [],
+};
+const latviaGame = { country: "Republic of Latvia", gameDate: "2014-06-20" };
+const latviaEvent = (title, description, extra = {}) => ({
+  id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  date: "2014-07-01",
+  title,
+  description,
+  importance: "major",
+  playerRelated: true,
+  ...extra,
+});
+const screenLatvia = (events, extra = {}) => quietly(() => screenGeneratedWorldEvents({
+  events,
+  world: latviaWorld,
+  game: latviaGame,
+  actions: [],
+  chats: [],
+  ...extra,
+}));
+
+test("the world cannot declare war for the player's country", () => {
+  const screened = screenLatvia([latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.")]);
+  assert.equal(screened.events.length, 0);
+  assert.equal(screened.dropped[0].route, "PLAYER_AGENCY_AUTHORITY");
+  assert.match(screened.dropped[0].reason, /no queued order or player-authored message/);
+  assert.deepEqual(screened.hidden, [], "it never happened, so the Board must never read it");
+});
+
+test("the player's own order authorizes the same choice", () => {
+  const actions = [{ id: "act-war", status: "planned", text: "Declare war on Russia" }];
+  const screened = screenLatvia([latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.")], { actions });
+  assert.equal(screened.events.length, 1);
+  assert.equal(screened.events[0].agency.authority, "player-order");
+});
+
+test("an event citing a queued order is kept even when it overreaches the order", () => {
+  const actions = [{ id: "act-border", status: "planned", text: "Strengthen the eastern border" }];
+  const screened = screenLatvia([latviaEvent(
+    "Latvia Mobilizes Reservists",
+    "Latvia announces a general mobilization of reservists.",
+    { impacts: { actionIds: ["act-border"] } },
+  )], { actions });
+  assert.equal(screened.events.length, 1);
+});
+
+test("the player's own message in a chat authorizes the treaty it agreed", () => {
+  const chats = [{
+    id: "chat-estonia",
+    messages: [{
+      id: "msg-latvia",
+      role: "user",
+      speaker: "Republic of Latvia",
+      text: "Latvia will sign the border demarcation treaty with Estonia next month.",
+    }],
+  }];
+  const treaty = latviaEvent(
+    "Latvia Signs Border Demarcation Treaty With Estonia",
+    "Latvia signs the border demarcation treaty with Estonia in Riga.",
+  );
+  assert.equal(screenLatvia([treaty]).events.length, 0, "without the chat nothing authorizes it");
+  const screened = screenLatvia([treaty], { chats });
+  assert.equal(screened.events.length, 1);
+  assert.equal(screened.events[0].agency.authority, "player-commitment");
+  assert.equal(screened.events[0].agency.authorityRef, "msg-latvia");
+});
+
+test("another power's sovereign act that only names the player's country stays", () => {
+  const screened = screenLatvia([
+    latviaEvent("NATO Deploys Battalion to Latvia", "NATO deploys a multinational battalion to Latvia."),
+    latviaEvent("Russia Deploys Troops Near the Latvia Border", "Russia deploys troops near the border."),
+  ]);
+  assert.equal(screened.events.length, 2);
+  assert.deepEqual(screened.dropped, []);
+});
