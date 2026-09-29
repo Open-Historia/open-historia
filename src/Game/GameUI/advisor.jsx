@@ -884,10 +884,22 @@ const mergeNotices = (current, stored) => {
     return last?.streaming ? [...kept.slice(0, -1), ...added, last] : [...kept, ...added];
 };
 
+// A long conversation renders its recent tail first; older messages come in
+// on demand, as a diplomacy thread's do (chat.jsx). advisor.json is never
+// trimmed, and every reply shown runs the parse and the markdown renderer and
+// mounts a Chart.js canvas per chart, so drawing it all made the drawer slow to
+// open in a long campaign.
+const ADVISOR_INITIAL_RENDER_WINDOW = 12;
+const ADVISOR_RENDER_WINDOW_STEP = 20;
+
 // The whole scrollable history, also memoized as a unit — so a keystroke in
 // the composer (state that lives in AdvisorPanel, outside this component)
 // never even reaches AdvisorMessageRow's own per-row check above.
-const AdvisorMessageList = React.memo(({ messages, isLoading, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
+//
+// Only the last `visibleLimit` messages are drawn. `i` stays the index into
+// the WHOLE transcript: placedDeployments and completedInstitutionDrafts are
+// written back through it.
+const AdvisorMessageList = React.memo(({ messages, visibleLimit, onShowEarlier, isLoading, allowedUnitTypes, chatDiffers, chatDir, onOpenActions, onOpenProjects, onRetryProjects, onRetry, retrying, onDraftMessage, onExecuteInstitutionDraft, onPlaceDeployment, messagesEndRef, containerRef, onScroll }) => (
     <div ref={containerRef} onScroll={onScroll} style={{ padding: "0.75rem", flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "1rem", scrollbarWidth: "none" }}>
     {messages.length === 0 && (
         <p style={{ fontSize: "0.85rem", color: "rgba(255,255,255,0.5)", marginTop: 0 }}>
@@ -895,10 +907,23 @@ const AdvisorMessageList = React.memo(({ messages, isLoading, allowedUnitTypes, 
         </p>
     )}
 
+    {messages.length > visibleLimit && (
+        <button
+            type="button"
+            className="oh-tap-row"
+            onClick={onShowEarlier}
+            style={{ alignSelf: "center", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "999px", color: "rgba(255,255,255,0.58)", cursor: "pointer", flexShrink: 0, fontSize: "0.68rem", padding: "0.35rem 0.65rem" }}
+        >
+            {Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP) === 1
+                ? "Show 1 earlier message"
+                : `Show ${Math.min(messages.length - visibleLimit, ADVISOR_RENDER_WINDOW_STEP)} earlier messages`}
+        </button>
+    )}
+
     {/* The retry is offered on the LAST message only, and only when it is the
         error: retrying anything older would re-ask a question the conversation
         has already moved past. */}
-    {messages.map((msg, i) => (msg.role === "notice"
+    {messages.map((msg, i) => (i < messages.length - visibleLimit ? null : msg.role === "notice"
         ? <AdvisorDocumentNotice key={msg.id || i} notice={msg} />
         : (
         <AdvisorMessageRow key={i} msg={msg} msgIndex={i} allowedUnitTypes={allowedUnitTypes} chatDiffers={chatDiffers} chatDir={chatDir} onOpenActions={onOpenActions} onOpenProjects={onOpenProjects} onRetryProjects={onRetryProjects} onDraftMessage={onDraftMessage} onExecuteInstitutionDraft={onExecuteInstitutionDraft} onPlaceDeployment={onPlaceDeployment}
@@ -927,6 +952,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const [input, setInput]         = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const messagesEndRef            = useRef(null);
+    const [visibleMessageLimit, setVisibleMessageLimit] = useState(ADVISOR_INITIAL_RENDER_WINDOW);
+    const handleShowEarlier = React.useCallback(() => {
+        setVisibleMessageLimit((current) => current + ADVISOR_RENDER_WINDOW_STEP);
+    }, []);
     const allowedUnitTypes          = useRuntimeState("world", selectAllowedUnitTypes);
     // The scrollable history div, and whether it should be kept pinned to the
     // bottom as new content (streaming tokens, a new reply) arrives. Starts
@@ -1549,6 +1578,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             keystroke. See AdvisorMessageRow's comment for why that mattered. */}
         <AdvisorMessageList
         messages={messages}
+        visibleLimit={visibleMessageLimit}
+        onShowEarlier={handleShowEarlier}
         isLoading={isLoading}
         allowedUnitTypes={allowedUnitTypes}
         chatDiffers={chatDiffers}
