@@ -264,6 +264,62 @@ test("the sentinel's challenged paths reach the exact-date verification prompt",
   assert.match(prompt, /CHALLENGED GENERATED TEMPORAL PATHS:\n- government\.headOfGovernment = Leader Old/);
 });
 
+const finishedCheckpoint = () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  return checkpoint;
+};
+const noCalls = async () => { throw new Error("no AI call expected"); };
+
+test("a finished world completes without a call", async () => {
+  const result = await runSimplePoliticalWorldV2({ checkpoint: finishedCheckpoint(), inputs, maxModelCalls: 5, callModel: noCalls });
+  assert.equal(result.status, "complete");
+  assert.equal(result.modelCalls, 0);
+});
+
+test("completion honours relevance: an actor the richer depth finds incomplete is not Canonical", async () => {
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint: finishedCheckpoint(),
+    inputs: { ...inputs, relevanceByPolity: { A: { depth: "full" } } },
+    maxModelCalls: 0,
+    callModel: noCalls,
+  });
+  assert.notEqual(result.status, "complete");
+  assert.equal(result.quality.canonicalReady, false);
+  assert.ok(result.quality.unresolved.some((entry) => entry.kind === "political-actor" && entry.polityKey === "A"));
+  assert.equal(result.pauseReason, "model-call-budget");
+});
+
+test("the session budget and the lifetime ceiling pause before any call", async () => {
+  const budget = await runSimplePoliticalWorldV2({ checkpoint: withUncoveredInstitution(), inputs, maxModelCalls: 0, callModel: noCalls });
+  assert.equal(budget.status, "paused");
+  assert.equal(budget.pauseReason, "model-call-budget");
+
+  const atCeiling = withUncoveredInstitution();
+  atCeiling.modelCalls = 100;
+  const ceiling = await runSimplePoliticalWorldV2({ checkpoint: atCeiling, inputs, maxModelCalls: 5, callModel: noCalls });
+  assert.equal(ceiling.pauseReason, "total-model-call-budget");
+  assert.equal(ceiling.modelCalls, 100);
+  assert.match(ceiling.lastError, /lifetime safety ceiling of 100 AI calls/);
+});
+
+test("the session budget counts calls across tasks and stops exactly at the limit", async () => {
+  const checkpoint = finishedCheckpoint();
+  checkpoint.stagedWorld.powerStatus.byPolity = {};
+  let calls = 0;
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 2,
+    callModel: async () => { calls += 1; return { toolInput: { powerJson: "[]" } }; },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.modelCalls, 2);
+  assert.equal(result.pauseReason, "model-call-budget");
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

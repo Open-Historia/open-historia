@@ -221,9 +221,13 @@ export const runSimplePoliticalWorldV2 = async ({
 
   const persist = async () => {
     if (typeof reconcileDeterministic === "function") current = reconcileDeterministic(current, inputs);
+    // The same relevance the pipeline's final evaluation uses, so an actor that
+    // only the richer depth standard finds incomplete cannot read as Canonical
+    // mid-run.
     current = setCheckpointQuality(current, evaluateQuality({
       checkpoint: current,
       polities: inputs?.polities || [],
+      relevanceByPolity: inputs?.relevanceByPolity || {},
       historicalVerificationRequired: current.historicalVerificationRequired === true,
     }));
     const worklistSummary = summarizePoliticalWorldV2Worklist({ checkpoint: current, inputs });
