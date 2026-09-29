@@ -53,9 +53,8 @@ import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { buildGameSeed } from "./exportPreset.js";
+import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
-import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
@@ -641,24 +640,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
     // Keeps the city set the map's own even if the author empties it here.
     if (initialMap.customCities) base.metadata.citiesAuthored = true;
+    // Each city with its size, population by year, tags, symbol and country
+    // (exportPreset.js gameCityToFeature).
     base.features = (initialMap.cities?.features || [])
-      .map((f) => ({
-        id: newId("feat"),
-        name: f.properties?.city ? String(f.properties.city) : "",
-        type: "Coordinate",
-        symbol: "square",
-        coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
-        country: "",
-        owner: null,
-        regionId: null,
-        population: f.properties?.population || 0,
-        tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
-        // Its size and its population by year come back too: a round trip
-        // lost the tier, and would lose the series.
-        ...(Number(f.properties?.tier) >= 1 && Number(f.properties?.tier) <= 3 ? { tier: Math.round(Number(f.properties.tier)) } : {}),
-        ...populationByYearField(f.properties),
-      }))
-      .filter((f) => Array.isArray(f.coord));
+      .map((f) => gameCityToFeature(f, newId("feat")))
+      .filter(Boolean);
     // The scenario's structures (world.markers) come back as map features, each
     // keeping its id and whatever the Workshop does not edit (mapFeatures.js).
     base.features.push(...(Array.isArray(initialMap.markers) ? initialMap.markers : [])

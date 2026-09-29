@@ -10,7 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { buildGameSeed } from "../src/Editor/exportPreset.js";
+import { buildGameSeed, gameCityToFeature } from "../src/Editor/exportPreset.js";
 import { claimStamper } from "../src/Editor/claimOverrides.js";
 import { MAP_FEATURE_STATUSES, buildMarkersForGame, isMapFeature, markerToFeature, newMapFeature } from "../src/Editor/mapFeatures.js";
 import { buildPuppetsForGame, overlordChoicesFor, setOverlord, withoutPolities } from "../src/Editor/scenarioPuppets.js";
@@ -158,8 +158,9 @@ test("a city's population by year survives import, export and the scenario round
   assert.deepEqual(imported.populationByYear, { 1950: 300000, 2000: 7000000 });
   const seed = buildGameSeed(doc({ features: [imported] }), regions(region("r1", "Nigeria", 0)));
   assert.deepEqual(seed.cities.features[0].properties.populationByYear, { 1950: 300000, 2000: 7000000 });
-  const editor = readFileSync(new URL("../src/Editor/MapEditor.jsx", import.meta.url), "utf8");
-  assert.ok(editor.includes("...populationByYearField(f.properties)"), "the Workshop reopens a scenario's cities with their series");
+  // What opening the scenario's map in the Workshop reads each city with.
+  const reopened = gameCityToFeature(seed.cities.features[0], "feat_4");
+  assert.deepEqual(reopened.populationByYear, { 1950: 300000, 2000: 7000000 }, "the Workshop reopens a scenario's cities with their series");
 });
 
 test("a new game inherits what the Workshop authored, even from a scenario played in place", () => {

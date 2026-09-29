@@ -17,6 +17,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { findGroupKey, normalizeGroupAreas, normalizeGroups } from "../runtime/groups.js";
 import { buildMarkersForGame, isMapFeature } from "./mapFeatures.js";
 import { buildPuppetsForGame } from "./scenarioPuppets.js";
+import { populationByYearField } from "../runtime/cityPopulation.js";
 
 // GADM ids contain a dot ("DEU.2_1", "Z01.14_1", "CHN.HKG"); regions drawn in the
 // editor use "reg_..." ids. Only the latter are custom geometry that tier-1 (stock
@@ -146,9 +147,57 @@ const buildCitiesForGame = (features) => ({
         ...(f.populationByYear && typeof f.populationByYear === "object" && Object.keys(f.populationByYear).length
           ? { populationByYear: { ...f.populationByYear } }
           : {}),
+        // What the Features panel edits besides, written only when it says
+        // something the rest does not: the tags beyond city/capital, a symbol
+        // other than the square, the country. The game passes them through
+        // (normalizeCustomCityFeature keeps unknown properties); they are here
+        // so reopening the scenario's map gives them back (gameCityToFeature).
+        ...(authoredCityTags(f) ? { tags: authoredCityTags(f) } : {}),
+        ...(f.symbol && f.symbol !== "square" ? { symbol: String(f.symbol) } : {}),
+        ...(f.country ? { country: String(f.country) } : {}),
       },
     })),
 });
+
+// The tags a city is given back from `capital` alone: ["city"], or
+// ["city", "capital"].
+const defaultCityTags = (capital) => (capital ? ["city", "capital"] : ["city"]);
+const authoredCityTags = (f) => {
+  const tags = Array.isArray(f.tags) ? f.tags.map((t) => String(t)) : [];
+  if (!tags.length) return null;
+  const fallback = defaultCityTags(tags.includes("capital"));
+  return tags.length === fallback.length && tags.every((t) => fallback.includes(t)) ? null : tags;
+};
+
+// One city of a scenario's cities.geojson as a Workshop feature — the way
+// opening a scenario's map reads its cities back (MapEditor.jsx). null when it
+// has no point. The size, the population by year, and the tags, symbol and
+// country buildCitiesForGame wrote all come back.
+export const gameCityToFeature = (f, id) => {
+  const props = f?.properties || {};
+  const coord = Array.isArray(f?.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null;
+  if (!coord) return null;
+  const capital = props.capital === "primary";
+  const tags = Array.isArray(props.tags) && props.tags.length ? props.tags.map((t) => String(t)) : defaultCityTags(capital);
+  if (capital && !tags.includes("capital")) tags.push("capital");
+  const tier = Number(props.tier);
+  return {
+    id,
+    name: props.city ? String(props.city) : "",
+    type: "Coordinate",
+    symbol: typeof props.symbol === "string" && props.symbol ? props.symbol : "square",
+    coord,
+    country: typeof props.country === "string" ? props.country : "",
+    owner: null,
+    regionId: null,
+    population: props.population || 0,
+    tags,
+    // Its size and its population by year come back too: a round trip
+    // lost the tier, and would lose the series.
+    ...(tier >= 1 && tier <= 3 ? { tier: Math.round(tier) } : {}),
+    ...populationByYearField(props),
+  };
+};
 
 // Turn the editor's persisted custom background (doc.metadata.customBackground)
 // into what the game needs: a light descriptor for world.json (just the kind) and

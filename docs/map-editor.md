@@ -406,7 +406,7 @@ Save robustness:
 1. Walk regions → build `regionOwnershipOverrides = {regionId: ownerName}`, collect owners, count custom-id regions.
 2. `detectCustomGeometry(regionsFC, kind)` (`:87`) → **tier 2** if `kind==="blank"`, or any region has a non-GADM id (`reg_…`), `mergedFrom`, or `edited`. Otherwise **tier 1**.
 3. `normalizeRegionsForGame` (`:43`) → rebuild an FC whose **properties** (MapLibre reads `["get","id"]`) carry `id, owner, gid0, name, typeId`, plus `claimants` and `edited` when present. Feature id is kept in properties only (a non-integer top-level id spams warnings).
-4. Build `colors`, `polityOverrides` (§10), `regionClaimants` (every region's `claimants`, deduplicated, at most four — the AI, the region popup and the cheats read disputes from the world, so a dispute that lived only in the map file striped the map and was never named to the model), cities (`buildCitiesForGame`), and background descriptor + heavy payload (`buildBackgroundForGame`).
+4. Build `colors`, `polityOverrides` (§10), `regionClaimants` (every region's `claimants`, deduplicated, at most four — the AI, the region popup and the cheats read disputes from the world, so a dispute that lived only in the map file striped the map and was never named to the model), cities (`buildCitiesForGame`: name, population, `capital`, `tier`, `populationByYear`, and — only when they say more than that — the Features panel's `tags`, `symbol` and `country`), and background descriptor + heavy payload (`buildBackgroundForGame`).
 
 ### Seed shape (return value)
 
@@ -457,7 +457,7 @@ The `null`-means-clear contract is why hydration (§20) must reload the scenario
 
 ## 20. Opening a scenario's current map (hydration)
 
-When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. `MapEditor`'s hydrate effect (`:339`, runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features, then:
+When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. `MapEditor`'s hydrate effect (`:339`, runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features (`gameCityToFeature`, `exportPreset.js`: size, series, tags, symbol and country come back; `exportPreset.test.js`), then:
 - `api.loadRegions(initialMap.regions)` if the scenario has custom geometry, **else** `api.reseedWorldWithOwners(initialMap.ownershipOverrides)` (stock world + overrides = its tier-1 map).
 
 `scenarioMode` forces `seedKind="deferred"` so `OlMap` doesn't auto-seed the default world under the scenario's map.
