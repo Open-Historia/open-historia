@@ -867,6 +867,25 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     }
   };
 
+  // The diagnostic above holds counts only. This file holds the whole
+  // checkpoint, staged work included, so unapplied work survives cleared site
+  // data, a reinstall or a new machine; Restore Run Log reads it back.
+  const exportPoliticalWorldV2Checkpoint = async () => {
+    if (!v2Checkpoint) return;
+    setError("");
+    try {
+      const { buildPoliticalWorldV2CheckpointFile } = await import("../AI/politicalWorldV2/checkpointFile.js");
+      const scenarioName = clean(details?.scenario?.name || details?.scenario?.id || "scenario");
+      const file = buildPoliticalWorldV2CheckpointFile({
+        checkpoint: v2Checkpoint,
+        scenario: { id: clean(details?.scenario?.id), name: scenarioName },
+      });
+      downloadJsonFile(`political-world-checkpoint-${safeFileToken(scenarioName)}-${safeFileToken(v2Checkpoint.scenarioDate || scenarioDate)}.json`, file);
+    } catch (nextError) {
+      setError(`Could not export the Political World checkpoint: ${nextError?.message || String(nextError)}`);
+    }
+  };
+
 
   const generate = async (testMode = false) => {
     const generationInputs = testMode ? testInputs : inputs;
@@ -1131,7 +1150,35 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     setLastApplied(null);
     try {
       const diagnostic = JSON.parse(await file.text());
-      if (diagnostic?.kind === "political-world-pipeline-diagnostic") {
+      if (diagnostic?.kind === "political-world-v2-checkpoint") {
+        const [{ restorePoliticalWorldV2CheckpointFile }, { savePoliticalWorldV2Checkpoint }] = await Promise.all([
+          import("../AI/politicalWorldV2/checkpointFile.js"),
+          import("../AI/politicalWorldV2/storage.js"),
+        ]);
+        // Checked against the saved scenario, exactly as a Resume would run.
+        const freshDetails = await loadScenarioDetails(details?.scenario?.id);
+        const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+        const restoredCheckpoint = restorePoliticalWorldV2CheckpointFile(diagnostic, {
+          scenarioId: details?.scenario?.id,
+          inputs: freshInputs,
+        });
+        if ((Number(v2Checkpoint?.modelCalls) || 0) > (Number(restoredCheckpoint.modelCalls) || 0)) {
+          throw new Error("This scenario already has a saved Political World checkpoint with more work in it than this file. Resume or apply that one instead.");
+        }
+        const saved = await savePoliticalWorldV2Checkpoint(restoredCheckpoint);
+        const calls = Number(saved?.modelCalls) || 0;
+        setV2Checkpoint(saved);
+        setPipelineResult(null);
+        setResult(null);
+        setRows([]);
+        setGeopoliticalResult(null);
+        setRunKind("political-world-v2");
+        setExpandedPolity("");
+        setProgressInfo(null);
+        setProgress(calls === 1
+          ? "Restored the Political World checkpoint without any AI calls. It holds 1 AI call of work. Resume continues it, and Apply to Scenario writes it once its quality checks pass."
+          : `Restored the Political World checkpoint without any AI calls. It holds ${calls} AI calls of work. Resume continues it, and Apply to Scenario writes it once its quality checks pass.`);
+      } else if (diagnostic?.kind === "political-world-pipeline-diagnostic") {
         const restoredPipeline = restorePipelineResultFromDiagnostic(diagnostic, {
           scenarioId: details?.scenario?.id,
           scenarioDate,
@@ -1471,6 +1518,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           {geopoliticalResult && runKind !== "political-world-unified" && <button onClick={downloadGeopoliticalDiagnostic} style={buttonStyle} type="button">Download Geopolitical Diagnostic</button>}
           {v2FailedJobs > 0 && <button disabled={busy || applying || dateMismatch} onClick={() => generatePoliticalWorld({ retryDeferred: true })} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Retry Deferred Targets</button>}
           {v2Checkpoint && <button onClick={downloadPoliticalWorldV2Diagnostic} style={buttonStyle} type="button">Download Generation Diagnostic</button>}
+          {v2Checkpoint && <button disabled={busy} onClick={exportPoliticalWorldV2Checkpoint} style={{ ...buttonStyle, opacity: busy ? 0.55 : 1 }} type="button">Export Checkpoint</button>}
         </div>
         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
           {MODE_OPTIONS.find((option) => option.id === mode)?.description}
