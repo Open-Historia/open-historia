@@ -64,6 +64,7 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
 import { createLatestRequest } from "../../runtime/latestRequest.js";
+import { followSavedFields } from "../../runtime/editorForm.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -3179,10 +3180,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       },
     });
 
-    // The canonical scenario just written, kept in the drawer too; otherwise
-    // reopening the Workshop resurrects the old world.json and a later ordinary
-    // scenario save can write the stale basemap back.
-    setEditorDetails(savedScenarioDetails);
+    // The canonical scenario just written, kept in the drawer too when it is
+    // open on this scenario; otherwise reopening the Workshop resurrects the old
+    // world.json and a later ordinary scenario save can write the stale basemap
+    // back. Its form follows the player country and date the save may have
+    // moved (a deleted polity, a stamped date), or the drawer's next Save
+    // writes the old ones back; a field the author changed there keeps theirs.
+    if (editorKind === "scenario" && editorDetails?.scenario?.id === scenarioId) {
+      const drawerGame = editorDetails.data?.game ?? {};
+      setEditorDetails(savedScenarioDetails);
+      setEditorState((current) => followSavedFields(current, drawerGame, savedScenarioDetails?.data?.game, ["country", "gameDate"]));
+    }
 
     await uploadScenarioAsset(
       scenarioId,
