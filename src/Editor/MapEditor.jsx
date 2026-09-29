@@ -734,11 +734,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.polities, d.regionCount, regionEpoch]);
 
-  // Each group's tint colour, for the map (OlMap/olStyle.js).
-  const groupColors = useMemo(
-    () => Object.fromEntries(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
+  // Each group's tint colour, for the map (OlMap/olStyle.js). Memoised on the
+  // colours themselves, not on d.groups: that changes with every keystroke in a
+  // group's description, and each new object restyled the whole region layer
+  // and rebuilt every group's outline.
+  const groupColorsKey = useMemo(
+    () => JSON.stringify(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
     [d.groups],
   );
+  const groupColors = useMemo(() => Object.fromEntries(JSON.parse(groupColorsKey)), [groupColorsKey]);
   const groupCount = useMemo(
     () => new Set([...Object.keys(d.groups || {}), ...Object.keys(api?.listGroupUsage?.() || {})]).size,
     // eslint-disable-next-line react-hooks/exhaustive-deps
