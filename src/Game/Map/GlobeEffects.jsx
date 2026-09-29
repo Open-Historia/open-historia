@@ -155,7 +155,6 @@ const GlobeEffects = ({ active }) => {
       }
 
       if (sunElement) {
-        const sunDirection = directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat);
         const projected = projectGlobeSun({
           sunLng: sunWorldPosition.lng,
           sunLat: sunWorldPosition.lat,
@@ -185,11 +184,12 @@ const GlobeEffects = ({ active }) => {
           lightingTimer = 0;
           lastLightingDraw = now;
           lightingVisible = true;
+          const sunDirection = directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat);
           drawGlobeLighting({
             canvas: lightingCanvas,
             matrix,
             cameraPosition: mapInstance.transform?.cameraPosition,
-            sunDirection: directionFromLngLat(sunWorldPosition.lng, sunWorldPosition.lat),
+            sunDirection,
             width,
             height,
             opacity: projectionTransition,
