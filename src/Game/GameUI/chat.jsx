@@ -3169,6 +3169,17 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         if (chatsLoadFailedRef.current) return;
         void saveAllChats(list).then((ok) => setChatsSaveFailed(!ok));
     };
+    // The list could be read at last (a Retry, or the store's own read): the
+    // chats begun meanwhile, kept in memory and unsaved, join it and are saved
+    // with it, rather than being replaced by it and lost.
+    const adoptRecoveredChats = (saved) => {
+        const begun = chatsRef.current.filter((chat) => !saved.some((entry) => sameChatId(entry.id, chat.id)));
+        const merged = [...begun, ...saved];
+        setChats(merged);
+        setChatsLoadFailed(false);
+        chatsLoadFailedRef.current = false;
+        if (begun.length) persistChats(merged);
+    };
     const [activeChat, setActiveChat]             = useState(null);
     const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
     const institutionAutomationInFlight = useRef(new Set());
@@ -3405,8 +3416,13 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (cancelled) return;
             if (!Array.isArray(saved)) { setFreshSinceOpen(true); return; }
             // A list the store read (or was written) is the player's: saving
-            // is safe again.
-            setChatsLoadFailed(false);
+            // is safe again, and what was begun while it could not be read
+            // joins it.
+            if (chatsLoadFailedRef.current) {
+                adoptRecoveredChats(saved);
+                setFreshSinceOpen(true);
+                return;
+            }
             setChats((prev) => {
                 const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
                 if (signature(saved) === signature(prev)) return prev;
@@ -3446,12 +3462,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         try {
             const saved = await loadAllChats({ force: true });
             if (saved === null) return;
-            const begun = chatsRef.current.filter((chat) => !saved.some((entry) => sameChatId(entry.id, chat.id)));
-            const merged = [...begun, ...saved];
-            setChats(merged);
-            setChatsLoadFailed(false);
-            chatsLoadFailedRef.current = false;
-            if (begun.length) persistChats(merged);
+            adoptRecoveredChats(saved);
         } finally {
             setChatsRetrying(false);
         }

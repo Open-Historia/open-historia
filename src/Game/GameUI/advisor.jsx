@@ -1383,7 +1383,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const saved = await loadMessages();
             if (saved === null) return;
             setLoadFailed(false);
-            const said = messagesRef.current;
+            // Not the notices: a turn's arrive in the file and were merged in
+            // here (mergeNotices), so the stored copy already holds them.
+            const storedIds = new Set(saved.map((message) => message?.id).filter(Boolean));
+            const said = messagesRef.current.filter((message) => !(message?.id && storedIds.has(message.id)));
             const merged = [...saved, ...said];
             setMessages(merged);
             if (merged.length) loadHistory(merged);
