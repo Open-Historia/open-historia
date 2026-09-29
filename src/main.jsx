@@ -15,7 +15,12 @@ import App from "./App.jsx";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 
+// The website and the local server (a normal browser tab that can be installed
+// as an app) register public/sw.js. The Android app does not: mobile/scripts/
+// stage-www.mjs leaves sw.js out of the APK as website-only, so registering it
+// there was a 404 and a "registration failed" line opening every phone's log.
 const registerServiceWorker = () => {
+    if (import.meta.env.VITE_OH_NATIVE) return;
     if (!import.meta.env.DEV && "serviceWorker" in navigator) {
         window.addEventListener("load", () => {
             navigator.serviceWorker.register("/sw.js").catch((error) => {

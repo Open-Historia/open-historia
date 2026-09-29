@@ -70,7 +70,7 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 `index.html` loads exactly one module, `/src/main.jsx`. It:
 
 1. `configureMapRuntime()` — sizes MapLibre worker count + parallel image requests from `navigator.hardwareConcurrency` (`src/runtime/assets.js:398`).
-2. Renders `<App/>` into `#root`, then `startTranslator()` (live UI translation when a non-English language is set — see [i18n & translation](i18n.md)) and registers the service worker (`public/sw.js`, production only).
+2. Renders `<App/>` into `#root`, then `startTranslator()` (live UI translation when a non-English language is set — see [i18n & translation](i18n.md)) and registers the service worker (`public/sw.js`, production only, and not in the Android app, whose APK leaves `sw.js` out).
 3. **The fork** (`src/main.jsx:28`):
    - If `VITE_OH_WEB`: `import("./runtime/web/index.js").then(installWebBackend)` installs the IndexedDB `/api` interceptor **before** `mount()`, so no request escapes uninstalled.
    - Else: `mount()` directly.
