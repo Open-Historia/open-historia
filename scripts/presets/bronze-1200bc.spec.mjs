@@ -30,9 +30,9 @@ export default {
   },
 
   // Player starts as New Kingdom Egypt. game.country MUST equal the owner code.
-  // BCE dates are plain text (dayjs can't parse them); the timeline shows them
-  // verbatim and the AI advances them as text.
-  game: { country: "EGYP", startDate: "1200 BCE", gameDate: "1200 BCE" },
+  // A year before AD 1 carries a leading minus (src/runtime/gameDates.js), so
+  // jump landing dates, project durations and date checks all work.
+  game: { country: "EGYP", startDate: "-1200-01-01", gameDate: "-1200-01-01" },
 
   // Bronze Age warfare: massed infantry with bronze arms, chariotry ("armor"),
   // war fleets and garrisons. No true siege artillery and certainly no air.
@@ -180,8 +180,7 @@ export default {
     "steppe herders, Vedic clans in India, village Europe); they can be raided, settled or " +
     "federated but have no central government. Religion is polytheist everywhere: Amun-Ra and " +
     "the Aten's memory in Egypt, the Storm God of Hatti, Marduk in Babylon, Ashur in Assyria, " +
-    "ancestor oracle-bones in Shang China. Dates are BCE and count DOWN (1200 BCE, then 1199 " +
-    "BCE...); write dates as e.g. '1198 BCE'.",
+    "ancestor oracle-bones in Shang China.",
 
   startingTimelineText:
     "The year is 1200 BCE. In Pi-Ramesses the court of Pharaoh still gleams — tribute barges " +
