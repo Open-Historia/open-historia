@@ -74,12 +74,15 @@ export const buildHistoricalTrackingIndex = (world = {}) => {
   return { identityIndex, canonicalKey, displayName, isLandless };
 };
 
+// `index`: the caller's buildHistoricalTrackingIndex(world) when it already has
+// one (the Stats pane builds one per world snapshot), so it is not built twice.
 export const buildHistoricalTrackingCandidateRows = ({
   world = {},
   playerCountry = "",
   currentCountry = "",
+  index: providedIndex = null,
 } = {}) => {
-  const index = buildHistoricalTrackingIndex(world);
+  const index = providedIndex || buildHistoricalTrackingIndex(world);
   const collected = new Map();
   const add = (value) => {
     const key = index.canonicalKey(value);

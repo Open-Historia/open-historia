@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildHistoricalTrackingCandidateRows,
+  buildHistoricalTrackingIndex,
   filterHistoricalTrackingCandidateRows,
   historySamplesInRange,
 } from "./statsHistoricalTracking.js";
@@ -69,4 +70,22 @@ test("the Advanced Statistics time range filters campaigns before 1970 and BC", 
   const modern = [{ date: "2010-01-01" }, { date: "2016-01-01" }];
   assert.deepEqual(dates(historySamplesInRange(modern, "5y")), ["2016-01-01"]);
   assert.deepEqual(historySamplesInRange([{ date: "not a date" }], "1y"), [{ date: "not a date" }]);
+});
+
+test("the Stats pane's one identity index serves Diplomacy names and the tracking list", () => {
+  const index = buildHistoricalTrackingIndex(world);
+  assert.equal(index.canonicalKey("Latvia"), "Republic of Latvia");
+  assert.equal(index.displayName("latvia"), "Republic of Latvia");
+  assert.equal(index.displayName(""), "Unknown polity");
+  assert.equal(index.canonicalKey("Nowhere Else"), "Nowhere Else", "an unknown name stays as written");
+
+  let lookups = 0;
+  const counted = {
+    ...index,
+    canonicalKey: (value) => { lookups += 1; return index.canonicalKey(value); },
+  };
+  const { index: used, rows } = buildHistoricalTrackingCandidateRows({ world, playerCountry: "Latvia", index: counted });
+  assert.equal(used, counted, "a provided index is used, not rebuilt");
+  assert.ok(lookups > 0);
+  assert.ok(rows.some((row) => row.key === "Republic of Latvia"));
 });

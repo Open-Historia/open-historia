@@ -9,7 +9,7 @@ import { isPolityLandless, readGameData, readWorldState, readWorldStateView, wri
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
+import { buildHistoricalTrackingCandidateRows, buildHistoricalTrackingIndex, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
@@ -340,6 +340,10 @@ const cleanText = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lowerText = (value) => cleanText(value).toLocaleLowerCase();
 const asArray = (value) => (Array.isArray(value) ? value : []);
 
+// One-off resolution against a world the pane does not hold (a rollback
+// snapshot, a fresh read before a write). Anything that resolves many names in
+// the pane's own world uses its identity index instead (polityIndex below):
+// each call here builds the whole polity identity index again.
 const canonicalPolityKey = (value, world) => {
     const raw = cleanText(value);
     if (!raw) return "";
@@ -355,17 +359,6 @@ const canonicalPolityKey = (value, world) => {
         // Diplomacy UI must remain readable even if an old save contains a stale name.
     }
     return raw;
-};
-
-const polityDisplayName = (world, value) => {
-    const key = canonicalPolityKey(value, world);
-    if (!key) return "Unknown polity";
-    const direct = world?.polityOverrides?.[key];
-    if (cleanText(direct?.name)) return cleanText(direct.name);
-    for (const [candidateKey, candidate] of Object.entries(world?.polityOverrides || {})) {
-        if (lowerText(candidateKey) === lowerText(key)) return cleanText(candidate?.name) || cleanText(candidateKey);
-    }
-    return key;
 };
 
 // Match the canonical 7B rule: score is authoritative and the semantic
@@ -445,17 +438,22 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
     </div>
 );
 
-const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
+// `identity`: the pane's identity index for this world (buildHistoricalTrackingIndex),
+// built once per world. Resolving every relation, party and war side through
+// resolvePolityIdentity alone rebuilt that index for each name, hundreds of times
+// on every world update.
+const DiplomacySection = ({ world, identity, targetCountry, viewerPolity }) => {
     const diplomacy = useMemo(() => {
-        if (!world || !targetCountry) return null;
-        const target = canonicalPolityKey(targetCountry, world);
+        if (!world || !identity || !targetCountry) return null;
+        const { canonicalKey, displayName } = identity;
+        const target = canonicalKey(targetCountry);
         const targetKey = lowerText(target);
         if (!targetKey) return null;
 
         const relations = asArray(world.relations)
             .map((relation) => {
-                const a = canonicalPolityKey(relation?.a, world);
-                const b = canonicalPolityKey(relation?.b, world);
+                const a = canonicalKey(relation?.a);
+                const b = canonicalKey(relation?.b);
                 const aKey = lowerText(a);
                 const bKey = lowerText(b);
                 if (aKey !== targetKey && bKey !== targetKey) return null;
@@ -463,7 +461,7 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
                 return {
                     ...relation,
                     counterpart,
-                    counterpartName: polityDisplayName(world, counterpart),
+                    counterpartName: displayName(counterpart),
                     displayStatus: relationStatusForScore(relation?.score),
                 };
             })
@@ -472,11 +470,11 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
 
         const agreements = asArray(world.agreements)
             .map((agreement) => {
-                const parties = asArray(agreement?.parties).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
+                const parties = asArray(agreement?.parties).map((party) => canonicalKey(party)).filter(Boolean);
                 if (!parties.some((party) => lowerText(party) === targetKey)) return null;
                 const counterparts = parties
                     .filter((party) => lowerText(party) !== targetKey)
-                    .map((party) => polityDisplayName(world, party));
+                    .map((party) => displayName(party));
                 return { ...agreement, counterparts };
             })
             .filter(Boolean)
@@ -489,12 +487,12 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
         const currentWars = asArray(world.wars)
             .filter((war) => ["active", "ceasefire"].includes(lowerText(war?.status)))
             .map((war) => {
-                const sideA = asArray(war?.sideA).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
-                const sideB = asArray(war?.sideB).map((party) => canonicalPolityKey(party, world)).filter(Boolean);
+                const sideA = asArray(war?.sideA).map((party) => canonicalKey(party)).filter(Boolean);
+                const sideB = asArray(war?.sideB).map((party) => canonicalKey(party)).filter(Boolean);
                 const onA = sideA.some((party) => lowerText(party) === targetKey);
                 const onB = sideB.some((party) => lowerText(party) === targetKey);
                 if (!onA && !onB) return null;
-                const opponents = (onA ? sideB : sideA).map((party) => polityDisplayName(world, party));
+                const opponents = (onA ? sideB : sideA).map((party) => displayName(party));
                 return { ...war, opponents };
             })
             .filter(Boolean)
@@ -505,15 +503,15 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
         // knowledge and loyalty visibility consistently with the map, Advisor
         // and diplomatic chat. Unknown covert arrangements therefore leave no
         // trace in this drawer.
-        const viewer = canonicalPolityKey(viewerPolity, world) || cleanText(viewerPolity);
+        const viewer = canonicalKey(viewerPolity) || cleanText(viewerPolity);
         const subordination = viewer ? puppetSummaryFor(world, viewer, target) : null;
         const subordinates = viewer
             ? livePuppetsFor(world, viewer)
-                .filter((row) => lowerText(canonicalPolityKey(row?.overlord, world)) === targetKey)
+                .filter((row) => lowerText(canonicalKey(row?.overlord)) === targetKey)
                 .map((row) => ({
                     ...row,
-                    puppetKey: canonicalPolityKey(row?.puppet, world) || cleanText(row?.puppet),
-                    puppetName: polityDisplayName(world, row?.puppet),
+                    puppetKey: canonicalKey(row?.puppet) || cleanText(row?.puppet),
+                    puppetName: displayName(row?.puppet),
                     kindLabel: puppetKindLabel(row?.kind),
                 }))
                 .sort((left, right) => left.puppetName.localeCompare(right.puppetName))
@@ -527,7 +525,7 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
             subordinates,
             activeAgreements: agreements.filter((agreement) => lowerText(agreement.status) === "active").length,
         };
-    }, [world, targetCountry, viewerPolity]);
+    }, [world, identity, targetCountry, viewerPolity]);
 
     if (!diplomacy) return null;
 
@@ -1177,6 +1175,7 @@ const HistoricalTrackingModal = ({
     settings,
     onChange,
     world,
+    identity,
     playerCountry,
     currentCountry,
 }) => {
@@ -1210,7 +1209,8 @@ const HistoricalTrackingModal = ({
         world,
         playerCountry,
         currentCountry,
-    }), [world, playerCountry, currentCountry]);
+        index: identity,
+    }), [world, identity, playerCountry, currentCountry]);
     const candidateRows = trackingCandidates.rows;
 
     const trackedPolities = settings?.trackedPolities || [];
@@ -1475,6 +1475,16 @@ const StatsPaneBody = ({ active }) => {
     useEffect(() => {
         worldSnapshotRef.current = worldSnapshot;
     }, [worldSnapshot]);
+    // Every name the pane resolves in its own world goes through one identity
+    // index, built once per world snapshot.
+    const polityIndex = useMemo(
+        () => (worldSnapshot ? buildHistoricalTrackingIndex(worldSnapshot) : null),
+        [worldSnapshot],
+    );
+    const polityIndexRef = useRef(null);
+    useEffect(() => {
+        polityIndexRef.current = polityIndex;
+    }, [polityIndex]);
     const displayName = useCountryDisplayName(targetCountry);
 
     // Political Actors are canonical political truth. Stats remains a separate,
@@ -1647,7 +1657,9 @@ const StatsPaneBody = ({ active }) => {
             const owner = cleanText(props.owner);
             const ownerName = COUNTRY_NAMES[owner] || owner;
             const rawCountry = ownerName || cleanText(props.COUNTRY) || COUNTRY_NAMES[gid0] || gid0;
-            const country = canonicalPolityKey(rawCountry, worldSnapshotRef.current) || rawCountry;
+            const country = (polityIndexRef.current
+                ? polityIndexRef.current.canonicalKey(rawCountry)
+                : canonicalPolityKey(rawCountry, worldSnapshotRef.current)) || rawCountry;
             if (country) setTargetCountry(country);
         };
         window.addEventListener(REGION_SELECTED_EVENT, onRegionSelected);
@@ -2002,8 +2014,8 @@ const StatsPaneBody = ({ active }) => {
     // stat metadata while Economy itself waits for the validated/migrated sheet.
     // This preserves capital/government/leader text without triggering heavy Stats
     // generation on the default Diplomacy tab.
-    const resolvedTargetKey = targetCountry && worldSnapshot
-        ? (canonicalPolityKey(targetCountry, worldSnapshot) || targetCountry)
+    const resolvedTargetKey = targetCountry && polityIndex
+        ? (polityIndex.canonicalKey(targetCountry) || targetCountry)
         : targetCountry;
     const headerSheet = sheet
         || worldSnapshot?.countryStats?.[resolvedTargetKey]
@@ -2054,7 +2066,7 @@ const StatsPaneBody = ({ active }) => {
         : "Whole polity";
 
     const trackingNames = trackingSettings.trackedPolities
-        .map((key) => polityDisplayName(worldSnapshot, key))
+        .map((key) => (polityIndex ? polityIndex.displayName(key) : cleanText(key)))
         .filter(Boolean);
     const trackingPreview = !trackingNames.length
         ? "No tracked countries yet"
@@ -2188,7 +2200,7 @@ const StatsPaneBody = ({ active }) => {
             )}
 
             {statsView === "diplomacy" && worldSnapshot && (
-                <DiplomacySection world={worldSnapshot} targetCountry={targetCountry} viewerPolity={player.code} />
+                <DiplomacySection world={worldSnapshot} identity={polityIndex} targetCountry={targetCountry} viewerPolity={player.code} />
             )}
 
             {statsView === "diplomacy" && !worldSnapshot && (
@@ -2382,6 +2394,7 @@ const StatsPaneBody = ({ active }) => {
             settings={trackingSettings}
             onChange={persistTrackingSettings}
             world={worldSnapshot}
+            identity={polityIndex}
             playerCountry={player.code}
             currentCountry={targetCountry}
             />
