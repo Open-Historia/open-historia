@@ -1315,7 +1315,7 @@ const heldButtonStyle = (primary, busy) => ({
     padding: "0.5rem 0.7rem",
 });
 
-const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard }) => {
+const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard, onCancel = null }) => {
     const notice = HELD_NOTICE[held.kind];
     if (!notice) return null;
     return (
@@ -1351,9 +1351,18 @@ const HeldTurnNotice = ({ held, isRetrying, progressLabel, onRetry, onDiscard })
                 Continue without them
                 </button>
             )}
-            <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={onDiscard} style={heldButtonStyle(false, isRetrying)}>
-            Discard the turn
-            </button>
+            {/* While a retry runs, Cancel stands where Discard was: a retry on a
+                slow model can take minutes, and a cancelled one leaves the turn
+                held (simulationStatus.js attemptHeldTurn). */}
+            {isRetrying && typeof onCancel === "function" ? (
+                <button type="button" className="oh-tap-row" onClick={onCancel} style={heldButtonStyle(false, false)}>
+                Cancel
+                </button>
+            ) : (
+                <button type="button" className="oh-tap-row" disabled={isRetrying} onClick={onDiscard} style={heldButtonStyle(false, isRetrying)}>
+                Discard the turn
+                </button>
+            )}
         </div>
         </div>
     );
@@ -1673,6 +1682,7 @@ const TimelineSkipPanel = ({
             progressLabel={progressLabel}
             onRetry={onRetryHeld}
             onDiscard={onDiscardHeld}
+            onCancel={onCancel}
             />
         )}
 

@@ -178,3 +178,11 @@ test("the Events page says which agents did not report, and asks only them again
     const retry = body(gameplay, "export const retryAgentReports = async");
     assert.match(retry, /isSimulationBusy\(\)\) throw/, "never while a turn is being written");
 });
+
+test("a held turn's retry can be cancelled from its notice", () => {
+    // Retry registers its AbortController where the skip's Cancel aborts it
+    // (jumpAbortRef), so the notice's Cancel is the skip's own.
+    assert.match(time, /isRetrying && typeof onCancel === "function"/);
+    assert.match(time, /onDiscard=\{onDiscardHeld\}\s*onCancel=\{onCancel\}/);
+    assert.match(time, /const retryHeld = async[\s\S]*?jumpAbortRef\.current = controller;/);
+});
