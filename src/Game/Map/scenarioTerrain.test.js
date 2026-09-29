@@ -1,4 +1,4 @@
-/*! Open Historia — scenario relief tiles over a vector background © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — a scenario's Tiled Basemap over its vector background © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/Map/scenarioTerrain.test.js
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,26 +9,57 @@ import {
   getShownRelief,
   publishShownRelief,
   subscribeShownRelief,
-  normalizeScenarioTerrain,
+  resolveTiledBasemap,
+  scenarioTiledBasemap,
   wantsScenarioTerrain,
 } from "./scenarioTerrain.js";
 
-test("only a vector background can declare relief tiles", () => {
-  assert.equal(normalizeScenarioTerrain(null), null);
-  assert.equal(normalizeScenarioTerrain({ kind: "vector" }), null);
-  assert.equal(normalizeScenarioTerrain({ kind: "image", terrain: { maxzoom: 8 } }), null, "an image background already replaces the map");
-  assert.deepEqual(normalizeScenarioTerrain({ kind: "vector", terrain: {} }), { minzoom: 0, maxzoom: 8 });
+const HASH = "a".repeat(64);
+const NAMED = { kind: "vector", tiled: { hash: HASH, name: "Westeros relief", bytes: 485_000_000, hubUrl: "https://github.com/x/y/releases/download/v1/westeros.pmtiles" } };
+const INSTALLED = { id: "westeros-relief", kind: "tiled", contentHash: HASH, minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4] };
+
+test("only a vector background can name a Tiled Basemap, by its content hash", () => {
+  assert.equal(scenarioTiledBasemap(null), null);
+  assert.equal(scenarioTiledBasemap({ kind: "vector" }), null);
+  assert.equal(scenarioTiledBasemap({ kind: "image", tiled: { hash: HASH } }), null, "an image background already replaces the map");
+  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { hash: "not-a-hash" } }), null);
+  assert.deepEqual(scenarioTiledBasemap(NAMED), NAMED.tiled);
+  assert.equal(scenarioTiledBasemap({ kind: "vector", tiled: { hash: HASH, hubUrl: "javascript:alert(1)" } }).hubUrl, undefined, "only an https link is kept");
+});
+
+test("an installed Tiled Basemap is drawn with the zooms and bounds of its own archive", () => {
+  const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: INSTALLED, archiveUrl: "http://x/api/basemaps/westeros-relief/archive" });
+  assert.equal(missing, null);
+  assert.deepEqual(terrain, { minzoom: 0, maxzoom: 14, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/api/basemaps/westeros-relief/archive" });
+  const style = buildScenarioTerrainStyle(terrain, terrain.url);
+  assert.equal(style.sources["custom-bg-terrain"].maxzoom, 14);
+  assert.deepEqual(style.sources["custom-bg-terrain"].tiles, ["ohrelief://http://x/api/basemaps/westeros-relief/archive/{z}/{x}/{y}"]);
+});
+
+test("a Tiled Basemap the player does not have leaves the painted fallback, and says what to download", () => {
+  const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: null, archiveUrl: "" });
+  assert.equal(terrain, null, "no relief source: the vector background alone");
+  assert.deepEqual(missing, NAMED.tiled);
+});
+
+test("Painted, an image, or a plain vector background asks for no relief and offers no download", () => {
+  for (const [descriptor, setting] of [[NAMED, SCENARIO_TERRAIN_PAINTED], [{ kind: "image" }, ""], [{ kind: "vector" }, ""]]) {
+    assert.deepEqual(resolveTiledBasemap({ descriptor, setting, basemap: INSTALLED, archiveUrl: "http://x/a" }), { tiles: null, missing: null });
+  }
+});
+
+test("a library entry that is not a Tiled Basemap, or has another hash, is not drawn", () => {
+  for (const basemap of [{ ...INSTALLED, kind: "vector" }, { ...INSTALLED, contentHash: "b".repeat(64) }]) {
+    const { tiles: terrain, missing } = resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap, archiveUrl: "http://x/a" });
+    assert.equal(terrain, null);
+    assert.deepEqual(missing, NAMED.tiled);
+  }
 });
 
 test("zooms are clamped and ordered; bad bounds are dropped", () => {
-  assert.deepEqual(
-    normalizeScenarioTerrain({ kind: "vector", terrain: { minzoom: 5, maxzoom: 2, bounds: [10, 0, 5, 1] } }),
-    { minzoom: 5, maxzoom: 5 },
-  );
-  assert.deepEqual(
-    normalizeScenarioTerrain({ kind: "vector", terrain: { minzoom: -3, maxzoom: 40, bounds: [0, -42, 93, 49.5] } }),
-    { minzoom: 0, maxzoom: 22, bounds: [0, -42, 93, 49.5] },
-  );
+  const draw = (meta) => resolveTiledBasemap({ descriptor: NAMED, setting: "", basemap: { ...INSTALLED, ...meta }, archiveUrl: "http://x/a" }).tiles;
+  assert.deepEqual(draw({ minzoom: 5, maxzoom: 2, bounds: [10, 0, 5, 1] }), { minzoom: 5, maxzoom: 5, url: "pmtiles://http://x/a" });
+  assert.deepEqual(draw({ minzoom: -3, maxzoom: 40 }), { minzoom: 0, maxzoom: 22, bounds: [0.2, -42.4, 92.8, 49.4], url: "pmtiles://http://x/a" });
 });
 
 test("the player's Painted choice turns relief off; anything else keeps it", () => {
@@ -70,15 +101,12 @@ test("a relief tile the archive lacks comes back transparent, never empty", asyn
 });
 
 test("a scenario's lighter fill ramp is kept only when it is a clean list of rising stops", () => {
+  const draw = (fillOpacity) => resolveTiledBasemap({ descriptor: { ...NAMED, fillOpacity }, setting: "", basemap: INSTALLED, archiveUrl: "http://x/a" }).tiles.fillOpacity;
   const ramp = [[1.5, 0.46], [5, 0.44], [8, 0.28], [14, 0.24]];
-  assert.deepEqual(normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: ramp } }).fillOpacity, ramp);
-  assert.deepEqual(
-    normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: [[2, 0], [9, 3]] } }).fillOpacity,
-    [[2, 0.05], [9, 1]],
-    "opacities clamp so owners never vanish entirely",
-  );
+  assert.deepEqual(draw(ramp), ramp);
+  assert.deepEqual(draw([[2, 0], [9, 3]]), [[2, 0.05], [9, 1]], "opacities clamp so owners never vanish entirely");
   for (const bad of [[[5, 0.4]], [[5, 0.4], [3, 0.3]], [[5, 0.4], ["x", 0.3]], "0.3", {}]) {
-    assert.equal(normalizeScenarioTerrain({ kind: "vector", terrain: { fillOpacity: bad } }).fillOpacity, undefined);
+    assert.equal(draw(bad), undefined);
   }
 });
 

@@ -64,6 +64,8 @@ const buildAbsoluteUrl = (pathname) => {
   const relativePath = withRuntimeToken(pathname);
   return origin ? new URL(relativePath, origin).toString() : relativePath;
 };
+// For archives served outside the runtime set: a Tiled Basemap's, by id.
+export const runtimeAbsoluteUrl = (pathname) => buildAbsoluteUrl(pathname);
 
 export const JSON_URLS = {
   advisor: "",
@@ -163,16 +165,12 @@ export const PMTILES_ARCHIVES = {
   cities: "",
   countries: "",
   regions: "",
-  // A scenario's raster relief (Map/scenarioTerrain.js). Scenario-only: never
-  // warmed at startup, only opened when the world declares it.
-  terrain: "",
 };
 
 export const PMTILES_PROTOCOL_URLS = {
   cities: "",
   countries: "",
   regions: "",
-  terrain: "",
 };
 
 const jsonValueCache = new Map();
@@ -464,12 +462,10 @@ export const setRuntimeAssetEndpoints = ({ token = "" } = {}) => {
   PMTILES_ARCHIVES.cities = buildAbsoluteUrl("/api/runtime/pmtiles/cities");
   PMTILES_ARCHIVES.countries = buildAbsoluteUrl("/api/runtime/pmtiles/countries");
   PMTILES_ARCHIVES.regions = buildAbsoluteUrl("/api/runtime/pmtiles/regions");
-  PMTILES_ARCHIVES.terrain = buildAbsoluteUrl("/api/runtime/pmtiles/terrain");
 
   PMTILES_PROTOCOL_URLS.cities = `pmtiles://${PMTILES_ARCHIVES.cities}`;
   PMTILES_PROTOCOL_URLS.countries = `pmtiles://${PMTILES_ARCHIVES.countries}`;
   PMTILES_PROTOCOL_URLS.regions = `pmtiles://${PMTILES_ARCHIVES.regions}`;
-  PMTILES_PROTOCOL_URLS.terrain = `pmtiles://${PMTILES_ARCHIVES.terrain}`;
 };
 
 export const setCountryNameResolver = (resolver) => {

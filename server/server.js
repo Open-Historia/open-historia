@@ -23,6 +23,8 @@ import {
   getScenarioDetails,
   importGameBundle,
   importScenarioBundle,
+  listScenariosNamingTiledBasemap,
+  migrateEmbeddedTiledArchives,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
@@ -55,9 +57,26 @@ import {
   createBasemap,
   deleteBasemap,
   ensureBasemapStore,
+  clearInterruptedDownloads,
+  createTiledBasemap,
+  findBasemapMetaByHash,
+  getBasemapArchivePath,
   getBasemapCatalog,
   getBasemapPayload,
+  getBasemapMeta,
+  incomingArchivePath,
+  setTiledBasemapFallback,
+  setTiledBasemapSource,
 } from "./basemapStore.js";
+import {
+  TooLargeError,
+  cancelInstallJob,
+  cleanBasemapSource,
+  downloadToFile,
+  getInstallJob,
+  receiveToFile,
+  startInstallJob,
+} from "./tiledBasemaps.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import { renameHubCacheBundles, renameScenarioBundleBytes, writeFileAtomic } from "./scenarioBundleNames.js";
 import {
@@ -210,6 +229,10 @@ ensureScenarioStore();
 ensureGameStore();
 ensureMapEditorStore();
 ensureBasemapStore();
+clearInterruptedDownloads();
+// A scenario or game still carrying a tiled archive inside it (the first cut of
+// scenario relief) moves it into the Basemap library (docs/adr/0005).
+migrateEmbeddedTiledArchives().catch((error) => console.warn("[basemaps] moving embedded archives into the library failed:", error.message));
 
 const sendError = (res, statusCode, error) => {
   const message = error instanceof Error ? error.message : String(error);
@@ -648,9 +671,13 @@ app.get("/api/scenarios/:scenarioId/export", (req, res) => {
   }
 });
 
-app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
+app.post("/api/scenarios/import", largeJsonParser, async (req, res) => {
   try {
-    res.status(201).json(importScenarioBundle(req.body ?? {}, { setSelected: true }));
+    const imported = importScenarioBundle(req.body ?? {}, { setSelected: true });
+    // A bundle from the first cut of scenario relief carries its archive; it
+    // becomes a Tiled Basemap before anyone reads the scenario back.
+    await migrateEmbeddedTiledArchives();
+    res.status(201).json(getScenarioDetails(imported.scenario.id));
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -658,9 +685,11 @@ app.post("/api/scenarios/import", largeJsonParser, (req, res) => {
 
 // Replace an existing scenario's content with a fresh bundle — the community
 // hub's "Update" button for scenarios imported unmodified from a post.
-app.put("/api/scenarios/:scenarioId/import", largeJsonParser, (req, res) => {
+app.put("/api/scenarios/:scenarioId/import", largeJsonParser, async (req, res) => {
   try {
-    res.json(updateScenarioFromBundle(req.params.scenarioId, req.body ?? {}));
+    updateScenarioFromBundle(req.params.scenarioId, req.body ?? {});
+    await migrateEmbeddedTiledArchives();
+    res.json(getScenarioDetails(req.params.scenarioId));
   } catch (error) {
     sendError(res, 400, error);
   }
@@ -951,7 +980,16 @@ const HUB_DOWNLOAD_HOSTS = new Set([
   "user-attachments.githubusercontent.com",
   "github-production-user-asset-6210df.s3.amazonaws.com",
 ]);
-const HUB_MAX_BUNDLE_BYTES = 200 * 1024 * 1024;
+// Caps: a scenario bundle, and a Tiled Basemap (docs/adr/0005). Both downloads
+// stream to disk, so a cap bounds disk use and accidents, not memory. The env
+// overrides exist for the tests, which scale them down to kilobytes.
+const HUB_MAX_BUNDLE_BYTES = Number(process.env.OH_HUB_MAX_BUNDLE_BYTES) || 200 * 1024 * 1024;
+const TILED_BASEMAP_MAX_BYTES = Number(process.env.OH_TILED_BASEMAP_MAX_BYTES) || 500 * 1024 * 1024;
+// Tests and local checks only: one exact origin (a fake "release" on this
+// machine) the hub download guard also accepts. Unset in every real run.
+const HUB_TEST_ORIGIN = process.env.OH_HUB_TEST_ORIGIN || "";
+const isHubDownloadUrl = (candidate) =>
+  isAllowedHubUrl(candidate, HUB_DOWNLOAD_HOSTS) || (Boolean(HUB_TEST_ORIGIN) && candidate.origin === HUB_TEST_ORIGIN);
 
 // One hop of a hub download. fetch() has no timeout of its own, so a connection
 // that never opens — an IPv6 route that blackholes, a proxy that drops the SYN —
@@ -965,14 +1003,23 @@ const HUB_TRANSIENT_CODES = new Set([
   "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "EPIPE",
   "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "TimeoutError",
 ]);
-const fetchHubHop = async (url) => {
+// Each hop:
+// the timeout covers the wait for the response's headers only. A Tiled Basemap
+// can take far longer than that to arrive on a slow link, and a body that stalls
+// is caught by the download's own idle timer (tiledBasemaps.js).
+const fetchHubHop = async (url, signal) => {
   for (let attempt = 0; ; attempt += 1) {
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(new DOMException("Timed out", "TimeoutError")), HUB_HOP_TIMEOUT_MS);
     try {
-      return await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(HUB_HOP_TIMEOUT_MS) });
+      return await fetch(url, { redirect: "manual", signal: signal ? AbortSignal.any([timeout.signal, signal]) : timeout.signal });
     } catch (error) {
+      if (signal?.aborted) throw error;
       const code = error?.cause?.code || error?.code || error?.name || "";
       if (attempt >= 1 || !HUB_TRANSIENT_CODES.has(code)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 750));
+    } finally {
+      clearTimeout(timer);
     }
   }
 };
@@ -1253,82 +1300,63 @@ renameHubCacheBundles(HUB_CACHE_DIR)
   .then((count) => { if (count) console.log(`[hub] ${count} downloaded scenario(s) renamed to the current bundle name.`); })
   .catch((error) => console.warn("[hub] cache rename failed:", error.message));
 
+const hubDownloadsInFlight = new Map();
+
 app.get("/api/hub/file", async (req, res) => {
   try {
     const fileUrl = String(req.query.url ?? "");
-    let current = new URL(fileUrl);
-    if (!isAllowedHubUrl(current, HUB_DOWNLOAD_HOSTS)) {
+    if (!isHubDownloadUrl(new URL(fileUrl))) {
       return sendError(res, 400, new Error("Only GitHub-hosted scenario files can be fetched."));
     }
 
     // Already fetched once? Serve the cached copy without touching GitHub, so a
     // re-import by the same person doesn't bump the scenario's download count.
     const cache = hubCachePaths(fileUrl);
-    if (fs.existsSync(cache.body)) {
-      let cachedType = "application/octet-stream";
-      try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
-      // A copy cached before the startup rename reached it is renamed now.
-      const cached = await renameScenarioBundleBytes(fs.readFileSync(cache.body));
-      if (cached.changed) {
-        try { writeFileAtomic(cache.body, cached.bytes); } catch { /* served renamed either way */ }
+    if (!fs.existsSync(cache.body)) {
+      // Redirects are followed by hand so every hop is re-checked against the
+      // host allowlist: `redirect: "follow"` would chase a github.com redirect to
+      // an attacker-controlled host (SSRF); GitHub's own release redirect
+      // (github.com -> objects.githubusercontent.com) stays inside it. The body
+      // is streamed straight into the cache (temp file + rename, so a concurrent
+      // serve never sees half of it) and stopped the moment it passes the cap,
+      // rather than read whole into memory first. Two requests for the same file
+      // at once share one download: a second writer would race the first for the
+      // cache file (and on Windows cannot replace one that is being read).
+      let download = hubDownloadsInFlight.get(cache.body);
+      if (!download) {
+        download = downloadToFile({
+          url: fileUrl,
+          dest: cache.body,
+          cap: HUB_MAX_BUNDLE_BYTES,
+          isAllowed: isHubDownloadUrl,
+          fetchHop: fetchHubHop,
+        })
+          .then(({ contentType }) => fs.writeFileSync(cache.type, contentType))
+          .finally(() => hubDownloadsInFlight.delete(cache.body));
+        hubDownloadsInFlight.set(cache.body, download);
       }
-      res.setHeader("Cache-Control", "no-store");
-      setHubFileGuards(res);
-      res.setHeader("Content-Type", cachedType);
-      return res.send(cached.bytes);
+      await download;
     }
 
-    // Follow redirects manually so every hop is re-checked against the host
-    // allowlist. `redirect: "follow"` would chase a github.com redirect to an
-    // attacker-controlled host (SSRF); GitHub's own release redirect
-    // (github.com -> objects.githubusercontent.com) stays inside the allowlist.
-    let upstream;
-    for (let hop = 0; ; hop += 1) {
-      if (hop > 5) {
-        return sendError(res, 502, new Error("Too many redirects fetching scenario file."));
-      }
-      upstream = await fetchHubHop(current);
-      if (upstream.status < 300 || upstream.status >= 400) break;
-      const location = upstream.headers.get("location");
-      if (!location) break;
-      const next = new URL(location, current);
-      if (!isAllowedHubUrl(next, HUB_DOWNLOAD_HOSTS)) {
-        return sendError(res, 400, new Error("Scenario file redirected off GitHub."));
-      }
-      current = next;
+    let cachedType = "application/octet-stream";
+    try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
+    // Kept and handed on under the current bundle name, whatever the post says:
+    // a copy just downloaded, or one cached before the startup rename reached it,
+    // is renamed now (scenarioBundleNames.js).
+    const cached = await renameScenarioBundleBytes(fs.readFileSync(cache.body));
+    if (cached.changed) {
+      try { writeFileAtomic(cache.body, cached.bytes); } catch { /* served renamed either way */ }
     }
-    if (!upstream.ok) {
-      return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
-    }
-
-    const downloaded = Buffer.from(await upstream.arrayBuffer());
-    if (downloaded.length > HUB_MAX_BUNDLE_BYTES) {
-      return sendError(res, 413, new Error("Scenario bundle is too large."));
-    }
-    // Kept and handed on under the current bundle name, whatever the post says.
-    const buffer = (await renameScenarioBundleBytes(downloaded)).bytes;
-
-    const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    // Cache for next time — best-effort; a cache write failure must not fail the
-    // import. Temp file + rename so a concurrent serve never sees a half-written body.
-    try {
-      fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
-      fs.writeFileSync(`${cache.body}.tmp`, buffer);
-      fs.renameSync(`${cache.body}.tmp`, cache.body);
-      fs.writeFileSync(cache.type, contentType);
-    } catch (cacheError) {
-      console.warn("[hub] cache write failed:", cacheError.message);
-    }
-
     res.setHeader("Cache-Control", "no-store");
     setHubFileGuards(res);
     // Pass the upstream content type through untouched. JSON bundles still parse
     // via response.json() (which ignores the header), while binary bundles (.zip)
     // and raw basemap images (.png/.jpg) arrive byte-for-byte.
-    res.setHeader("Content-Type", contentType);
-    res.send(buffer);
+    res.setHeader("Content-Type", cachedType);
+    res.send(cached.bytes);
   } catch (error) {
-    sendError(res, 502, error);
+    if (error instanceof TooLargeError) return sendError(res, 413, new Error("Scenario bundle is too large."));
+    sendError(res, error?.status || 502, error);
   }
 });
 
@@ -1482,6 +1510,135 @@ app.post("/api/basemaps", largeJsonParser, (req, res) => {
 app.get("/api/basemaps/:id/payload", (req, res) => {
   try {
     res.json(getBasemapPayload(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+// ---- Tiled Basemaps (docs/adr/0005) --------------------------------------
+// Installed from a GitHub release as a background job the client polls: the
+// archive streams to disk, is checked, and only then joins the library.
+app.post("/api/basemaps/tiled/install", jsonParser, (req, res) => {
+  try {
+    const { url: fileUrl, name, author, thumbnail, source, expectedHash } = req.body ?? {};
+    if (expectedHash !== undefined && !/^[a-f0-9]{64}$/.test(String(expectedHash))) {
+      return sendError(res, 400, new Error("expectedHash must be a SHA-256 hex digest."));
+    }
+    let target;
+    try {
+      target = new URL(String(fileUrl ?? ""));
+    } catch {
+      return sendError(res, 400, new Error("A Tiled Basemap needs the link to its file."));
+    }
+    if (!isHubDownloadUrl(target)) {
+      return sendError(res, 400, new Error("Tiled Basemaps can only be installed from GitHub (a release download link)."));
+    }
+    const jobId = startInstallJob({
+      run: async ({ signal, onProgress }) => {
+        const file = incomingArchivePath();
+        await downloadToFile({
+          url: target.href,
+          dest: file,
+          cap: TILED_BASEMAP_MAX_BYTES,
+          isAllowed: isHubDownloadUrl,
+          fetchHop: fetchHubHop,
+          onProgress,
+          signal,
+        });
+        // createTiledBasemap removes the file if it is refused or cancelled.
+        return createTiledBasemap({
+          file,
+          name,
+          author,
+          thumbnail,
+          source: cleanBasemapSource(source, target.href),
+          expectedHash,
+          signal,
+        });
+      },
+    });
+    res.status(202).json({ jobId });
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.get("/api/basemaps/tiled/install/:jobId", (req, res) => {
+  const job = getInstallJob(req.params.jobId);
+  if (!job) return sendError(res, 404, new Error("No such download."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(job);
+});
+
+app.delete("/api/basemaps/tiled/install/:jobId", (req, res) => {
+  const job = cancelInstallJob(req.params.jobId);
+  if (!job) return sendError(res, 404, new Error("No such download."));
+  res.json(job);
+});
+
+// An author's own archive, from a file on their machine: the request body is
+// streamed to disk, never parsed or held, then checked like a download.
+app.put("/api/basemaps/tiled", async (req, res) => {
+  const file = incomingArchivePath();
+  try {
+    await receiveToFile(req, file, TILED_BASEMAP_MAX_BYTES);
+    const meta = await createTiledBasemap({ file, name: req.query.name, author: req.query.author });
+    res.status(201).json(meta);
+  } catch (error) {
+    sendError(res, error instanceof TooLargeError ? 413 : 400, error);
+  }
+});
+
+app.get("/api/basemaps/by-hash/:hash", (req, res) => {
+  const meta = findBasemapMetaByHash(String(req.params.hash));
+  if (!meta) return sendError(res, 404, new Error("Basemap not in the library."));
+  res.setHeader("Cache-Control", "no-store");
+  res.json(meta);
+});
+
+// A Tiled Basemap's vector fallback (small GeoJSON).
+app.put("/api/basemaps/:id/payload", largeJsonParser, (req, res) => {
+  try {
+    res.json(setTiledBasemapFallback(req.params.id, req.body?.geojson));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// Where the author published it (a release download link), passed on by the
+// Scenarios that name it.
+app.put("/api/basemaps/:id/source", jsonParser, (req, res) => {
+  try {
+    res.json(setTiledBasemapSource(req.params.id, req.body?.payloadUrl));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+// Which scenarios name it: what deleting it would leave on their painted fallback.
+app.get("/api/basemaps/:id/users", (req, res) => {
+  const meta = getBasemapMeta(req.params.id);
+  if (!meta) return sendError(res, 404, new Error("Basemap not in the library."));
+  res.json(meta.kind === "tiled" ? listScenariosNamingTiledBasemap(meta.contentHash) : []);
+});
+
+// The archive itself, by byte range, for the map's pmtiles reader.
+app.get("/api/basemaps/:id/archive", (req, res) => {
+  try {
+    streamBinaryFile(req, res, getBasemapArchivePath(req.params.id));
+  } catch (error) {
+    sendError(res, 404, error);
+  }
+});
+
+app.head("/api/basemaps/:id/archive", (req, res) => {
+  try {
+    const stats = fs.statSync(getBasemapArchivePath(req.params.id));
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", stats.size);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).end();
   } catch (error) {
     sendError(res, 404, error);
   }

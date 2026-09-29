@@ -4,6 +4,7 @@ import { APP_HEIGHT } from "../../runtime/mobileUi.js";
 import Map from "react-map-gl/maplibre";
 import { useCustomBackground } from "./useCustomBackground.js";
 import { buildScenarioTerrainStyle, publishShownRelief } from "./scenarioTerrain.js";
+import TiledBasemapOffer from "./TiledBasemapOffer.jsx";
 import MapScene from "./MapScene.jsx";
 import { loadNatGeoDarkStyle } from "./natGeoDarkStyle.js";
 
@@ -601,7 +602,7 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
   // the scenario's basemap does, unless the player picked one in Settings → Map.
   // `declared` flips on from the light world.json poll (before the heavy payload)
   // so the map drops ESRI immediately rather than flashing satellite Earth.
-  const { background: customBg, declared: bgDeclared, basemap: worldBasemap } = useCustomBackground();
+  const { background: customBg, declared: bgDeclared, basemap: worldBasemap, missingTiled } = useCustomBackground();
   const isGlobe = projection === "globe";
   // The player's basemap pick (Settings → Map) is local to this browser and
   // reversible. Empty — the default — leaves the scenario author's background
@@ -1301,6 +1302,9 @@ function World({ mapRef, projection, terrainEnabled, onInitialIdle }) {
           Loading tiles…
         </div>
       )}
+      {/* The scenario names a Tiled Basemap the player does not have: its painted
+          fallback is on screen; offer the download (Map/TiledBasemapOffer.jsx). */}
+      {useScenarioBackground && missingTiled && <TiledBasemapOffer key={missingTiled.hash} basemap={missingTiled} />}
     </div>
   );
 }

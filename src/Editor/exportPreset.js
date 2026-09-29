@@ -157,8 +157,22 @@ const buildCitiesForGame = (features) => ({
 // to fully replace Earth; vectors carry their GeoJSON. Raster uploads
 // (GeoTIFF/PMTiles) are editor-only reference and don't persist, so they never
 // reach here. Returns { background: null } when there's nothing.
-const buildBackgroundForGame = (customBackground) => {
+//
+// A Tiled Basemap the author chose (doc.metadata.tiledBasemap: { hash, name,
+// bytes, hubUrl, fillOpacity }) is NAMED on a vector background, never carried
+// (docs/adr/0005). The vector drawing on screen is its painted fallback; with
+// none, the fallback is an empty drawing (the sea colour) until it downloads.
+const EMPTY_FALLBACK = { type: "FeatureCollection", features: [] };
+const buildBackgroundForGame = (customBackground, tiledBasemap = null) => {
   const bg = customBackground;
+  if (tiledBasemap?.hash) {
+    const { fillOpacity, ...named } = tiledBasemap;
+    const geojson = bg?.kind === "vector" && Array.isArray(bg.geojson?.features) ? bg.geojson : EMPTY_FALLBACK;
+    return {
+      background: { kind: "vector", tiled: named, ...(Array.isArray(fillOpacity) ? { fillOpacity } : {}) },
+      backgroundData: { geojson },
+    };
+  }
   if (!bg || typeof bg !== "object") return { background: null, backgroundData: null };
   if (bg.kind === "image" && bg.dataUrl) {
     return {
@@ -319,7 +333,7 @@ export const buildGameSeed = (doc, regionsFC, palette = {}, { playerCountry } = 
 
   const author = (doc.metadata?.author || "").trim();
   const gameCities = buildCitiesForGame(doc.features);
-  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground);
+  const { background, backgroundData } = buildBackgroundForGame(doc.metadata?.customBackground, doc.metadata?.tiledBasemap);
   const world = {
     ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
     regionOwnershipOverrides,

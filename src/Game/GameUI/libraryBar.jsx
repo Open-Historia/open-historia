@@ -2975,7 +2975,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           : bgDesc?.kind === "vector" && bgData?.geojson
             ? { kind: "vector", geojson: bgData.geojson }
             : null;
+      // A named Tiled Basemap (with the scenario's own fill ramp) re-opens as
+      // chosen, so Apply & Play keeps naming it.
+      const tiledBasemap = bgDesc?.kind === "vector" && bgDesc.tiled?.hash
+        ? { ...bgDesc.tiled, ...(Array.isArray(bgDesc.fillOpacity) ? { fillOpacity: bgDesc.fillOpacity } : {}) }
+        : null;
       setMapEditorSeed({
+        tiledBasemap,
         name: scenario.name || "",
         author: world.author || "",
         ownershipOverrides: world.regionOwnershipOverrides || {},

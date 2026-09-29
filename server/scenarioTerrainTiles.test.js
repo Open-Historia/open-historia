@@ -1,11 +1,12 @@
-/*! Open Historia — a scenario's relief tiles travel with it © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — a scenario names its Tiled Basemap, and never carries one © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test server/scenarioTerrainTiles.test.js
 //
-// A scenario can ship terrain.pmtiles, raster relief drawn over its vector
-// background (src/Game/Map/scenarioTerrain.js). The archive must survive a
-// bundle round trip like the geometry does, and a scenario WITHOUT one must not
-// be served anything: there is no stock relief to fall back to, and the game
-// reads the missing archive as "keep the painted background".
+// Detailed terrain is a Tiled Basemap that Scenarios name
+// (docs/adr/0005-tiled-basemaps-stream-to-disk.md). The first cut of this
+// feature shipped the archive INSIDE the scenario (a `terrain.pmtiles` asset,
+// with `world.background.terrain`). A scenario or game still in that shape is
+// migrated: its archive moves into the Basemap library, and its background names
+// the Tiled Basemap instead. A scenario that never had relief is untouched.
 //
 // Each case runs in its own child process because OH_DATA_DIR is read once, at
 // import time.
@@ -17,14 +18,18 @@ import path from "node:path";
 import url from "node:url";
 import { after, test } from "node:test";
 import { OWNER_SCHEMA } from "./ownerMigration.js";
+import { buildPmtiles } from "./testPmtiles.js";
 
 const SERVER_DIR = path.dirname(url.fileURLToPath(import.meta.url));
 const STORE_URL = url.pathToFileURL(path.join(SERVER_DIR, "libraryStore.js")).href;
+const BASEMAPS_URL = url.pathToFileURL(path.join(SERVER_DIR, "basemapStore.js")).href;
 const roots = [];
 const writeJson = (file, value) => {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(value), "utf-8");
 };
+
+const FALLBACK = { type: "FeatureCollection", features: [{ type: "Feature", properties: { fill: "#4a6" }, geometry: { type: "Polygon", coordinates: [[[0, 0], [2, 0], [2, 2], [0, 0]]] } }] };
 
 const buildDataDir = () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "oh-terrain-"));
@@ -32,6 +37,7 @@ const buildDataDir = () => {
   const scenarioDir = path.join(root, "scenarios", "painted");
   writeJson(path.join(scenarioDir, "scenario.json"), { id: "painted", name: "Painted World", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z" });
   writeJson(path.join(scenarioDir, "world.json"), { ownerSchema: OWNER_SCHEMA, customRegions: true, background: { kind: "vector" } });
+  writeJson(path.join(scenarioDir, "background.json"), { geojson: FALLBACK });
   writeJson(path.join(scenarioDir, "game.json"), { country: "Testland", gameDate: "0298-06-01" });
   for (const key of ["actions", "advisor", "chat", "events"]) writeJson(path.join(scenarioDir, "storage", `${key}.json`), []);
   writeJson(path.join(root, "scenario-manifest.json"), { order: ["painted"], selectedScenarioId: "painted", version: 2 });
@@ -39,7 +45,14 @@ const buildDataDir = () => {
 };
 
 const runStore = (root, body) => {
-  const script = `const store = await import(${JSON.stringify(STORE_URL)});\n${body}`;
+  const script = [
+    `const fs = await import("node:fs");`,
+    `const path = (await import("node:path")).default;`,
+    `const store = await import(${JSON.stringify(STORE_URL)});`,
+    `const basemaps = await import(${JSON.stringify(BASEMAPS_URL)});`,
+    `const ROOT = ${JSON.stringify(root)};`,
+    body,
+  ].join("\n");
   const out = execFileSync(process.execPath, ["--input-type=module", "-e", script], {
     encoding: "utf-8",
     env: { ...process.env, OH_DATA_DIR: root, OH_ASSETS_DIR: path.join(root, "no-stock-assets") },
@@ -54,45 +67,93 @@ after(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
 
-// Stand-in archive bytes: the store moves them, it never parses them.
-const TILES = Buffer.from("PMTiles\u0003 relief stand-in").toString("base64");
+const ARCHIVE = buildPmtiles({
+  minzoom: 0,
+  maxzoom: 1,
+  bounds: [0, -40, 90, 50],
+  tiles: [
+    { z: 0, x: 0, y: 0, bytes: Buffer.from("tile 0/0/0") },
+    { z: 1, x: 1, y: 0, bytes: Buffer.from("tile 1/1/0") },
+    { z: 1, x: 1, y: 1, bytes: Buffer.from("tile 1/1/1") },
+  ],
+}).toString("base64");
 
-test("a scenario's relief tiles survive a bundle round trip and are served to its games", () => {
+// A bundle in the first cut's shape: the archive rides inside it.
+const LEGACY_BUNDLE = `
+  const bundle = store.exportScenarioBundle("painted");
+  bundle.scenario = { ...bundle.scenario, id: "relief", name: "Relief World" };
+  bundle.data.world = { ...bundle.data.world, background: { kind: "vector", terrain: { minzoom: 0, maxzoom: 8, fillOpacity: [[2, 0.4], [10, 0.25]] } } };
+  bundle.assets.terrain = { contentType: "application/octet-stream", data: ${JSON.stringify(ARCHIVE)}, encoding: "base64", fileName: "terrain.pmtiles", mode: "embedded" };
+`;
+
+test("a scenario that carried its relief becomes one that names a Tiled Basemap", () => {
   const root = buildDataDir();
   const result = runStore(root, `
-    const fs = await import("node:fs");
-    const bundle = store.exportScenarioBundle("painted");
-    bundle.scenario = { ...bundle.scenario, id: "relief", name: "Relief World" };
-    bundle.data.world = { ...bundle.data.world, background: { kind: "vector", terrain: { minzoom: 0, maxzoom: 8 } } };
-    bundle.assets.terrain = { contentType: "application/octet-stream", data: ${JSON.stringify(TILES)}, encoding: "base64", fileName: "terrain.pmtiles", mode: "embedded" };
+    ${LEGACY_BUNDLE}
     const imported = store.importScenarioBundle(bundle);
-    const again = store.exportScenarioBundle(imported.scenario.id);
-    const game = store.createGame({ scenarioId: imported.scenario.id, setActive: true });
-    const served = store.resolveRuntimeBinaryAsset("terrain");
+    await store.migrateEmbeddedTiledArchives();
+    const id = imported.scenario.id;
+    const world = store.getScenarioDetails(id).data.world;
+    const meta = basemaps.findBasemapMetaByHash(world.background?.tiled?.hash);
+    const exported = store.exportScenarioBundle(id);
     ${report(`{
-      exportedMode: again.assets.terrain.mode,
-      exportedFile: again.assets.terrain.fileName,
-      sameBytes: again.assets.terrain.data === ${JSON.stringify(TILES)},
-      servedBytes: fs.readFileSync(served.sourcePath).toString("base64") === ${JSON.stringify(TILES)},
-      gameTerrain: store.getGameDetails(game.game.id).data.world.background?.terrain ?? null,
+      background: world.background,
+      meta,
+      fallback: meta ? basemaps.getBasemapPayload(meta.id) : null,
+      archiveBytes: meta ? fs.readFileSync(basemaps.getBasemapArchivePath(meta.id)).toString("base64") === ${JSON.stringify(ARCHIVE)} : false,
+      scenarioStillHasArchive: fs.existsSync(path.join(ROOT, "scenarios", id, "terrain.pmtiles")),
+      exportedTerrain: exported.assets.terrain ?? null,
+      exportedBackground: exported.data.world.background,
+      exportedFallback: exported.assets.backgroundData?.data ?? null,
     }`)}
   `);
-  assert.equal(result.exportedMode, "embedded");
-  assert.equal(result.exportedFile, "terrain.pmtiles");
-  assert.equal(result.sameBytes, true, "the archive travels byte-exact");
-  assert.equal(result.servedBytes, true, "the active game is served its scenario's archive");
-  assert.deepEqual(result.gameTerrain, { minzoom: 0, maxzoom: 8 }, "the game inherits the terrain descriptor");
+  assert.equal(result.background.kind, "vector", "the painted background stays, as the fallback");
+  assert.equal(result.background.terrain, undefined, "the old terrain block is gone");
+  assert.match(result.background.tiled.hash, /^[a-f0-9]{64}$/);
+  assert.equal(result.background.tiled.name, "Relief World");
+  assert.deepEqual(result.background.fillOpacity, [[2, 0.4], [10, 0.25]], "the scenario keeps its own fill ramp");
+  assert.equal(result.meta.kind, "tiled");
+  assert.equal(result.meta.maxzoom, 1, "the zoom range comes from the archive, not the old descriptor");
+  assert.equal(result.archiveBytes, true, "the archive moved into the library byte-exact");
+  assert.deepEqual(result.fallback, { geojson: FALLBACK }, "the Basemap takes the scenario's painted background as its fallback");
+  assert.equal(result.scenarioStillHasArchive, false, "the scenario no longer carries the archive");
+  assert.equal(result.exportedTerrain, null, "an export never carries a tiled archive");
+  assert.deepEqual(result.exportedBackground, result.background, "an export names the Tiled Basemap");
+  assert.deepEqual(result.exportedFallback, { geojson: FALLBACK }, "an export still carries the painted fallback");
 });
 
-test("a scenario without relief tiles exports none and serves none", () => {
+test("a game made from the old shape is migrated to name the same Tiled Basemap", () => {
   const root = buildDataDir();
   const result = runStore(root, `
-    const bundle = store.exportScenarioBundle("painted");
-    store.createGame({ scenarioId: "painted", setActive: true });
-    let served = null;
-    try { served = store.resolveRuntimeBinaryAsset("terrain").sourcePath; } catch (error) { served = "error: " + error.message; }
-    ${report(`{ mode: bundle.assets.terrain.mode, served }`)}
+    ${LEGACY_BUNDLE}
+    const imported = store.importScenarioBundle(bundle);
+    const game = store.createGame({ scenarioId: imported.scenario.id, setActive: true });
+    await store.migrateEmbeddedTiledArchives();
+    ${report(`{
+      scenario: store.getScenarioDetails(imported.scenario.id).data.world.background,
+      game: store.getGameDetails(game.game.id).data.world.background,
+    }`)}
   `);
-  assert.equal(result.mode, "default");
-  assert.match(result.served, /^error: /, "no stock relief exists to fall back to");
+  assert.ok(result.game.tiled?.hash);
+  assert.deepEqual(result.game, result.scenario);
+});
+
+test("migration is idempotent, and a scenario without relief is untouched", () => {
+  const root = buildDataDir();
+  const result = runStore(root, `
+    ${LEGACY_BUNDLE}
+    store.importScenarioBundle(bundle);
+    await store.migrateEmbeddedTiledArchives();
+    const first = store.getScenarioDetails("relief").data.world.background;
+    await store.migrateEmbeddedTiledArchives();
+    ${report(`{
+      first,
+      second: store.getScenarioDetails("relief").data.world.background,
+      painted: store.getScenarioDetails("painted").data.world.background,
+      library: basemaps.getBasemapCatalog().length,
+    }`)}
+  `);
+  assert.deepEqual(result.second, result.first);
+  assert.deepEqual(result.painted, { kind: "vector" });
+  assert.equal(result.library, 1);
 });

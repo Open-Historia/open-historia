@@ -1,15 +1,18 @@
-/*! Open Historia — scenario relief tiles over a vector background © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-// A scenario with a vector background can also ship raster relief tiles
-// (terrain.pmtiles): painted terrain that stays sharp when zoomed in, where the
-// vector shapes can only be flat colour. The world declares them on its
-// background descriptor:
+/*! Open Historia — a scenario's Tiled Basemap over its vector background © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// A scenario with a vector background can name a Tiled Basemap: raster relief
+// tiles in a PMTiles archive, painted terrain that stays sharp when zoomed in,
+// where the vector shapes can only be flat colour. The archive lives in the
+// player's Basemap library, downloaded once and shared by every scenario that
+// names it (docs/adr/0005-tiled-basemaps-stream-to-disk.md); the scenario only
+// names it, by the hash of its bytes:
 //
-//   world.background = { kind: "vector", terrain: { minzoom: 0, maxzoom: 8, bounds: [w, s, e, n] } }
+//   world.background = { kind: "vector", tiled: { hash, name, bytes, hubUrl }, fillOpacity? }
 //
 // The vector background is always the base and always loads; the tiles draw on
-// top of it. So a game that predates this feature, a scenario whose archive is
-// missing or unreadable, and a player who picked "Painted" in Settings → Map all
-// see the same thing: the vector background, never a blank map.
+// top of it. So a game that predates this feature, a player who has not
+// downloaded the Basemap yet, an archive that will not open, and a player who
+// picked "Painted" in Settings → Map all see the same thing: the vector
+// background, never a blank map.
 
 // Settings → Map. Empty (the default) shows a scenario's relief tiles when it has
 // them; "painted" keeps its vector background only.
@@ -43,20 +46,43 @@ const normalizeFillOpacityStops = (value) => {
   return stops;
 };
 
-// The descriptor's terrain block as the map needs it, or null when the scenario
-// declares none. Only a vector background can carry relief tiles: an image
-// background already replaces the whole map.
-export const normalizeScenarioTerrain = (descriptor) => {
-  const terrain = descriptor?.kind === "vector" ? descriptor.terrain : null;
-  if (!terrain || typeof terrain !== "object" || Array.isArray(terrain)) return null;
-  const minzoom = clampZoom(terrain.minzoom, 0);
-  const maxzoom = Math.max(minzoom, clampZoom(terrain.maxzoom, 8));
-  const fillOpacity = normalizeFillOpacityStops(terrain.fillOpacity);
+// The Tiled Basemap a scenario names, or null. Only a vector background can
+// name one (an image background already replaces the whole map), and only by a
+// SHA-256 content hash; a hub link is kept only when it is https.
+export const scenarioTiledBasemap = (descriptor) => {
+  const tiled = descriptor?.kind === "vector" ? descriptor.tiled : null;
+  if (!tiled || typeof tiled !== "object" || !/^[a-f0-9]{64}$/.test(String(tiled.hash || ""))) return null;
+  const bytes = Number(tiled.bytes);
+  const hubUrl = /^https:\/\//i.test(String(tiled.hubUrl || "")) ? String(tiled.hubUrl) : "";
   return {
-    minzoom,
-    maxzoom,
-    ...(validBounds(terrain.bounds) ? { bounds: terrain.bounds.map(Number) } : {}),
-    ...(fillOpacity ? { fillOpacity } : {}),
+    hash: tiled.hash,
+    ...(tiled.name ? { name: String(tiled.name).slice(0, 80) } : {}),
+    ...(Number.isFinite(bytes) && bytes > 0 ? { bytes } : {}),
+    ...(hubUrl ? { hubUrl } : {}),
+  };
+};
+
+// What the map draws of a scenario's Tiled Basemap: its tiles (zooms and bounds
+// read from the Basemap's own archive, the fill ramp the scenario's), or, when
+// the named Basemap is not in the library, none, plus the Basemap to offer for
+// download. `basemap` is the library entry found for the hash, if any;
+// `archiveUrl` is where its archive is served.
+export const resolveTiledBasemap = ({ descriptor, setting, basemap, archiveUrl }) => {
+  const named = wantsScenarioTerrain(setting) ? scenarioTiledBasemap(descriptor) : null;
+  if (!named) return { tiles: null, missing: null };
+  if (basemap?.kind !== "tiled" || basemap.contentHash !== named.hash || !archiveUrl) return { tiles: null, missing: named };
+  const minzoom = clampZoom(basemap.minzoom, 0);
+  const maxzoom = Math.max(minzoom, clampZoom(basemap.maxzoom, minzoom));
+  const fillOpacity = normalizeFillOpacityStops(descriptor.fillOpacity);
+  return {
+    tiles: {
+      minzoom,
+      maxzoom,
+      ...(validBounds(basemap.bounds) ? { bounds: basemap.bounds.map(Number) } : {}),
+      ...(fillOpacity ? { fillOpacity } : {}),
+      url: `pmtiles://${archiveUrl}`,
+    },
+    missing: null,
   };
 };
 

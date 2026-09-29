@@ -12,6 +12,7 @@
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle, zipBundle } from "./bundleZip.js";
 import { saveBlobToDisk } from "./saveFile.js";
+import { installTiledBasemap } from "./tiledBasemaps.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
 // background.json file bytes; plain atob/btoa mangle non-Latin1 vector data).
@@ -37,7 +38,12 @@ const BUNDLE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.(?:json|geojson|zip)|github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+\.(?:json|geojson))/i;
 const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const HASH_PATTERN = /Basemap-Hash:\s*([a-f0-9]{16,64})/i;
-const KIND_PATTERN = /Basemap-Kind:\s*(image|vector)/i;
+const KIND_PATTERN = /Basemap-Kind:\s*(image|vector|tiled)/i;
+// A Tiled Basemap (docs/adr/0005) is far too large for an issue attachment, so
+// its post links a release download of the .pmtiles archive instead, in any
+// repository, and says how big it is.
+const TILED_LINK_PATTERN = /https:\/\/github\.com\/[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.pmtiles/i;
+const SIZE_PATTERN = /Basemap-Size:\s*(\d+)/i;
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 let cache = { at: 0, posts: null };
@@ -117,6 +123,8 @@ const parseBasemapPost = (issue) => {
     coverImageUrl: coverMatch ? coverMatch[1] ?? coverMatch[2] ?? null : null,
     contentHash: body.match(HASH_PATTERN)?.[1]?.toLowerCase() ?? null,
     kind: body.match(KIND_PATTERN)?.[1]?.toLowerCase() ?? "image",
+    tiledUrl: body.match(TILED_LINK_PATTERN)?.[0] ?? null,
+    bytes: Number(body.match(SIZE_PATTERN)?.[1]) || null,
   };
 };
 
@@ -152,7 +160,9 @@ const parseScenarioAsBasemap = (issue) => {
 // (image kind) the attached image itself. Old JSON-bundle, new image/vector, and
 // scenario-carried basemaps all pass.
 export const basemapPostInstallable = (post) =>
-  Boolean(post?.fromScenario || post?.bundleUrl || (post?.kind === "image" && post?.coverImageUrl));
+  post?.kind === "tiled"
+    ? Boolean(post?.tiledUrl)
+    : Boolean(post?.fromScenario || post?.bundleUrl || (post?.kind === "image" && post?.coverImageUrl));
 
 export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
   if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
@@ -292,7 +302,19 @@ const payloadRefVia = (post) =>
 const payloadRefUrl = (post) =>
   (payloadRefVia(post) === "dataFile" ? post?.bundleUrl : post?.coverImageUrl || post?.bundleUrl) || null;
 
-export const installCommunityBasemap = async (post) => {
+export const installCommunityBasemap = async (post, { onProgress, signal } = {}) => {
+  // A Tiled Basemap is streamed to disk by the game server, with progress.
+  if (post?.kind === "tiled") {
+    if (!post.tiledUrl) throw new Error("This basemap post has no release link to its .pmtiles file.");
+    return installTiledBasemap({
+      url: post.tiledUrl,
+      name: post.title,
+      source: { community: true, url: post.url, payloadUrl: post.tiledUrl, payloadVia: "tiled" },
+      expectedHash: post.contentHash,
+      onProgress,
+      signal,
+    });
+  }
   const { meta, kind, payload } = await loadBasemapPayload(post);
   if ((kind === "image" && !payload.dataUrl) || (kind === "vector" && !payload.geojson)) {
     throw new Error("That basemap is missing its payload.");
@@ -338,7 +360,32 @@ const safeName = (name) =>
 // never actually complete for a vector basemap. .zip IS accepted, which is why
 // sharing a vector inside a scenario bundle always worked. Async now, because
 // zipping is.
+// A Tiled Basemap is too large to attach: the author puts the .pmtiles file in a
+// GitHub release (any repository of theirs) and pastes its download link into
+// the post. Nothing is downloaded here; the prefilled post carries the hash,
+// kind and size the hub reads back, and where the link goes.
+const publishTiledBasemap = (meta) => {
+  const technical = [
+    `Basemap-Hash: ${meta.contentHash || ""}`,
+    "Basemap-Kind: tiled",
+    `Basemap-Size: ${Number(meta.bytes) || 0}`,
+    "",
+    "Release download link to the .pmtiles file (paste it on the next line):",
+    meta.source?.payloadUrl || "",
+  ].join("\n");
+  const query = [
+    "template=basemap.yml",
+    `title=${encodeURIComponent(`[Basemap] ${meta.name || "Untitled basemap"}`)}`,
+    `name=${encodeURIComponent(meta.name || "")}`,
+    `author=${encodeURIComponent(meta.author || "")}`,
+    `technical=${encodeURIComponent(technical)}`,
+  ].join("&");
+  window.open(`${HUB_URL}/issues/new?${query}`, "_blank", "noopener");
+  return { tiled: true };
+};
+
 export const publishBasemap = async (meta, payload) => {
+  if (meta.kind === "tiled") return publishTiledBasemap(meta);
   const kind = meta.kind === "vector" ? "vector" : "image";
   const safe = safeName(meta.name);
   let dropWhat;

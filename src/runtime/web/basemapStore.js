@@ -124,6 +124,15 @@ const deleteBasemap = async (id) => {
 export const handleBasemaps = async ({ method, segments, body }) => {
   const id = segments[0] ? decodeURIComponent(segments[0]) : null;
 
+  // Tiled Basemaps need a disk to stream hundreds of megabytes onto
+  // (docs/adr/0005): the desktop app or a local server. Here a scenario naming
+  // one simply finds it missing and shows its painted fallback, and an install
+  // is refused in words rather than failing silently.
+  if (id === "tiled") {
+    return errorResponse("Detailed (tiled) basemaps need the desktop app or a local Open Historia server. This browser version shows the scenario's painted map instead.", 501);
+  }
+  if (id === "by-hash") return errorResponse("Basemap not in the library.", 404);
+
   try {
     if (!id) {
       if (method === "GET") return jsonResponse(await listBasemaps());

@@ -8,10 +8,11 @@
 // whole-world z0 tile), a "Your basemaps" shelf of the user's uploaded basemaps
 // (server-side library, thumbnailed), and a Community tab (filled in Phase 2).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EDITOR_BASEMAPS, esriPreviewUrl } from "./basemaps.js";
 import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
+import { announceTiledBasemap, formatBytes, listTiledBasemapUsers, setTiledBasemapFallback, setTiledBasemapSource, uploadTiledBasemap } from "../runtime/tiledBasemaps.js";
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
@@ -166,6 +167,7 @@ const BasemapPicker = ({
   onSelectBuiltin,
   onSelectCustom,
   onUpload,
+  currentVectorGeojson = null,
 }) => {
   const [tab, setTab] = useState("mine"); // mine | community
   const [mine, setMine] = useState([]);
@@ -176,6 +178,9 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  const [installPercent, setInstallPercent] = useState(null);
+  const installControllerRef = useRef(null);
+  const [tiledBusy, setTiledBusy] = useState(false);
 
   const refresh = () => {
     setLoading(true);
@@ -217,12 +222,65 @@ const BasemapPicker = ({
     }
   };
 
-  const handleDelete = async (id) => {
-    await deleteBasemapApi(id).catch(() => {});
+  const handleDelete = async (bm) => {
+    // A Tiled Basemap may be named by scenarios: deleting it leaves them on their
+    // painted fallback until it is downloaded again, so say which.
+    if (bm.kind === "tiled") {
+      const users = await listTiledBasemapUsers(bm.id);
+      const size = formatBytes(bm.bytes);
+      const message = users.length
+        ? `"${bm.name}" is the detailed map of: ${users.map((u) => u.name).join(", ")}. Deleting it frees ${size || "its space"}; those scenarios will show their painted map until it's downloaded again. Delete it?`
+        : `Delete "${bm.name}"${size ? ` and free ${size}` : ""}?`;
+      if (!window.confirm(message)) return;
+    }
+    await deleteBasemapApi(bm.id).catch(() => {});
+    // A game open on a scenario naming it goes back to its painted map.
+    if (bm.kind === "tiled") announceTiledBasemap(null);
     refresh();
   };
 
+  // An author's own detailed map: a PMTiles archive of raster tiles, streamed to
+  // the game server (never read here). The vector drawing currently on screen,
+  // if any, becomes its painted fallback.
+  const handleAddTiled = async (file) => {
+    if (!file) return;
+    setTiledBusy(true);
+    try {
+      const meta = await uploadTiledBasemap(file, { name: file.name.replace(/\.pmtiles$/i, "") });
+      if (currentVectorGeojson) await setTiledBasemapFallback(meta.id, currentVectorGeojson).catch(() => {});
+      refresh();
+    } catch (e) {
+      window.alert(`Could not add that detailed map: ${e?.message || e}`);
+    } finally {
+      setTiledBusy(false);
+    }
+  };
+
   const handlePublish = async (bm) => {
+    if (bm.kind === "tiled") {
+      // Too large to attach to a post: it goes in a GitHub release, and the post
+      // links it. The link is kept, so scenarios naming this map can offer it.
+      let meta = bm;
+      if (!bm.source?.payloadUrl) {
+        const link = window.prompt(
+          `"${bm.name}" is ${formatBytes(bm.bytes) || "too large"} to attach to a hub post, so it's shared as a GitHub release file:\n\n` +
+          "1. On GitHub, open any repository of yours (or make one) and choose Releases → Draft a new release.\n" +
+          `2. Attach the .pmtiles file (${bm.name}) and publish the release.\n` +
+          "3. Copy the file's download link and paste it here.\n\nRelease download link:",
+        );
+        if (!link) return;
+        try {
+          meta = await setTiledBasemapSource(bm.id, link);
+          refresh();
+        } catch (e) {
+          window.alert(e?.message || String(e));
+          return;
+        }
+      }
+      await publishBasemap(meta, null);
+      window.alert("On the GitHub page that opened, check the release link is in the post, add a preview picture if you like, then submit. Scenarios you save with this map from now on tell players where to download it.");
+      return;
+    }
     try {
       const payload = await getBasemapPayload(bm.id);
       const { fileName } = await publishBasemap(bm, payload);
@@ -237,14 +295,22 @@ const BasemapPicker = ({
   const handleInstall = async (post) => {
     if (busyId) return;
     setBusyId(post.id);
+    setInstallPercent(null);
+    const controller = new AbortController();
+    installControllerRef.current = controller;
     try {
-      await installCommunityBasemap(post);
+      await installCommunityBasemap(post, {
+        signal: controller.signal,
+        onProgress: ({ received, total }) => setInstallPercent(total ? Math.round((received / total) * 100) : null),
+      });
       refresh();
       setTab("mine");
     } catch (e) {
-      window.alert(`Install failed: ${e?.message || e}`);
+      if (e?.name !== "AbortError") window.alert(`Install failed: ${e?.message || e}`);
     } finally {
+      installControllerRef.current = null;
       setBusyId(null);
+      setInstallPercent(null);
     }
   };
 
@@ -266,6 +332,19 @@ const BasemapPicker = ({
                 const f = e.target.files?.[0];
                 e.target.value = "";
                 handleUpload(f);
+              }}
+            />
+          </label>
+          <label style={uploadBtn} title="A detailed map of raster tiles (a .pmtiles archive, up to 500 MB) that scenarios can name">
+            {tiledBusy ? "Adding…" : "⬆ Add detailed map"}
+            <input
+              type="file"
+              accept={acceptFor(".pmtiles")}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                handleAddTiled(f);
               }}
             />
           </label>
@@ -304,9 +383,9 @@ const BasemapPicker = ({
                         title={bm.name}
                         imageUrl={bm.thumbnail}
                         active={currentCustomId === bm.id}
-                        badge={bm.kind === "vector" ? "vector" : undefined}
+                        badge={bm.kind === "tiled" ? `detailed · ${formatBytes(bm.bytes)}` : bm.kind === "vector" ? "vector" : undefined}
                         onClick={() => { onSelectCustom(bm); onClose(); }}
-                        onDelete={() => handleDelete(bm.id)}
+                        onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
                       />
                     ))}
@@ -352,8 +431,10 @@ const BasemapPicker = ({
                         ) : (
                           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.6rem", opacity: 0.5 }}>🗺️</div>
                         )}
-                        {post.kind === "vector" && (
-                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>vector</span>
+                        {(post.kind === "vector" || post.kind === "tiled") && (
+                          <span style={{ position: "absolute", left: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>
+                            {post.kind === "tiled" ? `detailed${post.bytes ? ` · ${formatBytes(post.bytes)}` : ""}` : "vector"}
+                          </span>
                         )}
                         {post.fromScenario && (
                           <span title="Shared as part of a scenario — installing pulls the map out of that scenario's file" style={{ position: "absolute", right: 6, top: 6, background: "rgba(0,0,0,0.55)", borderRadius: "6px", fontSize: "0.6rem", fontWeight: 700, padding: "0.1rem 0.35rem", textTransform: "uppercase" }}>from scenario</span>
@@ -374,8 +455,15 @@ const BasemapPicker = ({
                             opacity: canInstall ? 1 : 0.5,
                           }}
                         >
-                          {busyId === post.id ? "Installing…" : "⬇ Install"}
+                          {busyId === post.id
+                            ? `Installing…${installPercent !== null ? ` ${installPercent}%` : ""}`
+                            : `⬇ Install${post.kind === "tiled" && post.bytes ? ` (${formatBytes(post.bytes)})` : ""}`}
                         </button>
+                        {busyId === post.id && post.kind === "tiled" && (
+                          <button type="button" style={tabBtn(false)} onClick={() => installControllerRef.current?.abort()}>
+                            Cancel
+                          </button>
+                        )}
                       </div>
                     </div>
                     );
