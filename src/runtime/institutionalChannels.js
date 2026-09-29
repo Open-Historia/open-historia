@@ -122,6 +122,25 @@ export const materializeInstitutionalChannel = ({
   return { world, chats: reconciled, channel: finalChannel, institution: institutions.byId[canonicalId] };
 };
 
+// Whether materializing changed nothing that is stored: the Council already
+// exists under the institution's bound channel id, with the same roster,
+// status and title. Opening a Council, or starting a debate or a vote round in
+// it, then has nothing to write, and does not rewrite the whole campaign.
+const channelShape = (chat) => JSON.stringify([
+  clean(chat?.id),
+  clean(chat?.status),
+  clean(chat?.title),
+  (Array.isArray(chat?.countries) ? chat.countries : []).map((country) => [clean(country?.name), clean(country?.code), clean(country?.polityKey)]),
+]);
+
+export const institutionalChannelUnchanged = ({ world = {}, chats = [] } = {}, result = null) => {
+  const channel = result?.channel;
+  if (!channel?.id) return false;
+  const stored = findInstitutionalChannel(chats, channel.institutionId);
+  const bound = clean(resolveInstitutionRecord(world, channel.institutionId)?.channelId);
+  return Boolean(stored) && bound === clean(channel.id) && channelShape(stored) === channelShape(channel);
+};
+
 export const ensureInstitutionalChannel = async ({
   institutionId = "",
   playerCountry = "",
@@ -137,12 +156,15 @@ export const ensureInstitutionalChannel = async ({
       playerCountry: playerCountry || game?.country || "",
       date: date || game?.gameDate || "",
     });
+    // Already there as it stands: no commit (the canonical state is then
+    // returned as read).
+    if (institutionalChannelUnchanged({ world, chats }, result)) return null;
     return { world: result.world, chats: result.chats };
   }, {
     playerCountry,
     expectedGameId,
   });
-  if (committed?.skipped || !result) throw new Error("Institutional channel was not committed.");
+  if (!result) throw new Error("Institutional channel was not committed.");
   const channel = findInstitutionalChannel(
     reconcileChatsForPlayer(committed.chat || committed.chats || result.chats, committed.world, playerCountry || committed.game?.country || ""),
     result.channel.institutionId,

@@ -3495,28 +3495,28 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 ...current.filter((entry) => entry.key !== key),
                 { key, institutionId: id, proposalId: proposal, kind: mode },
             ]);
-            let materialized = await ensureInstitutionalChannel({
-                institutionId: id,
-                playerCountry,
-                date: gameDate,
-                expectedGameId,
-            });
             // Publish the native Council channel immediately. The model may take
             // several seconds to reason, but the institution workspace should
             // already show that formal business is actively being considered.
-            adoptInstitutionalResult(materialized);
+            // A comment from the player is committed in the same write, since
+            // saying it materializes the channel too; without one, a Council
+            // that already stands costs no write at all.
             const comment = String(playerComment || "").trim();
-            if (comment) {
-                const spoken = await commitInstitutionalPlayerMessage({
+            const materialized = comment
+                ? await commitInstitutionalPlayerMessage({
                     institutionId: id,
                     playerCountry,
                     text: comment,
                     date: gameDate,
                     expectedGameId,
+                })
+                : await ensureInstitutionalChannel({
+                    institutionId: id,
+                    playerCountry,
+                    date: gameDate,
+                    expectedGameId,
                 });
-                adoptInstitutionalResult(spoken);
-                materialized = { ...materialized, channel: spoken.channel || materialized.channel };
-            }
+            adoptInstitutionalResult(materialized);
             const result = await runChatActionBatch({
                 chat: materialized.channel,
                 playerCountry,
