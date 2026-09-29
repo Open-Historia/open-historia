@@ -1274,6 +1274,9 @@ export const buildCountryStatHistorySample = (sheetInput, { date = "", round = 0
   });
 };
 
+const compareHistorySamples = (a, b) =>
+  compareGameDates(a.date, b.date) || Number(a.round || 0) - Number(b.round || 0);
+
 const normalizeHistorySeries = (value) => {
   if (!Array.isArray(value)) return [];
   const byDate = new Map();
@@ -1282,9 +1285,41 @@ const normalizeHistorySeries = (value) => {
     if (sample) byDate.set(sample.date, sample); // latest source wins deterministically
   }
   return [...byDate.values()]
-    .sort((a, b) => compareGameDates(a.date, b.date) || Number(a.round || 0) - Number(b.round || 0))
+    .sort(compareHistorySamples)
     .slice(-COUNTRY_STATS_HISTORY_MAX_SAMPLES);
 };
+
+// What a sample measured, without when: two samples that agree here are the
+// same reading. Normalized samples always list their fields in one order.
+const historySampleValues = (sample) => {
+  const { date: _date, round: _round, historyVersion: _version, ...values } = sample;
+  return JSON.stringify(values);
+};
+
+// One normalized sample into one normalized, sorted series. A sample on a date
+// the series already has replaces it (a same-day refresh or GM edit). A sample
+// that reads exactly like the one before it is not a new measurement and is not
+// kept: a sheet nobody reassessed would otherwise add a copy every turn, and the
+// charts would show each copy as a fresh data point.
+const appendHistorySample = (series, sample) => {
+  const sameDate = series.findIndex((entry) => entry.date === sample.date);
+  if (sameDate >= 0) {
+    const next = [...series];
+    next[sameDate] = sample;
+    return next;
+  }
+  const previous = series.filter((entry) => compareGameDates(entry.date, sample.date) < 0).at(-1);
+  if (previous && historySampleValues(previous) === historySampleValues(sample)) return series;
+  const last = series.at(-1);
+  const next = !last || compareHistorySamples(last, sample) < 0
+    ? [...series, sample]
+    : [...series, sample].sort(compareHistorySamples);
+  return next.slice(-COUNTRY_STATS_HISTORY_MAX_SAMPLES);
+};
+
+const buildHistorySample = (sheetOrSample, options) =>
+  normalizeCountryStatHistorySample(sheetOrSample) ||
+  buildCountryStatHistorySample(sheetOrSample, options);
 
 export const normalizeCountryStatsHistory = (value) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -1308,12 +1343,23 @@ export const appendCountryStatHistorySample = (
   if (!key) return normalizeCountryStatsHistory(historyInput);
 
   const history = normalizeCountryStatsHistory(historyInput);
-  const sample = normalizeCountryStatHistorySample(sheetOrSample) ||
-    buildCountryStatHistorySample(sheetOrSample, { date, round });
+  const sample = buildHistorySample(sheetOrSample, { date, round });
   if (!sample) return history;
 
-  history[key] = normalizeHistorySeries([...(history[key] || []), sample]);
+  history[key] = appendHistorySample(history[key] || [], sample);
   return history;
+};
+
+// The series to draw for one polity: its stored samples, then the current sheet
+// at the current date when that is newer than the last stored one. Stored history
+// keeps only readings that changed, so without this point a sheet unchanged for
+// years would end its line at the last change. For display only; never stored.
+export const withCurrentCountryStatSample = (seriesInput, sheet, { date = "", round = 0 } = {}) => {
+  const series = normalizeHistorySeries(seriesInput);
+  const current = buildCountryStatHistorySample(sheet, { date, round });
+  const last = series.at(-1);
+  if (!current || (last && compareGameDates(last.date, current.date) >= 0)) return series;
+  return [...series, current];
 };
 
 export const mergeCountryStatsHistory = (...values) => {
@@ -1329,16 +1375,20 @@ export const mergeCountryStatsHistory = (...values) => {
 
 // Capture every sheet that CURRENTLY exists. This does not generate missing Stats
 // and therefore adds no AI work to a turn. Repeated dates replace the prior sample,
-// which makes same-day refreshes and GM edits deterministic rather than duplicative.
+// which makes same-day refreshes and GM edits deterministic rather than duplicative,
+// and a sheet that reads as it did at its last sample adds nothing. The history is
+// normalized once for the whole world, not once per polity.
 export const captureCountryStatsHistory = (worldInput, { date = "", round = 0 } = {}) => {
   if (!worldInput || typeof worldInput !== "object" || Array.isArray(worldInput)) return worldInput;
   const countryStats = worldInput.countryStats && typeof worldInput.countryStats === "object"
     ? worldInput.countryStats
     : {};
-  let history = normalizeCountryStatsHistory(worldInput.countryStatsHistory);
+  const history = normalizeCountryStatsHistory(worldInput.countryStatsHistory);
 
   for (const [polity, sheet] of Object.entries(countryStats)) {
-    history = appendCountryStatHistorySample(history, polity, sheet, { date, round });
+    const key = clean(polity);
+    const sample = key ? buildHistorySample(sheet, { date, round }) : null;
+    if (sample) history[key] = appendHistorySample(history[key] || [], sample);
   }
 
   return {

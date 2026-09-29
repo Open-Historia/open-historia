@@ -5,6 +5,7 @@ import { validateGameplayPayload } from "../src/Game/AI/gameplaySchemas.js";
 
 import {
   aggregateTerritorialEconomy,
+  appendCountryStatHistorySample,
   buildEconomicConditionSummary,
   captureCountryStatsHistory,
   countryStatsTrackingMonthsElapsed,
@@ -15,6 +16,7 @@ import {
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
   parseStatNumber,
+  withCurrentCountryStatSample,
 } from "../src/runtime/countryStats.js";
 
 const ledger = () => [
@@ -449,6 +451,44 @@ test("history capture samples every existing sheet once per date without generat
 
   assert.equal(captureCountryStatsHistory(world, { date: "not a date" }).countryStatsHistory.Alpha.length, 1);
   assert.equal(captureCountryStatsHistory(null), null);
+});
+
+test("history capture records a sheet only when its readings changed", () => {
+  const world = {
+    countryStats: {
+      Alpha: { territorialComponents: ledger(), stability: 55 },
+      Beta: { stability: 40 },
+    },
+    countryStatsHistory: {},
+  };
+  const first = captureCountryStatsHistory(world, { date: "2014-01-01", round: 1 });
+  const unchanged = captureCountryStatsHistory(first, { date: "2014-02-01", round: 2 });
+  assert.equal(unchanged.countryStatsHistory.Alpha.length, 1, "an unreassessed sheet adds no copy");
+  assert.equal(unchanged.countryStatsHistory.Beta.length, 1);
+
+  const moved = captureCountryStatsHistory(
+    { ...unchanged, countryStats: { ...unchanged.countryStats, Beta: { stability: 35 } } },
+    { date: "2014-03-01", round: 3 },
+  );
+  assert.equal(moved.countryStatsHistory.Alpha.length, 1);
+  assert.deepEqual(moved.countryStatsHistory.Beta.map((sample) => [sample.date, sample.stability]), [
+    ["2014-01-01", 40],
+    ["2014-03-01", 35],
+  ]);
+
+  const backToFirst = appendCountryStatHistorySample(moved.countryStatsHistory, "Beta", { stability: 40 }, { date: "2014-04-01" });
+  assert.equal(backToFirst.Beta.length, 3, "a change back is a new reading");
+  const earlier = appendCountryStatHistorySample(moved.countryStatsHistory, "Beta", { stability: 40 }, { date: "2014-02-01" });
+  assert.equal(earlier.Beta.length, 2, "a sample like the one before it is skipped even out of order");
+});
+
+test("the drawn series runs to the current date without storing the extra point", () => {
+  const stored = [{ date: "2014-01-01", round: 1, stability: 40 }];
+  const drawn = withCurrentCountryStatSample(stored, { stability: 40 }, { date: "2016-01-01", round: 9 });
+  assert.deepEqual(drawn.map((sample) => sample.date), ["2014-01-01", "2016-01-01"]);
+  assert.equal(stored.length, 1);
+  assert.equal(withCurrentCountryStatSample(stored, { stability: 40 }, { date: "2014-01-01" }).length, 1);
+  assert.equal(withCurrentCountryStatSample(stored, null, { date: "2016-01-01" }).length, 1);
 });
 
 test("tracking settings are bounded and the player joins the tracked list only with an interval", () => {

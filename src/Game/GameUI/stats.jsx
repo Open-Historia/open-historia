@@ -36,6 +36,7 @@ import {
     normalizeCountryStatHistorySample,
     normalizeCountryStatsHistory,
     normalizeCountryStatsTracking,
+    withCurrentCountryStatSample,
 } from "../../runtime/countryStats.js";
 import { compareGameDates, formatGameDateReadable, gameDateDayNumber, parseGameDate } from "../../runtime/gameDates.js";
 import {
@@ -1162,7 +1163,7 @@ const AdvancedStatsModal = ({
                         <div style={{ backgroundColor: "rgba(59,130,246,0.07)", border: "1px solid rgba(96,165,250,0.14)", borderRadius: "9px", marginTop: "0.85rem", padding: "0.6rem 0.65rem" }}>
                             <div style={{ color: "#bfdbfe", fontSize: "0.63rem", fontWeight: 850 }}>Campaign history</div>
                             <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.58rem", lineHeight: 1.45, marginTop: "0.2rem" }}>
-                                {persistentCount} permanent sample{persistentCount === 1 ? "" : "s"}{recoveredCount > 0 ? ` · ${recoveredCount} recovered from rollback snapshots` : ""}. New completed turns are recorded automatically.
+                                {persistentCount} permanent sample{persistentCount === 1 ? "" : "s"}{recoveredCount > 0 ? ` · ${recoveredCount} recovered from rollback snapshots` : ""}. A completed turn that changes these figures is recorded automatically.
                             </div>
                         </div>
                     </aside>
@@ -1951,12 +1952,18 @@ const StatsPaneBody = ({ active }) => {
                     round: player.round,
                 });
 
-                const samples = merged[targetCountry] || [];
-                const recoveredCount = Math.max(0, samples.length - persistentCount);
+                // Stored history keeps only readings that changed; the chart
+                // still runs to today through the current sheet (not stored).
+                const stored = merged[targetCountry] || [];
+                const samples = withCurrentCountryStatSample(stored, currentSheet, {
+                    date: player.date,
+                    round: player.round,
+                });
+                const recoveredCount = Math.max(0, stored.length - persistentCount);
                 setHistoryState({ status: "ready", samples, error: "", recoveredCount, persistentCount });
 
                 const persistedSeries = persistent[targetCountry] || [];
-                if (JSON.stringify(persistedSeries) !== JSON.stringify(samples)) {
+                if (JSON.stringify(persistedSeries) !== JSON.stringify(stored)) {
                     try {
                         // Re-read immediately before the best-effort migration write so
                         // opening a chart cannot put a stale pre-turn world object back
