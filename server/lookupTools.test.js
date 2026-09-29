@@ -117,11 +117,36 @@ test("list_regions: one power's regions with ids, paged", () => {
 test("owner names are exact: Russia is not the Russian Federation", () => {
   const out = run("list_regions", { owner: "Russia" });
   assert.match(out.error, /"Russia" is not a power/);
-  assert.deepEqual(out.powers, ["Russian Federation", "Ukraine"]);
+  assert.deepEqual(out.didYouMean, ["Russian Federation"]);
+  assert.equal(out.powers, undefined);
   assert.equal(run("power_info", { name: "Russia" }).error !== undefined, true);
   // A declared alias and a legacy code both name the power the map spells out.
   assert.equal(run("list_regions", { owner: "UKR" }).owner, "Ukraine");
   assert.equal(run("power_info", { name: "RUS" }).name, "Russian Federation");
+});
+
+test("an unknown power is answered with the closest exact names, else the alphabetical list", () => {
+  const owners = {};
+  const regions = [];
+  for (const name of ["Albania", "Austria", "Australia", "Belarus", "Russian Federation", "Prussia", "Rwanda", "Tunisia", "Democratic Republic of the Congo", "Republic of the Congo"]) {
+    const id = name.toLowerCase().replace(/\W+/g, "-");
+    regions.push({ id, name: `${name} heartland` });
+    owners[id] = name;
+  }
+  const ctx = buildLookupContext({ regions, world: { regionOwnershipOverrides: owners } });
+  const ask = (owner) => executeLookup(ctx, "list_regions", { owner });
+  // Containment first, a whole word ahead of a fragment; then a letter or two off.
+  assert.deepEqual(ask("Russia").didYouMean, ["Russian Federation", "Prussia"]);
+  assert.deepEqual(ask("Congo").didYouMean, ["Republic of the Congo", "Democratic Republic of the Congo"]);
+  assert.deepEqual(ask("Austia").didYouMean, ["Austria"]);
+  assert.equal(ask("Russia").powers, undefined);
+  // Nothing close: the alphabetical list, as before.
+  const far = ask("Zzyzx");
+  assert.equal(far.didYouMean, undefined);
+  assert.equal(far.powers[0], "Albania");
+  assert.equal(far.powers.length, 10);
+  // A suggestion never resolves: the near name still names nobody.
+  assert.match(ask("Russia").error, /not a power/);
 });
 
 test("find_region: exact, with an administrative suffix, a transliteration off, or ambiguous", () => {

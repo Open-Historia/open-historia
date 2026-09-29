@@ -629,10 +629,47 @@ const countriesOf = (rows) => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([country, regions]) => ({ country, regions }));
 };
 
-const unknownPower = (context, token) => ({
-  error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
-  powers: [...context.ownerRows.keys()].sort().slice(0, 60),
-});
+// The power names closest to one the map does not know, best first: a name that
+// contains it or sits inside it ("russia" in "russian federation"), a whole word
+// ahead of a fragment and the nearer length first, then a spelling a letter or
+// two off. Suggestions only: the name asked for still names nobody.
+const DID_YOU_MEAN = 8;
+const closestPowers = (context, token) => {
+  const key = foldRegionKey(token);
+  if (key.length < 2) return [];
+  const ranked = [];
+  for (const label of context.ownerRows.keys()) {
+    const folded = foldRegionKey(label);
+    const [shorter, longer] = folded.length <= key.length ? [folded, key] : [key, folded];
+    const at = shorter.length >= 3 ? longer.indexOf(shorter) : -1;
+    let rank = -1;
+    if (at >= 0) rank = (at === 0 || longer[at - 1] === " " ? 0 : 500) + (longer.length - shorter.length);
+    else {
+      const max = Math.max(1, Math.floor(key.length / 3));
+      const distance = editDistance(key, folded, max);
+      if (distance <= max) rank = 1000 + distance;
+    }
+    if (rank >= 0) ranked.push({ label, rank });
+  }
+  return ranked
+    .sort((x, y) => x.rank - y.rank || x.label.localeCompare(y.label))
+    .slice(0, DID_YOU_MEAN)
+    .map(({ label }) => label);
+};
+
+const unknownPower = (context, token) => {
+  const didYouMean = closestPowers(context, token);
+  if (didYouMean.length) {
+    return {
+      error: `"${clean(token)}" is not a power on this map. Owner names are exact. The closest exact names are in didYouMean; call list_powers for the rest.`,
+      didYouMean,
+    };
+  }
+  return {
+    error: `"${clean(token)}" is not a power on this map. Owner names are exact. Call list_powers for the exact names.`,
+    powers: [...context.ownerRows.keys()].sort().slice(0, 60),
+  };
+};
 
 const stringsIn = (value, depth = 0, out = []) => {
   if (depth > 4 || value == null) return out;
