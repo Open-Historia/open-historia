@@ -31,7 +31,16 @@ const hanging = (seen) => (url, { signal } = {}) => {
 test("a signed document that never arrives ends as untrusted at the deadline", async () => {
   const seen = [];
   const started = Date.now();
-  const result = await withFetch(hanging(seen), () => fetchSignedJson("https://registry.example/node-directory.json", { timeoutMs: 50 }));
+  // AbortSignal.timeout's timer does not keep node's event loop alive (a page
+  // stays alive on its own), and nothing else here does: without this, node
+  // can finish before the deadline fires and cancel the test.
+  const keepAlive = setTimeout(() => {}, 2000);
+  let result;
+  try {
+    result = await withFetch(hanging(seen), () => fetchSignedJson("https://registry.example/node-directory.json", { timeoutMs: 50 }));
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.deepEqual(result, { valid: false, data: null, reason: "error" });
   assert.ok(Date.now() - started < 2000, "it gave up at the deadline, not later");
   assert.deepEqual(seen.map((s) => s.url), ["https://registry.example/node-directory.json", "https://registry.example/node-directory.json.sig"]);
