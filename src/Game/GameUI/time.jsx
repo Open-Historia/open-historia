@@ -29,6 +29,7 @@ import { documentsForEvent } from "../../runtime/reportDelivery.js";
 import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
+import { describeReceiptForPlayer } from "../../runtime/applicationReceipt.js";
 import { normalizeMarkdown } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
@@ -564,6 +565,9 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         // thing the fallback warning's "Save logging file" button attaches.
         rawResponse: entry.rawResponse || "",
         rangeLabel: formatRange(fromDate, toDate),
+        // What the engine dropped or changed of the answer (applicationReceipt.js);
+        // only the newest turn keeps its notes.
+        receipt: entry.receipt || null,
         round: entry.round || 0,
         source: entry.source || "ai",
         summary: entry.summary || "",
@@ -974,6 +978,47 @@ const InteractiveOfferStrip = () => {
             <button type="button" className="oh-tap-row" onClick={letPass} disabled={passing} title="Let the moment pass as it happened — free" style={{ ...ghostButtonStyle, opacity: passing ? 0.6 : 1, padding: "0.4rem 0.75rem" }}>
                 {passing ? "Letting it pass…" : "Let it pass"}
             </button>
+        </div>
+    );
+};
+
+// What the engine did not take, or changed, of the skip's answer
+// (runtime/applicationReceipt.js): a capture an event narrated that never
+// reached the map, an event kept off the timeline. The next skip's prompt reads
+// the same record; here it is folded away under the turn, and costs nothing.
+// The notes are the engine's own, in English, so the translator leaves them be.
+const EngineChangesNote = ({ receipt }) => {
+    const [open, setOpen] = useState(false);
+    const summary = useMemo(() => describeReceiptForPlayer(receipt), [receipt]);
+    if (!summary) return null;
+    return (
+        <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", marginTop: "0.75rem", overflow: "hidden" }}>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={() => setOpen((value) => !value)}
+        title="Why something an event describes may be missing from the map or the timeline"
+        style={{ alignItems: "center", background: "none", border: "none", color: "rgba(228,228,231,0.78)", cursor: "pointer", display: "flex", font: "inherit", fontSize: "0.72rem", fontWeight: 700, gap: "0.45rem", padding: "0.55rem 0.75rem", textAlign: "left", width: "100%" }}
+        >
+        <span style={{ flex: 1, minWidth: 0 }}>{summary.count === 1 ? "What the engine changed: 1 note" : `What the engine changed: ${summary.count} notes`}</span>
+        <span aria-hidden="true">{open ? "\u25B4" : "\u25BE"}</span>
+        </button>
+        {open && (
+            <div style={{ borderTop: "1px solid rgba(255,255,255,0.06)", display: "grid", gap: "0.55rem", padding: "0.6rem 0.8rem 0.75rem" }}>
+            <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem", lineHeight: 1.45 }}>{"The engine's own notes on this time skip, as it recorded them for the next one."}</div>
+            {summary.groups.map((group) => (
+                <div key={group.kind} style={{ display: "grid", gap: "0.25rem" }}>
+                <div style={{ color: "rgba(255,255,255,0.86)", fontSize: "0.7rem", fontWeight: 700 }}>{group.title}</div>
+                <ul data-no-translate style={{ color: "rgba(228,228,231,0.72)", display: "grid", fontSize: "0.7rem", gap: "0.2rem", lineHeight: 1.45, margin: 0, paddingLeft: "1.1rem" }}>
+                {group.notes.map((note, index) => <li key={`${group.kind}-${index}`}>{note}</li>)}
+                </ul>
+                </div>
+            ))}
+            {summary.omitted > 0 && (
+                <div style={{ color: "rgba(228,228,231,0.5)", fontSize: "0.68rem" }}>{summary.omitted === 1 ? "1 more note was left out for length." : `${summary.omitted} more notes were left out for length.`}</div>
+            )}
+            </div>
+        )}
         </div>
     );
 };
@@ -2059,6 +2104,7 @@ const TimelineHistoryPanel = ({
             )}
             </div>
         )}
+        {!live && record?.receipt && <EngineChangesNote receipt={record.receipt} />}
         {/* Under the cards, so the list reads as a finished turn's would. */}
         {progress && (
             <div style={{ marginTop: totalEvents > 0 ? "0.75rem" : 0 }}>

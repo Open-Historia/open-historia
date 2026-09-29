@@ -292,6 +292,39 @@ export const renderApplicationReceipt = (receipt, {
   return lines.join("\n");
 };
 
+// The same record for the player, in the Events panel (time.jsx): a capture
+// the event narrated that never reached the map is explained here, and it costs
+// no request. KIND_HEADINGS are written to the model, in the second person, so
+// the player gets headings of their own. The notes are the engine's record as
+// written, in English.
+export const RECEIPT_KIND_PLAYER_TITLES = Object.freeze({
+  redone: "Rejected and written again during the skip",
+  withheld: "Events kept off the timeline",
+  dropped: "Changes that were not applied to the map or the records",
+  adjusted: "Changes the engine adjusted before applying them",
+  short: "Kept as written, though shorter than was asked",
+});
+
+// { groups: [{ kind, title, notes }], count, omitted } in RECEIPT_NOTE_KINDS
+// order, or null when the receipt has no notes.
+export const describeReceiptForPlayer = (receipt) => {
+  const normalized = normalizeApplicationReceipt(receipt);
+  if (!normalized) return null;
+  const groups = RECEIPT_NOTE_KINDS
+    .map((kind) => ({
+      kind,
+      title: RECEIPT_KIND_PLAYER_TITLES[kind],
+      notes: normalized.notes.filter((note) => note.kind === kind).map((note) => note.text),
+    }))
+    .filter((group) => group.notes.length > 0);
+  if (groups.length === 0) return null;
+  return {
+    groups,
+    count: groups.reduce((total, group) => total + group.notes.length, 0),
+    omitted: normalized.omitted,
+  };
+};
+
 // The whole read side in one call: the block for the newest jump on record, or "".
 export const renderLastTurnReceipt = (simulationHistory) => {
   const record = selectLastJumpRecord(simulationHistory);
