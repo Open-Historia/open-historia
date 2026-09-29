@@ -16,7 +16,8 @@ import {
     writeWorldState,
 } from "../../runtime/gameState.js";
 import { PLAYER_GOAL_MAX_CHARS, playerGoalOf, withPlayerGoal } from "../../runtime/playerGoal.js";
-import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "./useTurnRunning.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -114,7 +115,14 @@ normalizeActionEntry({
     status: "planned",
 });
 
-const ActionItem = ({ action, onDelete }) => {
+// A queued troop order whose deletion undoes what it did to the map (#368).
+const movesUnit = (action) => Boolean(action?.unitRevert) && (action.status ?? "planned") === "planned";
+
+// locked: an order that moved a unit on the map (unitRevert) cannot be deleted
+// while a turn runs, because deleting it moves the unit back, and the turn's
+// world write would put the unit where it was. Other orders can: the turn reads
+// the queue again before it writes it.
+const ActionItem = ({ action, onDelete, locked = false }) => {
     const [hovered, setHovered] = React.useState(false);
     // The ✕ appears with the pointer over the row. Nothing hovers on a touch
     // screen, so there it is always shown, or an order could never be deleted.
@@ -172,15 +180,16 @@ const ActionItem = ({ action, onDelete }) => {
         type="button"
         className="oh-tap"
         onClick={onDelete}
-        title="Delete action"
+        disabled={locked}
+        title={locked ? TURN_RUNNING_NOTE : "Delete action"}
         aria-label="Delete action"
         style={{
             alignItems: "center",
-            background: hovered ? "rgba(239,68,68,0.1)" : "none",
+            background: hovered && !locked ? "rgba(239,68,68,0.1)" : "none",
             border: "none",
             borderRadius: "6px",
-            color: hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
-            cursor: "pointer",
+            color: locked ? "rgba(255,255,255,0.18)" : hovered ? "rgba(239,68,68,0.95)" : "rgba(239,68,68,0.8)",
+            cursor: locked ? "not-allowed" : "pointer",
             display: "flex",
             flexShrink: 0,
             fontSize: "1rem",
@@ -248,22 +257,6 @@ const SuggestionCard = ({ topic, onQueue, queuedIds }) => (
     </div>
     </div>
 );
-
-// Whether a turn is running, for the controls a turn's own world write would
-// overwrite. The flag is a synchronous counter (simulationStatus.js), so it is
-// polled while the panel is open, as the HUD polls it.
-const TURN_POLL_MS = 800;
-
-const useTurnRunning = (active) => {
-    const [running, setRunning] = React.useState(() => isSimulationBusy());
-    React.useEffect(() => {
-        if (!active) return undefined;
-        setRunning(isSimulationBusy());
-        const timer = window.setInterval(() => setRunning(isSimulationBusy()), TURN_POLL_MS);
-        return () => window.clearInterval(timer);
-    }, [active]);
-    return running;
-};
 
 const goalButtonStyle = (enabled, tone = "neutral") => ({
     background: tone === "primary" ? (enabled ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.07)") : "none",
@@ -468,6 +461,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [queuedSuggestionIds, setQueuedSuggestionIds] = React.useState(() => new Set());
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    const turnRunning = useTurnRunning(isOpen);
     const [isImproving, setIsImproving] = React.useState(false);
     // Holds the in-flight improve's AbortController so the button can stop it,
     // the same shape as the timeline jump's cancel (time.jsx jumpAbortRef).
@@ -600,6 +594,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
     const handleDelete = async (index) => {
         const removed = actions[index];
+        if (movesUnit(removed) && isSimulationBusy()) return;
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -860,7 +855,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             </p>
         )}
         {submittedActions.map(({ normalized, originalIndex }) => (
-            <ActionItem key={normalized.id || originalIndex} action={normalized} onDelete={() => handleDelete(originalIndex)} />
+            <ActionItem key={normalized.id || originalIndex} action={normalized} locked={turnRunning && movesUnit(normalized)} onDelete={() => handleDelete(originalIndex)} />
         ))}
         </div>
         </div>

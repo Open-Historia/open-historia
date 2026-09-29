@@ -28,6 +28,8 @@ import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useCanHover, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { TURN_RUNNING_NOTE } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "../GameUI/useTurnRunning.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -201,6 +203,9 @@ const UnitPopup = () => {
   // chat does). A mouse keeps the one click.
   const isTouch = useTouchPrimary();
   const [confirmingDisband, setConfirmingDisband] = useState(false);
+  // A turn landing would bring a disbanded unit back (unitsController.js), so
+  // Disband waits for it. Requesting orders does not: they join the queue.
+  const turnRunning = useTurnRunning(Boolean(selection));
   useEffect(() => {
     if (!confirmingDisband) return undefined;
     const timer = setTimeout(() => setConfirmingDisband(false), 4000);
@@ -361,6 +366,7 @@ const UnitPopup = () => {
   const postureText = POSTURE_LABEL[unit.posture] || "";
 
   const disband = () => {
+    if (turnRunning) return;
     if (isTouch && !confirmingDisband) {
       setConfirmingDisband(true);
       return;
@@ -539,9 +545,15 @@ const UnitPopup = () => {
                 <ActionButton
                   label={confirmingDisband ? "Disband?" : "Disband"}
                   tone={confirmingDisband ? "danger" : "neutral"}
+                  disabled={turnRunning}
                   onClick={disband}
                 />
               </div>
+              {turnRunning && (
+                <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
+                  {TURN_RUNNING_NOTE}
+                </div>
+              )}
               {requestState === "queued" && (
                 <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
                   Added to your actions for this round.

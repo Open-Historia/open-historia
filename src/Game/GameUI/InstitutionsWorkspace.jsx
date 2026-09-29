@@ -17,6 +17,7 @@ import {
 } from "../../runtime/institutionalGovernance.js";
 import { documentsReadableBy } from "../../runtime/reportDelivery.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { assertNoTurnRunning } from "../AI/simulationStatus.js";
 import { isTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -465,7 +466,14 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   const adopt = (result) => {
     if (result) onAdoptResult?.(result);
   };
-  const expectedGameId = () => clean(getLibraryState()?.activeGameId);
+  // Every command here asks for the campaign it writes to first, so this is
+  // where one is refused while a turn runs: the turn writes back the world the
+  // institutions live in, and the vote or the proposal would be gone when it
+  // landed. The error shows where the command's own errors do.
+  const expectedGameId = () => {
+    assertNoTurnRunning();
+    return clean(getLibraryState()?.activeGameId);
+  };
   const run = async (key, fn) => {
     if (busy) return null;
     setBusy(key); setError("");

@@ -70,6 +70,17 @@ export const isSimulationBusy = () => activeSimulations > 0
   || pendingProjectsJump !== null
   || pendingJumpSegment !== null;
 
+// What a player's edit to the world says instead of saving while a turn runs or
+// waits: the turn writes back the world it read when it started, so the edit
+// would be gone the moment the turn lands. Worded like the standing goal's lock
+// (GameUI/actions.jsx). Orders are not locked: the turn reads them again before
+// it writes (runtime/turnCommit.js).
+export const TURN_RUNNING_NOTE = "A turn is running. This can be changed once it ends.";
+
+export const assertNoTurnRunning = () => {
+  if (isSimulationBusy()) throw new Error(TURN_RUNNING_NOTE);
+};
+
 export const isChatGenerationLikely = () => chatGenerationInFlight;
 
 // A turn or a reply is being written right now. Unlike isSimulationBusy, a jump

@@ -14,6 +14,8 @@ import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { TURN_RUNNING_NOTE } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "./useTurnRunning.js";
 
 const TYPE_LABEL = {
   infantry: "Infantry",
@@ -134,6 +136,9 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   // landscape screen had no room left for the list, and the form spilled out
   // of the panel.
   const scrollAsOne = isMobile || isTouch;
+  // A unit placed while a turn runs would be gone when it lands
+  // (unitsController.js), so placing waits for it.
+  const turnRunning = useTurnRunning(open);
 
   useEffect(() => {
     const unsubscribe = subscribeUnits(() => {
@@ -179,6 +184,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   );
 
   const startDeploy = () => {
+    if (turnRunning) return;
     const name = deployName.trim() || `${TYPE_LABEL[deployType]} ${myUnits.length + 1}`;
     setInteractionMode({
       kind: "deploy",
@@ -318,10 +324,16 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
             <button
               className="oh-tap-row"
               onClick={startDeploy}
-              style={{ width: "100%", background: "rgba(59,130,246,0.35)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "12px", fontWeight: 600, padding: "6px 0" }}
+              disabled={turnRunning}
+              style={{ width: "100%", background: "rgba(59,130,246,0.35)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", color: turnRunning ? "rgba(255,255,255,0.4)" : "white", cursor: turnRunning ? "not-allowed" : "pointer", fontSize: "12px", fontWeight: 600, padding: "6px 0" }}
             >
               Place on map →
             </button>
+            {turnRunning && (
+              <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", marginTop: "5px" }}>
+                {TURN_RUNNING_NOTE}
+              </div>
+            )}
           </div>
 
           <div style={scrollAsOne ? undefined : { overflowY: "auto", flex: 1 }}>

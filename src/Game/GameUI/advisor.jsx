@@ -23,6 +23,7 @@ import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { commitInstitutionGovernanceCommand, commitInstitutionalPlayerProposal, commitInstitutionalPlayerVoteRequest } from "../../runtime/institutionalGovernance.js";
 import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLifecycle.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { TURN_RUNNING_NOTE, assertNoTurnRunning } from "../AI/simulationStatus.js";
 
 Chart.register(...registerables);
 
@@ -507,18 +508,22 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
 // as a translucent pending unit with a queued order for the AI to adjudicate.
 const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
     const [status, setStatus] = useState(placed ? "placed" : "idle");
+    const [error, setError] = useState("");
 
     useEffect(() => { if (placed) setStatus("placed"); }, [placed]);
 
     const handleClick = async () => {
         if (status !== "idle") return;
         setStatus("placing");
+        setError("");
         const result = await onPlace();
         setStatus(result?.ok ? "placed" : "idle");
+        if (!result?.ok && result?.error) setError(result.error);
     };
 
     const busy = status !== "idle";
     return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
         <button type="button" onClick={handleClick} disabled={busy} style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
             background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
@@ -534,6 +539,8 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
                 ? `Placing ${deployment.name}…`
                 : `📍 Place ${deployment.name} here`}
         </button>
+        {error && <span style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
     );
 };
 
@@ -1394,6 +1401,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // current institution before any canonical mutation is published.
     const handleExecuteInstitutionDraft = React.useCallback(async (msgIndex, draftIndex, draft) => {
         try {
+            // The institution lives in the world a running turn writes back.
+            assertNoTurnRunning();
             const game = await readJson(JSON_URLS.game, {
                 defaultValue: { gameDate: "", country: "" },
                 force: true,
@@ -1486,7 +1495,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
         try {
             const { deployUnit } = await import("../Map/unitsController.js");
-            await deployUnit({
+            // Null: a turn is running, and nothing was placed (unitsController.js).
+            const placedUnits = await deployUnit({
                 type: String(deployment.type).toLowerCase(),
                 strength: Math.max(1, Math.min(100, Number(deployment.strength) || 100)),
                 name: String(deployment.name).trim(),
@@ -1494,6 +1504,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 lng: Number(deployment.lng),
                 lat: Number(deployment.lat),
             });
+            if (placedUnits === null) return { ok: false, error: TURN_RUNNING_NOTE };
             mapRef?.current?.getMap?.()?.flyTo?.({
                 center: [Number(deployment.lng), Number(deployment.lat)],
                 zoom: 4.5,

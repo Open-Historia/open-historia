@@ -20,7 +20,8 @@ import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
 import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
-import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { TURN_RUNNING_NOTE, isSimulationBusy } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "./useTurnRunning.js";
 import { validateGameplayPayload } from "../AI/gameplaySchemas.js";
 import {
     appendCountryStatHistorySample,
@@ -1421,6 +1422,9 @@ const StatsPaneBody = ({ active }) => {
     const [statsView, setStatsView] = useState("politics");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
+    // The tracking settings live in the world a running turn writes back, so
+    // they wait for it (persistTrackingSettings).
+    const turnRunning = useTurnRunning(active);
     // On a phone, Back closes the statistics sheet on top, not the advisor under it.
     useBackToClose(advancedOpen, () => setAdvancedOpen(false));
     useBackToClose(trackingOpen, () => setTrackingOpen(false));
@@ -1496,6 +1500,9 @@ const StatsPaneBody = ({ active }) => {
     }, [active, targetCountry, player.code, player.round, worldSnapshot]);
 
     const persistTrackingSettings = useCallback((next) => {
+        // A turn running writes back the world it read, settings and all, so a
+        // change now would show on the chips and be gone when it landed.
+        if (isSimulationBusy()) return;
         const normalized = normalizeCountryStatsTracking(next, { playerCountry: player.code });
         setTrackingSettings(normalized);
         storeTrackingSettingsFallback(player.gameKey, normalized, player.code);
@@ -2322,7 +2329,9 @@ const StatsPaneBody = ({ active }) => {
                 <button
                 type="button"
                 onClick={() => setTrackingOpen(true)}
-                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.04))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: "pointer", display: "flex", gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
+                disabled={turnRunning}
+                title={turnRunning ? TURN_RUNNING_NOTE : undefined}
+                style={{ alignItems: "center", background: "linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.04))", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "11px", color: "#e7e7e9", cursor: turnRunning ? "not-allowed" : "pointer", display: "flex", opacity: turnRunning ? 0.55 : 1, gap: "0.7rem", justifyContent: "space-between", marginTop: "0.55rem", padding: "0.72rem 0.8rem", textAlign: "left", width: "100%" }}
                 >
                     <span style={{ alignItems: "center", display: "flex", gap: "0.65rem", minWidth: 0 }}>
                         <span style={{ alignItems: "center", backgroundColor: "rgba(234,179,8,0.12)", border: "1px solid rgba(250,204,21,0.22)", borderRadius: "8px", color: "#fbbf24", display: "inline-flex", flexShrink: 0, fontSize: "0.98rem", height: "2rem", justifyContent: "center", width: "2rem" }}>⚙</span>
@@ -2334,6 +2343,11 @@ const StatsPaneBody = ({ active }) => {
                             <span style={{ color: "rgba(255,255,255,0.34)", display: "block", fontSize: "0.6rem", marginTop: "0.14rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {trackingPreview}
                             </span>
+                            {turnRunning && (
+                                <span style={{ color: "rgba(255,255,255,0.46)", display: "block", fontSize: "0.6rem", marginTop: "0.14rem" }}>
+                                    {TURN_RUNNING_NOTE}
+                                </span>
+                            )}
                         </span>
                     </span>
                     <span style={{ color: "rgba(255,255,255,0.5)", flexShrink: 0, fontSize: "0.95rem" }}>›</span>

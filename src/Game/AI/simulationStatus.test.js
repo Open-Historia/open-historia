@@ -2,6 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  TURN_RUNNING_NOTE,
+  assertNoTurnRunning,
+  beginSimulation,
+  endSimulation,
   isChatGenerationLikely,
   setChatGenerationInFlight,
   subscribeChatGeneration,
@@ -41,4 +45,15 @@ test("the chat panel subscribes instead of polling the flag on a timer", () => {
   const chat = fs.readFileSync(new URL("../GameUI/chat.jsx", import.meta.url), "utf8");
   assert.match(chat, /subscribeChatGeneration\(setIsGenerating\)/);
   assert.doesNotMatch(chat, /setInterval\(\(\) => setIsGenerating/);
+});
+
+test("a player's world edit is refused while a turn runs, with the reason, and allowed once it ends", () => {
+  assert.doesNotThrow(() => assertNoTurnRunning());
+  beginSimulation();
+  try {
+    assert.throws(() => assertNoTurnRunning(), (error) => error.message === TURN_RUNNING_NOTE);
+  } finally {
+    endSimulation();
+  }
+  assert.doesNotThrow(() => assertNoTurnRunning());
 });

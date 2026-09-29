@@ -12,7 +12,7 @@ import { openDemandOf, placeDemandCards, playerAnswerEvent, playerDemandEvent } 
 import { describeChatCutIn, planChatReveal, randomChatRevealPauseMs } from "../AI/chatActions.js";
 import { logForNextStep, startChatReveal } from "./chatReveal.js";
 import { campaignChanged } from "../../runtime/campaignGuard.js";
-import { isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
+import { assertNoTurnRunning, isChatGenerationLikely, subscribeChatGeneration } from "../AI/simulationStatus.js";
 import {
     MAX_ACTIVE_SPIES, activeSpies, deploySpy, expelSpy, foreignSpies, intelligenceOf, normalizeIntercepts, normalizeSpies,
     recallSpy, redactExchange, setCoverStory, signalClarity, turnSpy,
@@ -1758,6 +1758,8 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (!playerLifecycleCase || isLoading) return;
             setIsLoading(true);
             try {
+                // The case lives in the world a running turn writes back.
+                assertNoTurnRunning();
                 const result = await commitInstitutionLifecycleCommand({
                     playerCountry,
                     date: gameDate,
@@ -2808,7 +2810,11 @@ const SpyView = ({ playerCountry, gameDate, countries, loadingCountries, panelOp
         setSelectedCountry(preferred);
     }, [selectedCountry, countryRows, spies, intercepts]);
 
+    // Refused while a turn runs: the turn writes back the world it read, and a
+    // deployed, expelled or recalled agent would be undone when it landed. Every
+    // caller shows the error.
     const commitSpies = async (next) => {
+        assertNoTurnRunning();
         const fresh = await readWorldState({ force: true });
         const committed = { ...fresh, spies: next, spySeal: isSeal(fresh?.spySeal) ? fresh.spySeal : newSeal() };
         const ops = spyOperationOps(next, committed.projects, { date: gameDate, playerPolity: playerCountry });

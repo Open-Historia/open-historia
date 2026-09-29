@@ -302,6 +302,7 @@ import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
+import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit } from "../../runtime/turnCommit.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -3869,6 +3870,19 @@ const projectsHeldError = (cause) => {
   return error;
 };
 
+// Whether a held turn's campaign has moved on since it was read
+// (runtime/turnCommit.js heldTurnOutdated). Unknown when the game cannot be
+// read, and a guard that cannot tell does not block the retry.
+const heldTurnIsStale = async (baseGame) => {
+  let game;
+  try {
+    game = await readJson(JSON_URLS.game, { force: true });
+  } catch {
+    return false;
+  }
+  return heldTurnOutdated(game, baseGame);
+};
+
 // Finish a held turn by re-running ONLY the board call. The events are not
 // regenerated — they are already valid, and on a slow model they may have cost
 // ten minutes. Because nothing was written, this is the same code path as the
@@ -3877,6 +3891,10 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
   const heldProjectsJump = getPendingProjectsJump();
   if (!heldProjectsJump) throw new Error("There is no turn waiting on the Projects board.");
   const { applyArgs } = heldProjectsJump;
+  if (await heldTurnIsStale(applyArgs.baseGame)) {
+    discardPendingProjectsJump();
+    throw new Error(HELD_TURN_STALE_NOTE);
+  }
   beginSimulation();
   try {
     // Released BEFORE the attempt, so a turn can never be applied twice, and
@@ -7905,6 +7923,22 @@ const applySimulationResult = async ({
   }
   for (const { from, to } of renamedPolities) chatsToWrite = renamePolityInChats(chatsToWrite, from, to);
 
+  // The queued orders the same way (runtime/turnCommit.js): the Actions panel,
+  // the advisor and the unit card queue and delete orders while a turn runs, and
+  // writing the list the turn started from put a deleted order back and lost a
+  // new one. The turn's settlement stands for the orders it read.
+  let actionsToWrite;
+  try {
+    actionsToWrite = mergeActionsAtCommit({
+      base: normalizeActions(baseActions),
+      turn: nextActions,
+      stored: await readActionsState({ force: true }),
+    });
+  } catch {
+    actionsToWrite = nextActions;
+  }
+  for (const { from, to } of renamedPolities) actionsToWrite = renamePolityInActions(actionsToWrite, from, to);
+
   // Last moment before anything is persisted. Everything above is pure, so a
   // turn generated for a campaign the player has since left is simply lost here
   // rather than written over whichever campaign they opened instead.
@@ -7924,7 +7958,7 @@ const applySimulationResult = async ({
   // record transactionally. Client caches switch generation before listeners
   // are notified, so no observer can see a hybrid turn.
   await writeCanonicalTurnState({
-    actions: nextActions,
+    actions: actionsToWrite,
     chats: chatsToWrite,
     events: nextEvents,
     game: nextGame,
@@ -8004,7 +8038,7 @@ const applySimulationResult = async ({
   });
 
   return {
-    actions: nextActions,
+    actions: actionsToWrite,
     chats: chatsToWrite, // what was actually persisted, not the pre-turn snapshot
     colors: nextColors,
     events: nextEvents,
@@ -14337,6 +14371,10 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
   const heldSegment = getPendingJumpSegment();
   if (!heldSegment) throw new Error("There is no jump waiting on a failed segment.");
   const { context, state } = heldSegment;
+  if (await heldTurnIsStale(context.bundle?.game)) {
+    discardPendingJumpSegment();
+    throw new Error(HELD_TURN_STALE_NOTE);
+  }
   beginSimulation();
   try {
     // The player pressed Retry, which is a fresh decision to spend: the segments

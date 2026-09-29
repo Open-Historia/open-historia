@@ -22,6 +22,19 @@ import {
   normalizeUnitEntry,
   recenterPatrolOrders,
 } from "../../runtime/gameState.js";
+import { isSimulationBusy } from "../AI/simulationStatus.js";
+
+// A turn reads world.json when it starts and writes it back whole when it
+// lands, so a unit placed, disbanded or moved in between would be undone
+// without a word. While one runs (or waits to be retried) the map's unit
+// changes are refused, and the Forces panel and the unit card say why.
+// Requested orders are not: they go to the queue, which the turn reads again
+// before it writes it (runtime/turnCommit.js).
+export const unitsLocked = () => {
+  if (!isSimulationBusy()) return false;
+  console.warn("[units] a turn is running; the change was not made.");
+  return true;
+};
 
 let units = [];
 // Standing orders the ENGINE is advancing (world.pendingUnitOrders).
@@ -327,6 +340,7 @@ const commitPendingOrders = async (mutator) => {
 export const updateUnitAdmin = async (unitId, patch = {}) => {
   const id = String(unitId ?? "").trim();
   if (!id || !patch || typeof patch !== "object") return null;
+  if (unitsLocked()) return null;
   const moved = Object.prototype.hasOwnProperty.call(patch, "lng") || Object.prototype.hasOwnProperty.call(patch, "lat");
   // A patrolling unit placed somewhere else takes its station with it
   // (recenterPatrolOrders): the ring follows it, and the next turn's patrol step
@@ -408,6 +422,7 @@ const queueOrder = async (text, unitRevert = null) => {
 export const revertUnitOrder = async (revert) => {
   const unitId = String(revert?.unitId ?? "").trim();
   if (!unitId) return;
+  if (unitsLocked()) return;
   // A standing order minted by the beta engine for this action: cancel it, or the
   // unit keeps marching toward a destination whose justification is gone.
   if (revert.pendingOrderId) {
@@ -430,7 +445,9 @@ export const revertUnitOrder = async (revert) => {
     }));
 };
 
+// Null when a turn is running and nothing was placed.
 export const deployUnit = async ({ type, strength, name, composition, lng, lat }) => {
+  if (unitsLocked()) return null;
   if (!playerCode) await bootstrap();
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
@@ -482,12 +499,15 @@ export const requestUnitOrders = async (unitId, text) => {
 export const getRound = () => round;
 export const getGameDate = () => gameDate;
 
-export const removeUnit = async (unitId) =>
-  commit((list) => list.filter((u) => u.id !== unitId));
+export const removeUnit = async (unitId) => {
+  if (unitsLocked()) return units;
+  return commit((list) => list.filter((u) => u.id !== unitId));
+};
 
 export const disbandUnit = async (unitId) => {
   const unit = getUnitById(unitId);
   if (!unit) return;
+  if (unitsLocked()) return;
   await commit((list) => list.filter((u) => u.id !== unitId));
   await queueOrder(
     `Disband order: ${unit.name} (${unit.type}, id ${unit.id}, owner ${unit.ownerCode}) is decommissioned and stood down.`,

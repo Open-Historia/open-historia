@@ -370,7 +370,7 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 | **Help brainstorm actions** | `onOpenAdvisor` (opens the advisor drawer) | `Main.openAdvisor` |
 | **Get/Refresh AI suggestions** | `generateActionSuggestions({force:true})` → `SuggestionCard`s | AI |
 | Queue a suggestion | `normalizeSuggestionAction` → persisted; button flips to "✓ Queued" | — |
-| Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
+| Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect. Such an order's ✕ is disabled while a turn runs (the turn would put the unit back); any other order can be queued or deleted mid-turn, since the turn reads the queue again before writing it | `src/Game/Map/unitsController.js` |
 | **🎯 Standing goal** (`StandingGoal`) | Under the date line: *Set a standing goal*, or the goal with **Edit**; editing offers Save (Enter), Cancel (Esc) and **Clear goal**. Locked while a turn runs (polls `isSimulationBusy()`), since the turn writes the world the goal lives in. The advisor, the time skip and the suggestions steer by it; a leader never sees it | `withPlayerGoal` → `writeWorldState` (`src/runtime/playerGoal.js`); read with `useRuntimeState("world", playerGoalOf)` |
 
 Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
@@ -402,7 +402,7 @@ Two authors create the board's entries (the player only sets a priority or aband
 | Element | Behavior | Connects to |
 |---|---|---|
 | Unit list | `subscribeUnits`/`getUnits`; split into "Your units" (`getPlayerCode`) and dimmed "Other forces". Clicking a unit `flyTo`s it | `src/Game/Map/unitsController.js` |
-| Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–1000), optional name → `setInteractionMode({kind:"deploy", params})` then closes the panel | unitsController |
+| Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–1000), optional name → `setInteractionMode({kind:"deploy", params})` then closes the panel. **Place on map** is disabled while a turn runs, with *A turn is running. This can be changed once it ends.* (`useTurnRunning`) | unitsController |
 | **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy) + Cancel (`clearInteractionMode`) | interaction-mode state |
 
 Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re-renders once the lookup warms). `TYPE_GLYPH`/`TYPE_LABEL` map unit types to icons/labels; strength color-codes >600 green / >250 amber / else red.
