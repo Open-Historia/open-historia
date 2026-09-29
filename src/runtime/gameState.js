@@ -1,7 +1,7 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
-import { applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { MAX_GROUPS, applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
@@ -5252,6 +5252,9 @@ export const applyEventImpactsToWorld = ({
       const applied = applyGroupOps(nextWorld, groupOps);
       nextWorld.groups = applied.groups;
       nextWorld.groupAreas = applied.groupAreas;
+      for (const change of applied.changes) {
+        if (change.op === "refused") console.warn(`[groups] "${change.name}" was not created on event "${event.title}": the ${MAX_GROUPS}-group limit is reached.`);
+      }
     }
 
     if (event.impacts.politicalActorOps?.length) {

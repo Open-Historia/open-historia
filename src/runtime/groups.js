@@ -168,7 +168,10 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 
     if (!key) {
       if (op.op === "release") continue;
-      if (Object.keys(nextGroups).length >= MAX_GROUPS) continue;
+      if (Object.keys(nextGroups).length >= MAX_GROUPS) {
+        changes.push({ op: "refused", name: op.name, reason: "limit" });
+        continue;
+      }
       key = op.name;
       nextGroups[key] = {
         name: key,

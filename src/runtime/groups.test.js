@@ -123,6 +123,14 @@ test("the model is taken at its word where the intent is plain, and nowhere else
 
   const many = applyGroupOps({}, Array.from({ length: MAX_GROUPS + 5 }, (_, index) => ({ op: "create", name: `Group ${index}` })));
   assert.equal(Object.keys(many.groups).length, MAX_GROUPS);
+  const refused = many.changes.filter((change) => change.op === "refused");
+  assert.equal(refused.length, 5, "every create past the cap is reported, not dropped in silence");
+  assert.deepEqual(refused[0], { op: "refused", name: `Group ${MAX_GROUPS}`, reason: "limit" });
+
+  const full = applyGroupOps(many, [{ op: "take", name: "Latecomers", regionIds: ["r9"] }]);
+  assert.equal(findGroupKey(full.groups, "Latecomers"), "", "a take that would found a group past the cap founds nothing");
+  assert.deepEqual(full.groupAreas, {});
+  assert.deepEqual(full.changes, [{ op: "refused", name: "Latecomers", reason: "limit" }]);
 });
 
 test("the prompt names each group exactly, says what it is, and where it controls", () => {

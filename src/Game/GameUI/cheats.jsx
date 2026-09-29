@@ -26,6 +26,7 @@ import {
     GROUP_DESCRIPTION_MAX,
     GROUP_NAME_MAX,
     GROUP_PALETTE,
+    MAX_GROUPS,
     defaultGroupColor,
     findGroupKey,
     groupRegions,
@@ -2805,7 +2806,11 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
         const clash = findGroupKey(groups, name);
         if (!selected) {
             if (clash) throw new Error(`There is already a group called ${clash}.`);
-            await applyOps([{ op: "create", name, description, color }]);
+            const next = await applyOps([{ op: "create", name, description, color }]);
+            // Checked on the result, not counted beforehand: the create is dropped
+            // at the cap, and the note must never tell the next skip a group exists
+            // that the map and the prompts do not have.
+            if (!findGroupKey(next.groups, name)) throw new Error(`A game holds at most ${MAX_GROUPS} groups; erase one first.`);
             await noteGmChange("groups", `Created the group ${name} by hand${description ? ` — ${description.slice(0, 160)}` : ""}.`);
             setSelected(name);
             return `${name} created. Give it an area: Edit the area on the map.`;
