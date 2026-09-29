@@ -1912,7 +1912,6 @@ const StatsPaneBody = ({ active }) => {
                     readWorldStateView({ force: false }),
                     readJson(JSON_URLS.snapshots, {
                         defaultValue: [],
-                        force: true,
                         clone: false,
                     }).catch(() => []),
                 ]);

@@ -3115,7 +3115,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setFields({});
         setTarget("");
         if (tool === "roll-back-turn") {
-            readJson(JSON_URLS.snapshots, { defaultValue: [], force: true })
+            // The cached archive, shared (gameplay.js loadRollbackSnapshots):
+            // a forced read with a copy re-parsed and deep-copied all of it.
+            readJson(JSON_URLS.snapshots, { defaultValue: [], clone: false })
                 .then((list) => setItems(Array.isArray(list) ? list : []))
                 .catch(() => setItems([]));
         }

@@ -15,8 +15,10 @@ import {
   captureRevealCarry,
   describeEventMapChanges,
   eventDisclosureKey,
+  findTurnSnapshot,
   liveEventCard,
   resolveRevealCarry,
+  revealNeedsStaging,
   turnRecordId,
 } from "./turnReveal.js";
 
@@ -85,6 +87,30 @@ test("the same entry always has the same id, so a re-read world keeps the reveal
   const entry = { toDate: "1941-06-22", round: 6, eventIds: ["a", "b"] };
   assert.equal(turnRecordId({ ...entry }), turnRecordId(entry));
   assert.equal(typeof turnRecordId(null), "string");
+});
+
+// ---- the staged reveal's restore point ------------------------------------------
+
+test("the staged reveal replays from the newest restore point spanning the turn", () => {
+  const index = [
+    { id: "snap-7", round: 6, fromDate: "1941-06-22", toDate: "1941-06-22" },
+    { id: "snap-6", round: 5, fromDate: "1941-06-22", toDate: "1941-06-22" },
+    { id: "snap-5", round: 4, fromDate: "1941-06-21", toDate: "1941-06-22" },
+  ];
+  assert.equal(findTurnSnapshot(index, { fromDate: "1941-06-22", toDate: "1941-06-22" })?.id, "snap-7");
+  assert.equal(findTurnSnapshot(index, { fromDate: "1941-06-21", toDate: "1941-06-22" })?.id, "snap-5");
+  assert.equal(findTurnSnapshot(index, { fromDate: "1939-09-01", toDate: "1939-10-01" }), null, "a turn no restore point spans");
+  assert.equal(findTurnSnapshot(null, { fromDate: "a", toDate: "b" }), null);
+  assert.equal(findTurnSnapshot(index, null), null);
+});
+
+test("a turn seen whole needs no restore point read", () => {
+  const record = { events: [{}, {}, {}] };
+  assert.equal(revealNeedsStaging(record, 1), true);
+  assert.equal(revealNeedsStaging(record, 2), true);
+  assert.equal(revealNeedsStaging(record, 3), false, "fully revealed: the world as it is");
+  assert.equal(revealNeedsStaging({ events: [] }, 1), false);
+  assert.equal(revealNeedsStaging(null, 1), false);
 });
 
 // ---- carrying the reveal -------------------------------------------------------

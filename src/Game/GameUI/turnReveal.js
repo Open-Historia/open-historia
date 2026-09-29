@@ -104,6 +104,22 @@ export const turnRecordId = (entry, index = 0) => {
     return `${date}-r${round}${own ? `-${own}` : ""}-${index}`;
 };
 
+// The restore point a turn's staged reveal replays from: the newest one
+// spanning the turn's dates. Works on the snapshot index's entries (id, round,
+// dates) as on the archive's, so the index can say whether the archive is
+// worth reading at all.
+export const findTurnSnapshot = (entries, record) => {
+    if (!record) return null;
+    return (Array.isArray(entries) ? entries : []).find(
+        (entry) => entry?.fromDate === record.fromDate && entry?.toDate === record.toDate,
+    ) ?? null;
+};
+
+// Whether the reveal has anything left to stage: a turn seen whole is shown as
+// the world is, and needs no restore point.
+export const revealNeedsStaging = (record, visibleCount) =>
+    (record?.events?.length ?? 0) > 0 && visibleCount < record.events.length;
+
 // ---------------------------------------------------------------------------
 // Carrying the reveal from the streamed cards to the written turn
 // ---------------------------------------------------------------------------

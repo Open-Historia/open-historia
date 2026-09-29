@@ -14,6 +14,7 @@ import {
     loadCountryNames,
     loadRegionCatalog,
     loadRollbackSnapshotCount,
+    loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
@@ -58,9 +59,11 @@ import {
     captureRevealCarry,
     describeEventMapChanges,
     eventDisclosureKey,
+    findTurnSnapshot,
     resolvePolityName,
     resolveRegionName,
     resolveRevealCarry,
+    revealNeedsStaging,
     turnRecordId,
 } from "./turnReveal.js";
 
@@ -2848,33 +2851,47 @@ const DateWidget = ({
     // open and the base is missing — a one-shot load at record time raced the
     // session boot (snapshots briefly read empty) and staging silently never
     // engaged for that turn.
+    //
+    // Only while there is something left to reveal, and only once the snapshot
+    // index says the archive holds this turn: the archive is up to twelve whole
+    // worlds, and it was read (and on a miss read again on every open) for a
+    // turn already seen whole, after a reload, or one no restore point spans.
+    // The index is a few hundred bytes, so an index miss is simply asked again
+    // next time (it can read empty at boot); an archive miss is remembered.
+    const needsStaging = revealNeedsStaging(latestTurnRecord, visibleEventCount);
+    const stagingMissRef = React.useRef("");
     useEffect(() => {
         const record = latestTurnRecord;
         // Not mid-skip: the snapshot that would load belongs to the turn before.
-        if (skipInFlight || openPanel !== "history" || !record || !(record.events?.length > 0)) {
+        if (skipInFlight || openPanel !== "history" || !record || !needsStaging) {
             return undefined;
         }
         if (stagedBase.recordId === record.id && stagedBase.world) {
             return undefined;
         }
+        if (stagingMissRef.current === record.id) {
+            return undefined;
+        }
         let cancelled = false;
-        loadRollbackSnapshots()
-            .then((snapshots) => {
-                if (cancelled) return;
-                const match = (snapshots || []).find(
-                    (snap) => snap?.fromDate === record.fromDate && snap?.toDate === record.toDate && snap?.state?.world,
-                );
-                // A copy of the one world staged: the list is the shared archive
-                // (gameplay.js loadRollbackSnapshots), never to be written into.
-                if (match) setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
-            })
-            .catch(() => {
-                /* no snapshot — reveal without staging */
-            });
+        (async () => {
+            if (!findTurnSnapshot(await loadRollbackSnapshotIndex(), record) || cancelled) return;
+            const snapshots = await loadRollbackSnapshots();
+            if (cancelled) return;
+            const match = findTurnSnapshot(snapshots.filter((snap) => snap?.state?.world), record);
+            if (!match) {
+                stagingMissRef.current = record.id;
+                return;
+            }
+            // A copy of the one world staged: the list is the shared archive
+            // (gameplay.js loadRollbackSnapshots), never to be written into.
+            setStagedBase({ recordId: record.id, world: cloneWorldForStaging(match.state.world) });
+        })().catch(() => {
+            /* no snapshot — reveal without staging */
+        });
         return () => {
             cancelled = true;
         };
-    }, [latestTurnRecord?.id, openPanel, skipInFlight, stagedBase.recordId]);
+    }, [latestTurnRecord?.id, needsStaging, openPanel, skipInFlight, stagedBase.recordId]);
 
     useEffect(() => {
         // No snapshot needed while the skip writes: the world has not moved, so

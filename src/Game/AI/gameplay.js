@@ -6608,7 +6608,8 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
     // Read shared and written without the defensive copies: the older restore
     // points only move along in a new array, never change (see
     // loadRollbackSnapshots). Each copy was the whole archive, every turn.
-    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true, clone: false }).catch(() => []);
+    // Unforced, for the reason given there.
+    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], clone: false }).catch(() => []);
     const list = Array.isArray(prior) ? prior : [];
     const snapshot = {
       id: `snap-${round}-${Date.now()}`,
@@ -6647,8 +6648,13 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
 // into it. A caller that hands part of a snapshot to code that may change it
 // copies that part: rollBackToSnapshot, interveneAfterEvent, the reveal's
 // staged world (time.jsx), viewAsSeen (gameState.js).
+//
+// And not re-read: this tab is the archive's only writer, every write
+// (writeJson) primes the cache with what it wrote, and the cache is swept when
+// the game changes. A forced read re-fetched and re-parsed 8-21 MB on every
+// turn, undo and reveal to get back the value already in hand.
 export const loadRollbackSnapshots = async () => {
-  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true, clone: false }).catch(() => []);
+  const list = await readJson(JSON_URLS.snapshots, { defaultValue: [], clone: false }).catch(() => []);
   return Array.isArray(list) ? list : [];
 };
 
