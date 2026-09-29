@@ -1064,32 +1064,11 @@ export const institutionChannelParticipants = (world = {}, institutionInput = ""
   return out;
 };
 
-const parseCsv = (value) => clean(value).split(",").map(clean).filter(Boolean);
-const parseEventNumbers = (value) => parseCsv(value)
-  .map((entry) => Number(entry))
-  .filter((entry) => Number.isInteger(entry) && entry > 0)
-  .map((entry) => entry - 1);
-
-export const decodeInstitutionUpdates = (value) => {
-  if (Array.isArray(value)) return value.filter((entry) => entry && typeof entry === "object").map(clone);
-  const text = clean(value);
-  if (!text) return [];
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-    const [id, op, polity, status, role, eventNumbers, name, kind, note] = line.split("~");
-    return {
-      id: clean(id),
-      op: lower(op),
-      polity: clean(polity),
-      status: lower(status),
-      role: lower(role),
-      eventIndexes: parseEventNumbers(eventNumbers),
-      eventIds: [],
-      name: clean(name),
-      kind: lower(kind).replace(/[\s-]+/g, "_"),
-      note: clean(note),
-    };
-  });
-};
+// Institution updates arrive as structured objects (the Round-Zero baselines);
+// only a well-formed object is kept.
+export const decodeInstitutionUpdates = (value) => array(value)
+  .filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry))
+  .map(clone);
 
 export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
   const events = array(eventsInput);
@@ -1103,133 +1082,6 @@ export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
     ], 24);
     return { ...update, eventIds };
   });
-};
-
-const institutionEventText = (event = {}) => clean(`${event?.title || ""} ${event?.description || ""}`);
-const textToken = (value) => clean(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-const containsSemanticToken = (text, value) => {
-  const token = textToken(value);
-  if (!token) return false;
-  return textToken(text).includes(token);
-};
-const CREATE_EVENT_RE = /\b(?:establish(?:es|ed|ing)?|create(?:s|d|ing)?|form(?:s|ed|ing)?|found(?:s|ed|ing)?|constitut(?:e|es|ed|ing)|charter(?:s|ed|ing)?|launch(?:es|ed|ing)?)\b/i;
-const JOIN_EVENT_RE = /\b(?:join(?:s|ed|ing)?|admit(?:s|ted|ting)?|accession|accede(?:s|d)?|becomes?\s+(?:a\s+)?member|enters?\s+(?:the\s+)?(?:alliance|union|organization|organisation|council|bloc|pact))\b/i;
-const LEAVE_EVENT_RE = /\b(?:withdraw(?:s|n|al)?|leave(?:s|ft|ing)?|exit(?:s|ed|ing)?|resign(?:s|ed|ing)?\s+(?:from\s+)?(?:membership|the\s+organization|the\s+organisation|the\s+alliance|the\s+union))\b/i;
-const SUSPEND_EVENT_RE = /\bsuspend(?:s|ed|ing|sion)?\b/i;
-const RESTORE_EVENT_RE = /\b(?:restore(?:s|d|ing)?|reinstate(?:s|d|ing)?|readmit(?:s|ted|ting)?)\b/i;
-const ROLE_EVENT_RE = /\b(?:elect(?:s|ed|ing)?|appoint(?:s|ed|ing)?|select(?:s|ed|ing)?|name(?:s|d|ing)?|chair(?:s|ed|ing)?|lead(?:s|ing)?|leadership)\b/i;
-const DISSOLVE_EVENT_RE = /\b(?:dissolv(?:e|es|ed|ing)|disband(?:s|ed|ing)?|abolish(?:es|ed|ing)?|wind(?:s|ing)?\s+up|terminate(?:s|d|ing)?)\b/i;
-
-const operationEventPattern = (op) => ({
-  create: CREATE_EVENT_RE,
-  join: JOIN_EVENT_RE,
-  leave: LEAVE_EVENT_RE,
-  suspend: SUSPEND_EVENT_RE,
-  restore: RESTORE_EVENT_RE,
-  role: ROLE_EVENT_RE,
-  dissolve: DISSOLVE_EVENT_RE,
-}[lower(op)] || null);
-
-const eventMentionsInstitution = (event, update) => {
-  const text = institutionEventText(event);
-  return [update?.name, update?.shortName, update?.id]
-    .map((value) => clean(value).replace(/[-_]+/g, " "))
-    .filter(Boolean)
-    .some((value) => containsSemanticToken(text, value));
-};
-
-const eventMentionsPolity = (event, polity, world) => {
-  const canonical = canonicalPolity(polity, world);
-  if (!canonical) return false;
-  const actorTokens = array(event?.actors).map((value) => canonicalPolity(value, world)).filter(Boolean);
-  if (actorTokens.some((value) => lower(value) === lower(canonical))) return true;
-  const identity = world?.polityOverrides?.[canonical] || {};
-  const aliases = unique([canonical, identity?.name, identity?.code, ...array(identity?.aliases)], 24);
-  const text = institutionEventText(event);
-  return aliases.some((alias) => containsSemanticToken(text, alias));
-};
-
-// Live world generation may omit an event number even when the semantic event
-// makes the institution lifecycle cause completely unambiguous. Native code owns
-// that foreign-key binding. This helper only fills a missing link when there is
-// exactly one strong semantic match; it never guesses among multiple events.
-// Founding-member joins may inherit the uniquely bound creation event when that
-// event names the polity as an actor/participant in the founding.
-export const bindInstitutionUpdatesToCausalEvents = (candidate, { world = {} } = {}) => {
-  if (!candidate || typeof candidate !== "object") return { bound: 0, ambiguous: 0, unresolved: 0 };
-  const events = array(candidate.events);
-  let updates = bindInstitutionUpdatesToEvents(candidate.institutionUpdates, events);
-  let bound = 0;
-  let ambiguous = 0;
-  let unresolved = 0;
-
-  const createEventIdsByInstitution = new Map();
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) !== "create") continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    if (!id) continue;
-    if (array(update?.eventIds).length) {
-      createEventIdsByInstitution.set(id, array(update.eventIds));
-      continue;
-    }
-    const matches = events.filter((event) =>
-      clean(event?.id) &&
-      eventMentionsInstitution(event, update) &&
-      CREATE_EVENT_RE.test(institutionEventText(event))
-    );
-    if (matches.length === 1) {
-      const eventId = clean(matches[0].id);
-      updates[index] = { ...update, eventIds: [eventId] };
-      createEventIdsByInstitution.set(id, [eventId]);
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) === "create" || array(update?.eventIds).length) continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    const pattern = operationEventPattern(update?.op);
-    if (!id || !pattern) {
-      unresolved += 1;
-      continue;
-    }
-
-    let matches = events.filter((event) => {
-      const text = institutionEventText(event);
-      return clean(event?.id) && eventMentionsInstitution(event, update) && pattern.test(text)
-        && (!clean(update?.polity) || eventMentionsPolity(event, update.polity, world));
-    });
-
-    // A newly created institution's founding members are often expressed by the
-    // same semantic founding event instead of separate "joins" prose. Reuse that
-    // exact creation cause only when the joining polity is actually a named actor
-    // or participant in the founding event.
-    if (!matches.length && lower(update?.op) === "join") {
-      const createIds = createEventIdsByInstitution.get(id) || [];
-      if (createIds.length === 1) {
-        const foundingEvent = events.find((event) => clean(event?.id) === createIds[0]);
-        if (foundingEvent && eventMentionsPolity(foundingEvent, update.polity, world)) matches = [foundingEvent];
-      }
-    }
-
-    if (matches.length === 1) {
-      updates[index] = { ...update, eventIds: [clean(matches[0].id)] };
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  candidate.institutionUpdates = updates;
-  return { bound, ambiguous, unresolved };
 };
 
 export const validateInstitutionUpdates = (updatesInput, {
