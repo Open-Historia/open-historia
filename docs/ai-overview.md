@@ -324,7 +324,7 @@ Anthropic-compatible has the same problem (it is also an arbitrary proxy) and a 
 
 **Where a call starts** is the Fallback entry's `structuredMode` — per entry, because the evidence is about one model on one endpoint, `auto` by default. `auto` starts at `tool`; anything else names a rung to begin at, skipping ones a gateway has already been shown to ignore. It is a starting point, never a lock: the ladder still steps down from wherever it starts, so a setting chosen months ago cannot strand a campaign. Changing the entry's **model** resets it to `auto` (`updateEntry`). The observer's evidence is keyed by entry id.
 
-The setting is **offered, never inferred**: `createModeObserver` records where calls land, and after two consistent sightings the UI asks whether to start there in future. Silently remembering was considered and rejected — one unrelated failure would demote every later call out of the strongest channel, invisibly.
+The setting is **offered, never inferred**: `createModeObserver` records where calls land, and after two consistent sightings the UI asks whether to start there in future. The evidence can settle on any call (a Game Master request, suggestions, a stat sheet), so `main.jsx` announces it with an `ai:structured-mode-suggestion` event, and the timeline panel (`time.jsx`) asks at once when no turn is running, or when the running one ends — never in the middle of one. Until 2026-09-28 nothing listened for the event and the offer waited for the end of the next skip, every call on that endpoint paying for the failed rungs meanwhile. Silently remembering was considered and rejected — one unrelated failure would demote every later call out of the strongest channel, invisibly.
 
 ### Streaming vs buffered
 

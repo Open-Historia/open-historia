@@ -2151,6 +2151,22 @@ const DateWidget = ({
     // discovery, the player makes the decision. Checked after a turn ends, so it
     // never interrupts one.
     const [modeSuggestion, setModeSuggestion] = useState(null);
+    // The evidence can settle on any call to that endpoint (a Game Master
+    // request, suggestions, a stat sheet), not only a skip, and main.jsx says so
+    // with ai:structured-mode-suggestion. Until the player answers, every call
+    // there walks down the ladder again and pays for the failed rungs, so the
+    // offer comes at once when no turn is running, else when the running one
+    // ends — never in the middle of one.
+    const [modeEvidence, setModeEvidence] = useState(0);
+    const turnRunning = isLoading || isRetryingProjects || isRetryingSegment;
+    useEffect(() => {
+        const noted = () => setModeEvidence((count) => count + 1);
+        window.addEventListener("ai:structured-mode-suggestion", noted);
+        return () => window.removeEventListener("ai:structured-mode-suggestion", noted);
+    }, []);
+    useEffect(() => {
+        if (modeEvidence && !turnRunning) setModeSuggestion(getStructuredModeSuggestion());
+    }, [modeEvidence, turnRunning]);
     // Holds the in-flight jump's AbortController so the Cancel button can stop it.
     const jumpAbortRef = React.useRef(null);
     const [visibleEventCount, setVisibleEventCount] = useState(1);
