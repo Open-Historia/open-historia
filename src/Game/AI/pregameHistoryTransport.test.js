@@ -4,6 +4,7 @@ import {
   GAMEPLAY_TOOLS,
   decodePregameHistoryTransportPayload,
   mergePregameHistoryTransportSections,
+  extractPregameHistoryStableRetrySections,
   normalizeGameplayPayload,
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
@@ -196,6 +197,38 @@ test("pregame transport distinguishes a missing canonical section from explicit 
   assert.deepEqual(explicitEmpty.payload.canonicalUpdates, []);
 });
 
+test("pregame schema correction freezes validated history but not merely shape-valid canonical state", () => {
+  const candidate = normalizeGameplayPayload("pregameHistory", {
+    events: [{ date: "2020-11-18", title: "Stable history", description: "This event is already valid." }],
+    summary: "The historical interpretation is already valid.",
+    canonicalUpdates: [{
+      // The live Fire Rises failure used the wrong discriminator and therefore
+      // failed schema validation even though its six events were valid.
+      type: "war:start", id: "war-x", polities: ["A"], opponents: ["B"],
+      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "x",
+    }],
+  });
+  const verdict = validateGameplayPayload("pregameHistory", candidate);
+  assert.equal(verdict.valid, false);
+  assert.match(verdict.error, /kind is required/);
+
+  const stable = extractPregameHistoryStableRetrySections(candidate);
+  assert.equal(stable.events.length, 1);
+  assert.equal(stable.events[0].title, "Stable history");
+  assert.equal(stable.summary, "The historical interpretation is already valid.");
+  assert.equal(Object.prototype.hasOwnProperty.call(stable, "canonicalUpdates"), false);
+
+  const transportStable = extractPregameHistoryStableRetrySections({
+    events: [{ date: "2020-11-18", title: "Stable history", description: "This event is already valid." }],
+    summary: "Stable.",
+    canonicalUpdates: [{
+      kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
+      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Working relationship.",
+    }],
+  }, { includeCanonical: true });
+  assert.equal(transportStable.canonicalUpdates.length, 1, "schema-valid canonical sibling may be frozen for transport-only repair");
+});
+
 test("pregame corrective merge preserves valid first-attempt sections", () => {
   const preserved = {
     summary: "Original interpretation.",
@@ -253,6 +286,9 @@ test("native pregame directive teaches the shallow transport field names", async
   assert.match(source, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
   assert.match(source, /response\?\.toolInput \?\? parsed \?\? null/);
   assert.match(source, /transport-syntax correction only/);
+  assert.match(source, /extractPregameHistoryStableRetrySections\(stableSource/);
+  assert.match(source, /corrective attempt preserved stable Round-Zero sections/);
+  assert.match(source, /engine has frozen the validated historical events/);
   assert.match(source, /Round-Zero canonical .* processing would be lossy/);
   assert.match(source, /mutateCanonicalTurnState\(\(current\) =>/);
   assert.match(source, /preserveUnknownStartedDate: true/);

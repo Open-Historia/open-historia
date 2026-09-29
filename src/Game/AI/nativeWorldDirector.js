@@ -819,6 +819,108 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
   };
 };
 
+// Pure Round-Zero constructors. They create canonical scheduler records without
+// invoking the normal-turn storyline mutation/coalescing path. New baseline
+// identities use the native Round-Zero id namespace. The ordinary coalescer
+// recognizes that namespace directly, so identity survives save normalization
+// without adding a second persisted identity flag.
+export const buildPregameStorylineBaselineRecord = ({
+  id = "",
+  processKind = "",
+  title = "",
+  participants = [],
+  status = "active",
+  pressure = 0,
+  momentum = 0,
+  startedDate = "",
+  state = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+} = {}) => {
+  const canonicalId = normalizeString(id);
+  const kind = normalizeString(processKind).toLowerCase();
+  const canonicalStatus = normalizeString(status).toLowerCase();
+  const start = normalizeString(startedDate);
+  const observed = normalizeString(observedDate);
+  if (!canonicalId) return { record: null, error: "Round-Zero storyline requires a native canonical id." };
+  if (!kind || kind === "war") return { record: null, error: `Round-Zero storyline ${canonicalId} must describe a non-war process.` };
+  if (!["active", "dormant"].includes(canonicalStatus)) return { record: null, error: `Round-Zero storyline ${canonicalId} must be active or dormant.` };
+  if (!normalizeString(title)) return { record: null, error: `Round-Zero storyline ${canonicalId} requires a title.` };
+  if (start && parseIsoDate(start) == null) return { record: null, error: `Round-Zero storyline ${canonicalId} has an invalid startedDate.` };
+  if (observed && parseIsoDate(observed) == null) return { record: null, error: `Round-Zero storyline ${canonicalId} has an invalid observed date.` };
+  const record = normalizeStorylineForDirector({
+    id: canonicalId,
+    kind,
+    title: normalizeString(title),
+    participants,
+    status: canonicalStatus,
+    pressure,
+    momentum,
+    startedDate: start,
+    accountedThroughDate: observed,
+    lastUpdatedDate: observed || start,
+    lastVisibleEventDate: "",
+    nextReviewDate: "",
+    state: normalizeString(state) || normalizeString(title),
+    drivers: [],
+    constraints: [],
+    sourceEventIds,
+    createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+  });
+  if (!record || record.participants.length === 0) {
+    return { record: null, error: `Round-Zero storyline ${canonicalId} requires at least one participant.` };
+  }
+  return { record, error: "" };
+};
+
+export const buildPregameWarStorylineMirrorRecord = ({
+  war = null,
+  assessment = null,
+  observedDate = "",
+  round = 1,
+} = {}) => {
+  const warId = normalizeString(war?.id);
+  if (!warId) return { record: null, error: "Round-Zero war mirror requires a canonical war id." };
+  const participants = [...new Set([
+    ...normalizeArray(war?.sideA),
+    ...normalizeArray(war?.sideB),
+  ].map(normalizeString).filter(Boolean))];
+  if (participants.length < 2) return { record: null, error: `Round-Zero war mirror ${warId} requires both belligerent sides.` };
+  const warStatus = normalizeString(war?.status).toLowerCase();
+  if (!["active", "ceasefire"].includes(warStatus)) return { record: null, error: `Round-Zero war mirror ${warId} requires a live war.` };
+  const observed = normalizeString(observedDate);
+  if (observed && parseIsoDate(observed) == null) return { record: null, error: `Round-Zero war mirror ${warId} has an invalid observed date.` };
+  const pressure = Number.isFinite(Number(assessment?.pressure))
+    ? Number(assessment.pressure)
+    : (warStatus === "ceasefire" ? 60 : 85);
+  const momentum = Number.isFinite(Number(assessment?.momentum))
+    ? Number(assessment.momentum)
+    : (warStatus === "ceasefire" ? 15 : 30);
+  const record = normalizeStorylineForDirector({
+    id: `storyline-${warId}`,
+    kind: "war",
+    title: normalizeString(war?.title) || warId,
+    participants,
+    status: "active",
+    pressure,
+    momentum,
+    startedDate: normalizeString(war?.startedDate),
+    accountedThroughDate: observed,
+    lastUpdatedDate: observed || normalizeString(war?.startedDate),
+    lastVisibleEventDate: "",
+    nextReviewDate: "",
+    state: normalizeString(assessment?.state) || normalizeString(war?.note) || normalizeString(war?.title) || warId,
+    drivers: [],
+    constraints: [],
+    sourceEventIds: normalizeArray(war?.sourceEventIds),
+    createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+  });
+  return record ? { record, error: "" } : { record: null, error: `Round-Zero war mirror ${warId} could not be normalized.` };
+};
+
 
 const storylineParticipantsKey = (participants) =>
   [...new Set(
@@ -829,7 +931,12 @@ const storylineParticipantsKey = (participants) =>
     .sort()
     .join("|");
 
+const isNativePregameStorylineId = (value) =>
+  /^storyline-(?:war-)?r0v\d+-/i.test(normalizeString(value));
+
 const storylineSemanticIdentityKey = (storyline) => {
+  const id = normalizeString(storyline?.id);
+  if (isNativePregameStorylineId(id)) return `id:${id}`;
   const kind = normalizeString(storyline?.kind).toLowerCase() || "world";
   const title = normalizeString(storyline?.title).toLowerCase();
   const participants = storylineParticipantsKey(storyline?.participants);
@@ -1005,6 +1112,73 @@ const coalesceWorldStorylines = (worldLike) => {
     aliasToCanonical,
     duplicateGroups,
     mergedDuplicateCount: normalized.length - storylines.length,
+  };
+};
+
+// Round-Zero identity-preserving merge. Unlike the legacy semantic coalescer,
+// this seam treats a native canonical id as authoritative and never merges two
+// distinct ids merely because kind/title/participants match. Existing exact ids
+// are retained when structurally compatible; incompatible id collisions fail
+// closed. This is pure foundation for the CP2 compiler and is not wired into
+// ordinary storyline application yet.
+export const mergePregameStorylineBaselines = ({ world = {}, records = [] } = {}) => {
+  const existing = normalizeArray(world?.storylines)
+    .map(normalizeStorylineForDirector)
+    .filter(Boolean);
+  const byId = new Map();
+  for (const entry of existing) {
+    const id = normalizeString(entry?.id);
+    if (!id) continue;
+    if (byId.has(id)) {
+      return { world, storylines: existing, appliedIds: [], mergedIds: [], error: `Round-Zero storyline canon contains duplicate id ${id}.` };
+    }
+    byId.set(id, entry);
+  }
+
+  const appliedIds = [];
+  const mergedIds = [];
+  for (const raw of normalizeArray(records)) {
+    const next = normalizeStorylineForDirector(raw);
+    const id = normalizeString(next?.id);
+    if (!next || !id) {
+      return { world, storylines: [...byId.values()], appliedIds, mergedIds, error: "Round-Zero storyline baseline contains an invalid canonical record." };
+    }
+    const prior = byId.get(id);
+    if (prior) {
+      const sameKind = normalizeString(prior?.kind).toLowerCase() === normalizeString(next?.kind).toLowerCase();
+      const sameParticipants = storylineParticipantsKey(prior?.participants) === storylineParticipantsKey(next?.participants);
+      if (!sameKind || !sameParticipants) {
+        return { world, storylines: [...byId.values()], appliedIds, mergedIds, error: `Round-Zero storyline id ${id} conflicts with existing canonical identity.` };
+      }
+      mergedIds.push(id);
+      continue;
+    }
+    byId.set(id, next);
+    appliedIds.push(id);
+  }
+
+  if (byId.size > MAX_PERSISTED_STORYLINES) {
+    return {
+      world,
+      storylines: existing,
+      appliedIds: [],
+      mergedIds: [],
+      error: `Round-Zero storyline baseline would exceed the canonical capacity of ${MAX_PERSISTED_STORYLINES}; silent truncation is forbidden.`,
+    };
+  }
+
+  const statusRank = { active: 0, dormant: 1, resolved: 2 };
+  const storylines = [...byId.values()].sort((a, b) =>
+    (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
+    compareGameDates(b.lastUpdatedDate || b.startedDate || "", a.lastUpdatedDate || a.startedDate || "") ||
+    normalizeString(a.id).localeCompare(normalizeString(b.id))
+  );
+  return {
+    world: { ...(world && typeof world === "object" ? world : {}), storylines },
+    storylines,
+    appliedIds,
+    mergedIds,
+    error: "",
   };
 };
 

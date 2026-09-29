@@ -219,6 +219,108 @@ const normalizedAgreements = (world) => array(normalizeWorldState(world)?.agreem
   .filter(Boolean)
   .slice(0, MAX_AGREEMENTS);
 
+// Pure Round-Zero constructors. The bootstrap compiler resolves identity and
+// decides whether a fact reuses existing canon; these helpers own only the
+// persisted diplomatic record shapes and domain-specific validation. They do
+// not replay normal-turn lifecycle operations.
+export const buildPregameRelationBaselineRecord = ({
+  id = "",
+  a = "",
+  b = "",
+  score = null,
+  summary = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const left = canonicalDiplomaticPolity(a, world);
+  const right = canonicalDiplomaticPolity(b, world);
+  const pairKey = relationPairKey(left, right);
+  const numeric = Number(score);
+  if (!left || !right || !pairKey) return { record: null, error: "Round-Zero relation requires two distinct current polities." };
+  if (!Number.isFinite(numeric)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} requires a finite absolute score.` };
+  const ordered = [left, right].sort((x, y) => lower(x).localeCompare(lower(y)));
+  const clamped = clamp(Math.round(numeric), -100, 100);
+  const date = clean(observedDate);
+  if (date && !isGameDate(date)) return { record: null, error: `Round-Zero relation ${left} ↔ ${right} has an invalid observed date.` };
+  return {
+    record: {
+      id: clean(id) || relationIdForPair(ordered[0], ordered[1]),
+      a: ordered[0],
+      b: ordered[1],
+      score: clamped,
+      status: normalizeRelationStatus("", clamped),
+      summary: clean(summary),
+      lastUpdatedDate: date,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
+
+export const buildPregameAgreementBaselineRecord = ({
+  id = "",
+  type = "",
+  title = "",
+  parties = [],
+  guarantor = "",
+  beneficiary = "",
+  startedDate = "",
+  terms = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const canonicalId = clean(id);
+  const agreementType = normalizeAgreementType(type);
+  const start = clean(startedDate);
+  const observed = clean(observedDate);
+  if (!canonicalId) return { record: null, error: "Round-Zero agreement requires a native canonical id." };
+  if (!clean(title)) return { record: null, error: `Round-Zero agreement ${canonicalId} requires a title.` };
+  if (start && !isGameDate(start)) return { record: null, error: `Round-Zero agreement ${canonicalId} has an invalid startedDate.` };
+  if (observed && !isGameDate(observed)) return { record: null, error: `Round-Zero agreement ${canonicalId} has an invalid observed date.` };
+
+  let canonicalParties;
+  let guaranteeFields = {};
+  if (agreementType === "guarantee") {
+    const g = canonicalDiplomaticPolity(guarantor, world);
+    const beneficiaryPolity = canonicalDiplomaticPolity(beneficiary, world);
+    if (!g || !beneficiaryPolity || lower(g) === lower(beneficiaryPolity)) {
+      return { record: null, error: `Round-Zero guarantee ${canonicalId} requires distinct guarantor and beneficiary roles.` };
+    }
+    canonicalParties = [g, beneficiaryPolity];
+    guaranteeFields = { guarantor: g, beneficiary: beneficiaryPolity };
+  } else {
+    canonicalParties = canonicalizeParties(parties, world);
+    if (canonicalParties.length < 2) {
+      return { record: null, error: `Round-Zero agreement ${canonicalId} requires at least two current parties.` };
+    }
+  }
+
+  return {
+    record: {
+      id: canonicalId,
+      title: clean(title),
+      type: agreementType,
+      status: "active",
+      parties: canonicalParties,
+      startedDate: start,
+      endedDate: "",
+      lastUpdatedDate: observed || start,
+      terms: clean(terms),
+      ...guaranteeFields,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
+
 const relationMapFromWorld = (world) => {
   const map = new Map();
   for (const relation of normalizedRelations(world)) {
@@ -1416,6 +1518,63 @@ const PUPPET_OP_SET = new Set(PUPPET_OP_VALUES);
 const PUPPET_ENDING_OPS = new Set(["release", "annex", "revolt"]);
 const PUPPET_KIND_SET = new Set(PUPPET_KINDS);
 const MAX_PUPPET_UPDATES_PER_PASS = 24;
+
+export const buildPregamePuppetBaselineRecord = ({
+  id = "",
+  overlord = "",
+  puppet = "",
+  kind = "client",
+  loyalty = 50,
+  secrecy = "open",
+  startedDate = "",
+  sourceEventIds = [],
+  observedDate = "",
+  round = 1,
+  world = {},
+} = {}) => {
+  const canonicalId = clean(id);
+  const canonicalOverlord = canonicalDiplomaticPolity(overlord, world);
+  const canonicalPuppet = canonicalDiplomaticPolity(puppet, world);
+  const puppetKind = lower(kind);
+  const secrecyMode = lower(secrecy);
+  const start = clean(startedDate);
+  const observed = clean(observedDate);
+  const numericLoyalty = Number(loyalty);
+
+  if (!canonicalId) return { record: null, error: "Round-Zero puppet baseline requires a native canonical id." };
+  if (!canonicalOverlord || !canonicalPuppet || lower(canonicalOverlord) === lower(canonicalPuppet)) {
+    return { record: null, error: `Round-Zero puppet ${canonicalId} requires distinct current overlord and puppet polities.` };
+  }
+  if (!PUPPET_KIND_SET.has(puppetKind)) return { record: null, error: `Round-Zero puppet ${canonicalId} has unsupported kind ${kind || "<blank>"}.` };
+  if (!["open", "covert"].includes(secrecyMode)) return { record: null, error: `Round-Zero puppet ${canonicalId} secrecy must be open or covert.` };
+  if (!Number.isFinite(numericLoyalty)) return { record: null, error: `Round-Zero puppet ${canonicalId} requires finite loyalty.` };
+  if (start && !isGameDate(start)) return { record: null, error: `Round-Zero puppet ${canonicalId} has an invalid startedDate.` };
+  if (observed && !isGameDate(observed)) return { record: null, error: `Round-Zero puppet ${canonicalId} has an invalid observed date.` };
+
+  const knownDate = start || observed;
+  return {
+    record: {
+      id: canonicalId,
+      overlord: canonicalOverlord,
+      puppet: canonicalPuppet,
+      kind: puppetKind,
+      loyalty: clamp(Math.round(numericLoyalty), 0, 100),
+      secrecy: secrecyMode,
+      knownTo: [
+        { polity: canonicalOverlord, learnedDate: knownDate },
+        { polity: canonicalPuppet, learnedDate: knownDate },
+      ],
+      status: "active",
+      startedDate: start,
+      endedDate: "",
+      lastUpdatedDate: observed || start,
+      sourceEventIds: unique(sourceEventIds, 24),
+      createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+      updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    },
+    error: "",
+  };
+};
 // How many subordinations the bounded prompt slice may carry. Its own bound:
 // borrowing the agreements cap made the number lie about what it limited.
 const MAX_CONTEXT_PUPPETS = 24;

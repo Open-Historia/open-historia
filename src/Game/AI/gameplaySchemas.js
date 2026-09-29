@@ -3923,6 +3923,34 @@ const normalizePregameHistoryShape = (value) => {
   return changed ? { ...value, canonicalUpdates } : value;
 };
 
+// Corrective retries may freeze independently valid historical cards even when
+// the overall Round-Zero answer fails schema validation in canonical state. Do
+// not freeze canonicalUpdates here: shape-valid canonical facts still require
+// domain/identity validation before they are safe to preserve across a retry.
+// CP2's compiler will own that stronger guarantee at the cutover boundary.
+export const extractPregameHistoryStableRetrySections = (value, { includeCanonical = false } = {}) => {
+  if (!isPlainRecord(value)) return {};
+  const sections = {};
+  if (Array.isArray(value.events)) {
+    const error = validateAgainstSchema(PREGAME_HISTORY_SCHEMA.properties.events, value.events, "$.events");
+    if (!error) sections.events = value.events.map((entry) => ({
+      ...entry,
+      ...(Array.isArray(entry?.tags) ? { tags: [...entry.tags] } : {}),
+    }));
+  }
+  if (includeCanonical && Array.isArray(value.canonicalUpdates)) {
+    const error = validateAgainstSchema(
+      PREGAME_HISTORY_SCHEMA.properties.canonicalUpdates,
+      value.canonicalUpdates,
+      "$.canonicalUpdates",
+    );
+    if (!error) sections.canonicalUpdates = value.canonicalUpdates.map((entry) => ({ ...entry }));
+  }
+  const summary = String(value.summary ?? "").trim();
+  if (summary) sections.summary = summary;
+  return sections;
+};
+
 export const normalizeGameplayPayload = (taskKey, value) => {
   if (taskKey === "chatActions") return normalizeChatActionsShape(value);
   if (taskKey === "pregameHistory") return normalizePregameHistoryShape(value);

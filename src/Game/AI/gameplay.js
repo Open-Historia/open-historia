@@ -109,6 +109,7 @@ import {
   decodeGameMasterTransportPayload,
   decodePregameHistoryTransportPayload,
   mergePregameHistoryTransportSections,
+  extractPregameHistoryStableRetrySections,
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
@@ -3484,6 +3485,7 @@ const runJsonTask = async (taskKey, {
         elapsedMs: Date.now() - taskStartedAt,
       }, { verbose: true });
       let parsed = response?.toolInput ?? unwrapMimickedToolCall(extractJsonPayload(rawText), tool?.name);
+      let pregameDecodedTransportSections = null;
       // The GM answers through a shallow transport (JSON array text per
       // subsystem); decode it here so schema validation sees the structured
       // transaction and a broken array is reported like any other invalid payload.
@@ -3495,21 +3497,20 @@ const runJsonTask = async (taskKey, {
       } else if (taskKey === "pregameHistory" && parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const decoded = decodePregameHistoryTransportPayload(parsed);
         transportDecodeError = normalizeString(decoded?.error);
+        pregameDecodedTransportSections = decoded?.validSections || null;
         parsed = decoded?.payload;
-        if (transportDecodeError && outputAttempt === 1) {
-          pregamePreservedTransportSections = decoded?.validSections || null;
-        } else if (pregamePreservedTransportSections) {
-          parsed = mergePregameHistoryTransportSections(parsed, pregamePreservedTransportSections);
-          logDebugEvent("ai", 'Task "pregameHistory" corrective attempt preserved independently valid Round-Zero sections.', {
-            preserved: Object.keys(pregamePreservedTransportSections),
-          }, { verbose: true });
-        }
       }
       // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
       // envelope, a singular event, synonym keys, doubled impacts wrappers —
       // rewritten to the canonical shape before the schema sees them.
       // It also drops the `interactive event` a time skip no longer proposes.
       parsed = normalizeGameplayPayload(taskKey, parsed);
+      if (taskKey === "pregameHistory" && outputAttempt > 1 && pregamePreservedTransportSections) {
+        parsed = mergePregameHistoryTransportSections(parsed, pregamePreservedTransportSections);
+        logDebugEvent("ai", 'Task "pregameHistory" corrective attempt preserved stable Round-Zero sections.', {
+          preserved: Object.keys(pregamePreservedTransportSections),
+        }, { verbose: true });
+      }
       // Same idea for markerOps. The engine has always accepted `found`/`destroy`
       // as aliases and a build written flat, but the schema only ever allowed the
       // canonical spelling — and a single rejected op fails the WHOLE payload, so
@@ -3824,6 +3825,26 @@ const runJsonTask = async (taskKey, {
 
       failureReason = validation.error;
       if (!firstFailureReason) firstFailureReason = validation.error;
+      if (taskKey === "pregameHistory" && outputAttempt === 1 && parsed && typeof parsed === "object") {
+        const stableSource = transportDecodeError && pregameDecodedTransportSections
+          ? mergePregameHistoryTransportSections(parsed, pregameDecodedTransportSections)
+          : parsed;
+        const stableSections = extractPregameHistoryStableRetrySections(stableSource, {
+          // A sibling that decoded from the JSON-text transport and independently
+          // passes the canonical sub-schema is frozen only for transport repair.
+          // It is still subjected to the full semantic/bootstrap validators after
+          // the retry; schema-failing canonical state is never frozen here.
+          includeCanonical: Boolean(transportDecodeError),
+        });
+        if (Array.isArray(stableSections.events)) {
+          const eventError = validatePregameEvents(
+            { ...parsed, events: stableSections.events },
+            { startDate: normalizeString(variables?.pregameStartDate || variables?.startDate), strict: true },
+          );
+          if (eventError) delete stableSections.events;
+        }
+        pregamePreservedTransportSections = Object.keys(stableSections).length ? stableSections : null;
+      }
       if (schemaValid && !salvageCandidate) {
         salvageCandidate = parsed;
         removedFromAnswer = removedThisAttempt;
@@ -3845,7 +3866,9 @@ const runJsonTask = async (taskKey, {
           : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
         const transportRepairInstruction = taskKey === "pregameHistory" && transportDecodeError
           ? " This is a transport-syntax correction only: preserve every previous field and historical/canonical fact exactly except the JSON-text field(s) named in the error; repair their JSON syntax without dropping, merging, rewriting, or replacing array items."
-          : "";
+          : taskKey === "pregameHistory" && pregamePreservedTransportSections?.events
+            ? " The engine has frozen the validated historical events from your previous answer. Correct only the invalid Round-Zero section; do not reinterpret or replace those historical events."
+            : "";
         history.push({
           role: "user",
           parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}${transportRepairInstruction}` }],

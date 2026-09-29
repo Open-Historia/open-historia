@@ -93,6 +93,53 @@ const normalizedWars = (world) =>
     .filter(Boolean)
     .slice(0, MAX_WARS);
 
+// Round-Zero baseline construction is intentionally separate from normal-turn
+// lifecycle verbs. The caller owns identity resolution; this helper owns the
+// canonical persisted war shape and its structural invariants. It is pure and
+// does not mutate/apply against world.wars.
+export const buildPregameWarBaselineRecord = ({
+  id = "",
+  title = "",
+  status = "active",
+  sideA = [],
+  sideB = [],
+  startedDate = "",
+  note = "",
+  sourceEventIds = [],
+  round = 1,
+} = {}) => {
+  const canonicalId = normalizeString(id);
+  const canonicalStatus = normalizeString(status).toLowerCase();
+  if (!canonicalId) return { record: null, error: "Round-Zero war baseline requires a native canonical id." };
+  if (!["active", "ceasefire"].includes(canonicalStatus)) {
+    return { record: null, error: `Round-Zero war ${canonicalId} must be active or ceasefire.` };
+  }
+  const start = normalizeString(startedDate);
+  if (start && !parseIsoDate(start)) {
+    return { record: null, error: `Round-Zero war ${canonicalId} has an invalid startedDate.` };
+  }
+  const normalized = normalizeWar({
+    id: canonicalId,
+    title: normalizeString(title),
+    status: canonicalStatus,
+    sideA,
+    sideB,
+    startedDate: start,
+    endedDate: "",
+    lastUpdatedDate: start,
+    cause: normalizeString(note),
+    note: normalizeString(note),
+    sourceEventIds: [...new Set(normalizeArray(sourceEventIds).map(normalizeString).filter(Boolean))].slice(-24),
+    storylineIds: [],
+    createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
+    updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
+  });
+  if (!normalized) {
+    return { record: null, error: `Round-Zero war ${canonicalId} requires two non-empty opposing sides.` };
+  }
+  return { record: normalized, error: "" };
+};
+
 const parseCsv = (value) =>
   uniquePolities(
     String(value ?? "")
