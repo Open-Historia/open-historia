@@ -100,6 +100,7 @@ import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
 import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
+import { formalAgendaProposals } from "./formalAgenda.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -12004,8 +12005,14 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
 const institutionGovernancePrompt = (world, institutionId, playerCountry = "") => {
   const institution = resolveInstitutionRecord(world, institutionId);
   if (!institution) return "";
-  const proposals = Object.values(institution.proposals || {}).slice(0, 16);
-  const proposalLines = proposals.length
+  // Open business first, most recent activity first, then a few recently
+  // settled proposals so members do not table them again (formalAgenda.js).
+  const { open: proposals, closed: closedProposals } = formalAgendaProposals(institution.proposals);
+  const closedLines = closedProposals.length
+    ? "\nRecently settled (already decided; do not table these again):\n"
+      + closedProposals.map((proposal) => `- ${proposal.id}: ${proposal.title} [${proposal.status}]`).join("\n")
+    : "";
+  const proposalLines = (proposals.length
     ? proposals.map((proposal) => {
       const amendments = Array.isArray(proposal?.amendments)
         ? proposal.amendments.filter((entry) => entry?.status === "proposed").map((entry) => `${entry.id}: ${entry.text}`).slice(0, 4)
@@ -12018,7 +12025,7 @@ const institutionGovernancePrompt = (world, institutionId, playerCountry = "") =
         + (eligible ? `; eligible voters: ${eligible}` : "")
         + (already ? `; ballots already cast: ${already}` : "");
     }).join("\n")
-    : "- no formal proposals are currently on the agenda";
+    : "- no formal proposals are currently on the agenda") + closedLines;
   const members = (Array.isArray(institution.members) ? institution.members : [])
     .map((member) => `${member.polity} (${member.status || "member"}${member.role ? `, ${member.role}` : ""})`)
     .join(", ");
