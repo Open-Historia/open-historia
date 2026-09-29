@@ -3359,11 +3359,17 @@ const normalizeEventNpcReaction = (value) => {
   const evaluatedAt = normalizeOptionalString(value.evaluatedAt);
   const result = normalizeOptionalString(value.result);
   const chatId = normalizeOptionalString(value.chatId);
+  // A reaction given up after its last failed attempt ("failed") says how many
+  // attempts it made and why the last one failed, for the Event Editor.
+  const attempts = Math.max(0, Math.trunc(Number(value.attempts) || 0));
+  const lastError = normalizeOptionalString(value.lastError);
   return {
     enabled: value.enabled === true,
     ...(evaluatedAt ? { evaluatedAt } : {}),
     ...(result ? { result } : {}),
     ...(chatId ? { chatId } : {}),
+    ...(attempts ? { attempts } : {}),
+    ...(lastError ? { lastError } : {}),
   };
 };
 

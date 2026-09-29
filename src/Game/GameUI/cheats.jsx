@@ -2517,6 +2517,13 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                         : 0;
                     const pendingReactionSeconds = pendingReaction ? Math.max(0, Math.ceil(pendingReactionMs / 1000)) : 0;
                     const reactionResult = cleanEventText(event?.npcReaction?.result).toLowerCase();
+                    // A reaction whose request failed is tried again a few times, then
+                    // given up (AI/eventReactionRetry.js): say so rather than showing a
+                    // countdown that starts over as if it were still on its way.
+                    const pendingReactionAttempts = Math.max(0, Math.trunc(Number(pendingReaction?.attempts) || 0));
+                    const pendingReactionError = cleanEventText(pendingReaction?.lastError);
+                    const failedReactionAttempts = Math.max(0, Math.trunc(Number(event?.npcReaction?.attempts) || 0));
+                    const failedReactionError = cleanEventText(event?.npcReaction?.lastError);
                     return (
                         <div key={editorKey} style={{ ...editorFieldStyle, borderColor: isEditing ? "rgba(255,255,255,0.23)" : "rgba(255,255,255,0.1)", padding: "0.55rem 0.6rem" }}>
                             <div style={{ alignItems: "flex-start", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
@@ -2571,9 +2578,20 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                             )}
                             {pendingReaction && !isEditing && (
                                 <div style={{ alignItems: "center", background: "rgba(16,185,129,0.055)", border: "1px solid rgba(52,211,153,0.18)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
-                                    <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35 }}>
-                                        NPCs may react after the grace window. Editing this event before delivery changes what they evaluate. Delivery check in {pendingReactionSeconds}s.
-                                    </div>
+                                    {pendingReactionAttempts > 0 ? (
+                                        <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35, minWidth: 0, overflowWrap: "anywhere" }}>
+                                            <div>
+                                                {pendingReactionAttempts === 1
+                                                    ? `The reaction request failed once. Trying again in ${pendingReactionSeconds}s.`
+                                                    : `The reaction request failed ${pendingReactionAttempts} times. Trying again in ${pendingReactionSeconds}s.`}
+                                            </div>
+                                            {pendingReactionError && <div style={{ color: "rgba(254,202,202,0.72)", marginTop: "0.15rem" }}>{`Last error: ${pendingReactionError}`}</div>}
+                                        </div>
+                                    ) : (
+                                        <div style={{ color: "rgba(167,243,208,0.72)", fontSize: "0.61rem", lineHeight: 1.35 }}>
+                                            NPCs may react after the grace window. Editing this event before delivery changes what they evaluate. Delivery check in {pendingReactionSeconds}s.
+                                        </div>
+                                    )}
                                     <button
                                         type="button"
                                         className="oh-tap-row"
@@ -2590,6 +2608,36 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                         style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.62rem", padding: "0.3rem 0.45rem" }}
                                     >
                                         Cancel delivery
+                                    </button>
+                                </div>
+                            )}
+                            {!pendingReaction && !isEditing && reactionResult === "failed" && (
+                                <div style={{ alignItems: "center", background: "rgba(127,29,29,0.13)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 8, display: "flex", gap: "0.5rem", justifyContent: "space-between", marginTop: "0.45rem", padding: "0.4rem 0.48rem" }}>
+                                    <div style={{ color: "rgba(254,202,202,0.78)", fontSize: "0.61rem", lineHeight: 1.35, minWidth: 0, overflowWrap: "anywhere" }}>
+                                        <div>
+                                            {failedReactionAttempts > 1
+                                                ? `The reaction request failed ${failedReactionAttempts} times, so it was given up. No chat message was sent.`
+                                                : "The reaction request failed, so it was given up. No chat message was sent."}
+                                        </div>
+                                        {failedReactionError && <div style={{ marginTop: "0.15rem" }}>{`Last error: ${failedReactionError}`}</div>}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="oh-tap-row"
+                                        disabled={busy}
+                                        onClick={() => runBusy(async () => {
+                                            // A fresh request, as if the reaction had just been switched on.
+                                            const next = (events ?? []).map((entry, index) => index === sourceIndex
+                                                ? { ...entry, npcReaction: { enabled: true } }
+                                                : entry);
+                                            const persisted = await persist(next);
+                                            const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
+                                            if (persistedEvent) await syncReactionQueueForEvent(persistedEvent, true, { restart: true });
+                                            return "NPC reaction queued again. It is checked after the grace window.";
+                                        })}
+                                        style={{ ...buttonStyle, flexShrink: 0, fontSize: "0.62rem", padding: "0.3rem 0.45rem" }}
+                                    >
+                                        Retry
                                     </button>
                                 </div>
                             )}

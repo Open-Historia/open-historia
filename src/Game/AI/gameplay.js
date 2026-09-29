@@ -99,6 +99,7 @@ import {
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
+import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -16041,7 +16042,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       return debug ? { processed: 0, reason: "event-not-yet-revealed", retryAfterMs: 5000 } : null;
     }
 
-    const removeQueueEntry = async (worldInput, { events = null, reactionResult = "", chatId = "" } = {}) => {
+    const removeQueueEntry = async (worldInput, { events = null, reactionResult = "", chatId = "", failure = null } = {}) => {
       const nextWorld = {
         ...worldInput,
         pendingEventOutreach: normalizeArray(worldInput?.pendingEventOutreach)
@@ -16060,6 +16061,9 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
                   evaluatedAt: new Date().toISOString(),
                   result: reactionResult,
                   ...(chatId ? { chatId } : {}),
+                  // A reaction given up: how many times it was asked, and why
+                  // the last one failed, for the Event Editor to show.
+                  ...(failure ? { attempts: failure.attempts, lastError: failure.lastError } : {}),
                 },
               }
             : candidate
@@ -16124,23 +16128,54 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
             return "$.chat.countries must contain at least one known non-player polity (or chat must be null).";
           }
           const speaker = normalizeString(candidate.chat.speaker) || normalizeString(countries[0]?.name || countries[0]?.code);
-          if (!idleDiplomacySpeakerHasContext(bundle.world, speaker, politicalDecisionSet)) {
-            return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+          const hasContext = (name) => idleDiplomacySpeakerHasContext(bundle.world, name, politicalDecisionSet);
+          if (!hasContext(speaker)) {
+            if (!finalAttempt) {
+              return "$.chat.speaker must be one of the governments supplied in PRIVATE POLITICAL DECISION CONTEXT, or chat must be null.";
+            }
+            // The last chance: an invited government that has its context
+            // speaks instead, and with none the reaction is silence rather than
+            // one more failed request (eventReactionRetry.js).
+            const stand = reactionSpeakerWithContext(
+              speaker,
+              countries.map((country) => normalizeString(country?.name || country?.code)),
+              hasContext,
+            );
+            if (!stand) {
+              candidate.chat = null;
+              return "";
+            }
+            candidate.chat.speaker = stand;
           }
           return finalAttempt ? "" : validateChatOpener(candidate.chat, "$.chat");
         },
         variables,
       }));
     } catch (error) {
-      // Keep the request pending, but back off instead of hot-looping a dead provider.
+      // Tried again further apart each time (30 s, 2 min, 10 min), then given
+      // up: the entry leaves the queue and the event records the failure, which
+      // the Event Editor shows with a Retry (eventReactionRetry.js).
       const latestWorld = await readWorldState({ force: true });
+      const queued = normalizeArray(latestWorld.pendingEventOutreach)
+        .find((entry) => normalizeString(entry?.id) === dueQueueId);
+      if (!queued) return debug ? { processed: 1, reason: "cancelled-during-generation" } : null;
+      const lastError = normalizeString(error?.message);
+      const next = eventReactionAfterFailure(queued.attempts);
+      if (next.giveUp) {
+        await removeQueueEntry(latestWorld, {
+          events: await readEventsState({ force: true }),
+          reactionResult: "failed",
+          failure: { attempts: next.attempts, lastError },
+        });
+        return debug ? { processed: 1, reason: "ai-error-gave-up", message: lastError } : null;
+      }
       const latestQueue = normalizeArray(latestWorld.pendingEventOutreach).map((entry) =>
         normalizeString(entry?.id) === dueQueueId
           ? {
               ...entry,
-              attempts: Number(entry?.attempts || 0) + 1,
-              deliverAfter: new Date(Date.now() + 30000).toISOString(),
-              lastError: normalizeString(error?.message),
+              attempts: next.attempts,
+              deliverAfter: new Date(Date.now() + next.retryAfterMs).toISOString(),
+              lastError,
             }
           : entry
       );
@@ -16148,7 +16183,7 @@ export const processPendingEventOutreach = async ({ debug = false } = {}) => {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("oh:event-outreach-queue-changed"));
       }
-      return debug ? { processed: 0, reason: "ai-error", retryAfterMs: 30000, message: normalizeString(error?.message) } : null;
+      return debug ? { processed: 0, reason: "ai-error", retryAfterMs: next.retryAfterMs, message: lastError } : null;
     }
 
     // The grace window extends through generation in practice: if the admin edits,
