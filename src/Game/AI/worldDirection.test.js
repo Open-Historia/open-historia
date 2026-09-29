@@ -1,7 +1,7 @@
 /*! Open Historia — world direction: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/worldDirection.test.js
 //
-// Runs without node_modules: worldDirection.js imports nothing.
+// Runs without node_modules: worldDirection.js imports only runtime/gameDates.js.
 //
 // These are an author's settings, so the promise is to the author: the number
 // they set is the number the engine uses. And to the player: none of it may
@@ -147,7 +147,22 @@ test("a beat is a dated line in the author's words; the rest of the text is igno
 test("dates sort as numbers, years before AD 1 included", () => {
     assert.ok(dateKey("-0218-08-02") < dateKey("0001-01-01"));
     assert.ok(dateKey("1914-07-28") < dateKey("1914-08-01"));
+    assert.ok(dateKey("-0218-04-15") < dateKey("-0218-12-18"), "April comes before December inside a BC year");
+    assert.ok(dateKey("-0218-12-31") < dateKey("-0217-01-01"), "218 BC comes before 217 BC");
     assert.equal(dateKey("not a date"), null);
+});
+
+test("BC beats list in calendar order and land in the skip that covers them", () => {
+    const beats = parseScriptedEvents([
+        "-0218-12-18 Hannibal defeats the Romans at the Trebia.",
+        "-0218-04-15 Hannibal crosses the Rhone with his elephants.",
+        "-0217-06-21 Hannibal ambushes the Romans at Lake Trasimene.",
+    ].join("\n"));
+    assert.deepEqual(beats.map((beat) => beat.date), ["-0218-04-15", "-0218-12-18", "-0217-06-21"]);
+    const spring = scriptedBeatsInSpan(beats, { originDate: "-0218-03-01", targetDate: "-0218-06-30" });
+    assert.deepEqual(spring.map((beat) => beat.date), ["-0218-04-15"]);
+    const winter = scriptedBeatsInSpan(beats, { originDate: "-0218-06-30", targetDate: "-0218-12-31" });
+    assert.deepEqual(winter.map((beat) => beat.date), ["-0218-12-18"]);
 });
 
 test("a period covers the beats after its origin up to its target; the first skip covers its origin day too", () => {

@@ -12,7 +12,10 @@
 // (requestBudget.js) — and the simulator is told at the top of its next turn
 // (runtime/applicationReceipt.js, the "short" note).
 //
-// DELIBERATELY IMPORT-FREE: gameplay.js hands in the resolved settings.
+// Imports only the game-date rules (runtime/gameDates.js, itself import-free):
+// gameplay.js hands in the resolved settings.
+
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
 const asText = (value) => String(value ?? "").trim();
@@ -88,27 +91,11 @@ export const worldShareShortfall = (events, floorPercent, { playerNames = [] } =
 // again would be a whole second request.
 const DATE_AT_START = /^\s*(-?\d{1,4}-\d{2}-\d{2})\s*(?:[—–\-:|]+\s*)?(.*)$/;
 
-// A date as one number that sorts, negative years included: -0218-03-01 is
-// -2180301 and falls before 0001-01-01.
-export const dateKey = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const value = Number(match[2]) * 10000 + Number(match[3]) * 100 + Number(match[4]);
-    return match[1] ? -value : value;
-};
-
-// The same date as a count of days, for "within a week of": proleptic
-// Gregorian, and setUTCFullYear takes the years Date.UTC would misread (a year
-// under 100, a year before 1).
-const dayNumber = (iso) => {
-    const match = /^(-?)(\d{1,4})-(\d{2})-(\d{2})$/.exec(asText(iso));
-    if (!match) return null;
-    const year = Number(match[2]) * (match[1] ? -1 : 1);
-    const date = new Date(0);
-    date.setUTCFullYear(year, Number(match[3]) - 1, Number(match[4]));
-    const value = Math.round(date.getTime() / 86400000);
-    return Number.isFinite(value) ? value : null;
-};
+// A date as one number that sorts, negative years included, and a count of
+// days for "within a week of": its day number (runtime/gameDates.js), so
+// 15 April 218 BC falls before 18 December 218 BC and both before 0001-01-01.
+// Null when it is not a game date.
+export const dateKey = (iso) => gameDateDayNumber(asText(iso));
 
 export const parseScriptedEvents = (text) => {
     const beats = [];
@@ -148,11 +135,11 @@ const words = (text) => new Set(String(text ?? "").normalize("NFD").replace(/[̀
 export const SCRIPTED_MATCH_DAYS = 7;
 export const beatIsWritten = (beat, events) => {
     const needles = [...words(`${beat?.title} ${beat?.text}`)];
-    const beatDay = dayNumber(beat?.date);
+    const beatDay = dateKey(beat?.date);
     if (!needles.length || beatDay === null) return false;
     const needed = Math.min(3, Math.max(1, Math.ceil(needles.length / 3)));
     return asArray(events).some((event) => {
-        const eventDay = dayNumber(event?.date);
+        const eventDay = dateKey(event?.date);
         if (eventDay === null || Math.abs(eventDay - beatDay) > SCRIPTED_MATCH_DAYS) return false;
         const haystack = words(`${event?.title} ${event?.description}`);
         let shared = 0;
