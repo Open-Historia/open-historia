@@ -4,6 +4,7 @@ import { getNationFlags } from "../../runtime/assets.js";
 import { resolvePolityFlag, setPolityFlag } from "../../runtime/polityFlags.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { GAME_FLAG_LIMIT, gameFlagChoices } from "./gameFlagChoices.js";
 
 const MAX_FLAG_WIDTH = 256;
 const ACCEPT = "image/png,image/jpeg,image/webp,image/gif,image/svg+xml";
@@ -258,23 +259,9 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
         [polity?.polityKey, polity?.name, polity?.code, world, flags],
     );
 
-    const existing = useMemo(() => {
-        const seen = new Set();
-        return Object.entries(flags || {})
-            .filter(([, value]) => str(value))
-            .filter(([, value]) => {
-                if (seen.has(value)) return false;
-                seen.add(value);
-                return true;
-            })
-            .slice(0, 120);
-    }, [flags]);
-
     const q = query.trim().toLowerCase();
-    const filteredExisting = useMemo(
-        () => (q ? existing.filter(([name]) => searchText(name).includes(q)) : existing),
-        [existing, q],
-    );
+    // Searched in full (every name that uses an image), then capped to draw.
+    const filteredExisting = useMemo(() => gameFlagChoices(flags, q), [flags, q]);
     const filteredCommunity = useMemo(
         () => (q
             ? community.filter((post) => searchText(post?.title, post?.author, post?.code).includes(q))
@@ -394,14 +381,21 @@ const GameFlagPicker = ({ isOpen, polity, world, onClose, onApplied }) => {
                             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.76rem", marginBottom: "0.75rem" }}>
                                 Reuse any flag already stored in this campaign. Choosing one copies the image to this polity's stable lineage; renaming the polity later will not detach it.
                             </div>
-                            {existing.length === 0 ? (
+                            {filteredExisting.stored === 0 ? (
                                 <div style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.8rem" }}>No custom flags are stored in this campaign yet.</div>
-                            ) : filteredExisting.length === 0 ? noMatches : (
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.75rem" }}>
-                                    {filteredExisting.map(([name, imageUrl]) => (
-                                        <FlagCard key={name} imageUrl={imageUrl} label={name} selected={current.imageUrl === imageUrl} onClick={() => apply(imageUrl)} />
-                                    ))}
-                                </div>
+                            ) : filteredExisting.choices.length === 0 ? noMatches : (
+                                <>
+                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: "0.75rem" }}>
+                                        {filteredExisting.choices.slice(0, GAME_FLAG_LIMIT).map(({ imageUrl, label }) => (
+                                            <FlagCard key={imageUrl} imageUrl={imageUrl} label={label} selected={current.imageUrl === imageUrl} onClick={() => apply(imageUrl)} />
+                                        ))}
+                                    </div>
+                                    {filteredExisting.choices.length > GAME_FLAG_LIMIT && (
+                                        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem", marginTop: "0.75rem" }}>
+                                            {`Showing ${GAME_FLAG_LIMIT} of ${filteredExisting.choices.length} flags. Search to narrow the list.`}
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </>
                     ) : communityPack ? (
