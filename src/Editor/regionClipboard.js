@@ -132,6 +132,17 @@ export const describeClipboard = (payload) => {
   };
 };
 
+// The day a clipboard was copied (a real date, not a game date), written the
+// way the game writes its dates in English ("Jan 8, 2026") whatever the
+// browser's locale, so the translator puts it into the player's language
+// (runtime/localDates.js). The browser's own "8/1/2026" was read month first
+// there, and shown as the wrong day.
+export const formatCopiedDay = (time) => {
+  const date = new Date(time);
+  if (!Number.isFinite(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
 // ---- persistence: one slot in IndexedDB, mirrored in memory ------------------
 
 const DB_NAME = "oh-workshop";

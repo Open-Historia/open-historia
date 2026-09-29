@@ -10,7 +10,7 @@
 import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton } from "./editorStyles.js";
-import { describeClipboard } from "./regionClipboard.js";
+import { describeClipboard, formatCopiedDay } from "./regionClipboard.js";
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -22,7 +22,7 @@ const ago = (iso) => {
   if (minutes < 60) return `${minutes} min ago`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${plural(hours, "hour")} ago`;
-  return new Date(then).toLocaleDateString();
+  return formatCopiedDay(then);
 };
 
 const ClipboardPanel = ({ clipboard, selectionCount = 0, result = null, onCopySelection, onPaste, onClear, onClose }) => {

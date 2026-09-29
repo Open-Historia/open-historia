@@ -8,10 +8,12 @@ import {
   CLIPBOARD_VERSION,
   buildClipboardPayload,
   describeClipboard,
+  formatCopiedDay,
   isRegionClipboard,
   planClipboardMerge,
   resolvePastedIds,
 } from "./regionClipboard.js";
+import { createDateLocalizer } from "../runtime/localDates.js";
 
 const region = (id, owner, extra = {}) => ({
   type: "Feature",
@@ -121,4 +123,14 @@ test("the panel summary counts regions per owner", () => {
     { key: "Rohan", name: "Rohan", count: 1 },
   ]);
   assert.equal(describeClipboard(null), null);
+});
+
+test("the day a clipboard was copied is written so the translator reads it as that day", () => {
+  // 8 January, whatever the browser's locale: a day-first "8/1/2026" was read
+  // month first by the translator and shown as 1 August.
+  const day = formatCopiedDay(new Date(2026, 0, 8, 12).getTime());
+  assert.equal(day, "Jan 8, 2026");
+  assert.equal(createDateLocalizer("fr")(day), "8 janv. 2026");
+  assert.equal(createDateLocalizer("fr")(formatCopiedDay(new Date(2026, 0, 25, 12).getTime())), "25 janv. 2026", "a day above 12 is not dropped");
+  assert.equal(formatCopiedDay(Number.NaN), "");
 });
