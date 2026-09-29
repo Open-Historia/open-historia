@@ -48,7 +48,7 @@ Every URL points at the **registry Worker** (`open-historia-registry.nichojkrol.
 | `VITE_OH_HUB_URL` | Worker root | Community-hub GitHub proxy (`/hub/*`), because GitHub attachments send no CORS. | `router.js:109` |
 | `VITE_OH_ACCOUNT_URL` | Worker root | Accounts (`/account/*`) + encrypted sync (`/sync/*`). | `account.js:11` |
 | `VITE_OH_GOOGLE_CLIENT_ID` | Google OAuth client id | Public client id for "Sign in with Google". Empty ⇒ Google button hidden (accounts effectively disabled). | `account.js:77` |
-| `VITE_OH_MANIFEST_URL` | *(unset)* → `/content-manifest.json` | Signed asset→hash manifest; ships with the build, same-origin default. | `contentTrust.js:18` |
+| `VITE_OH_MANIFEST_URL` | *(unset)* → `${BASE_URL}content-manifest.json` | Signed asset→hash manifest; ships with the build, so the default sits beside it (`/play/content-manifest.json` on openhistoria.com; a root-absolute default 404'd there and verification never ran). A missing manifest logs one `console.info`. | `contentTrust.js` |
 
 ---
 

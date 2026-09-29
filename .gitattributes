@@ -3,6 +3,13 @@
 *.sh text eol=lf
 *.command text eol=lf
 
+# Signed documents: the detached .sig covers the exact LF bytes that were signed,
+# and the site serves public/ verbatim. A CRLF checkout (core.autocrlf on
+# Windows, where the site is built) would serve bytes the signature does not
+# cover, and every client would reject the manifest as bad-signature.
+public/content-manifest.json text eol=lf
+public/node-directory.json text eol=lf
+
 # NOTE: the large world-map binaries (*.pmtiles, regions-seed.geojson,
 # cities-seed.json, the default scenario's regions.geojson) used to be tracked in
 # Git LFS. They are no longer in the repo at all - they are hosted as GitHub
