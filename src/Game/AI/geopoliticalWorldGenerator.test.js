@@ -103,3 +103,32 @@ test("the baseline passes the scenario's history authority to every prompt, incl
     assert.ok(!entry.systemPrompt.includes(FALLBACK_REFERENCE), `${entry.label} does not fall back to external chronology`);
   }
 });
+
+
+test("the baseline stops asking once a phase has already blocked Apply", async () => {
+  const polities = ["Avalon", "Borduria"];
+  const tools = [];
+  const result = await generateGeopoliticalWorldBaseline({
+    scenarioDate: "2014-03-22",
+    polities,
+    world: {},
+    callModel: async (systemPrompt, messages, options) => {
+      tools.push(options.tool.name);
+      if (options.tool.name === "submit_geopolitical_institution_catalog") return { toolInput: { institutionsJson: "[]" } };
+      if (options.tool.name === "submit_geopolitical_power_calibration") return { toolInput: { powerJson: "[]" } };
+      throw new Error(`unexpected tool ${options.tool.name}`);
+    },
+  });
+
+  assert.equal(result.blockingErrors.length, 1);
+  assert.match(result.blockingErrors[0], /Power calibration incomplete/);
+  // One catalog call and the two power attempts; no membership or agreement
+  // request is spent on a baseline that can no longer be applied.
+  assert.deepEqual(tools, [
+    "submit_geopolitical_institution_catalog",
+    "submit_geopolitical_power_calibration",
+    "submit_geopolitical_power_calibration",
+  ]);
+  assert.equal(result.modelCalls, 3);
+  assert.deepEqual(result.unresolvedMembershipPolities, polities);
+});

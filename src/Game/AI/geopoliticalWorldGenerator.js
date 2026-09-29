@@ -1048,10 +1048,15 @@ export const generateGeopoliticalWorldBaseline = async ({
   const catalogById = new Map(institutionCatalog.map((entry) => [entry.id, entry]));
   const catalogByToken = buildCatalogIdentityIndex(institutionCatalog);
 
+  // A blocked baseline can never be applied (applyGeopoliticalWorldBaseline
+  // refuses it), so once a phase has blocked it no later phase spends a
+  // request. The author retries the whole baseline anyway.
+  const catalogBlocked = blockingErrors.length > 0;
+
   // Phase 2: global relative power evidence. Native code owns the actual tiers.
   const powerMap = new Map();
   let unresolvedPower = [...requestedPolities];
-  for (let attempt = 1; attempt <= 2 && unresolvedPower.length; attempt += 1) {
+  for (let attempt = 1; attempt <= 2 && unresolvedPower.length && !catalogBlocked; attempt += 1) {
     try {
       const prompt = buildPowerPrompt({ scenarioDate, historyAuthority, world, scenarioContext, requestedPolities: unresolvedPower, allPolityKeys, accepted: [...powerMap.values()] });
       modelCalls += 1;
@@ -1069,7 +1074,7 @@ export const generateGeopoliticalWorldBaseline = async ({
       diagnostics.push({ phase: "power-calibration", attempt, error: clean(error?.message || error) });
     }
   }
-  if (unresolvedPower.length) blockingErrors.push(`Power calibration incomplete for ${unresolvedPower.length} polity/polities: ${unresolvedPower.slice(0, 12).join(", ")}${unresolvedPower.length > 12 ? "…" : ""}.`);
+  if (unresolvedPower.length && !catalogBlocked) blockingErrors.push(`Power calibration incomplete for ${unresolvedPower.length} polity/polities: ${unresolvedPower.slice(0, 12).join(", ")}${unresolvedPower.length > 12 ? "…" : ""}.`);
 
   // Phase 3: membership/regime profiles. Each normal bounded batch runs once.
   // Every valid row is salvaged; only the final unresolved set is retried.
@@ -1113,7 +1118,13 @@ export const generateGeopoliticalWorldBaseline = async ({
     return accepted;
   };
 
-  const membershipCoverage = await resolveGeopoliticalMembershipCoverage({
+  const skipRemainingPhases = blockingErrors.length > 0;
+  if (skipRemainingPhases) warnings.push("Skipped the membership and standing-agreement requests because the baseline was already blocked.");
+  const membershipCoverage = skipRemainingPhases ? {
+    records: [],
+    diagnostics: [],
+    unresolvedPolities: [...requestedPolities],
+  } : await resolveGeopoliticalMembershipCoverage({
     requestedPolities,
     batchSize: GEOPOLITICAL_WORLD_BATCH_SIZE,
     requestProfiles: normalizeMembershipRows,
@@ -1133,13 +1144,13 @@ export const generateGeopoliticalWorldBaseline = async ({
   const records = membershipCoverage.records;
   diagnostics.push(...membershipCoverage.diagnostics);
   const unresolvedMembershipPolities = membershipCoverage.unresolvedPolities;
-  if (unresolvedMembershipPolities.length) {
+  if (unresolvedMembershipPolities.length && !skipRemainingPhases) {
     blockingErrors.push(`Membership/regime profile incomplete for ${unresolvedMembershipPolities.length} polity/polities after unresolved-only rescue: ${unresolvedMembershipPolities.slice(0, 24).join(", ")}${unresolvedMembershipPolities.length > 24 ? "…" : ""}.`);
   }
 
   // Phase 4: one global agreement pass, avoiding cross-batch duplication.
   const agreements = new Map();
-  if (!blockingErrors.length || records.length) {
+  if (!blockingErrors.length) {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
         const prompt = buildAgreementsPrompt({ scenarioDate, historyAuthority, scenarioContext, allPolityKeys, catalog: institutionCatalog });
