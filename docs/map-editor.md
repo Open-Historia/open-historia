@@ -191,7 +191,7 @@ The strip sits in a band between the documents chip and the Save / Apply / Close
 | Lasso select | `lasso` | Freehand `Draw` polygon; on `drawend` selects every region whose interior point falls inside (`selectWithinPolygon`, `:868`). |
 | Pan | `pan` | No interaction added; default map drag. |
 | Draw region | `draw` | `Draw` (Polygon, `trace:true`, `traceSource:source`) + `Snap`. Clicking a border traces along it. **On `drawend` the new polygon is carved OUT of every region it overlaps** (`subtractFrom`, R-tree extent query for candidates) so no ground is owned twice; carved neighbours get `edited:true` (`:889`). Inside → hole; across an edge → bite; fully over → deletes the underlying region. |
-| Edit vertices | `modify` | `Modify` + `Snap`. On `modifyend` sets `edited:true` on dragged features (`:963`). |
+| Edit vertices | `modify` | `Modify` on the selected regions only + `Snap` against every region. With nothing selected the tool mounts nothing and its banner asks for a selection. On `modifyend` sets `edited:true` on dragged features. |
 | Move | `move` | `Translate` on the region layer. A moved region is marked `edited`, and each move is one undo step (`trackMove`, `shapeEdits.js`); a click that moves nothing records nothing. |
 | Delete | `delete` | Click removes a region (a city hit under the cursor wins). |
 | Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one, marking the survivor `edited` (`mergeRegionFeatures`, `shapeEdits.js`). |

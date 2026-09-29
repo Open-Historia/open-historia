@@ -1031,11 +1031,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             padding: "7px 11px",
             maxWidth: "min(760px, calc(100vw - 24px))",
             fontSize: 11.5,
-            color: "rgba(255,255,255,0.78)",
+            color: d.selection.length ? "rgba(255,255,255,0.78)" : "#fbbf24",
             textAlign: "center",
           }}
         >
-          <b>Manual vertex override:</b> {d.selection.length ? `${d.selection.length} selected region${d.selection.length === 1 ? "" : "s"}` : "no selection — editing all regions"} · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo
+          <b>Manual vertex override:</b>{" "}
+          {d.selection.length === 0
+            ? "select the regions to edit first"
+            : d.selection.length === 1
+              ? "1 selected region · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo"
+              : `${d.selection.length} selected regions · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo`}
         </div>
       )}
 

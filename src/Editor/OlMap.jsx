@@ -2806,17 +2806,18 @@ const OlMap = ({
         });
       });
       added.push(draw, new Snap({ source })); // Snap last so it sees events first
-    } else if (activeTool === "modify") {
-      // Manual override mode. If the author selected regions first, expose ONLY
-      // those vertices instead of the entire 3,500-region world. Snapping still
+    } else if (activeTool === "modify" && (selectionIds || []).some((id) => source.getFeatureById(id))) {
+      // Manual override mode, on the selected regions only — never the entire
+      // 3,500-region world, whose handles on every border bury the one being
+      // fixed. With nothing selected the tool does nothing and the banner
+      // asks for a selection, as the Shared border tool does. Snapping still
       // sees every region, so a human can deliberately align a corrected border
       // to its neighbour without being buried in unrelated handles.
       const selectedFeatures = (selectionIds || [])
         .map((id) => source.getFeatureById(id))
         .filter(Boolean);
-      const selectedCollection = selectedFeatures.length ? new Collection(selectedFeatures) : null;
       const modify = new Modify({
-        ...(selectedCollection ? { features: selectedCollection } : { source }),
+        features: new Collection(selectedFeatures),
         pixelTolerance: 18,
         style: manualVertexStyle,
       });
