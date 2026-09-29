@@ -1172,6 +1172,7 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   const politics = list.filter((change) => change.kind === "politics").length;
   if (politics) lines.push(`${plural(politics, "Politics entry", "Politics entries")} changed`);
   if (byKind.stats) lines.push("Stats sheet changed");
+  if (byKind.institutionLogos) lines.push("Institution logos changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);
   if (byKind.borders) lines.push(`${plural(byKind.borders, "border change", "border changes")}`);

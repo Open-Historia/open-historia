@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 
 import { parsePost, parseSuggestionComment, refreshPublishedRecord } from "./hubPosts.js";
 import {
+  KNOWN_KINDS,
   SUGGESTION_SCHEMA,
   buildSuggestion,
   buildSuggestionComment,
@@ -25,7 +26,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "./scenarioSuggestion.js";
-import { buildScenarioSnapshot } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, summarizeChangesForComment } from "./scenarioChanges.js";
 import { buildDetailSave, detailChangeStatus } from "./suggestionApply.js";
 
 const ZIP = "https://github.com/user-attachments/files/123/old-world-suggestion.zip";
@@ -177,4 +178,15 @@ test("accepting builds one save: meta, game, world, features, prompts, Politics 
   assert.deepEqual(patch.worldPatch.institutions, [{ id: "league", name: "The Grand League", members: ["Alpha", "Beta"] }]);
   assert.deepEqual(uploads, [{ key: "stats", json: { version: 2, sections: [] } }]);
   assert.deepEqual(clears, ["cover"]);
+});
+
+test("every kind of change has a line in the comment", () => {
+  for (const kind of KNOWN_KINDS) {
+    const change = kind === "field"
+      ? { id: kind, area: "details", kind, path: ["meta", "name"] }
+      : { id: kind, area: "details", kind };
+    assert.ok(summarizeChangesForComment([change]).length > 0, `a suggestion of one ${kind} change says what it is`);
+  }
+  const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
+  assert.match(comment, /^- Institution logos changed$/m);
 });

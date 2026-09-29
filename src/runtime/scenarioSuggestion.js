@@ -40,7 +40,7 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // The change kinds a suggestion may carry (scenarioChanges.js). Anything else
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
-const KNOWN_KINDS = new Set([
+export const KNOWN_KINDS = new Set([
   "field", "politics", "stats", "institutionLogos", "cover",
   "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
