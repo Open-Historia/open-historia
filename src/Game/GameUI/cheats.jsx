@@ -53,6 +53,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { restorePointsFor } from "../../runtime/turnCommit.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -3115,8 +3116,14 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         setFields({});
         setTarget("");
         if (tool === "roll-back-turn") {
-            readJson(JSON_URLS.snapshots, { defaultValue: [], force: true })
-                .then((list) => setItems(Array.isArray(list) ? list : []))
+            // Not one saved for a turn whose write then failed: it is at the
+            // current round, and would be listed as the most recent turn.
+            Promise.all([
+                readJson(JSON_URLS.snapshots, { defaultValue: [], force: true }),
+                // Unread, the round is unknown and every restore point is listed.
+                readJson(JSON_URLS.game, { force: true }).catch(() => null),
+            ])
+                .then(([list, game]) => setItems(restorePointsFor(Array.isArray(list) ? list : [], { round: game ? game.round || 1 : undefined })))
                 .catch(() => setItems([]));
         }
         if (tool === "edit-feature" || tool === "add-feature" || tool === "clear-features") {
