@@ -1212,7 +1212,10 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
     // player, from the same shared rule as the list's markers.
     const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
     const puppetRelations = usePuppetMarkers();
-    const theyAre = !isGroup ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
+    // A Council or accession table takes the group path even with one AI member
+    // (submitPlayerText), where no demand is read, so none is offered there.
+    const oneOnOne = !isGroup && !isInstitutional && !isLifecycleConversation;
+    const theyAre = oneOnOne ? puppetRelations[countries[0]?.name]?.theyAre ?? "" : "";
     // The composer offers "make this a demand" only to an Overlord writing to
     // its own Puppet; an Overlord's demands of the player arrive on their own.
     const canDemand = theyAre === "puppet";
