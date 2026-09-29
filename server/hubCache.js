@@ -96,14 +96,19 @@ export const pruneHubCache = (dir, maxBytes = HUB_CACHE_MAX_BYTES, { keep = "" }
 };
 
 // At startup: downloads a crash or a quit cut short, and .type files whose body
-// is gone, then the size cap.
+// is gone, then the size cap. It runs as the server starts, so a file it cannot
+// remove (held open by a virus scanner, say) is left for next time rather than
+// stopping the server.
 export const sweepHubCache = (dir, maxBytes = HUB_CACHE_MAX_BYTES) => {
   const all = entries(dir);
   const bodies = new Set(all.filter((entry) => entry.name.endsWith(".body")).map((entry) => entry.filePath));
   for (const entry of all) {
     const leftover = entry.name.endsWith(".tmp")
       || (entry.name.endsWith(".type") && !bodies.has(entry.filePath.replace(/\.type$/, ".body")));
-    if (leftover) fs.rmSync(entry.filePath, { force: true });
+    if (!leftover) continue;
+    try {
+      fs.rmSync(entry.filePath, { force: true });
+    } catch { /* in use; next time */ }
   }
   return pruneHubCache(dir, maxBytes);
 };

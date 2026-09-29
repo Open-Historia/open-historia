@@ -1378,14 +1378,18 @@ const hubCachePaths = (fileUrl) => {
 sweepHubCache(HUB_CACHE_DIR);
 
 // Serves a downloaded file from disk, with the guards every hub file gets.
+// Sized before any header is set: a file cleared between the cache check and
+// here throws into the route's error reply, which must not go out under the
+// bundle's content type.
 const sendHubFile = (res, filePath, contentType, { removeAfter = false } = {}) => {
+  const { size } = fs.statSync(filePath);
   res.setHeader("Cache-Control", "no-store");
   setHubFileGuards(res);
   // Pass the upstream content type through untouched. JSON bundles still parse
   // via response.json() (which ignores the header), while binary bundles (.zip)
   // and raw basemap images (.png/.jpg) arrive byte-for-byte.
   res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Length", fs.statSync(filePath).size);
+  res.setHeader("Content-Length", size);
   const stream = fs.createReadStream(filePath);
   stream.once("error", (error) => res.destroy(error));
   if (removeAfter) stream.once("close", () => fs.rm(filePath, { force: true }, () => {}));
