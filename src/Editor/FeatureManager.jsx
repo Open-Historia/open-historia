@@ -13,7 +13,7 @@ import Panel from "./Panel.jsx";
 import Icon from "./Icon.jsx";
 import { pillButton, inputStyle } from "./editorStyles.js";
 import { TextField, SelectField } from "./fields.jsx";
-import { importAllCities, importMajorCities } from "./citiesImport.js";
+import { estimateJsonBytes, importAllCities, importMajorCities } from "./citiesImport.js";
 import { mergeImportedFeatures, parseFeatureImport } from "./featureImport.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 
@@ -96,13 +96,20 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
   };
 
   // The city seed, merged like a file import. It says what it added, and says
-  // so when the seed could not be downloaded, rather than adding nothing.
+  // so when the seed could not be downloaded, rather than adding nothing. The
+  // whole seed is ~70k points, which every save, the scenario and the game then
+  // carry, so that one asks first with the count and a size.
   const doImport = async (mode) => {
     setImporting(true);
     setImportNote("");
     try {
       const cities = mode === "all" ? await importAllCities() : await importMajorCities();
       const added = mergeImportedFeatures(features, cities).added;
+      if (mode === "all" && added > 0) {
+        const megabytes = Math.max(1, Math.round((estimateJsonBytes(cities) * (added / cities.length)) / 1e6));
+        const question = `Add ${added.toLocaleString()} cities to this map? That is about ${megabytes} MB more in the map, its saves and the scenario, and so many cities can make the Workshop and the game slow, especially on phones.`;
+        if (!window.confirm(question)) return;
+      }
       setFeatures((list) => mergeImportedFeatures(list, cities).features);
       setImportNote(
         added === 0
@@ -168,18 +175,20 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
       </div>
       <div style={{ display: "flex", gap: 6 }}>
         <button
-          onClick={() => doImport("all")}
-          disabled={importing}
-          style={{ ...pillButton(true), flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
-        >
-          <Icon name="plus" size={14} /> {importing ? "Importing…" : "Import all cities"}
-        </button>
-        <button
           onClick={() => doImport("major")}
           disabled={importing}
+          title="Capitals and cities of 500,000 people or more"
+          style={{ ...pillButton(true), flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
+        >
+          <Icon name="plus" size={14} /> {importing ? "Importing…" : "Import major cities"}
+        </button>
+        <button
+          onClick={() => doImport("all")}
+          disabled={importing}
+          title="Every city and place in the world list, about 70,000 of them; asks first"
           style={{ ...pillButton(false), display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: importing ? 0.6 : 1 }}
         >
-          Major only
+          All cities…
         </button>
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>

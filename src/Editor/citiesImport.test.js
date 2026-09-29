@@ -75,3 +75,13 @@ test("imports that start together share one download", async () => {
     assert.equal(calls.length, 1);
   });
 });
+
+test("estimateJsonBytes: close to the real size of a large list, from a sample", async () => {
+  const { estimateJsonBytes } = await freshModule();
+  const list = Array.from({ length: 5000 }, (_, i) => ({ id: `feat_${i}`, name: `Town number ${i}`, coord: [i / 100, i / 200], tags: ["city"] }));
+  const real = list.reduce((sum, item) => sum + JSON.stringify(item).length + 1, 0);
+  const estimate = estimateJsonBytes(list);
+  assert.ok(Math.abs(estimate - real) / real < 0.05, `estimate ${estimate} vs ${real}`);
+  assert.equal(estimateJsonBytes([]), 0);
+  assert.equal(estimateJsonBytes(null), 0);
+});

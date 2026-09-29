@@ -50,8 +50,21 @@ const toFeature = (c) => ({
   tags: c.tags || ["city"],
 });
 
-// How many cities are available to import (for the button label).
-export const cityCount = async () => (await loadSeed()).length;
+// Roughly how many bytes a list of features adds to the document, its autosave
+// and the scenario's cities.geojson, from an even sample of them: the whole
+// seed is ~70k features, too many to stringify just to ask.
+export const estimateJsonBytes = (list, samples = 200) => {
+  const items = Array.isArray(list) ? list : [];
+  if (!items.length) return 0;
+  const step = Math.max(1, Math.floor(items.length / samples));
+  let bytes = 0;
+  let counted = 0;
+  for (let i = 0; i < items.length; i += step) {
+    bytes += JSON.stringify(items[i]).length + 1;
+    counted += 1;
+  }
+  return Math.round((bytes / counted) * items.length);
+};
 
 // Every city / POI from the original dataset. Both imports throw when the seed
 // cannot be downloaded.
