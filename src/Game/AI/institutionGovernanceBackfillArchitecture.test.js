@@ -25,6 +25,6 @@ test("legacy governance provider work happens before an atomic generation-guarde
 
 test("legacy governance backfill remains fail-closed when constitutional law cannot be established", () => {
   assert.match(source, /final\.rule\.type === "unspecified"/);
-  assert.match(source, /throw new Error\(votingRuleMissingMessage\(/);
+  assert.match(source, /throw votingRuleMissingError\(/);
   assert.doesNotMatch(source, /Political\/Institution editor/, "no advice to use a screen that does not exist");
 });

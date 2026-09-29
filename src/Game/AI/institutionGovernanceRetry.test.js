@@ -7,6 +7,7 @@ import {
 import {
   createVotingRuleRetry,
   GOVERNANCE_BACKFILL_STALE,
+  votingRuleMissingError,
   votingRuleMissingMessage,
 } from "./institutionGovernanceRetry.js";
 
@@ -90,6 +91,19 @@ test("no request while a turn is being written, and a stale resolution may be as
   busy = false;
   await assert.rejects(retry(commit, { institutionId: "council", proposalId: "p1" }), /Campaign advanced/);
   await assert.rejects(retry(commit, { institutionId: "council", proposalId: "p1" }), /Campaign advanced/);
+  assert.equal(calls, 2);
+});
+
+test("a failed resolver request may be asked again; its final word that there is no rule is not", async () => {
+  const { commit } = store();
+  let calls = 0;
+  let answer = () => { throw new Error("The provider is not answering."); };
+  const retry = createVotingRuleRetry({ backfill: async () => { calls += 1; answer(); } });
+  const options = { institutionId: "council", proposalId: "p1", expectedGameId: "game-1" };
+  await assert.rejects(retry(commit, options), /not answering/);
+  answer = () => { throw votingRuleMissingError("Old Council"); };
+  await assert.rejects(retry(commit, options), (error) => error.message === votingRuleMissingMessage("Old Council"));
+  await assert.rejects(retry(commit, options), (error) => error.message === votingRuleMissingMessage("Old Council"));
   assert.equal(calls, 2);
 });
 

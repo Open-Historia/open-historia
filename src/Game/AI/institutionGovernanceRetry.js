@@ -6,9 +6,10 @@
 // the advisor's draft, an AI sponsor's institution_submit_proposal) goes
 // through commitWithVotingRuleBackfill: on that refusal it asks the governance
 // resolver once (institutionGovernanceBackfill.js, one request) and runs the
-// whole commit again, which reads the world afresh. It asks at most once per
-// campaign and institution in a session, and never while a turn is being
-// written; otherwise the player reads a sentence they can act on.
+// whole commit again, which reads the world afresh. Once the resolver has
+// answered for a campaign and institution it is not asked again in the session
+// (a failed request does not count), and it is never asked while a turn is
+// being written; otherwise the player reads a sentence they can act on.
 
 import { INSTITUTION_GOVERNANCE_ERROR_CODES } from "../../runtime/institutionalGovernance.js";
 import { isSimulationBusy } from "./simulationStatus.js";
@@ -17,12 +18,15 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 export const GOVERNANCE_BACKFILL_STALE = "institution-governance-backfill-stale";
 
-export const isVotingRuleUnspecified =(error) => error?.code === INSTITUTION_GOVERNANCE_ERROR_CODES.VOTING_RULE_UNSPECIFIED;
+export const isVotingRuleUnspecified = (error) => error?.code === INSTITUTION_GOVERNANCE_ERROR_CODES.VOTING_RULE_UNSPECIFIED;
 
 // Player-visible: shown where the vote was asked for.
 export const votingRuleMissingMessage = (name) => `${clean(name) || "This institution"} has no voting rule in its charter, so it cannot hold a formal vote yet. Its members can still debate the proposal.`;
 
 const ruleError = (message) => Object.assign(new Error(message), { code: INSTITUTION_GOVERNANCE_ERROR_CODES.VOTING_RULE_UNSPECIFIED });
+
+// The resolver's final word that no rule exists (institutionGovernanceBackfill.js).
+export const votingRuleMissingError = (name) => ruleError(votingRuleMissingMessage(name));
 
 export const createVotingRuleRetry = ({ backfill, busy = () => false, attempted = new Set() } = {}) => async (commit, {
   institutionId = "", proposalId = "", expectedGameId = "",
@@ -39,9 +43,11 @@ export const createVotingRuleRetry = ({ backfill, busy = () => false, attempted 
     try {
       await backfill({ institutionId, proposalId, expectedGameId });
     } catch (backfillError) {
-      // The campaign moved on while the resolver answered: nothing was kept,
-      // so a later vote may ask again.
-      if (backfillError?.code === GOVERNANCE_BACKFILL_STALE) attempted.delete(key);
+      // Only the resolver's answer that there is no rule is final. Anything
+      // else (the campaign moved on while it answered, the provider failed)
+      // settled nothing, so a later vote may ask again rather than be told
+      // the charter has no rule.
+      if (!isVotingRuleUnspecified(backfillError)) attempted.delete(key);
       throw backfillError;
     }
     try {

@@ -30,7 +30,7 @@ import {
   generateGeopoliticalInstitutionGovernanceJob,
 } from "./geopoliticalWorldGenerator.js";
 import { geopoliticalInstitutionGovernanceTargets } from "./geopoliticalInstitutionGovernance.js";
-import { GOVERNANCE_BACKFILL_STALE, votingRuleMissingMessage } from "./institutionGovernanceRetry.js";
+import { GOVERNANCE_BACKFILL_STALE, votingRuleMissingError } from "./institutionGovernanceRetry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -89,7 +89,7 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
   const heldAt = (date) => geopoliticalInstitutionGovernanceTargets({ world, scenarioDate: date })
     .some((entry) => entry.id === initial.institution.id);
   const scenarioDate = heldAt(startDate) ? startDate : heldAt(currentDate) ? currentDate : "";
-  if (!scenarioDate) throw new Error(votingRuleMissingMessage(initial.institution.name || targetInstitutionId));
+  if (!scenarioDate) throw votingRuleMissingError(initial.institution.name || targetInstitutionId);
   const capturedGameDate = clean(game?.gameDate);
   const capturedRound = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
   const activeGameId = clean(expectedGameId || getLibraryState()?.activeGameId);
@@ -135,7 +135,7 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
     if (Array.isArray(generated?.warnings) && generated.warnings.length) {
       console.warn("[institution governance] no voting rule could be established.", generated.warnings);
     }
-    throw new Error(votingRuleMissingMessage(final.institution?.name || targetInstitutionId));
+    throw votingRuleMissingError(final.institution?.name || targetInstitutionId);
   }
 
   return {
