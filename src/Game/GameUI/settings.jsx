@@ -696,12 +696,17 @@ const ConnectionFields = ({ connection, sharedBy = 1 }) => {
             label="API endpoint"
             value={connection.endpoint}
             onChange={set("endpoint")}
-            placeholder={connection.provider === "openai-compatible" ? "http://localhost:11434/v1" : "https://my-proxy.example/v1"}
+            // On a phone localhost is the phone itself, so the example is a LAN address.
+            placeholder={connection.provider === "openai-compatible" ? (import.meta.env.VITE_OH_NATIVE ? "http://192.168.1.20:11434/v1" : "http://localhost:11434/v1") : "https://my-proxy.example/v1"}
             // A server on the player's own machine works from the website too, but only
             // if it allows this origin — otherwise the browser silently drops the reply.
             // Say so up front here rather than letting it surface as "Failed to fetch".
+            // The Android app has no such limit (native HTTP, runtime/native/http.js),
+            // but reaches the server over the network and without streaming.
             helperText={connection.provider === "openai-compatible"
-                ? (import.meta.env.VITE_OH_WEB
+                ? (import.meta.env.VITE_OH_NATIVE
+                    ? "Base URL that exposes /chat/completions and /models. A server on your network (Ollama, LM Studio) works directly. Use the computer's network address, such as http://192.168.1.20:11434/v1, not localhost, which on a phone means the phone itself. The server has to listen on that address: start Ollama with OLLAMA_HOST=0.0.0.0. Its replies arrive whole rather than word by word."
+                    : import.meta.env.VITE_OH_WEB
                     ? "Base URL that exposes /chat/completions and /models. A server on your own machine (Ollama, LM Studio) also has to allow this site: start Ollama with OLLAMA_ORIGINS set to this site's address, or use the desktop app."
                     : "Base URL that exposes /chat/completions and /models.")
                 : "Base URL of a self-hosted proxy that speaks the Anthropic Messages API (POST /messages)."}
@@ -1735,7 +1740,10 @@ const DiagnosticsPanel = () => {
 
         <Toggle label="Keep a diagnostics log" enabled={enabled} onToggle={toggleEnabled} />
         <div style={helperTextStyle}>
-        On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts.
+        {/* The desktop app's own log exists only on desktop. */}
+        {import.meta.env.VITE_OH_WEB
+            ? "On by default. Off: nothing is recorded and the log on this device is deleted. Remembered across save changes and restarts."
+            : "On by default. Off: nothing is recorded and the log on this device is deleted. The desktop app still notes its own start-up and server errors, which never include your campaign. Remembered across save changes and restarts."}
         </div>
 
         <Toggle label="Detailed logging" enabled={verbose} onToggle={toggleVerbose} />
