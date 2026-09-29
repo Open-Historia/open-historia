@@ -32,7 +32,7 @@ import {
     loadCountryNames as loadCachedCountryNames,
     readJson,
 } from "../../runtime/assets.js";
-import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
+import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
@@ -2077,8 +2077,6 @@ const ChatDateSeparator = ({ value }) => (
 // A long thread renders its recent tail first; older messages come in on demand.
 const CHAT_INITIAL_RENDER_WINDOW = 12;
 const CHAT_RENDER_WINDOW_STEP = 40;
-// A group chat takes at most this many NPC replies to one player message; the
-// floor then returns to the player rather than letting a six-way table monologue.
 
 // ── Incoming diplomacy notifications ──────────────────────────────────────────
 //
@@ -4719,4 +4717,4 @@ const Toolbar = memo(({ onOpenAdvisor, activePanel, onTogglePanel, mapRef }) => 
     );
 });
 
-export { Toolbar, Chat, ChatPanel };
+export { Toolbar };

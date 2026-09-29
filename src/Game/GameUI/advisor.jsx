@@ -27,22 +27,9 @@ import { getLibraryState } from "../../runtime/library.js";
 
 Chart.register(...registerables);
 
+// The drawer's width when the parent passes none; main.jsx keeps its own
+// (ADVISOR_DEFAULT_WIDTH) and always passes one.
 const ADVISOR_PANEL_WIDTH = "min(20rem, calc(100vw - 1rem))";
-
-const baseStyle = {
-    position: "fixed",
-    backgroundColor: "rgba(24, 24, 27, 0.9)",
-    backdropFilter: "blur(4px)",
-    zIndex: 9999,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    color: "white",
-    fontFamily: "sans-serif",
-    borderRadius: "12px",
-    border: "1px solid rgba(255,255,255,0.1)",
-    boxShadow: "0 4px 6px -1px rgba(0,0,0,0.2)",
-};
 
 const ThinkingDots = () => {
     const [dots, setDots] = React.useState(0);
@@ -615,16 +602,6 @@ const AdvisorChart = ({ config }) => {
         </div>
     );
 };
-
-const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
-    <button onClick={onToggle} style={{
-        ...baseStyle,
-        bottom: "0.5rem", right: rightShift,
-        height: "4rem", width: "4rem",
-        cursor: "pointer", fontSize: "1.5rem",
-        transition: "right 0.35s cubic-bezier(0.4, 0, 0.2, 1)",
-    }}>🧭</button>
-);
 
 const saveMessages = async (messages) => {
     try {
@@ -1304,12 +1281,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
-    // Sends one drafted message (see ADVISOR_MESSAGE_DRAFT_DIRECTIVE in main.jsx)
-    // straight to its country's diplomatic chat, then marks it sent on the
-    // ADVISOR message itself (not just local UI state) so the button stays
-    // "✓ Sent" across a reload instead of reappearing clickable. A stable
-    // reference (no deps) so it never breaks AdvisorMessageList's memoization —
-    // see the comment on that component for why that matters.
+    // "Ask for the next batch" under a projects block that was cut off. A
+    // stable reference (no deps) so it never breaks AdvisorMessageList's
+    // memoization — see the comment on that component for why that matters.
     // Puts the follow-up in the composer rather than sending it: the player may
     // want to narrow what they are asking for, and this file has never auto-sent
     // anything on the player's behalf (see the requestedPrompt effect above).
@@ -1621,4 +1595,4 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     );
 };
 
-export { ADVISOR_PANEL_WIDTH, AdvisorButton, AdvisorPanel };
+export { AdvisorPanel };
