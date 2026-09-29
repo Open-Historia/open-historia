@@ -2,6 +2,7 @@
 
 import { callAI } from "./main.jsx";
 import { parseGeopoliticalArrayText } from "./geopoliticalJsonTransport.js";
+import { toolResponsePayload } from "./toolResponsePayload.js";
 import { resolveGeopoliticalMembershipCoverage } from "./geopoliticalMembershipCoverage.js";
 import { resolveScenarioInstitutionReferenceCatalog } from "./institutionReferenceCatalogs.js";
 import { applyDiplomaticUpdates } from "./nativeDiplomaticDirector.js";
@@ -139,9 +140,7 @@ export const GEOPOLITICAL_AGREEMENTS_TOOL = shallowTool(
 
 const parseArrayText = (value) => parseGeopoliticalArrayText(value);
 
-const toolSource = (response) => response?.toolInput && typeof response.toolInput === "object"
-  ? response.toolInput
-  : response && typeof response === "object" && !Array.isArray(response) ? response : null;
+const toolSource = (response, toolName) => toolResponsePayload(response, toolName);
 
 const canonicalPolity = (value, world, allowedByLower) => {
   const token = clean(value);
@@ -206,7 +205,7 @@ const callTool = async ({ callModel, systemPrompt, userMessage, tool, signal, lo
     logLabel,
     tool,
   });
-  const source = toolSource(response);
+  const source = toolSource(response, tool?.name);
   if (!source) throw new Error(`${logLabel} returned no tool payload`);
   return source;
 };

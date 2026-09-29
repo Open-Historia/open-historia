@@ -1,6 +1,7 @@
 /*! Open Historia Continuum — Political World v2 real domain job executor */
 
 import { callAI } from "../main.jsx";
+import { toolResponsePayload } from "../toolResponsePayload.js";
 import { generatePoliticalWorldProposals } from "../politicalWorldGenerator.js";
 import { generatePoliticalGoverningAlignmentRepair } from "../politicalGoverningAlignmentRepair.js";
 import {
@@ -44,11 +45,7 @@ const chunk = (values, size) => {
   return out;
 };
 
-const sourcePayload = (response) => response?.toolInput && typeof response.toolInput === "object"
-  ? response.toolInput
-  : response && typeof response === "object" && !Array.isArray(response)
-    ? response
-    : null;
+const sourcePayload = (response, toolName) => toolResponsePayload(response, toolName);
 
 const allPolityObjects = (inputs = {}) => array(inputs.polities).filter((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey));
 const targetPolityObjects = (inputs = {}, targets = []) => {
@@ -424,7 +421,7 @@ export const createPoliticalWorldV2Executor = ({
         logLabel: "political world v2 temporal sentinel",
         tool: POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL,
       });
-      const payload = sourcePayload(response) || {};
+      const payload = sourcePayload(response, POLITICAL_WORLD_TEMPORAL_SENTINEL_TOOL.name) || {};
       const checked = validateTemporalSentinelPayload({ payload, entries });
       const clearPolities = unique([...checked.clearPolities, ...authoredOrUnchanged]);
       const challengePolities = [...checked.challenges.keys()];
@@ -474,7 +471,7 @@ export const createPoliticalWorldV2Executor = ({
         logLabel: "political world v2 exact-date verification",
         tool: POLITICAL_WORLD_HISTORICAL_VERIFICATION_TOOL,
       });
-      const payload = sourcePayload(response) || {};
+      const payload = sourcePayload(response, POLITICAL_WORLD_HISTORICAL_VERIFICATION_TOOL.name) || {};
       const checked = validateHistoricalVerificationPayload({
         payload,
         entries,
