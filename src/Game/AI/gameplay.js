@@ -96,6 +96,7 @@ import {
   buildBoardPassDirective,
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
+import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -6909,27 +6910,6 @@ export const sendAdvisorDraftedMessage = async ({ countryName, text }) => {
 // retried. Callers that own the board through their own impacts
 // (applyGameMasterCommand) or have no board story (advanceActiveInteractive)
 // simply omit it and are unchanged.
-// Ledger records reference the events that caused them by id. When a
-// post-processor drops an event, every record bound only to it is dropped too;
-// a record bound to no event at all (a baseline row) stays.
-const filterBoundLedgerUpdatesToKeptEvents = (updates, allEvents, keptEvents) => {
-  const allIds = normalizeArray(allEvents)
-    .map((event) => normalizeString(event?.id))
-    .filter(Boolean);
-  const keptIds = new Set(
-    normalizeArray(keptEvents)
-      .map((event) => normalizeString(event?.id))
-      .filter(Boolean),
-  );
-
-  return normalizeArray(updates).filter((update) => {
-    const serialized = JSON.stringify(update ?? {});
-    const referenced = allIds.filter((id) => serialized.includes(id));
-    if (!referenced.length) return true;
-    return referenced.some((id) => keptIds.has(id));
-  });
-};
-
 const applySimulationResult = async ({
   baseActions,
   baseChats,
