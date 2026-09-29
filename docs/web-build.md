@@ -71,7 +71,7 @@ There is no Express server. `installWebApiRouter()` (`router.js:138`) replaces `
 | `runtime/pmtiles/<key>` | inline (scenario override → else proxy) | `libraryStore.getScenarioPmtilesOverride` |
 | `runtime/json/<key>` | `handleRuntimeJson` | `libraryStore.js:1110` |
 | `mapeditor/*` | `handleMapEditor` | `editorStore.js` |
-| `basemaps/*` | `handleBasemaps` | `basemapStore.js` |
+| `basemaps/*` | `handleBasemaps` | `basemapStore.js` — except Tiled Basemaps: `basemaps/tiled/*` answers 501 with a plain message and `basemaps/by-hash/*` 404, since hundreds of megabytes need the desktop app or a local server's disk ([ADR 0005](adr/0005-tiled-basemaps-stream-to-disk.md)); a scenario naming one shows its painted fallback |
 | `flags/*` | `handleFlags` | `flagStore.js` |
 | `library` | `handleLibrary` | `libraryStore.js:1036` |
 | `scenarios/*` | `handleScenarios` | `libraryStore.js:1042` |

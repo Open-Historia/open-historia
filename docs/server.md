@@ -93,7 +93,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, and it replies `504` rather than hanging | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
-| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`) | `server/server.js` |
+| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; **streamed** into an on-disk cache keyed by URL SHA-256 (temp file + rename) and stopped the moment it passes 200 MB (`HUB_MAX_BUNDLE_BYTES`), so a download is never held in memory; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`) | `server/server.js` |
 | POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
 | GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
 
@@ -111,7 +111,16 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | GET | `/api/basemaps` | Basemap catalog (light metadata only) | `server/server.js:776` |
 | POST | `/api/basemaps` | Create a basemap (image or vector; dedup by hash) → 201 | `server/server.js:784` |
 | GET | `/api/basemaps/:id/payload` | Heavy payload (`{ dataUrl }` or `{ geojson }`), fetched only when applied | `server/server.js:792` |
-| DELETE | `/api/basemaps/:id` | Delete a basemap | `server/server.js:800` |
+| DELETE | `/api/basemaps/:id` | Delete a basemap (a Tiled Basemap's archive too) | `server/server.js` |
+| POST | `/api/basemaps/tiled/install` | Start installing a **Tiled Basemap** from a GitHub release link (`{ url, name, source? }`) → 202 `{ jobId }`. The archive streams to disk (≤ 500 MB, `TILED_BASEMAP_MAX_BYTES`), is checked as a raster PMTiles v3 archive with a readable probe tile, hashed, and only then joins the library ([ADR 0005](adr/0005-tiled-basemaps-stream-to-disk.md)) | `server/tiledBasemaps.js` |
+| GET / DELETE | `/api/basemaps/tiled/install/:jobId` | An install's progress (`status`, `received`, `total`, `error`, `basemap`) / cancel it (the partial file is removed) | `server/tiledBasemaps.js` |
+| PUT | `/api/basemaps/tiled?name=` | An author's own archive, the request body streamed to disk (never parsed), checked like an install → 201; 413 past the cap | `server/server.js` |
+| GET | `/api/basemaps/by-hash/:hash` | The library entry with that content hash, or 404 | `server/basemapStore.js` |
+| PUT | `/api/basemaps/:id/payload` · `/api/basemaps/:id/source` | A Tiled Basemap's vector fallback (`{ geojson }`) · where it is published (a GitHub release `.pmtiles` link) | `server/basemapStore.js` |
+| GET | `/api/basemaps/:id/users` | The scenarios naming a Tiled Basemap (`[{ id, name }]`), for the delete warning | `server/libraryStore.js` |
+| GET / HEAD | `/api/basemaps/:id/archive` | A Tiled Basemap's archive, by byte range, for the map | `server/server.js` |
+
+Tests scale the caps down and admit one local "release" origin through env vars that are unset in every real run: `OH_TILED_BASEMAP_MAX_BYTES`, `OH_HUB_MAX_BUNDLE_BYTES`, `OH_HUB_TEST_ORIGIN` (`server/tiledBasemaps.test.js`).
 
 ### Static / SPA
 | Path | Purpose | Handler |
