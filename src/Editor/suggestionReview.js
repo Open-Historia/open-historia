@@ -111,11 +111,18 @@ const markerView = (marker) => marker ? {
 } : null;
 // The custom basemap as the diff fingerprints it (scenarioChanges.js
 // buildScenarioSnapshot): its kind and a hash of the payload a save uploads
-// (exportPreset.js buildBackgroundForGame), or null.
+// (exportPreset.js buildBackgroundForGame), or null. Kept per basemap object:
+// the payload runs to megabytes, and the statuses are worked out again on
+// every document edit while the basemap stays the same object.
+const backgroundHashes = new WeakMap();
 const backgroundOf = (saved) => {
-  if (saved?.kind === "image" && saved.dataUrl) return { kind: "image", hash: hashText(canonicalJson({ dataUrl: saved.dataUrl })) };
-  if (saved?.kind === "vector" && Array.isArray(saved.geojson?.features)) return { kind: "vector", hash: hashText(canonicalJson({ geojson: saved.geojson })) };
-  return null;
+  if (!isRecord(saved)) return null;
+  if (backgroundHashes.has(saved)) return backgroundHashes.get(saved);
+  let fingerprint = null;
+  if (saved.kind === "image" && saved.dataUrl) fingerprint = { kind: "image", hash: hashText(canonicalJson({ dataUrl: saved.dataUrl })) };
+  else if (saved.kind === "vector" && Array.isArray(saved.geojson?.features)) fingerprint = { kind: "vector", hash: hashText(canonicalJson({ geojson: saved.geojson })) };
+  backgroundHashes.set(saved, fingerprint);
+  return fingerprint;
 };
 const puppetView = (row) => row ? {
   overlord: clean(row.overlord), puppet: clean(row.puppet), kind: clean(row.kind) || "satellite",

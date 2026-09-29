@@ -300,6 +300,15 @@ test("a new custom basemap is open, applied or a conflict by what the map has no
   assert.equal(mapChangeStatus(change, ctx), "conflict", "the author put another basemap on since");
   setBackground(null);
   assert.equal(mapChangeStatus({ ...change, to: null }, ctx), "applied", "no basemap is what the suggestion asks for");
+
+  // A basemap is fingerprinted once, not again on every document edit.
+  let reads = 0;
+  setBackground({ kind: "image", get dataUrl() { reads += 1; return ours.dataUrl; } });
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const afterFirst = reads;
+  d.upsertPolity("Alpha", { note: "An unrelated edit." });
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  assert.equal(reads, afterFirst, "the payload is not read again");
 });
 
 test("cities, units, map features, puppets and groups: applied and taken back", () => {
