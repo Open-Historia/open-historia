@@ -10,7 +10,7 @@ import {
   clearInteractionMode,
 } from "../Map/unitsController.js";
 import { UNIT_TYPES } from "../../runtime/gameState.js";
-import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.js";
+import { ensurePolityNames, polityDisplayName, subscribePolityNames } from "../../runtime/polityNames.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -148,11 +148,15 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   // Back cancels it, as the banner's Cancel does.
   useBackToClose(mode.kind !== "idle", clearInteractionMode);
 
-  // Owner codes render as full names; re-render once the lookup is warm.
+  // Owner codes render as full names; re-render once the lookup is warm and
+  // whenever a world write changes them.
   const [, setNamesEpoch] = useState(0);
   useEffect(() => {
-    ensurePolityNames().then(() => setNamesEpoch((epoch) => epoch + 1)).catch(() => {});
-  }, [units.length]);
+    const bump = () => setNamesEpoch((epoch) => epoch + 1);
+    const unsubscribe = subscribePolityNames(bump);
+    ensurePolityNames().then(bump).catch(() => {});
+    return unsubscribe;
+  }, []);
 
   // The scenario may restrict deployable troop types (e.g. no air in 1200).
   const availableTypes =
