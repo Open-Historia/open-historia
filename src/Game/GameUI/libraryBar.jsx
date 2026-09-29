@@ -66,7 +66,7 @@ import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js"
 import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { changedFields, followSavedFields } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
-import { buildScenarioCountryOptions, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
+import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -1334,6 +1334,9 @@ const EditorDrawer = ({
   // at the top of the Overview, and Suggest changes for a downloaded one.
   communityCard = null,
   onSuggestChanges = null,
+  // The countries this map offers (buildScenarioCountryOptions), for the
+  // Player Country field's suggestions and its check.
+  countryOptions = [],
 }) => {
   const isMobile = useIsMobile();
   const touch = useTouchPrimary();
@@ -1443,7 +1446,17 @@ const EditorDrawer = ({
           <div style={{ display: "grid", gap: "0.8rem", gridTemplateColumns: formColumns }}>
             <div>
               <label style={fieldLabelStyle}>Player Country</label>
-              <input style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
+              <input list="oh-player-country-options" style={inputStyle} value={formState.country} onChange={(event) => onChange("country", event.target.value)} />
+              <datalist id="oh-player-country-options">
+                {countryOptions.map((option) => (
+                  <option key={option.code} value={option.code} label={option.name !== option.code ? option.name : undefined} />
+                ))}
+              </datalist>
+              {!isOfferedCountry(formState.country, countryOptions) && (
+                <div style={{ color: "#fde68a", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>
+                  No country or faction by this name is on this map, so the player would start with nothing. Pick one from the list.
+                </div>
+              )}
             </div>
             <div>
               <label style={fieldLabelStyle}>Game Date</label>
@@ -3405,6 +3418,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     [scenarios],
   );
 
+  // The countries the map open in the drawer offers: the scenario's, or the
+  // game's own world (polities founded in play included).
+  const editorCountryOptions = useMemo(
+    () => (editorDetails?.data?.world
+      ? buildScenarioCountryOptions(
+        editorDetails.data.world,
+        Object.entries(countryNames ?? {}).map(([code, name]) => ({ code, name })),
+        editorDetails.scenario?.countryNameOverrides,
+      )
+      : []),
+    [editorDetails, countryNames],
+  );
+
   // The scenario open in the drawer as the catalog has it now: every hub
   // bookkeeping write refreshes the catalog, not the drawer's copy.
   const drawerScenario = editorKind === "scenario" && editorDetails?.scenario
@@ -4131,6 +4157,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           />
         ) : null}
         onSuggestChanges={drawerScenario?.hubOrigin ? () => handleSuggestChanges(drawerScenario) : null}
+        countryOptions={editorCountryOptions}
         onFileSelect={handleEditorAssetSelect}
         onOpenFileDialog={(assetKey) => assetFileInputsRef.current[assetKey]?.click()}
         onSave={handleSave}

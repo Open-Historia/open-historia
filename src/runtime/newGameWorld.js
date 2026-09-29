@@ -68,6 +68,18 @@ export const buildScenarioCountryOptions = (world, allCountries, nameOverrides =
     .sort((left, right) => left.name.localeCompare(right.name));
 };
 
+// Whether a player country typed into the editor is one the map offers
+// (buildScenarioCountryOptions), by its key or its shown name, exactly: the
+// HUD, diplomacy and every turn key on this string, and a typo makes the
+// player a polity that owns nothing. Blank, or no list to check against, is
+// not flagged.
+export const isOfferedCountry = (value, options) => {
+  const wanted = String(value ?? "").trim();
+  const list = Array.isArray(options) ? options : [];
+  if (!wanted || !list.length) return true;
+  return list.some((option) => option.code === wanted || option.name === wanted);
+};
+
 // The world a new game's details (loadGameDetails) hold, to merge the player's
 // polity into. A read that failed must stop the start: merged into an empty
 // world and written back whole, it replaced the seeded world with the player's

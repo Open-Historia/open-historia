@@ -11,7 +11,7 @@
 //   - the country list offers what the scenario holds, and nothing technical.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildScenarioCountryOptions, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "./newGameWorld.js";
+import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "./newGameWorld.js";
 
 const seeded = () => ({
   ownerCodes: ["Japan", "Korea"],
@@ -119,4 +119,16 @@ test("a new game's world that could not be read stops the start instead of being
   for (const details of [null, {}, { data: {} }, { data: { world: [] } }, { data: { world: "{}" } }]) {
     assert.throws(() => seededWorldOf(details, "Ezo Republic"), /its world could not be read, so Ezo Republic was not added to it/);
   }
+});
+
+test("the editor's player country is checked against what the map offers, exactly", () => {
+  const options = [{ code: "Japan", name: "Japan" }, { code: "KOR", name: "Joseon" }];
+  assert.equal(isOfferedCountry("Japan", options), true);
+  assert.equal(isOfferedCountry("KOR", options), true, "by its key");
+  assert.equal(isOfferedCountry("Joseon", options), true, "or by the name the list shows");
+  assert.equal(isOfferedCountry(" Japan ", options), true, "around spaces");
+  assert.equal(isOfferedCountry("Japn", options), false, "a typo is flagged");
+  assert.equal(isOfferedCountry("japan", options), false, "names are exact keys");
+  assert.equal(isOfferedCountry("", options), true, "blank is not flagged");
+  assert.equal(isOfferedCountry("Anything", []), true, "nothing to check against, nothing flagged");
 });
