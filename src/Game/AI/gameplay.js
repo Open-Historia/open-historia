@@ -137,9 +137,11 @@ import {
   buildTurnReviewPrompt,
   buildTurnReviewTool,
   readTurnReviewAnswer,
+  reviewFailure,
   remapBoardOps,
   shareRepeatedBlocks,
 } from "./turnReview.js";
+import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -377,17 +379,16 @@ import {
 } from "./scriptedEventResolution.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
+  HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
+  attemptHeldTurn,
   beginSimulation,
-  discardPendingJumpSegment,
-  discardPendingProjectsJump,
+  discardHeldTurns,
   endSimulation,
-  getPendingJumpSegment,
-  getPendingProjectsJump,
+  getHeldTurn,
+  holdTurn,
   isSimulationBusy,
   setChatGenerationInFlight,
-  setPendingJumpSegment,
-  setPendingProjectsJump,
 } from "./simulationStatus.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -4151,7 +4152,7 @@ const projectsHeldError = (cause) => {
     + `saved yet: ${cause?.message || "the board task returned no usable answer"}. `
     + "Retry the board to finish the turn, or discard it and run the turn again.",
   );
-  error.projectsHeld = true;
+  error.heldKind = HELD_TURN.board;
   error.cause = cause;
   return error;
 };
@@ -4161,28 +4162,32 @@ const projectsHeldError = (cause) => {
 // ten minutes. Because nothing was written, this is the same code path as the
 // first attempt rather than a second one to keep in step.
 export const retryPendingProjectsJump = async ({ signal } = {}) => {
-  const heldProjectsJump = getPendingProjectsJump();
+  const heldProjectsJump = getHeldTurn(HELD_TURN.board);
   if (!heldProjectsJump) throw new Error("There is no turn waiting on the Projects board.");
   const { applyArgs } = heldProjectsJump;
   beginSimulation();
   try {
-    // Released BEFORE the attempt, so a turn can never be applied twice, and
-    // re-held only if the BOARD fails again — a failure after that point is a
-    // different situation and must not pretend otherwise.
-    setPendingProjectsJump(null);
     // The RETRY's signal, not the held turn's — that one belongs to a request
     // that already finished, and if the player cancelled it this call would abort
     // before it started.
     applyArgs.projects = { ...applyArgs.projects, signal };
+    // Released BEFORE the attempt (attemptHeldTurn), and re-held only if the
+    // BOARD fails again or the player cancels — a failure after that point is
+    // a different situation and must not pretend otherwise.
     // Re-running the whole apply is safe and is why this is one call rather than
     // a second code path to keep in step: it is pure until its final writes, and
     // every step in between is deterministic — espionage included, since its rolls
     // are seeded on the round.
-    return await applySimulationResult(applyArgs);
+    return await attemptHeldTurn(HELD_TURN.board, heldProjectsJump, () => applySimulationResult(applyArgs), { signal });
   } catch (error) {
-    if (error?.projectsHeld) {
+    if (error?.heldKind === HELD_TURN.board) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
-      setPendingProjectsJump({ applyArgs });
+      holdTurn(HELD_TURN.board, heldProjectsJump);
+    }
+    // The board answered and a check holds the turn now (checks made after the
+    // board): the turn moves to the checks, which a Retry there can finish.
+    if (error?.heldKind === HELD_TURN.checks && heldProjectsJump.context) {
+      holdTurn(HELD_TURN.checks, { context: heldProjectsJump.context, state: heldProjectsJump.state });
     }
     throw error;
   } finally {
@@ -4436,11 +4441,11 @@ const activeCampaignId = () => {
   }
 };
 
-// activeSimulations, pendingProjectsJump and pendingJumpSegment moved to
+// activeSimulations and the held turns (HELD_TURN) moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
 // this module. Reached through the accessors below; see that file for why.
 //
-// pendingProjectsJump: a turn whose events are generated and validated but NOT
+// HELD_TURN.board: a turn whose events are generated and validated but NOT
 // yet written, because the Projects & Operations board could not be brought in
 // step with them. Nothing is applied while it is set. That is deliberate and is
 // what keeps the retry honest: the board's ops must ride in on the events that
@@ -4449,10 +4454,16 @@ const activeCampaignId = () => {
 // bypass to add. If it cannot be resolved the turn fails like any other and the
 // player rolls back.
 //
-// pendingJumpSegment: a jump whose segments are part-generated, where one
+// HELD_TURN.segment: a jump whose segments are part-generated, where one
 // segment failed, the ones before it are still in hand, and NOTHING has been
 // written. Held so the player is told which segment failed and can retry just
 // that segment or discard the turn (see runJumpSegments).
+//
+// HELD_TURN.checks: a jump whose every segment is in hand but whose turn
+// review (runTurnReview) did not come back, so the units, territory,
+// structures, board and agents' reports it answers for were never decided.
+// Nothing is written. The player retries the review, takes the turn without it
+// (the review failing open, as it always did), or discards.
 
 // Storyline motion repairs that failed, keyed by campaign and storyline id (see
 // recordMotionRepairOutcome). Memory only: it keeps a storyline that fails the
@@ -4460,11 +4471,8 @@ const activeCampaignId = () => {
 const motionRepairFailures = new Map();
 
 export {
+  HELD_TURN,
   NO_RESPONSE_BODY_NOTE,
-  discardPendingJumpSegment,
-  discardPendingProjectsJump,
-  hasPendingJumpSegment,
-  hasPendingProjectsJump,
   isChatGenerationLikely,
   isSimulationBusy,
 } from "./simulationStatus.js";
@@ -4483,7 +4491,7 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
     + "Retry that segment to carry on from where it stopped, or discard the turn — the game stays on "
     + "its current date either way.",
   );
-  error.segmentHeld = true;
+  error.heldKind = HELD_TURN.segment;
   error.segmentIndex = segmentIndex;
   error.segmentCount = segmentCount;
   error.completedSegments = completedSegments;
@@ -6879,6 +6887,8 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
 // a scenario or dragged through the 5s poll — capped so a long game can't grow it
 // without bound. Purely best-effort: a snapshot failure must never break a turn.
+// Returns whether it was saved, so the player can be told when this turn cannot
+// be rolled back.
 // `turn` is the journal of what the turn APPLIED (intervene.js journalTurn):
 // with the pre-turn state beside it, the turn can be applied again from any
 // point the player chooses — Intervene (interveneAfterEvent below).
@@ -6915,8 +6925,15 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
       cloneResult: false,
       echo: false,
     });
+    // The turn was written well before this (the agents' reports come in
+    // between), so the timeline counted its restore points on the new round
+    // and found this one missing: no Rollback button until the next turn.
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:restore-point-saved"));
+    return true;
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
+    logDebugEvent("turn", "The turn's restore point could not be saved; this turn cannot be rolled back.", error, { problem: true });
+    return false;
   }
 };
 
@@ -7271,6 +7288,9 @@ const applySimulationResult = async ({
   // parts of it instead of making a request each. Null otherwise.
   const review = projects?.review ?? null;
   const requests = projects?.requests ?? null;
+  // A time skip's checks (turnChecks.js); null for every other kind of turn.
+  const checks = projects?.checks ?? null;
+  const boardCheck = (ask) => (checks ? checks.run("board", ask) : ask());
 
   // One curator analysis for the round's candidates and for the breadth
   // repair's supplemental ones.
@@ -7283,8 +7303,8 @@ const applySimulationResult = async ({
       payload: review.parts.timeline ?? curatorUnavailable(candidates),
       generation: { source: review.parts.timeline ? "ai" : "fallback" },
     })
-    : (input) =>
-      runJsonTask("timelineCurator", {
+    : (input) => {
+      const ask = () => runJsonTask("timelineCurator", {
         lookups: buildTaskLookups({ world: baseWorld, events: baseEvents, chats: baseChats, game: baseGame }),
         fallback: () => curatorUnavailable(input.candidates),
         signal: projects?.signal,
@@ -7292,6 +7312,10 @@ const applySimulationResult = async ({
         variables: curatorVariables(input),
         ...jumpTaskOptions(requests, "review"),
       });
+      // By the candidates judged: the breadth repair's supplemental events are
+      // curated too, and a retried repair may bring different ones.
+      return checks ? checks.run("timeline", ask, fellBack, { about: JSON.stringify(input.candidates) }) : ask();
+    };
 
   // The curator decides whether an event exists BEFORE impacts, chats, history
   // and persistence see it: the model judges each candidate against recent
@@ -7343,7 +7367,7 @@ const applySimulationResult = async ({
   // and a curator pass after it — to pad a skip that came back thin, and a thin
   // skip is still a skip: the lanes it neglected are the ones the world director
   // selects first next turn.
-  const breadthRepair = review ? null : await maybeRepairWorldBreadthAfterCuration({
+  const searchBreadth = () => maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
     bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
@@ -7351,6 +7375,13 @@ const applySimulationResult = async ({
     mode: result.mode,
     signal: projects?.signal,
   });
+  // Kept with the turn's checks so a retry of another check finds the same
+  // supplemental events rather than searching afresh. A search that was made
+  // and failed (the request, or an answer that broke its rules) holds the turn
+  // like any other check; one not needed, or that found nothing, has answered.
+  const breadthRepair = review ? null : await (checks
+    ? checks.run("breadth", searchBreadth, (answer) => (answer?.failed ? "the search failed or came back unusable" : ""))
+    : searchBreadth());
   if (breadthRepair?.events?.length) {
     // New storyline ids ride on their own repair events before any filtering,
     // so a surviving event carries its continuity exactly like a main event.
@@ -7860,6 +7891,14 @@ const applySimulationResult = async ({
     logDebugEvent("turn", `Covert operations synced to the board: ${spySync.length} op(s), ${doubtOps.length} doubted.`, undefined, { verbose: true });
   }
 
+  // A check that failed holds the turn before the board is asked. Asked first,
+  // a board failure held the turn on the board, and its Retry then met the
+  // failed check with nothing holding the turn for it: the turn was lost.
+  if (checksHoldTurn(checks)) {
+    logDebugEvent("turn", "Turn HELD: a check after the events failed, so nothing was written.", checks.failures());
+    throw checksHeldError(checks.failures());
+  }
+
   // The board, in its own call, once for the whole round — after the segments
   // merged so it sees the complete story, after espionage so an exposed ring can
   // stall the operation it belonged to, and BEFORE anything is written so its ops
@@ -7894,14 +7933,17 @@ const applySimulationResult = async ({
         // board does not move this turn; it never holds the turn, because the
         // only way to un-hold it would be another request.
         ? reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap })
-        : await generateProjectOps(
+        // Kept with the turn's checks only so that retrying another check does
+        // not ask the board again; its own failure throws and holds the turn
+        // on the board (HELD_TURN.board), as before.
+        : await boardCheck(() => generateProjectOps(
           // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
           // read before the turn ran, so its board carries none of this turn's
           // impacts and none of the covert-operation sync just above.
           { ...projects.bundle, game: nextGame, world: worldWithImpacts },
           freshEvents,
           { signal: projects.signal, hiddenEvents: boardHiddenEvents, requests },
-        );
+        ));
       // The board was looked at this round, whatever it found (projects.js
       // boardPassReasons counts the quiet rounds from here).
       if (!skipped) worldWithImpacts = { ...worldWithImpacts, boardReviewedRound: nextGame.round };
@@ -8205,6 +8247,14 @@ const applySimulationResult = async ({
   }
   for (const { from, to } of renamedPolities) chatsToWrite = renamePolityInChats(chatsToWrite, from, to);
 
+  // And again at the last point where nothing is written, for any check made
+  // after the board, rather than landing the turn with that check's changes
+  // silently missing (turnChecks.js).
+  if (checksHoldTurn(checks)) {
+    logDebugEvent("turn", "Turn HELD: a check after the events failed, so nothing was written.", checks.failures());
+    throw checksHeldError(checks.failures());
+  }
+
   // Last moment before anything is persisted. Everything above is pure, so a
   // turn generated for a campaign the player has since left is simply lost here
   // rather than written over whichever campaign they opened instead.
@@ -8263,8 +8313,12 @@ const applySimulationResult = async ({
   // one request, and are only filed here; a turn with no review (a resolved
   // interactive event, a game-master command) waits for the next skip's. Otherwise each
   // agent makes its own request, as before.
+  // With saving off, the agents whose report failed are handed back on the
+  // result: the turn is already written, so they cannot hold it, but the player
+  // is told and can ask again (time.jsx).
+  let agentReportsFailed = [];
   if (review) await fileReviewedAgentReports(review);
-  else if (!savingRequests()) await refreshSpyIntercepts();
+  else if (!savingRequests()) agentReportsFailed = (await refreshSpyIntercepts()).failed.map((entry) => entry.target);
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId });
   // And the advisor flags each new paper in its conversation.
@@ -8274,7 +8328,7 @@ const applySimulationResult = async ({
   // with what this turn applied beside it, in the order the reveal shows it, so
   // the player can stop the round part-way (Intervene). Only a time skip is
   // worth stopping: a resolved interactive event or a game-master command is one moment.
-  await captureRollbackSnapshot({
+  const restorePointSaved = await captureRollbackSnapshot({
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
     toDate: nextGame.gameDate || "",
@@ -8310,6 +8364,8 @@ const applySimulationResult = async ({
     events: nextEvents,
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
+    agentReportsFailed,
+    restorePointSaved,
     world: nextWorld,
   };
 };
@@ -11368,21 +11424,43 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
   }
 };
 
-export const refreshSpyIntercepts = async () => {
-  if (!isActiveFeatureEnabled("espionage")) return;
+// -> { failed: [{ target, reason }] }: the agents whose report did not come
+// back, so the player can be told and ask again (retryAgentReports). `targets`
+// limits it to those agents.
+export const refreshSpyIntercepts = async ({ targets = null } = {}) => {
+  const failed = [];
+  if (!isActiveFeatureEnabled("espionage")) return { failed };
   let world;
   try {
     world = normalizeWorldState(await readWorldState({ force: true }));
   } catch {
-    return;
+    return { failed };
   }
+  const only = Array.isArray(targets) ? new Set(targets.map((target) => normalizeString(target).toLowerCase())) : null;
   const player = normalizeString((await readGameData()).country);
   for (const spy of activeSpies(world, player)) {
+    if (only && !only.has(normalizeString(spy.target).toLowerCase())) continue;
     try {
       await gatherIntelligence(spy.target);
     } catch (error) {
       console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
+      failed.push({ target: spy.target, reason: normalizeString(error?.message) || "the request failed" });
     }
+  }
+  return { failed };
+};
+
+// Ask again for the reports a time skip could not get (with Save AI requests
+// off, each agent asks on its own after the turn is written, so a failed one
+// cannot hold the turn). Waits for no turn: refused while one is being written,
+// since the report would describe a world the turn is about to replace.
+export const retryAgentReports = async ({ targets = [] } = {}) => {
+  if (spyReportInFlight || isSimulationBusy()) throw new Error("A turn is being written; ask the agents again once it lands.");
+  spyReportInFlight = true;
+  try {
+    return await refreshSpyIntercepts({ targets });
+  } finally {
+    spyReportInFlight = false;
   }
 };
 
@@ -13107,7 +13185,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   try {
     return await applyScene(Boolean(scene?.board));
   } catch (error) {
-    if (!error?.projectsHeld) throw error;
+    if (error?.heldKind !== HELD_TURN.board) throw error;
     logDebugEvent("turn", "Scene outcome: the Board did not update, so the Scene was written without it.", error, { problem: true });
     return applyScene(false);
   }
@@ -13814,7 +13892,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
     // Held, not lost. state.nextSegment still points at the segment that failed,
     // so a retry resumes with exactly that one.
-    setPendingJumpSegment({ context, state });
+    holdTurn(HELD_TURN.segment, { context, state });
     console.warn(`[ai] jump segment ${segmentIndex + 1}/${segmentCount} failed (${reason}) — the turn is held.`);
     logDebugEvent("warn", "[turn] A jump segment failed; the turn is HELD and nothing was written.", {
       completedSegments: state.segmentPayloads.length,
@@ -14003,9 +14081,9 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
 // placements are noted on `receipt` for the next turn. `sections` is a Scene's
 // list of checks, each also subject to its setting; a jump passes none and runs
 // the unit and territory Directors whatever the settings, as it always has.
-const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate = "", sections = null, receipt = null }) => {
+const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = null, gameDate = "", sections = null, receipt = null }) => {
   const runs = (key) => !sections || (sections.includes(key) && requestSettings.reviewSection(key));
-  const asked = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
+  const requestDirector = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
     lookups: buildTaskLookups(bundle),
     fallback,
     signal,
@@ -14013,30 +14091,41 @@ const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate =
     variables,
     ...jumpTaskOptions(requests, "review"),
   });
+  // Through the turn's checks when a time skip has them (turnChecks.js): a
+  // director that fell back holds the turn instead of leaving its changes out.
+  const askAsCheck = (key, taskKey, fallback, userMessage, variables) => (checks
+    ? checks.run(key, () => requestDirector(taskKey, fallback, userMessage, variables), fellBack)
+    : requestDirector(taskKey, fallback, userMessage, variables));
 
   const units = !runs("units") ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
-      : await asked("unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+      : await askAsCheck("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
     await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
     return answer;
   };
 
   const territory = !runs("territory") ? null : async (input) => (review
     ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
-    : asked("territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+    : askAsCheck("territory", "territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
 
   const structuresRun = sections ? runs("structures") : (review || requestSettings.reviewSection("structures"));
   const structures = !structuresRun ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
-      : await asked("structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
+      : await askAsCheck("structures", "structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
         structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }));
     return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
   };
 
   return { units, territory, structures };
 };
+// Why a runJsonTask answer is the task's fallback rather than the model's, or
+// "" when the model answered (turnChecks.js failureOf).
+const fellBack = (answer) => (normalizeString(answer?.generation?.source) === "fallback"
+  ? normalizeString(answer.generation.fallbackReason) || "no usable answer"
+  : "");
+
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
   judgments: normalizeArray(candidates).map((event, index) => ({
@@ -14120,7 +14209,9 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
 const runTurnReview = async ({ context, merged, signal, state, sections = null }) => {
   const { bundle, mode } = context;
   const requests = state.requests;
-  const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [] };
+  // `failure` is the error when the request itself failed; `missing` names the
+  // jobs asked of it that came back with no usable part.
+  const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [], failure: null, missing: [] };
   // A canned turn means the model is not answering; asking it to check one would
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
@@ -14291,7 +14382,14 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
 
   const usable = jobs.filter((job) => job.schema);
   if (!usable.length || (requests && !requests.budget.take("review"))) {
-    if (usable.length) logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
+    if (usable.length) {
+      logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
+      // Something needed checking and was not: the turn would land with none of
+      // it done, as a failed review did. A Retry gives the checks a budget of
+      // their own (retryPendingChecksJump).
+      review.failure = new Error(`this time skip used all ${requests.budget.cap} of its requests before the checks`);
+      review.missing = usable.map((job) => job.key);
+    }
     return review;
   }
 
@@ -14342,6 +14440,10 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
   } catch (error) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
     logDebugEvent("turn", "Turn review failed; every check falls back to leaving the turn as written.", error, { problem: true });
+    // Said on the review, not only in the log: a time skip holds the turn on
+    // it (finishTimelineJump) rather than landing it with nothing moved.
+    review.failure = error;
+    review.missing = shared.map((job) => job.key);
     return review;
   } finally {
     idle.cancel();
@@ -14375,6 +14477,7 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
     }
     review.parts[job.key] = salvaged.value;
   }
+  review.missing = shared.map((job) => job.key).filter((key) => !review.parts[key]);
   return review;
 };
 
@@ -14435,7 +14538,7 @@ const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state
   } catch (error) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
     logDebugEvent("turn", "Queued-order outcome attribution failed; unanswered orders remain queued.", error, { problem: true });
-    return { plan, answer: null };
+    return { plan, answer: null, failed: error?.message || "the request failed" };
   } finally {
     idle.cancel();
   }
@@ -14471,7 +14574,7 @@ const fileReviewedAgentReports = async (review) => {
 const finishTimelineJump = async ({ context, signal, state }) => {
   const { baseColors, bundle, mode, targetDate } = context;
   // Every segment is in hand, so there is no longer a jump to resume.
-  setPendingJumpSegment(null);
+  holdTurn(HELD_TURN.segment, null);
 
   // One round out of every segment. applySimulationResult advances the round
   // exactly once, and the dedupeGeneratedEvents pass inside it already collapses
@@ -14489,14 +14592,34 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // about it, and again when the Directors run, because the order attribution
   // below may give an event its order only after the review.
   merged.events = markOrderedEvents(merged.events, context.bundle?.actions);
-  const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
+  // Every check this finish asks, kept for the turn (turnChecks.js): a failed
+  // one holds the turn unwritten, and a retry asks only what failed.
+  const checks = state.checks ?? (state.checks = createTurnChecks());
+  // A canned turn already told the player the model is not answering, and the
+  // fallback page offers Rollback. Its checks still run (the model may be back),
+  // but one that fails lands the turn as written rather than holding a turn the
+  // player has no reason to retry.
+  if (normalizeString(state.generation?.source) === "fallback") checks.accept();
+  const review = state.requests?.saving
+    ? await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure, { copy: copyReviewParts })
+    : null;
+  // Held here rather than at the write when the one request is what failed:
+  // nothing after it has anything to go on.
+  if (checksHoldTurn(checks)) {
+    holdTurn(HELD_TURN.checks, { context, state });
+    throw checksHeldError(checks.failures());
+  }
 
   // A current order whose outcome event omitted actionIds gets one bounded
   // semantic association pass. Saving mode piggybacks on the combined review;
   // legacy/non-saving mode asks only when needed. Native application accepts
   // exact ids/indexes only, then the normal curator sees the repaired actionIds
   // and protects a genuine order outcome from filler removal.
-  const standaloneActionReview = review ? null : await runStandaloneActionOutcomeReview({ context, merged, signal, state });
+  const standaloneActionReview = review ? null : await checks.run(
+    "actions",
+    () => runStandaloneActionOutcomeReview({ context, merged, signal, state }),
+    (answer) => answer?.failed || "",
+  );
   const actionPlan = review?.actionOutcomePlan ?? standaloneActionReview?.plan ?? null;
   const actionAnswer = review?.parts?.actions ?? standaloneActionReview?.answer ?? null;
   if (actionPlan && actionAnswer) {
@@ -14529,6 +14652,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       bundle,
       review,
       signal,
+      checks,
       requests: state.requests,
       gameDate: normalizeString(merged.stopDate) || context.targetDate,
       receipt: state.receipt,
@@ -14577,7 +14701,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // is where the arguments a retry needs are held.
   // `review` carries the turn review's answers (null when requests are not being
   // saved) and `requests` the skip's budget, for everything the apply still asks.
-  applyArgs.projects = { bundle, signal, review, requests: state.requests };
+  applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
   applyArgs.phases = state.phases;
   state.phases?.enter("applying");
   try {
@@ -14605,7 +14729,12 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     }
     return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
   } catch (error) {
-    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs });
+    // With the finish's context and state, so a board Retry that a failed check
+    // then holds can hand the turn over to the checks.
+    if (error?.heldKind === HELD_TURN.board) holdTurn(HELD_TURN.board, { applyArgs, context, state });
+    // A check made inside the apply failed (the timeline clean-up): held by
+    // the checks, like the rest, so the same Retry and Continue answer it.
+    if (error?.heldKind === HELD_TURN.checks) holdTurn(HELD_TURN.checks, { context, state });
     throw error;
   }
 };
@@ -14616,8 +14745,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   // The A/B lab is observational and must not touch any live pending/simulation
   // state, even when one of its candidate generations fails.
   if (!evaluationMode) {
-    discardPendingProjectsJump();
-    discardPendingJumpSegment();
+    discardHeldTurns();
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
@@ -14776,7 +14904,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
 // segment failed, so this is the same code path as the first attempt rather than
 // a second one to keep in step.
 export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } = {}) => {
-  const heldSegment = getPendingJumpSegment();
+  const heldSegment = getHeldTurn(HELD_TURN.segment);
   if (!heldSegment) throw new Error("There is no jump waiting on a failed segment.");
   const { context, state } = heldSegment;
   beginSimulation();
@@ -14796,9 +14924,49 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
     // A retry is timed on its own, and tells the panel that asked for it.
     state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
     // Re-holds itself on another failure, so the player can retry again or
-    // discard — exactly as they could the first time.
-    await runJumpSegments({ context, onEvents, onProgress, signal, state });
-    return await finishTimelineJump({ context, signal, state });
+    // discard — exactly as they could the first time — and on a Cancel.
+    return await attemptHeldTurn(HELD_TURN.segment, heldSegment, async () => {
+      await runJumpSegments({ context, onEvents, onProgress, signal, state });
+      return finishTimelineJump({ context, signal, state });
+    }, { signal });
+  } finally {
+    endSimulation();
+  }
+};
+
+// Finish a turn held on a failed check (turnChecks.js). `withoutFailedChecks` takes
+// the turn as the failed checks left it — each leaves the turn as written, as a
+// failed check always did — and asks no check again (what a turn asks after it
+// is written, the agents' reports and the institutions' votes, still runs).
+// Otherwise only the failed checks
+// are asked again: the segments are in hand and are not regenerated, and a
+// check that answered keeps its answer. Re-holds itself on another failure.
+export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailedChecks = false } = {}) => {
+  const held = getHeldTurn(HELD_TURN.checks);
+  if (!held) throw new Error("There is no turn waiting on its checks.");
+  const { context, state } = held;
+  beginSimulation();
+  try {
+    // The checks that answered are given their answers back either way; the
+    // failed ones are asked again, or taken as they failed. A cancelled
+    // Continue takes that back: the turn is held as it was.
+    if (withoutFailedChecks) state.checks?.accept();
+    // A fresh decision to spend, as a segment retry is: the held attempt spent
+    // the budget's review request, and the apply still asks for its own.
+    const spentSoFar = state.requests ?? { used: 0, refused: 0 };
+    state.requests = {
+      ...createJumpRequests({
+        segments: 1,
+        reserveInstitutionBallot: collectAutonomousInstitutionBallotWork(context.bundle?.world, context.bundle?.game?.country || "", { maxInstitutions: 1 }).length > 0,
+      }),
+      used: spentSoFar.used,
+      refused: spentSoFar.refused,
+    };
+    state.phases = createSkipPhases({ requestsUsed: () => state.requests?.used ?? 0, onChange: onProgress });
+    return await attemptHeldTurn(HELD_TURN.checks, held, () => finishTimelineJump({ context, signal, state }), {
+      signal,
+      onCancel: () => { if (withoutFailedChecks) state.checks?.accept(false); },
+    });
   } finally {
     endSimulation();
   }

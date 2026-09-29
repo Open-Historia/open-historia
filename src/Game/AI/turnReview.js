@@ -232,3 +232,29 @@ export const remapBoardOps = ({ ops, shownEvents, visibleEvents, hiddenEvents, i
     }
     return { ops: kept, dropped };
 };
+
+// ---- A review that did not come back ------------------------------------------
+//
+// A job that fails open by itself is the design above, and a time skip no
+// longer lands a turn that way without telling the player: the review's
+// failure holds the turn (turnChecks.js, gameplay.js finishTimelineJump).
+//
+// review: what gameplay.js runTurnReview returns —
+//   asked    false when nothing needed checking, so no request was made
+//   failure  the error, when the request itself failed (timeout, 503, no answer)
+//            or was never made because the skip's request budget ran out
+//   missing  the keys of the jobs asked whose part was absent or unusable
+//
+// Every job asked has a required field (buildTurnReviewTool), so a job with
+// nothing to change answers with an empty list, which is usable. A missing
+// part is a broken answer, never a quiet one.
+
+// Why the review failed, or "" when it did not.
+export const reviewFailure = (review) => {
+  // Before `asked`: a review refused by the skip's request budget was never
+  // asked, and still leaves the turn unchecked.
+  if (review?.failure) return asText(review.failure.message) || "the request failed";
+  if (!review?.asked) return "";
+  const missing = asArray(review.missing).map(asText).filter(Boolean);
+  return missing.length ? `no usable answer for ${missing.join(", ")}` : "";
+};

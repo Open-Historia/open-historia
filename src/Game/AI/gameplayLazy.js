@@ -35,6 +35,7 @@ export const simulateTimelineJump = async (...args) => (await gameplay()).simula
 export const simulateAutoJump = async (...args) => (await gameplay()).simulateAutoJump(...args);
 export const retryPendingJumpSegment = async (...args) => (await gameplay()).retryPendingJumpSegment(...args);
 export const retryPendingProjectsJump = async (...args) => (await gameplay()).retryPendingProjectsJump(...args);
+export const retryPendingChecksJump = async (...args) => (await gameplay()).retryPendingChecksJump(...args);
 export const maybeGeneratePregameHistory = async (...args) => {
   // This is the only production entry point for the automatic Round-Zero
   // bootstrap. Gate it before importing the large gameplay chunk so an author
@@ -82,5 +83,6 @@ export const consolidateHistoryNow = async (...args) => (await gameplay()).conso
 // --- Stats and intelligence -------------------------------------------------
 export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
+export const retryAgentReports = async (...args) => (await gameplay()).retryAgentReports(...args);
 export const generateCountryStatSheet = async (...args) => (await gameplay()).generateCountryStatSheet(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);
