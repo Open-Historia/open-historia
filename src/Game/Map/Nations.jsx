@@ -34,7 +34,7 @@ import {
   forgetParsedSourceCopy,
   holdUntilSourceLoaded,
 } from "./regionsSourceMemory.js";
-import { publishPolityIndex } from "../../runtime/placeSearch.js";
+import { publishGroupIndex, publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import {
   loadCountryLabelCollections,
@@ -894,6 +894,11 @@ const WorldMap = ({ isGlobe = false }) => {
     const ptrFeatures = polityLabelCollections.ptrLabelData?.features;
     publishPolityIndex(ptrFeatures?.length ? ptrFeatures : polityLabelCollections.labelData?.features);
   }, [polityLabelCollections]);
+
+  // Where each group's label sits, for the place search: the only place a group can be found.
+  useEffect(() => {
+    publishGroupIndex(groupAreaData.labels?.features);
+  }, [groupAreaData]);
 
   // Development-time proof instead of screenshot guesswork. One authoritative
   // record per polity is exposed for inspection and the known regression set is

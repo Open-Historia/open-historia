@@ -47,6 +47,12 @@ export const onUnitSelected = ({ id, lngLat }) => {
   _setSelection({ id, lngLat });
 };
 
+// Search opens a unit without a click's toggle, so landing on the one already open leaves it open.
+export const focusUnit = ({ id, lngLat }) => {
+  if (!_setSelection || !id) return;
+  _setSelection({ id, lngLat });
+};
+
 // Called by the dispatcher when a region (or empty space) is selected, so the
 // two popups never show at once.
 export const dismissUnitPopup = () => {
