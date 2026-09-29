@@ -65,6 +65,7 @@ import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from 
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
 import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { followSavedFields } from "../../runtime/editorForm.js";
+import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -149,6 +150,11 @@ const subscribeMainMenu = (listener) => {
   return () => mainMenuListeners.delete(listener);
 };
 export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isMainMenuOpen, isMainMenuOpen);
+// What a flow that activated a game still owes the player once the UI has
+// remounted around that game: open its editor, offer the country picker, or
+// say why the rest of the setup failed (runtime/afterActivation.js).
+const afterActivation = createActivationHandOff();
+const handOffAfterActivation = (work) => afterActivation.put(work);
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
 // widget, forces panel, editor drawer) starts at the screen edge, below a
 // status bar or camera cutout the page is drawn under (Android Chrome in
@@ -1781,7 +1787,17 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // remount a game activation triggers, so every open/close writes it first.
   // Flows that activate a game flip it BEFORE awaiting the request — the
   // remount happens mid-await, and the new instance must mount closed.
+  // An instance the activation already unmounted must not write it: its own
+  // copy is gone, and the live instance's would disagree with isMainMenuOpen().
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const setMenuOpen = (open) => {
+    if (!mountedRef.current) return;
     menuOpenDefault = open;
     setMenuOpenState(open);
     if (!open) setMenuOverGame(false);
@@ -1903,7 +1919,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      await openGameEditor(details.game.id);
+      // The UI remounts around the new game; the new instance opens its editor.
+      handOffAfterActivation({ gameId: details.game.id, editor: true });
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
@@ -1921,6 +1938,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorError(null);
     setIsBusy(true);
     setMenuOpen(false);
+    let gameId = null;
     try {
       const details = await createGame({
         name: `${faction.name} — ${scenario.name}`,
@@ -1931,7 +1949,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         gamePatch: { country: faction.name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
-      const gameId = details.game.id;
+      gameId = details.game.id;
 
       // Read the game's world, which createGame seeded from the scenario, and merge
       // the faction into its existing maps. This read-merge-write is load-bearing:
@@ -1977,10 +1995,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         } catch { /* flag is cosmetic */ }
       }
 
-      await openGameEditor(gameId);
+      handOffAfterActivation({ gameId, editor: true });
     } catch (nextError) {
-      setMenuOpen(true);
-      setEditorError(nextError.message);
+      if (gameId) {
+        // Activated already: the remounted UI opens the game and says why.
+        handOffAfterActivation({ gameId, editor: true, error: nextError.message });
+      } else {
+        setMenuOpen(true);
+        setEditorError(nextError.message);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -2005,6 +2028,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorError(null);
     setIsBusy(true);
     setMenuOpen(false);
+    let gameId = null;
     try {
       const name = String(group.name ?? "").trim();
       const details = await createGame({
@@ -2013,7 +2037,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         gamePatch: { country: name, ...(difficulty ? { difficulty } : null) },
         setActive: true,
       });
-      const gameId = details.game.id;
+      gameId = details.game.id;
       // The same read-merge-write as a faction (see startGameForFaction): saveGame
       // writes `world` whole.
       const gameDetails = await loadGameDetails(gameId).catch(() => null);
@@ -2049,10 +2073,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         } catch { /* flag is cosmetic */ }
       }
 
-      await openGameEditor(gameId);
+      handOffAfterActivation({ gameId, editor: true });
     } catch (nextError) {
-      setMenuOpen(true);
-      setEditorError(nextError.message);
+      if (gameId) {
+        handOffAfterActivation({ gameId, editor: true, error: nextError.message });
+      } else {
+        setMenuOpen(true);
+        setEditorError(nextError.message);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -2444,7 +2472,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         seedGameId: game.id,
         setActive: true,
       });
-      await openGameEditor(details.game.id);
+      handOffAfterActivation({ gameId: details.game.id, editor: true });
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
@@ -3131,6 +3159,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       throw new Error("The map in the editor is empty while this scenario has territory — its map had not finished loading. Wait for it to appear, then save again.");
     }
 
+    // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
+    const scenarioCountry = playerCountryAfterSave(currentGame.country, seed);
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
         ...currentWorld,
@@ -3170,8 +3200,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       },
       game: {
         ...currentGame,
-        // The author's player country, not the seed's first owner (playerCountryAfterSave.js).
-        country: playerCountryAfterSave(currentGame.country, seed),
+        country: scenarioCountry,
         // Guarantee a valid date so the timeline never shows "Invalid Date".
         gameDate:
           currentGame.gameDate || currentGame.startDate || seed.game?.gameDate || seed.game?.startDate || "2016-01-01",
@@ -3256,12 +3285,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
     // map) in place — this guarantees the new map is live. Menu flag first: the
-    // activation remounts the UI and the remount must come up menu-closed.
+    // activation remounts the UI and the remount must come up menu-closed. The
+    // game starts as the scenario's own player country, just saved above, not
+    // the seed's, which is only the map's first owner (a Japan scenario started
+    // as Afghanistan whenever the picker was dismissed).
     setMenuOpen(false);
     const gameDetails = await createGame({
       name: `${scenario.name} Session`,
       scenarioId,
-      ...(seed.game?.country ? { gamePatch: { country: seed.game.country } } : null),
+      ...(scenarioCountry ? { gamePatch: { country: scenarioCountry } } : null),
       setActive: true,
     });
     const newGameId = gameDetails.game.id;
@@ -3275,12 +3307,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setMenuOpen(false);
 
     // Optional: let the player pick who they control on the new game — limited to
-    // the factions this map actually contains.
-    const seedWorld = {
-      ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
-      polityOverrides: seed.world?.polityOverrides ?? {},
-    };
-    setPlayGameId(newGameId);
+    // the factions this map actually contains. Offered by the UI remounted
+    // around the new game (openPlayCountryPicker), since this one is gone.
+    handOffAfterActivation({
+      gameId: newGameId,
+      countryPicker: {
+        scenario,
+        seedWorld: {
+          ownerCodes: [...new Set(Object.values(seed.world?.regionOwnershipOverrides ?? {}))].sort(),
+          polityOverrides: seed.world?.polityOverrides ?? {},
+        },
+        background: seed.world?.background,
+      },
+    });
+  };
+
+  // The Apply-&-Play country picker over a game just made from `scenario`.
+  const openPlayCountryPicker = (gameId, { scenario, seedWorld, background }) => {
+    setPlayGameId(gameId);
     setCountryQuery("");
     setCountryOptions([]);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
@@ -3298,7 +3342,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         downloadScenarioJsonAsset(scenario.id, "regionsGeojson", { coarse: true })
           .then((geojson) => { if (geojson) setCustomRegionData(geojson); })
           .catch(() => {});
-        loadPickerBackground(scenario.id, seed.world?.background);
+        loadPickerBackground(scenario.id, background);
       })
       // Falling back to every real-world country here was the same bug by another
       // route: a scenario picker listing Germany and France because a name lookup
@@ -3308,6 +3352,21 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         setPickerOwnerOverrides(seedWorld.regionOwnershipOverrides ?? null);
       });
   };
+
+  // Pick up what a flow owes the game it just activated (handOffAfterActivation):
+  // only in the instance mounted for that game, whichever came first, the
+  // hand-off or the remount.
+  const pendingAfterActivation = useSyncExternalStore(afterActivation.subscribe, afterActivation.get, afterActivation.get);
+  useEffect(() => {
+    const work = afterActivation.take(activeGameId);
+    if (!work) return;
+    if (work.editor) {
+      openGameEditor(work.gameId).then(() => {
+        if (work.error) setEditorError(work.error);
+      });
+    }
+    if (work.countryPicker) openPlayCountryPicker(work.gameId, work.countryPicker);
+  }, [pendingAfterActivation, activeGameId]);
 
   // Country picker resolution: in the Apply-&-Play flow update the active game;
   // in the normal "New Game" flow create a new game.

@@ -451,7 +451,7 @@ In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEdit
 | `cities` | `citiesGeojson` | always written |
 | `backgroundData` | `backgroundData` | `clearScenarioAsset` when null |
 
-The `null`-means-clear contract is why hydration (§20) must reload the scenario's existing flags/tags/background — otherwise a round-trip that "loaded none" would clear the author's work. For the same reason a piece that fails to download (rather than one the scenario lacks: `downloadScenarioJsonAsset` throws for anything but a 404) closes the Workshop before it can save, with the reason shown in the scenario drawer. Finally it creates + activates a fresh game so the running map reflects the edit.
+The `null`-means-clear contract is why hydration (§20) must reload the scenario's existing flags/tags/background — otherwise a round-trip that "loaded none" would clear the author's work. For the same reason a piece that fails to download (rather than one the scenario lacks: `downloadScenarioJsonAsset` throws for anything but a 404) closes the Workshop before it can save, with the reason shown in the scenario drawer. Finally it creates + activates a fresh game so the running map reflects the edit, starting as the scenario's own player country just saved (never the seed's first owner). The activation remounts the UI (App keys it on the active game), so the optional "pick who you control" picker is handed to the instance mounted for the new game (`src/runtime/afterActivation.js`) rather than set up in the one being unmounted.
 
 ---
 
