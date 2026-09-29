@@ -98,6 +98,7 @@ import {
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
 import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
+import { applyBoardCarriers } from "./boardPassApply.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -143,7 +144,6 @@ import {
   boardPassCarriers,
   boardPassReasons,
   isProjectOpen,
-  materiallyChangedEntryIds,
   spyProvenanceOps,
   unassessedHighPriorityEntries,
 } from "../../runtime/projects.js";
@@ -7211,24 +7211,30 @@ const applySimulationResult = async ({
       ].slice(0, 12),
     },
   });
-  const nextColors = impactMerge.colors;
+  // `let`: a Project the board pass completes can recolour a polity too.
+  let nextColors = impactMerge.colors;
   let impactedWorld = impactMerge.world;
   // A polity renamed this turn — by an event's polityChanges, or a record whose
   // display name still differed from its key — is re-keyed everywhere the world
   // state does not carry: the game's own polity, the queued orders, the chats
   // (below), the flags, and the stock map's baked regions with no override.
-  const renamedPolities = normalizeArray(impactMerge.renamedPolities);
+  // The board pass adds the renames its Project completions make.
+  const renamedPolities = [...normalizeArray(impactMerge.renamedPolities)];
   let renamedFlags = null;
-  if (renamedPolities.length) {
-    const regions = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), impactedWorld);
-    for (const { from, to } of renamedPolities) {
-      impactedWorld = expandBakedRegionsForRename(impactedWorld, regions, from, to);
+  const rekeyRenamedPolities = async (world, renames) => {
+    if (!renames.length) return world;
+    let rekeyed = world;
+    const regions = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), rekeyed);
+    for (const { from, to } of renames) {
+      rekeyed = expandBakedRegionsForRename(rekeyed, regions, from, to);
       nextGame = renamePolityInGame(nextGame, from, to);
       nextActions = renamePolityInActions(nextActions, from, to);
     }
-    const flagsBefore = await getNationFlags({ force: true }).catch(() => ({}));
-    renamedFlags = renamedPolities.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore);
-  }
+    const flagsBefore = renamedFlags ?? await getNationFlags({ force: true }).catch(() => ({}));
+    renamedFlags = renames.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore);
+    return rekeyed;
+  };
+  impactedWorld = await rekeyRenamedPolities(impactedWorld, renamedPolities);
 
   // Live institution lifecycle effects ride the SAME events that narrate them.
   // Geography/unit/report reducers remain in gameState; membership needs chats
@@ -7609,51 +7615,29 @@ const applySimulationResult = async ({
         .filter((carrier) => carrier.onTimeline)
         .flatMap((carrier) => carrier.ops.map((op) => ({ ...op, eventIndex: carrier.eventIndex }))));
 
-      // APPLIED here, one event at a time, through the same event path every other
-      // impact takes (release of completion effects included), so the board the
-      // player sees after this write is the one the model moved. Only the project
-      // ops are replayed: the events' other impacts were applied when the world
-      // was first impacted, and must not run twice. A Hidden event's carrier is
-      // never stamped into an entry's activity, which lists timeline events only;
-      // nor is a fallback, which names no event of its own (stampsActivity).
-      //
-      // A provisional event is judged on the Board itself, before and after its
-      // OWN ops: if nothing changed materially, its claim was never recorded, so
-      // its ops are applied unstamped and the event leaves the timeline below.
-      const unbackedIds = new Set();
-      // A provisional event the board pass left no ops of its own on is unbacked
-      // before anything is applied, so not even a fallback op stamps it.
-      for (const index of provisionalIndexes) {
-        const touched = carriers.some((carrier) => carrier.onTimeline && !carrier.fallback && carrier.eventIndex === index);
-        if (!touched && freshEvents[index]) unbackedIds.add(freshEvents[index].id);
-      }
-      const movedByHidden = new Set();
-      let hiddenEventsThatMoved = 0;
-      const applyCarrier = (world, carrier, event, { stamped }) => applyEventImpactsToWorld({
+      // Applied one event at a time, provisional events judged on the Board
+      // itself (boardPassApply.js says how).
+      const boardPass = applyBoardCarriers({
+        world: worldWithImpacts,
         colors: nextColors,
-        events: [{ id: event.id, date: event.date || nextGame.gameDate, title: event.title, description: "", impacts: { projectOps: carrier.ops } }],
-        world,
-        motion: null,
+        carriers,
+        visibleEvents: freshEvents,
+        hiddenEvents: boardHiddenEvents,
+        provisionalIndexes,
+        date: nextGame.gameDate,
         round: nextGame.round,
-        boardOnlyEventIds: stamped ? [] : [event.id],
-      }).world;
-      for (const carrier of carriers) {
-        const event = carrier.onTimeline ? freshEvents[carrier.eventIndex] : boardHiddenEvents[carrier.hiddenIndex];
-        if (!event) continue;
-        const before = worldWithImpacts;
-        const stamped = carrier.stampsActivity && !unbackedIds.has(event.id);
-        let after = applyCarrier(before, carrier, event, { stamped });
-        const changed = materiallyChangedEntryIds(before.projects, after.projects);
-        if (carrier.onTimeline && !carrier.fallback && provisionalIndexes.has(carrier.eventIndex) && !changed.length) {
-          unbackedIds.add(event.id);
-          after = applyCarrier(before, carrier, event, { stamped: false });
-        }
-        if (!carrier.onTimeline && changed.length) {
-          hiddenEventsThatMoved += 1;
-          changed.forEach((id) => movedByHidden.add(id));
-        }
-        worldWithImpacts = after;
+      });
+      worldWithImpacts = boardPass.world;
+      // A Project the board completed can rename or recolour a polity through
+      // its onComplete effects: the colours are the turn's from here on, and a
+      // rename is re-keyed everywhere the world does not hold, exactly like one
+      // an event made (the chats follow at the write, from renamedPolities).
+      nextColors = boardPass.colors;
+      if (boardPass.renamedPolities.length) {
+        renamedPolities.push(...boardPass.renamedPolities);
+        worldWithImpacts = await rekeyRenamedPolities(worldWithImpacts, boardPass.renamedPolities);
       }
+      const { unbackedIds, movedByHidden, hiddenEventsThatMoved } = boardPass;
       if (attached) logDebugEvent("turn", `Projects board updated: ${attached} op(s).`, undefined, { verbose: true });
 
       // An unbacked event made a claim nothing recorded, so it leaves the timeline.
