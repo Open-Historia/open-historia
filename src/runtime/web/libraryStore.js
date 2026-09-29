@@ -101,8 +101,11 @@ const mutateGame = (id, mutate) => serializeWrite(async () => {
   return record;
 });
 
-const listScenarioIds = async () => new Set((await idbGetAll(STORES.scenarios)).map((r) => r.id));
-const listGameIds = async () => new Set((await idbGetAll(STORES.games)).map((r) => r.id));
+// Keys only. Reading the records to learn their ids cloned every scenario's
+// embedded tiles and geometry and every game's restore points on each create,
+// import and delete — hundreds of MB on a phone, for a list of names.
+const listScenarioIds = async () => new Set((await idbGetAllKeys(STORES.scenarios)).map(String));
+const listGameIds = async () => new Set((await idbGetAllKeys(STORES.games)).map(String));
 
 const emptyScenarioRecord = (id) => ({ id, meta: {}, json: {}, colors: undefined, flags: undefined, geojson: {}, pmtiles: {}, cover: undefined });
 const emptyGameRecord = (id) => ({ id, meta: {}, json: {}, colors: undefined, flags: undefined, snapshots: undefined, cover: undefined });

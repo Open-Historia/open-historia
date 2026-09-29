@@ -272,6 +272,35 @@ test("a game export measures its scenario's tile archives and geometry", async (
   assert.ok(scenarioRef.scenarioBytes > 32 * 1024 * 1024);
 });
 
+test("creating, importing and deleting never load every record to read the ids", async () => {
+  await reset();
+  getAllLog.length = 0;
+  const scenarioId = ok(await scenarios("POST", "", { name: "Light" })).scenario.id;
+  const id = await newGame("Light", { scenarioId });
+  const bundle = ok(await games("GET", `${id}/export`));
+  const imported = ok(await games("POST", "import", bundle)).game.id;
+  ok(await games("DELETE", imported));
+  ok(await games("DELETE", id));
+  ok(await scenarios("DELETE", scenarioId));
+  assert.deepEqual(getAllLog.filter((name) => name === "games" || name === "scenarios"), []);
+});
+
+test("a revision of the built-in scenario reaches its games one at a time", async () => {
+  await reset();
+  const id = await newGame("On the built-in");
+  const stored = db.get("scenarios").get("default");
+  stored.json.world = { ...stored.json.world, builtInRevision: 1 };
+  stored.flags = { Testland: "seed.png" };
+  const game = db.get("games").get(id);
+  delete game.flags;
+  getAllLog.length = 0;
+
+  await store.ensureSeeded();
+  assert.deepEqual(getAllLog.filter((name) => name === "games"), []);
+  assert.deepEqual(db.get("games").get(id).flags, { Testland: "seed.png" }, "the game keeps the flags it read from the scenario");
+  assert.equal(db.get("scenarios").get("default").json.world.builtInRevision, 2);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },
