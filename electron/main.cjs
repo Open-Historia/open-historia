@@ -447,6 +447,12 @@ const waitForSetupChoice = () =>
     ipcMain.handleOnce("setup:choice", (_event, choice) => resolve(choice === "retry" ? "retry" : "continue"));
   });
 
+// The fetcher keeps printing progress after a player closes the setup window
+// (which quits the app), and a destroyed window throws on every send.
+const sendToSetup = (channel, payload) => {
+  if (setupWindow && !setupWindow.isDestroyed()) setupWindow.webContents.send(channel, payload);
+};
+
 // Electron builds NO context menu on its own — a right-click just does
 // nothing, in an editable field or not. Chrome's spellchecker (spellcheck:
 // true, the default, made explicit below) still runs and underlines
@@ -685,7 +691,7 @@ const boot = async () => {
         if (currentAsset) doneBytes += pending.find((a) => a.asset === currentAsset)?.bytes ?? 0;
         currentAsset = asset;
       }
-      setupWindow?.webContents.send("setup:progress", {
+      sendToSetup("setup:progress", {
         asset,
         received: doneBytes + received,
         total: totalBytes,
@@ -697,15 +703,15 @@ const boot = async () => {
     // network blip used to be sent into a blank world with no word about it.
     pending = missingAssets();
     if (!pending.length) {
-      setupWindow?.webContents.send("setup:done");
+      sendToSetup("setup:done");
       break;
     }
     logMain("warn", "map.incomplete", `${pending.length} map file(s) still missing after the download.`, {
       assets: pending.map((asset) => asset.asset),
     });
-    setupWindow?.webContents.send("setup:failed", { missing: pending.length });
+    sendToSetup("setup:failed", { missing: pending.length });
     if ((await waitForSetupChoice()) !== "retry") {
-      setupWindow?.webContents.send("setup:done");
+      sendToSetup("setup:done");
       break;
     }
   }
