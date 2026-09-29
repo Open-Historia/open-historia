@@ -6,7 +6,6 @@ const DEFAULT_MATCH_TOLERANCE = 500;
 const DEFAULT_MATCH_GRID_SIZE = 0.25;
 const MAX_NUMERIC_KEY_PRECISION = 370000;
 const POINT_ID_SPAN = 2 ** 26;
-const EMPTY_FEATURE_COLLECTION = Object.freeze({ type: "FeatureCollection", features: [] });
 
 const polygonsOf = (geometry) => {
   if (geometry?.type === "Polygon") return [geometry.coordinates];
@@ -294,102 +293,6 @@ export const buildPoliticalBoundaryTopology = (
       edgeCount: a.length,
       recoveredTopologySegmentCount: recoveredA.length,
       skippedFeatureCount,
-    },
-  };
-};
-
-export const derivePolityBoundariesFromTopology = (
-  topology,
-  ownershipOverrides = {},
-  { affectedOwners = null } = {},
-) => {
-  if (!topology?.regionIds?.length) return { data: EMPTY_FEATURE_COLLECTION, stats: { boundaryGroupCount: 0 } };
-  const affected = affectedOwners && [...affectedOwners].length
-    ? new Set([...affectedOwners].map((owner) => toCountryName(owner)).filter(Boolean))
-    : null;
-  const ownerCache = new Array(topology.regionIds.length);
-  const ownerForRegion = (regionIndex) => {
-    if (regionIndex < 0) return "";
-    if (ownerCache[regionIndex] !== undefined) return ownerCache[regionIndex];
-    const id = topology.regionIds[regionIndex];
-    const owner = toCountryName(ownershipOverrides?.[id] ?? topology.baseOwners[regionIndex] ?? "");
-    ownerCache[regionIndex] = owner;
-    return owner;
-  };
-
-  const byOwnerGroup = new Map();
-  let boundarySegmentCount = 0;
-  const addBoundary = (regionIndexes, pointA, pointB) => {
-    if (!pointA || !pointB || (pointA[0] === pointB[0] && pointA[1] === pointB[1])) return;
-    const owners = [...new Set(regionIndexes.map(ownerForRegion).filter(Boolean))].sort();
-    if (owners.length < 2) return;
-    if (affected && !owners.some((owner) => affected.has(owner))) return;
-    const key = owners.join("\u001f");
-    let group = byOwnerGroup.get(key);
-    if (!group) {
-      group = { owners, segments: [], seen: new Set() };
-      byOwnerGroup.set(key, group);
-    }
-    const uniqueKey = edgeKey(pointA, pointB);
-    if (group.seen.has(uniqueKey)) return;
-    group.seen.add(uniqueKey);
-    group.segments.push({ a: pointA, b: pointB });
-    boundarySegmentCount += 1;
-  };
-
-  for (let edge = 0; edge < topology.a.length; edge += 1) {
-    const second = topology.region2[edge];
-    const extra = topology.extra.get(edge);
-    if (second === -1 && !extra) continue;
-    const regions = [topology.region1[edge]];
-    if (second !== -1) regions.push(second);
-    if (extra) regions.push(...extra);
-    addBoundary(
-      regions,
-      [topology.pointX[topology.a[edge]], topology.pointY[topology.a[edge]]],
-      [topology.pointX[topology.b[edge]], topology.pointY[topology.b[edge]]],
-    );
-  }
-  for (let index = 0; index < topology.recoveredA.length; index += 1) {
-    addBoundary(
-      [topology.recoveredRegion1[index], topology.recoveredRegion2[index]],
-      topology.recoveredA[index],
-      topology.recoveredB[index],
-    );
-  }
-
-  let boundaryChainCount = 0;
-  const features = [];
-  const ordered = [...byOwnerGroup.entries()].sort(([left], [right]) => left.localeCompare(right));
-  for (const [ownerKey, group] of ordered) {
-    const coordinates = stitchSegments(group.segments, topology.precision);
-    boundaryChainCount += coordinates.length;
-    features.push({
-      type: "Feature",
-      id: stableId("polity-boundary", ownerKey),
-      properties: {
-        class: "polity-boundary",
-        ownerKey,
-        owners: group.owners.join(" | "),
-        ownerList: group.owners,
-        owner0: group.owners[0] ?? "",
-        owner1: group.owners[1] ?? "",
-        owner2: group.owners[2] ?? "",
-        owner3: group.owners[3] ?? "",
-      },
-      geometry: { type: "MultiLineString", coordinates },
-    });
-  }
-  return {
-    data: { type: "FeatureCollection", features },
-    stats: {
-      regionCount: topology.regionIds.length,
-      edgeCount: topology.a.length,
-      boundarySegmentCount,
-      boundaryChainCount,
-      boundaryGroupCount: features.length,
-      recoveredBoundarySegmentCount: topology.recoveredA.length,
-      skippedFeatureCount: topology.stats?.skippedFeatureCount ?? 0,
     },
   };
 };

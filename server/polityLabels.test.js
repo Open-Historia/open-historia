@@ -10,7 +10,8 @@ import {
   curveMinZoomForPolityLabelTier,
   selectPolityPointFallbacks,
 } from "../src/Game/Map/vnext/polityLabels.js";
-import { derivePolitySurfaces } from "../src/Game/Map/vnext/politySurfaces.js";
+// The per-owner geometry the boundary worker hands the label engine.
+import { aggregatePolityGeometry } from "../src/Game/Map/vnext/polityGeometry.js";
 
 const surface = (owner, coordinates) => ({
   type: "Feature",
@@ -237,9 +238,9 @@ test("live polity labels expand when ownership transfers add territory", () => {
   };
   const labelFor = (surfaces, owner) => byOwner(buildPolityLabelCollections(surfaces), owner);
 
-  const before = labelFor(derivePolitySurfaces(regions).data, "Ukraine");
+  const before = labelFor(aggregatePolityGeometry(regions), "Ukraine");
   const after = labelFor(
-    derivePolitySurfaces(regions, { "border-zone": "Ukraine" }).data,
+    aggregatePolityGeometry(regions, { "border-zone": "Ukraine" }),
     "Ukraine",
   );
 

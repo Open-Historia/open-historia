@@ -100,3 +100,79 @@ test("boundary feature ids cannot collide for distinct owner groups", () => {
   assert.equal(new Set(features.map((feature) => String(feature.id))).size, 2);
 });
 
+// Seam recovery and robustness, through the path the boundary worker runs
+// (polityBoundariesWorker.js): buildPoliticalBoundaryTopology with its default
+// precision and match tolerance, then createPoliticalBoundaryState.
+const liveBoundaries = (features, ownershipOverrides = {}) => {
+  const topology = buildPoliticalBoundaryTopology({ type: "FeatureCollection", features });
+  const state = createPoliticalBoundaryState(topology, ownershipOverrides);
+  return { topology, state, features: politicalBoundaryStateCollection(state).features };
+};
+const linesOf = (features) => features.map((feature) => [lineOwners(feature), feature.geometry.coordinates]);
+
+test("a shared administrative edge inside one polity draws no border", () => {
+  const { features } = liveBoundaries([square("west", "Union", 0, 1), square("east", "Union", 1, 2)]);
+  assert.deepEqual(features, []);
+});
+
+test("a shared edge between different polities is kept and stitched into one line", () => {
+  const { features } = liveBoundaries([square("west", "Westland", 0, 1), square("east", "Eastland", 1, 2)]);
+  assert.deepEqual(linesOf(features), [["Eastland | Westland", [[[1, 0], [1, 1]]]]]);
+});
+
+test("one long frontier edge is reconciled with several shorter neighbours", () => {
+  // The two sides were simplified independently: no vertex of the long west
+  // edge matches the east side's, so only seam recovery can find the border.
+  const west = square("west", "Westland", 0, 1);
+  const east = square("east", "Eastland", 1, 2);
+  east.geometry.coordinates[0] = [[1, 0], [2, 0], [2, 1], [1, 1], [1, 0.6], [1, 0.25], [1, 0]];
+  const { topology, features } = liveBoundaries([west, east]);
+  assert.ok(topology.stats.recoveredTopologySegmentCount >= 3);
+  assert.deepEqual(linesOf(features), [["Eastland | Westland", [[[1, 0], [1, 0.25], [1, 0.6], [1, 1]]]]]);
+});
+
+test("the tiny source drift between neighbouring frontiers is reconciled", () => {
+  const { topology, features } = liveBoundaries([
+    square("west", "Westland", 0, 1),
+    square("east", "Eastland", 1.0015, 2),
+  ]);
+  assert.ok(topology.stats.recoveredTopologySegmentCount >= 1);
+  assert.deepEqual(linesOf(features), [["Eastland | Westland", [[[1, 0], [1, 1]]]]]);
+});
+
+test("a recovered seam is reclassified by an ownership change like any other edge", () => {
+  const { state } = liveBoundaries([square("west", "Westland", 0, 1), square("east", "Eastland", 1.0015, 2)]);
+  const patch = updatePoliticalBoundaryState(state, { east: "Westland" }, ["east"]);
+  assert.equal(politicalBoundaryStateCollection(state).features.length, 0);
+  assert.equal(patch.patch.removeIds.length, 1);
+
+  updatePoliticalBoundaryState(state, {}, ["east"]);
+  assert.deepEqual(linesOf(politicalBoundaryStateCollection(state).features), [["Eastland | Westland", [[[1, 0], [1, 1]]]]]);
+});
+
+test("an ownership override reclassifies a border from the start", () => {
+  const { features } = liveBoundaries(
+    [square("west", "Westland", 0, 1), square("east", "Eastland", 1, 2)],
+    { east: "Westland" },
+  );
+  assert.deepEqual(features, []);
+});
+
+test("legacy owner codes are canonicalised before ownership is compared", () => {
+  const { features } = liveBoundaries(
+    [square("west", "Spain", 0, 1), square("east", "France", 1, 2)],
+    { east: "ESP" },
+  );
+  assert.deepEqual(features, []);
+});
+
+test("malformed features are skipped without losing valid borders", () => {
+  const { topology, features } = liveBoundaries([
+    { type: "Feature", properties: { id: "bad" }, geometry: null },
+    square("west", "Westland", 0, 1),
+    square("east", "Eastland", 1, 2),
+  ]);
+  assert.equal(topology.stats.skippedFeatureCount, 1);
+  assert.deepEqual(linesOf(features), [["Eastland | Westland", [[[1, 0], [1, 1]]]]]);
+});
+

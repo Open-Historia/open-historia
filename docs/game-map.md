@@ -176,7 +176,7 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 | `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
 | `custom-regions-local-outline` | `buildProvinceOutlinePaint` | Scenario province grid (`customActive && worldKnown`): hidden through z6.5; opacity `6.5→0, 7.5→0.25, 10→0.38, 12→0.45`; width `6.5→0.25, 8→0.4, 12→0.5` CSS px, capped above z12. Country/frontier strokes stay visible, and fill-based province selection is unchanged. |
 
-`_fillColor` is carried by the dissolved polity surfaces (`enrichedPolitySurfaceData`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
+No dissolved polity surface owns the political fill: live ownership colours the canonical regions through feature state, and `_fillColor` is carried only by the disputed-region features (with their `_stripes`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
 
 ---
 
@@ -368,7 +368,7 @@ world.json ──(useWorldState, 5s)──► customRegions, regionOwnershipOver
    │                                 regionClaimants, polityOverrides, markers,
    │                                 labelFont/Color, basemap, background, units
    │
-   ├─► Nations.jsx ──► polity boundary worker (dissolved surfaces, frontiers, disputed data)
+   ├─► Nations.jsx ──► polity boundary worker (frontier topology, per-owner label geometry, disputed data)
    │                   live polity labels (buildPolityLabelCollections; follow conquests)
    │                   stockRegionsFillPaint (GID_1 → owner colour)
    │

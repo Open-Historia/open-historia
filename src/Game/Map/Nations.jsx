@@ -48,6 +48,7 @@ import { parseColorToRgb } from "./cssColor.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
 import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
 import { POLITICAL_FILL_OPACITY_STOPS, V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
+import { resolvePolityLabelNames } from "./vnext/polityNaming.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
   isPolityTextPtr1DebugEnabled,
@@ -325,16 +326,6 @@ const ownerFoldKey = (value) =>
     .normalize("NFD")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "");
-
-// The same fold for a label as the player reads it, which may be in any script
-// (runtime/translator.js): folded to a-z, every Chinese, Arabic or Cyrillic name
-// was "" and "collided" with every other, so each fell back to its English owner.
-const labelFoldKey = (value) =>
-  String(value ?? "")
-    .normalize("NFD")
-    .replace(/\p{M}+/gu, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "");
 
 // ---- Disputed-region stripes ------------------------------------------------
 // A region whose `claimants` list names the countries contesting it renders
@@ -1311,56 +1302,19 @@ const WorldMap = ({ isGlobe = false }) => {
     [resolveOwnerRgb],
   );
 
-  const workerLabelNames = useMemo(() => {
-    // Worker geometry is keyed by canonical political owner, so label metadata
-    // must use that exact namespace too. Raw codes/aliases here would recreate
-    // the old USA-vs-United States class of stale-label mismatch.
-    const owners = new Set();
-    const canonicalOwner = (value) => toCountryName(String(value ?? "").trim());
-    for (const record of customRegionMeta.records ?? []) {
-      const owner = canonicalOwner(record?.owner);
-      if (owner) owners.add(owner);
-    }
-    for (const rawOwner of Object.values(regionOwnershipOverrides ?? {})) {
-      const owner = canonicalOwner(rawOwner);
-      if (owner) owners.add(owner);
-    }
-
-    const overrideByCanonical = new Map();
-    for (const [rawOwner, entry] of Object.entries(polityOverrides ?? {})) {
-      const owner = canonicalOwner(rawOwner);
-      if (!owner) continue;
-      owners.add(owner);
-      if (!overrideByCanonical.has(owner) || rawOwner === owner) overrideByCanonical.set(owner, entry ?? {});
-    }
-
-    const labels = new Map();
-    for (const owner of owners) {
-      const override = overrideByCanonical.get(owner) ?? {};
-      const raw = String(
-        override.mapLabel
-        || override.mapDistinctLabel
-        || override.name
-        || owner,
-      ).trim();
-      labels.set(owner, translateLabel(resolveCountryDisplayName(raw, owner)) || owner);
-    }
-
-    // Authored names are presentation, but duplicate display labels make two
-    // different political actors indistinguishable. Fall back to stable owner
-    // identity only for the colliding labels.
-    const counts = new Map();
-    for (const label of labels.values()) {
-      const key = labelFoldKey(label);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    for (const [owner, label] of labels) {
-      if ((counts.get(labelFoldKey(label)) ?? 0) > 1) labels.set(owner, owner);
-    }
-    return Object.fromEntries(labels);
-    // labelEpoch intentionally rebakes translated strings after i18n updates.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customRegionMeta.records, labelEpoch, polityOverrides, regionOwnershipOverrides]);
+  // Worker geometry is keyed by canonical political owner, so label metadata
+  // must use that exact namespace too (vnext/polityNaming.js).
+  const workerLabelNames = useMemo(() => resolvePolityLabelNames({
+    records: customRegionMeta.records,
+    regionOwnershipOverrides,
+    polityOverrides,
+    canonicalOwner: toCountryName,
+    displayName: resolveCountryDisplayName,
+    translate: translateLabel,
+  }),
+  // labelEpoch intentionally rebakes translated strings after i18n updates.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [customRegionMeta.records, labelEpoch, polityOverrides, regionOwnershipOverrides]);
   const workerLabelNamesRef = useRef(workerLabelNames);
   workerLabelNamesRef.current = workerLabelNames;
 
