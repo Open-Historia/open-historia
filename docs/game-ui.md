@@ -335,7 +335,7 @@ There is no document panel (a Dossier launcher existed briefly in the lab and wa
 
 - **Diplomacy.** A document the player holds with other governments arrives as a message in the thread with them, spoken by its sender: a bold `📄` heading and dateline over the document in full. It raises the unread badge and the notification like any message — once the reveal reaches the event that brought it (see 6.3).
 - **The Spy tab.** A document held by a government where the player has an agent arrives among that agent's intercepts, listed with `📄` rather than `📡`, sealed like the rest and redacted to the player's signal clarity.
-- **The event card.** A published document, or one only the player's government holds, sits under the text of the event that produced it (`EventDocument` in `time.jsx`): `📄 title`, `Published` or `Our government's`, and the document a click away.
+- **The event card.** A published document, or one only the player's government holds, sits under the text of the event that produced it (`EventDocument` in `time.jsx`): `📄 title`, `Published` or `Our government's`, and the document a click away, rendered like the event's own text (`normalizeMarkdown` + remark-gfm + remark-breaks), so a letter keeps its lines and a treaty its tables.
 
 The advisor reads all of them as the government's own staff; the dock is back to three launchers.
 

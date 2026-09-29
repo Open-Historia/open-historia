@@ -32,6 +32,18 @@ test("the timeline event body is rendered with breaks, gfm and the repair pass",
     }
 });
 
+// The documents under a card (world.reports) are model-written too, and a
+// letter or a treaty is where line structure matters most. They were rendered
+// bare, so their line breaks, <br> tags and tables collapsed into one block.
+test("every markdown body on the card, the documents included, gets the same treatment", () => {
+    const renders = source.match(/<ReactMarkdown[^>]*>[^<]*<\/ReactMarkdown>/g) ?? [];
+    assert.ok(renders.some((render) => render.includes("report.body")), "the event's documents are rendered as markdown");
+    for (const render of renders) {
+        assert.match(render, /remarkPlugins=\{EVENT_REMARK_PLUGINS\}/, `${render} uses the event text's plugins`);
+        assert.match(render, /normalizeMarkdown\(/, `${render} goes through the repair pass`);
+    }
+});
+
 test("the card still styles the blocks that a paragraphed body produces", () => {
     for (const selector of [".timeline-markdown p", ".timeline-markdown strong"]) {
         assert.ok(source.includes(selector), `${selector} is styled`);

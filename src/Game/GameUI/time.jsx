@@ -825,7 +825,10 @@ const EventDocument = ({ report }) => {
         </button>
         {open && (
             <div className="timeline-markdown" style={{ borderTop: "1px solid rgba(251,191,36,0.12)", color: "rgba(228,228,231,0.84)", fontSize: "0.74rem", lineHeight: 1.55, padding: "0.55rem 0.8rem 0.7rem" }}>
-            <ReactMarkdown>{report.body}</ReactMarkdown>
+            {/* Model-written like the description above it, and it is here that
+                line structure matters most: a dateline, a salutation, numbered
+                articles. */}
+            <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(report.body)}</ReactMarkdown>
             </div>
         )}
         </div>
