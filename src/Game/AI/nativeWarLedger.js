@@ -140,6 +140,114 @@ export const buildPregameWarBaselineRecord = ({
   return { record: normalized, error: "" };
 };
 
+const pregameWarTitleKey = (value) => normalizeString(value)
+  .toLocaleLowerCase()
+  .normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^a-z0-9]+/g, " ")
+  .replace(/\s+/g, " ")
+  .trim();
+
+const pregameWarSideKey = (values) => uniquePolities(values)
+  .map((value) => polityKey(value))
+  .sort()
+  .join("|");
+
+const pregameWarSidePairKey = (sideA, sideB) =>
+  [pregameWarSideKey(sideA), pregameWarSideKey(sideB)].sort().join("<>");
+
+const samePregameSourceSet = (superset, required) => {
+  const values = new Set(normalizeArray(superset).map(normalizeString).filter(Boolean));
+  return normalizeArray(required).map(normalizeString).filter(Boolean).every((id) => values.has(id));
+};
+
+// Resolve Day-One war identity conservatively. Sides/date identify possible
+// candidates; title/provenance provide identity evidence. A title mismatch is
+// ambiguity, not permission to fork or silently merge a second live war.
+export const resolvePregameWarBaselineMatch = ({ records = [], candidate = null } = {}) => {
+  if (!candidate) return { match: null, error: "Round-Zero war resolver requires a candidate." };
+  const sides = pregameWarSidePairKey(candidate.sideA, candidate.sideB);
+  const title = pregameWarTitleKey(candidate.title);
+  const date = normalizeString(candidate.startedDate);
+  const live = normalizeArray(records)
+    .map((entry, index) => normalizeWar(entry, index))
+    .filter((entry) => entry && ["active", "ceasefire"].includes(entry.status))
+    .filter((entry) => pregameWarSidePairKey(entry.sideA, entry.sideB) === sides);
+
+  const dateCompatible = (entry) => {
+    const existing = normalizeString(entry.startedDate);
+    return !date || !existing || date === existing;
+  };
+  const possible = live.filter(dateCompatible);
+  const exact = possible.filter((entry) => pregameWarTitleKey(entry.title) === title);
+  if (exact.length > 1) return { match: null, error: "Round-Zero war identity matches multiple canonical wars." };
+  if (exact.length === 1) return { match: exact[0], error: "" };
+  if (possible.length) {
+    return { match: null, error: "Round-Zero war identity is ambiguous: the same live sides/date already exist under a different canonical title." };
+  }
+
+  const conflictingKnownDate = live.some((entry) =>
+    pregameWarTitleKey(entry.title) === title &&
+    date && normalizeString(entry.startedDate) && normalizeString(entry.startedDate) !== date
+  );
+  if (conflictingKnownDate) {
+    return { match: null, error: "Round-Zero war conflicts with a live war having the same sides/title but a different known start date." };
+  }
+  return { match: null, error: "" };
+};
+
+export const mergePregameWarBaselineRecord = ({ existing = null, incoming = null } = {}) => {
+  const prior = normalizeWar(existing);
+  const next = normalizeWar(incoming);
+  if (!prior || !next || normalizeString(prior.id) !== normalizeString(next.id)) {
+    return { record: null, error: "Round-Zero war merge requires the same valid canonical id." };
+  }
+  if (pregameWarSidePairKey(prior.sideA, prior.sideB) !== pregameWarSidePairKey(next.sideA, next.sideB)) {
+    return { record: null, error: `Round-Zero war ${prior.id} changes canonical belligerent identity.` };
+  }
+  if (pregameWarTitleKey(prior.title) !== pregameWarTitleKey(next.title)) {
+    return { record: null, error: `Round-Zero war ${prior.id} changes canonical title identity.` };
+  }
+  if (prior.status !== next.status) {
+    return { record: null, error: `Round-Zero war ${prior.id} conflicts on status (${prior.status} vs ${next.status}).` };
+  }
+  if (prior.startedDate && next.startedDate && prior.startedDate !== next.startedDate) {
+    return { record: null, error: `Round-Zero war ${prior.id} conflicts on known start date.` };
+  }
+  const startedDate = prior.startedDate || next.startedDate;
+  const sourceEventIds = [...new Set([...prior.sourceEventIds, ...next.sourceEventIds])].slice(-24);
+  return {
+    record: normalizeWar({
+      ...prior,
+      startedDate,
+      lastUpdatedDate: prior.lastUpdatedDate || next.lastUpdatedDate || startedDate,
+      note: prior.note || next.note,
+      cause: prior.cause || next.cause || prior.note || next.note,
+      sourceEventIds,
+      storylineIds: [...new Set([...prior.storylineIds, ...next.storylineIds])].slice(-12),
+      createdRound: prior.createdRound || next.createdRound,
+      updatedRound: Math.max(prior.updatedRound || 0, next.updatedRound || 0),
+    }),
+    error: "",
+  };
+};
+
+export const pregameWarBaselineCompatibilityError = (expected, actual) => {
+  const left = normalizeWar(expected);
+  const right = normalizeWar(actual);
+  if (!left || !right) return "war record is missing or invalid";
+  if (left.id !== right.id) return "war id changed";
+  if (pregameWarSidePairKey(left.sideA, left.sideB) !== pregameWarSidePairKey(right.sideA, right.sideB)) return "war sides changed";
+  if (pregameWarTitleKey(left.title) !== pregameWarTitleKey(right.title)) return "war title identity changed";
+  if (left.status !== right.status) return "war status changed";
+  if (left.startedDate !== right.startedDate) return "war start date was not conserved";
+  if (!samePregameSourceSet(right.sourceEventIds, left.sourceEventIds)) return "war provenance was not conserved";
+  for (const storylineId of left.storylineIds) {
+    if (!right.storylineIds.includes(storylineId)) return "war storyline linkage was not conserved";
+  }
+  return "";
+};
+
 const parseCsv = (value) =>
   uniquePolities(
     String(value ?? "")

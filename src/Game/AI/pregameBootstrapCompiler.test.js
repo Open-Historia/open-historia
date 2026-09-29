@@ -9,9 +9,9 @@ import {
 } from "./pregameBootstrapCompiler.js";
 import { applyWorldStorylineUpdates } from "./nativeWorldDirector.js";
 
-const makeWorld = () => ({
+const makeWorld = (names = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]) => ({
   polityOverrides: Object.fromEntries(
-    ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].map((name) => [name, { name, status: "active" }]),
+    names.map((name) => [name, { name, status: "active" }]),
   ),
   wars: [],
   relations: [],
@@ -56,7 +56,7 @@ test("CP2 candidate contract rejects model-owned persistent ids and lifecycle bo
         guarantor: "Alpha", beneficiary: "Beta", parties: ["Alpha", "Beta"], startedDate: "2021-01-01",
       }],
     }),
-    /must use directional guarantor\/beneficiary roles, not parties/,
+    /guarantee must use directional guarantor\/beneficiary roles/,
   );
 });
 
@@ -85,7 +85,7 @@ test("native war identity is side-order independent and replay is idempotent", (
   assert.equal(first.receipt.derived[0].canonicalId, `storyline-${warId}`);
 
   const replay = compile([
-    warFact({ title: "Renamed Alpha-Beta Conflict", sideA: ["Beta"], sideB: ["Alpha"] }),
+    warFact({ sideA: ["Beta"], sideB: ["Alpha"] }),
   ], { world: first.projectedWorld });
   assert.equal(replay.ok, true, replay.error);
   assert.equal(replay.receipt.facts[0].outcome, "merged");
@@ -94,18 +94,26 @@ test("native war identity is side-order independent and replay is idempotent", (
   assert.equal(replay.receipt.derived[0].canonicalId, `storyline-${warId}`);
 });
 
-test("a unique live war keeps its identity when an unknown start date later becomes known and the title is paraphrased", () => {
+test("a unique live war keeps its identity when an unknown start date later becomes known", () => {
   const first = compile([warFact({ startedDate: "" })]);
   assert.equal(first.ok, true, first.error);
   const warId = first.receipt.facts[0].canonicalId;
 
   const replay = compile([
-    warFact({ ref: "w2", title: "Renamed Alpha-Beta Conflict", startedDate: "2020-11-18" }),
+    warFact({ ref: "w2", startedDate: "2020-11-18" }),
   ], { world: first.projectedWorld });
   assert.equal(replay.ok, true, replay.error);
   assert.equal(replay.receipt.facts[0].outcome, "merged");
   assert.equal(replay.receipt.facts[0].canonicalId, warId);
   assert.equal(replay.projectedWorld.wars.length, 1);
+});
+
+test("a renamed live war is ambiguity rather than silent identity reuse", () => {
+  const first = compile([warFact()]);
+  assert.equal(first.ok, true, first.error);
+  const renamed = compile([warFact({ ref: "w2", title: "Renamed Alpha-Beta Conflict" })], { world: first.projectedWorld });
+  assert.equal(renamed.ok, false);
+  assert.match(renamed.error, /identity is ambiguous/);
 });
 
 test("repeated war episodes with different known start dates do not collapse", () => {
@@ -139,7 +147,7 @@ test("an agreement with incomplete identity fails closed rather than guessing ac
     parties: ["Gamma", "Alpha"], startedDate: "2020-01-01", terms: "Possibly the same alliance.",
   }], { world: first.projectedWorld });
   assert.equal(replay.ok, false);
-  assert.match(replay.error, /incomplete date identity/);
+  assert.match(replay.error, /identity is ambiguous/);
   assert.equal(replay.projectedWorld, null);
 });
 
@@ -271,7 +279,7 @@ test("existing scenario-authored relation is reused only when the substantive sc
 
   const conflict = compile([{ ref: "r3", kind: "relation", a: "Alpha", b: "Beta", score: -40, summary: "Contradictory model state." }], { world: first.projectedWorld });
   assert.equal(conflict.ok, false);
-  assert.match(conflict.error, /conflicts with existing authoritative relation/);
+  assert.match(conflict.error, /conflicts on absolute score/);
 });
 
 test("puppet baseline rejects chains instead of silently reparenting Round-Zero canon", () => {
@@ -386,4 +394,284 @@ test("semantic baseline contract rejects clamped numeric ranges and lossy polity
     }),
     /storyline may contain at most 12 distinct participants/,
   );
+});
+
+test("same-batch war facts resolve against staged canon and conflicts fail closed in either order", () => {
+  const active = warFact({ ref: "w-active", status: "active" });
+  const ceasefire = warFact({ ref: "w-ceasefire", status: "ceasefire" });
+  for (const facts of [[active, ceasefire], [ceasefire, active]]) {
+    const result = compile(facts);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /conflicts on status/);
+  }
+
+  const renamed = compile([
+    warFact({ ref: "w1" }),
+    warFact({ ref: "w2", title: "A Different Label For The Same Live War" }),
+  ]);
+  assert.equal(renamed.ok, false);
+  assert.match(renamed.error, /identity is ambiguous/);
+});
+
+test("war merge enriches unknown date and provenance and conserves them into the native mirror", () => {
+  const first = compile([
+    warFact({ startedDate: "", sourceEventRefs: ["e0"] }),
+  ], { eventIdsByRef: { e0: "event-old" } });
+  assert.equal(first.ok, true, first.error);
+  const warId = first.receipt.facts[0].canonicalId;
+
+  const replay = compile([
+    warFact({ ref: "w2", startedDate: "2020-11-18", sourceEventRefs: ["e1"] }),
+  ], {
+    world: first.projectedWorld,
+    eventIdsByRef: { e1: "event-new" },
+  });
+  assert.equal(replay.ok, true, replay.error);
+  const war = replay.projectedWorld.wars.find((entry) => entry.id === warId);
+  assert.equal(war.startedDate, "2020-11-18");
+  assert.deepEqual(new Set(war.sourceEventIds), new Set(["event-old", "event-new"]));
+  assert.equal(war.storylineIds.length, 1);
+  const mirror = replay.projectedWorld.storylines.find((entry) => entry.id === war.storylineIds[0]);
+  assert.ok(mirror);
+  assert.equal(mirror.startedDate, "2020-11-18");
+  assert.deepEqual(new Set(mirror.sourceEventIds), new Set(["event-old", "event-new"]));
+  assert.equal(mirror.canonicalIdentity, true);
+});
+
+test("agreement merge enriches unknown date and provenance but rejects contradictory terms", () => {
+  const first = compile([{
+    ref: "a1", kind: "agreement", type: "alliance", title: "Alpha-Gamma Pact",
+    parties: ["Alpha", "Gamma"], startedDate: "", terms: "Mutual support.", sourceEventRefs: ["e0"],
+  }], { eventIdsByRef: { e0: "event-old" } });
+  assert.equal(first.ok, true, first.error);
+  const id = first.receipt.facts[0].canonicalId;
+
+  const enriched = compile([{
+    ref: "a2", kind: "agreement", type: "alliance", title: "Alpha-Gamma Pact",
+    parties: ["Gamma", "Alpha"], startedDate: "2020-01-01", terms: "Mutual support.", sourceEventRefs: ["e1"],
+  }], { world: first.projectedWorld, eventIdsByRef: { e1: "event-new" } });
+  assert.equal(enriched.ok, true, enriched.error);
+  const agreement = enriched.projectedWorld.agreements.find((entry) => entry.id === id);
+  assert.equal(agreement.startedDate, "2020-01-01");
+  assert.deepEqual(new Set(agreement.sourceEventIds), new Set(["event-old", "event-new"]));
+
+  const conflict = compile([{
+    ref: "a3", kind: "agreement", type: "alliance", title: "Alpha-Gamma Pact",
+    parties: ["Alpha", "Gamma"], startedDate: "2020-01-01", terms: "A materially different obligation.",
+  }], { world: enriched.projectedWorld });
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.error, /conflicts on substantive terms/);
+});
+
+test("military access preserves grant direction and reciprocal access explicitly", () => {
+  const directional = compile([
+    {
+      ref: "m1", kind: "agreement", type: "military_access", title: "Base Access",
+      grantor: "Alpha", grantee: "Beta", startedDate: "2020-01-01", terms: "Alpha grants Beta access.",
+    },
+    {
+      ref: "m2", kind: "agreement", type: "military_access", title: "Base Access",
+      grantor: "Beta", grantee: "Alpha", startedDate: "2020-01-01", terms: "Beta grants Alpha access.",
+    },
+  ]);
+  assert.equal(directional.ok, true, directional.error);
+  assert.equal(directional.projectedWorld.agreements.length, 2);
+  assert.deepEqual(
+    directional.projectedWorld.agreements.map((entry) => [entry.grantor, entry.grantee, entry.reciprocalAccess]).sort(),
+    [["Alpha", "Beta", false], ["Beta", "Alpha", false]].sort(),
+  );
+
+  const reciprocal = compile([{
+    ref: "m3", kind: "agreement", type: "military_access", title: "Reciprocal Access",
+    parties: ["Alpha", "Beta"], reciprocal: true, startedDate: "2020-02-01", terms: "Mutual access.",
+  }]);
+  assert.equal(reciprocal.ok, true, reciprocal.error);
+  assert.equal(reciprocal.projectedWorld.agreements[0].reciprocalAccess, true);
+  assert.equal("grantor" in reciprocal.projectedWorld.agreements[0], false);
+});
+
+test("legacy military access without directional roles is ambiguity, not a silent reverse grant", () => {
+  const world = makeWorld();
+  world.agreements = [{
+    id: "legacy-access", title: "Base Access", type: "military_access", status: "active",
+    parties: ["Alpha", "Beta"], startedDate: "2020-01-01", terms: "Legacy record without direction.",
+  }];
+  const result = compile([{
+    ref: "m1", kind: "agreement", type: "military_access", title: "Base Access",
+    grantor: "Alpha", grantee: "Beta", startedDate: "2020-01-01", terms: "Alpha grants Beta access.",
+  }], { world });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /does not record grant direction/);
+});
+
+test("scenario-authored storyline identity is adopted explicitly and survives ordinary coalescing", () => {
+  const world = makeWorld();
+  world.storylines = [
+    {
+      id: "scenario-one", kind: "crisis", title: "Banking Crisis", participants: ["Alpha"], status: "active",
+      pressure: 70, momentum: 20, startedDate: "2020-01-01", state: "Banking stress remains unresolved.",
+    },
+    {
+      id: "scenario-two", kind: "crisis", title: "Banking Crisis", participants: ["Alpha"], status: "active",
+      pressure: 75, momentum: 25, startedDate: "2021-01-01", state: "A later distinct banking episode.",
+    },
+  ];
+  const result = compile([{
+    ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title: "Banking Crisis",
+    participants: ["Alpha"], startedDate: "2020-01-01", pressure: 70, momentum: 20,
+    state: "Banking stress remains unresolved.",
+  }], { world });
+  assert.equal(result.ok, true, result.error);
+  const adopted = result.projectedWorld.storylines.find((entry) => entry.id === "scenario-one");
+  assert.equal(adopted.canonicalIdentity, true);
+
+  const ordinary = applyWorldStorylineUpdates({
+    world: result.projectedWorld,
+    updates: [], events: [], stopDate: "2021-08-01", round: 2,
+  });
+  assert.ok(ordinary.world.storylines.some((entry) => entry.id === "scenario-one"));
+  assert.ok(ordinary.world.storylines.some((entry) => entry.id === "scenario-two"));
+});
+
+test("adopted scenario storyline identity survives ordinary capacity pressure", () => {
+  const world = makeWorld();
+  world.storylines = [{
+    id: "scenario-anchor", kind: "crisis", title: "Banking Crisis", participants: ["Alpha"], status: "active",
+    pressure: 70, momentum: 20, startedDate: "2020-01-01", state: "Banking stress remains unresolved.",
+  }];
+  const result = compile([{
+    ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title: "Banking Crisis",
+    participants: ["Alpha"], startedDate: "2020-01-01", pressure: 70, momentum: 20,
+    state: "Banking stress remains unresolved.",
+  }], { world });
+  assert.equal(result.ok, true, result.error);
+
+  const overflowWorld = {
+    ...result.projectedWorld,
+    storylines: [
+      ...result.projectedWorld.storylines,
+      ...Array.from({ length: 110 }, (_, index) => ({
+        id: `filler-${index + 1}`,
+        kind: "world",
+        title: `Filler ${index + 1}`,
+        participants: [index % 2 === 0 ? "Beta" : "Gamma"],
+        status: "active",
+        pressure: 50,
+        momentum: 10,
+        startedDate: "2021-01-01",
+        accountedThroughDate: "2021-07-18",
+        lastUpdatedDate: "2021-07-18",
+        state: `Filler state ${index + 1}`,
+      })),
+    ],
+  };
+  const ordinary = applyWorldStorylineUpdates({
+    world: overflowWorld, updates: [], events: [], stopDate: "2021-08-01", round: 2,
+  });
+  assert.ok(ordinary.world.storylines.length <= 96);
+  assert.ok(ordinary.world.storylines.some((entry) => entry.id === "scenario-anchor"));
+  assert.equal(ordinary.world.storylines.find((entry) => entry.id === "scenario-anchor")?.canonicalIdentity, true);
+});
+
+test("same-date distinct storyline title is ambiguity and conflicting state is rejected", () => {
+  const world = makeWorld();
+  world.storylines = [{
+    id: "scenario-crisis", kind: "crisis", title: "Banking Crisis", participants: ["Alpha"], status: "active",
+    pressure: 70, momentum: 20, startedDate: "2020-01-01", state: "Banking stress remains unresolved.",
+  }];
+  const renamed = compile([{
+    ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title: "Industrial Slowdown",
+    participants: ["Alpha"], startedDate: "2020-01-01", pressure: 70, momentum: 20,
+    state: "Banking stress remains unresolved.",
+  }], { world });
+  assert.equal(renamed.ok, false);
+  assert.match(renamed.error, /identity is ambiguous/);
+
+  const conflict = compile([{
+    ref: "s2", kind: "storyline", processKind: "crisis", status: "active", title: "Banking Crisis",
+    participants: ["Alpha"], startedDate: "2020-01-01", pressure: 70, momentum: 20,
+    state: "A contradictory canonical state.",
+  }], { world });
+  assert.equal(conflict.ok, false);
+  assert.match(conflict.error, /conflicts on canonical state/);
+});
+
+test("scenario-authored war mirror linkage is authoritative even when its id is not native-shaped", () => {
+  const world = makeWorld();
+  world.wars = [{
+    id: "scenario-war", title: "Alpha-Beta War", status: "active", sideA: ["Alpha"], sideB: ["Beta"],
+    startedDate: "2020-11-18", storylineIds: ["scenario-war-mirror"], sourceEventIds: [],
+  }];
+  world.storylines = [{
+    id: "scenario-war-mirror", kind: "war", title: "Alpha-Beta War", participants: ["Alpha", "Beta"],
+    status: "active", pressure: 80, momentum: 25, startedDate: "2020-11-18",
+    state: "The conflict remains active.", sourceEventIds: [],
+  }];
+  const result = compile([warFact({ assessment: { pressure: 80, momentum: 25, state: "The conflict remains active." } })], { world });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.receipt.facts[0].canonicalId, "scenario-war");
+  assert.equal(result.receipt.derived[0].canonicalId, "scenario-war-mirror");
+  assert.equal(result.projectedWorld.storylines.find((entry) => entry.id === "scenario-war-mirror")?.canonicalIdentity, true);
+  assert.deepEqual(result.projectedWorld.wars.find((entry) => entry.id === "scenario-war")?.storylineIds, ["scenario-war-mirror"]);
+});
+
+test("war mirror cardinality fails closed above twelve total belligerents", () => {
+  const names = Array.from({ length: 24 }, (_, index) => `Polity ${index + 1}`);
+  const world = makeWorld(names);
+  const twelve = compile([warFact({
+    sideA: names.slice(0, 6), sideB: names.slice(6, 12), title: "Twelve-Party War",
+  })], { world });
+  assert.equal(twelve.ok, true, twelve.error);
+  assert.equal(twelve.projectedWorld.storylines.find((entry) => entry.kind === "war")?.participants.length, 12);
+
+  const thirteen = compile([warFact({
+    sideA: names.slice(0, 6), sideB: names.slice(6, 13), title: "Thirteen-Party War",
+  })], { world });
+  assert.equal(thirteen.ok, false);
+  assert.match(thirteen.error, /at most 12 total belligerents|more than 12 total belligerents/);
+
+  const twentyFourShape = validatePregameBootstrapCandidateShape({
+    contractVersion: 1,
+    facts: [warFact({ sideA: names.slice(0, 12), sideB: names.slice(12, 24), title: "Twenty-Four-Party War" })],
+  });
+  assert.match(twentyFourShape, /at most 12 total belligerents/);
+});
+
+test("known Day-One baseline dates may not be later than the campaign start", () => {
+  const cases = [
+    warFact({ startedDate: "2030-01-01" }),
+    { ref: "a1", kind: "agreement", type: "alliance", title: "Pact", parties: ["Alpha", "Beta"], startedDate: "2030-01-01", terms: "x" },
+    { ref: "s1", kind: "storyline", processKind: "crisis", status: "active", title: "Crisis", participants: ["Alpha"], startedDate: "2030-01-01", pressure: 50, momentum: 20, state: "x" },
+    { ref: "p1", kind: "puppet", overlord: "Alpha", puppet: "Beta", puppetKind: "client", loyalty: 50, secrecy: "open", startedDate: "2030-01-01" },
+  ];
+  for (const fact of cases) {
+    const result = compile([fact], { startDate: "2021-07-18" });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /after the Round-One campaign start/);
+  }
+});
+
+test("semantic receipt is family-specific even when scenario canon reuses an id across families", () => {
+  const world = makeWorld();
+  world.wars = [{
+    id: "shared-id", title: "Alpha-Beta War", status: "active", sideA: ["Alpha"], sideB: ["Beta"],
+    startedDate: "2020-11-18", storylineIds: ["war-shared-mirror"], sourceEventIds: [],
+  }];
+  world.storylines = [{
+    id: "war-shared-mirror", kind: "war", title: "Alpha-Beta War", participants: ["Alpha", "Beta"],
+    status: "active", pressure: 85, momentum: 30, startedDate: "2020-11-18", state: "Open conflict continues.",
+  }];
+  world.agreements = [{
+    id: "shared-id", title: "Gamma-Delta Pact", type: "alliance", status: "active",
+    parties: ["Gamma", "Delta"], startedDate: "2020-01-01", terms: "Mutual support.", sourceEventIds: [],
+  }];
+  const result = compile([{
+    ref: "a1", kind: "agreement", type: "alliance", title: "Gamma-Delta Pact",
+    parties: ["Gamma", "Delta"], startedDate: "2020-01-01", terms: "Mutual support.",
+  }], { world });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.receipt.facts[0].kind, "agreement");
+  assert.equal(result.receipt.facts[0].canonicalId, "shared-id");
+  assert.ok(result.projectedWorld.wars.some((entry) => entry.id === "shared-id"));
+  assert.ok(result.projectedWorld.agreements.some((entry) => entry.id === "shared-id"));
 });

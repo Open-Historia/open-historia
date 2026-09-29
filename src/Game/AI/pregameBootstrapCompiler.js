@@ -10,21 +10,38 @@
 
 import { normalizeWorldState } from "../../runtime/gameState.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { parseGameDate } from "../../runtime/gameDates.js";
+import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
 import {
   buildPregameWarBaselineRecord,
+  mergePregameWarBaselineRecord,
+  pregameWarBaselineCompatibilityError,
+  resolvePregameWarBaselineMatch,
 } from "./nativeWarLedger.js";
 import {
   AGREEMENT_TYPE_VALUES,
   buildPregameAgreementBaselineRecord,
   buildPregamePuppetBaselineRecord,
   buildPregameRelationBaselineRecord,
+  mergePregameAgreementBaselineRecord,
+  mergePregamePuppetBaselineRecord,
+  mergePregameRelationBaselineRecord,
+  pregameAgreementBaselineCompatibilityError,
+  pregameAgreementRoleKey,
+  pregamePuppetBaselineCompatibilityError,
+  pregameRelationBaselineCompatibilityError,
   relationPairKey,
+  resolvePregameAgreementBaselineMatch,
+  resolvePregamePuppetBaselineMatch,
+  resolvePregameRelationBaselineMatch,
+  validatePregamePuppetGraph,
 } from "./nativeDiplomaticDirector.js";
 import {
   buildPregameStorylineBaselineRecord,
   buildPregameWarStorylineMirrorRecord,
+  mergePregameStorylineBaselineRecord,
   mergePregameStorylineBaselines,
+  pregameStorylineBaselineCompatibilityError,
+  resolvePregameStorylineBaselineMatch,
 } from "./nativeWorldDirector.js";
 
 export const PREGAME_BOOTSTRAP_CONTRACT_VERSION = 1;
@@ -45,7 +62,7 @@ const COMMON_FACT_FIELDS = new Set(["ref", "kind", "sourceEventRefs"]);
 const FACT_FIELDS = {
   war: new Set([...COMMON_FACT_FIELDS, "title", "status", "sideA", "sideB", "startedDate", "note", "assessment"]),
   relation: new Set([...COMMON_FACT_FIELDS, "a", "b", "score", "summary"]),
-  agreement: new Set([...COMMON_FACT_FIELDS, "type", "title", "parties", "guarantor", "beneficiary", "startedDate", "terms"]),
+  agreement: new Set([...COMMON_FACT_FIELDS, "type", "title", "parties", "guarantor", "beneficiary", "grantor", "grantee", "reciprocal", "startedDate", "terms"]),
   storyline: new Set([...COMMON_FACT_FIELDS, "processKind", "status", "title", "participants", "startedDate", "pressure", "momentum", "state", "distinctFromWarRef"]),
   puppet: new Set([...COMMON_FACT_FIELDS, "overlord", "puppet", "puppetKind", "loyalty", "secrecy", "startedDate"]),
 };
@@ -150,6 +167,9 @@ export const validatePregameBootstrapCandidateShape = (candidate) => {
       if (unique(fact.sideA).length > MAX_POLITIES_PER_SIDE || unique(fact.sideB).length > MAX_POLITIES_PER_SIDE) {
         return factError(index, `war sides may contain at most ${MAX_POLITIES_PER_SIDE} distinct polities each.`);
       }
+      if (unique([...fact.sideA, ...fact.sideB]).length > MAX_STORYLINE_PARTICIPANTS) {
+        return factError(index, `war may contain at most ${MAX_STORYLINE_PARTICIPANTS} total belligerents because its canonical scheduler mirror must preserve every participant.`);
+      }
       if (!validDate(fact.startedDate)) return factError(index, "war startedDate must be a valid game date or blank.");
       if (fact.assessment !== undefined) {
         if (!fact.assessment || typeof fact.assessment !== "object" || Array.isArray(fact.assessment)) return factError(index, "war assessment must be an object.");
@@ -177,9 +197,24 @@ export const validatePregameBootstrapCandidateShape = (candidate) => {
       if (!validDate(fact.startedDate)) return factError(index, "agreement startedDate must be a valid game date or blank.");
       if (type === "guarantee") {
         if (!clean(fact.guarantor) || !clean(fact.beneficiary)) return factError(index, "guarantee requires explicit guarantor and beneficiary roles.");
-        if (fact.parties !== undefined) return factError(index, "guarantee must use directional guarantor/beneficiary roles, not parties.");
+        if (fact.parties !== undefined || fact.grantor !== undefined || fact.grantee !== undefined || fact.reciprocal !== undefined) {
+          return factError(index, "guarantee must use directional guarantor/beneficiary roles only.");
+        }
+      } else if (type === "military_access") {
+        const reciprocal = fact.reciprocal === true;
+        if (reciprocal) {
+          if (!Array.isArray(fact.parties) || unique(fact.parties).length !== 2) return factError(index, "reciprocal military access requires exactly two parties.");
+          if (fact.grantor !== undefined || fact.grantee !== undefined || fact.guarantor !== undefined || fact.beneficiary !== undefined) {
+            return factError(index, "reciprocal military access must use parties, not directional roles.");
+          }
+        } else {
+          if (!clean(fact.grantor) || !clean(fact.grantee)) return factError(index, "directional military access requires explicit grantor and grantee roles, or reciprocal=true.");
+          if (fact.parties !== undefined || fact.guarantor !== undefined || fact.beneficiary !== undefined) return factError(index, "directional military access must use grantor/grantee roles, not parties.");
+        }
       } else {
-        if (fact.guarantor !== undefined || fact.beneficiary !== undefined) return factError(index, "non-guarantee agreement may not supply guarantor/beneficiary roles.");
+        if (fact.guarantor !== undefined || fact.beneficiary !== undefined || fact.grantor !== undefined || fact.grantee !== undefined || fact.reciprocal !== undefined) {
+          return factError(index, "this agreement type may not supply directional access/guarantee roles.");
+        }
         if (!Array.isArray(fact.parties)) return factError(index, "agreement requires parties array.");
         if (unique(fact.parties).length > MAX_AGREEMENT_PARTIES) {
           return factError(index, `agreement may contain at most ${MAX_AGREEMENT_PARTIES} distinct parties.`);
@@ -255,54 +290,6 @@ const resolveSourceEventIds = (fact, eventIdsByRef) => {
   return { ids, error: "" };
 };
 
-const warMatch = (fact, war) => {
-  if (!war || !WAR_STATUSES.has(lower(war.status))) return false;
-  if (sidePairKey(fact.sideA, fact.sideB) !== sidePairKey(war.sideA, war.sideB)) return false;
-  const candidateDate = clean(fact.startedDate);
-  const existingDate = clean(war.startedDate);
-  if (candidateDate && existingDate) return candidateDate === existingDate;
-  return titleKey(fact.title) && titleKey(fact.title) === titleKey(war.title);
-};
-
-const agreementRoleKey = (agreement) => {
-  const type = lower(agreement?.type).replace(/[ -]+/g, "_");
-  if (type === "guarantee") {
-    const guarantor = clean(agreement?.guarantor || agreement?.parties?.[0]);
-    const beneficiary = clean(agreement?.beneficiary || agreement?.parties?.[1]);
-    return `${type}|${lower(guarantor)}>${lower(beneficiary)}`;
-  }
-  return `${type}|${listKey(agreement?.parties)}`;
-};
-
-const agreementMatch = (fact, agreement) => {
-  if (!agreement || lower(agreement.status) !== "active") return false;
-  if (agreementRoleKey(fact) !== agreementRoleKey(agreement)) return false;
-  const candidateDate = clean(fact.startedDate);
-  const existingDate = clean(agreement.startedDate);
-  if (candidateDate && existingDate) return candidateDate === existingDate;
-  return titleKey(fact.title) && titleKey(fact.title) === titleKey(agreement.title);
-};
-
-const storylineMatch = (fact, storyline) => {
-  if (!storyline || lower(storyline.kind) !== lower(fact.processKind)) return false;
-  if (participantKey(storyline.participants) !== participantKey(fact.participants)) return false;
-  const candidateDate = clean(fact.startedDate);
-  const existingDate = clean(storyline.startedDate);
-  if (candidateDate && existingDate) return candidateDate === existingDate;
-  return titleKey(fact.title) && titleKey(fact.title) === titleKey(storyline.title);
-};
-
-const puppetMatch = (fact, row) =>
-  lower(row?.status) === "active" &&
-  lower(row?.overlord) === lower(fact.overlord) &&
-  lower(row?.puppet) === lower(fact.puppet);
-
-const existingArray = (world, key) => array(world?.[key]).filter((entry) => entry && typeof entry === "object");
-const uniqueMatch = (matches, label) => {
-  if (matches.length <= 1) return { match: matches[0] || null, error: "" };
-  return { match: null, error: `${label} matches multiple existing canonical records; identity is ambiguous.` };
-};
-
 const receiptOutcome = (fact, outcome, canonicalId, reason = "") => ({
   ref: clean(fact.ref),
   kind: lower(fact.kind),
@@ -330,6 +317,8 @@ const reject = (candidate, receipt, fact, error) => {
   };
 };
 
+const existingArray = (world, key) => array(world?.[key]).filter((entry) => entry && typeof entry === "object");
+
 const canonicalIdsByFamily = (world) => ({
   war: new Set(existingArray(world, "wars").map((entry) => clean(entry.id)).filter(Boolean)),
   relation: new Set(existingArray(world, "relations").map((entry) => clean(entry.id)).filter(Boolean)),
@@ -338,23 +327,14 @@ const canonicalIdsByFamily = (world) => ({
   storyline: new Set(existingArray(world, "storylines").map((entry) => clean(entry.id)).filter(Boolean)),
 });
 
-const validatePuppetGraph = (rows) => {
-  const parentByPuppet = new Map();
-  for (const row of rows.filter((entry) => lower(entry?.status) === "active")) {
-    const overlord = clean(row?.overlord);
-    const puppet = clean(row?.puppet);
-    if (!overlord || !puppet || lower(overlord) === lower(puppet)) return "Round-Zero puppet canon contains an invalid self/blank subordination.";
-    const puppetKey = lower(puppet);
-    const prior = parentByPuppet.get(puppetKey);
-    if (prior && lower(prior) !== lower(overlord)) return `Round-Zero puppet ${puppet} has more than one active overlord.`;
-    parentByPuppet.set(puppetKey, overlord);
+const overlayRecords = (base, staged) => {
+  const byId = new Map();
+  for (const entry of [...array(base), ...array(staged)]) {
+    const id = clean(entry?.id);
+    if (!id) continue;
+    byId.set(id, entry);
   }
-  for (const [puppetKey, overlord] of parentByPuppet) {
-    if (parentByPuppet.has(lower(overlord))) {
-      return `Round-Zero puppet chain is forbidden: ${overlord} is itself a puppet while directing ${puppetKey}.`;
-    }
-  }
-  return "";
+  return [...byId.values()];
 };
 
 const projectWorld = (world, compiled) => {
@@ -366,6 +346,41 @@ const projectWorld = (world, compiled) => {
     agreements: [...existingArray(normalized, "agreements"), ...compiled.agreements],
     puppets: [...existingArray(normalized, "puppets"), ...compiled.puppets],
   };
+};
+
+const baselineDateError = (value, startDate, label) => {
+  const date = clean(value);
+  const horizon = clean(startDate);
+  if (!date || !horizon) return "";
+  if (compareGameDates(date, horizon) > 0) return `${label} date ${date} is after the Round-One campaign start ${horizon}.`;
+  return "";
+};
+
+const claimCanonicalId = (claims, kind, id, ref) => {
+  const key = `${kind}|${clean(id)}`;
+  const prior = claims.get(key);
+  if (prior && prior !== clean(ref)) return `candidate facts ${prior} and ${clean(ref)} resolve to the same canonical ${kind} id ${id}.`;
+  claims.set(key, clean(ref));
+  return "";
+};
+
+const familyRecordById = (world, kind, id) => {
+  const key = kind === "war" ? "wars"
+    : kind === "relation" ? "relations"
+      : kind === "agreement" ? "agreements"
+        : kind === "puppet" ? "puppets"
+          : kind === "storyline" ? "storylines"
+            : "";
+  return key ? existingArray(world, key).find((entry) => clean(entry?.id) === clean(id)) || null : null;
+};
+
+const semanticConservationError = (kind, expected, actual, world) => {
+  if (kind === "war") return pregameWarBaselineCompatibilityError(expected, actual);
+  if (kind === "relation") return pregameRelationBaselineCompatibilityError(expected, actual, world);
+  if (kind === "agreement") return pregameAgreementBaselineCompatibilityError(expected, actual, world);
+  if (kind === "puppet") return pregamePuppetBaselineCompatibilityError(expected, actual);
+  if (kind === "storyline") return pregameStorylineBaselineCompatibilityError(expected, actual);
+  return `unsupported receipt family ${kind}`;
 };
 
 export const compilePregameBootstrapCandidate = ({
@@ -390,7 +405,9 @@ export const compilePregameBootstrapCandidate = ({
     ...existingArray(baseWorld, "puppets"),
     ...existingArray(baseWorld, "storylines"),
   ].map((entry) => clean(entry.id)).filter(Boolean));
-  const candidateIdentity = new Set();
+  const canonicalClaims = new Map();
+  const expectedByRef = new Map();
+  const expectedDerived = new Map();
   const warMetaByRef = new Map();
   const storylineMetaByRef = new Map();
   const warFactRefs = new Set(
@@ -405,6 +422,8 @@ export const compilePregameBootstrapCandidate = ({
     const kind = lower(raw.kind);
     const sources = resolveSourceEventIds(raw, eventIdsByRef);
     if (sources.error) return reject(candidate, receipt, raw, factError(index, sources.error));
+    const horizonError = baselineDateError(raw.startedDate, startDate, `$.facts[${index}].startedDate`);
+    if (horizonError) return reject(candidate, receipt, raw, factError(index, horizonError));
 
     if (kind === "war") {
       const sideA = resolvePolityList(raw.sideA, baseWorld);
@@ -416,6 +435,9 @@ export const compilePregameBootstrapCandidate = ({
       if (sideB.some((name) => overlap.has(lower(name))) || !sideA.length || !sideB.length) {
         return reject(candidate, receipt, raw, factError(index, "war requires two non-empty disjoint canonical sides."));
       }
+      if (unique([...sideA, ...sideB]).length > MAX_STORYLINE_PARTICIPANTS) {
+        return reject(candidate, receipt, raw, factError(index, `war has more than ${MAX_STORYLINE_PARTICIPANTS} total belligerents; its canonical scheduler mirror would be lossy.`));
+      }
       const semantic = {
         ...raw,
         status: lower(raw.status),
@@ -424,40 +446,31 @@ export const compilePregameBootstrapCandidate = ({
         title: clean(raw.title),
         startedDate: clean(raw.startedDate),
       };
-      const allocationKey = `${sidePairKey(sideA, sideB)}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
-      const duplicateKey = `war|${allocationKey}`;
-      if (candidateIdentity.has(duplicateKey)) return reject(candidate, receipt, raw, factError(index, "duplicates another candidate war identity."));
-      candidateIdentity.add(duplicateKey);
+      const currentWars = overlayRecords(existingArray(baseWorld, "wars"), compiled.wars);
+      const matched = resolvePregameWarBaselineMatch({ records: currentWars, candidate: semantic });
+      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
 
-      const existingWars = existingArray(baseWorld, "wars");
-      let matched = uniqueMatch(existingWars.filter((war) => warMatch(semantic, war)), `$.facts[${index}] war`);
-      if (matched.error) return reject(candidate, receipt, raw, matched.error);
-      if (!matched.match) {
-        const unknownDateSideMatches = existingWars.filter((war) =>
-          WAR_STATUSES.has(lower(war?.status)) &&
-          sidePairKey(war?.sideA, war?.sideB) === sidePairKey(sideA, sideB) &&
-          (!clean(war?.startedDate) || !clean(raw.startedDate))
-        );
-        const fallback = uniqueMatch(unknownDateSideMatches, `$.facts[${index}] war with unknown-date identity`);
-        if (fallback.error) return reject(candidate, receipt, raw, fallback.error);
-        matched = fallback;
-      }
       let warRecord;
+      let outcome;
       if (matched.match) {
-        if (lower(matched.match.status) !== semantic.status) {
-          return reject(candidate, receipt, raw, factError(index, `conflicts with existing war ${matched.match.id} status ${matched.match.status}.`));
-        }
-        warRecord = matched.match;
-        receipt.facts.push(receiptOutcome(raw, "merged", matched.match.id, "Existing authoritative war baseline retained."));
+        const incoming = buildPregameWarBaselineRecord({
+          id: matched.match.id,
+          title: raw.title,
+          status: raw.status,
+          sideA,
+          sideB,
+          startedDate: raw.startedDate,
+          note: raw.note,
+          sourceEventIds: sources.ids,
+          round,
+        });
+        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        const merged = mergePregameWarBaselineRecord({ existing: matched.match, incoming: incoming.record });
+        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        warRecord = merged.record;
+        outcome = "merged";
       } else {
-        const sameLiveSidesAndTitle = existingWars.filter((war) =>
-          WAR_STATUSES.has(lower(war.status)) &&
-          sidePairKey(war.sideA, war.sideB) === sidePairKey(sideA, sideB) &&
-          titleKey(war.title) === titleKey(raw.title)
-        );
-        if (sameLiveSidesAndTitle.length && clean(raw.startedDate) && sameLiveSidesAndTitle.some((war) => clean(war.startedDate) && clean(war.startedDate) !== clean(raw.startedDate))) {
-          return reject(candidate, receipt, raw, factError(index, "conflicts with an existing live war having the same sides/title but a different known start date."));
-        }
+        const allocationKey = `${sidePairKey(sideA, sideB)}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
         const id = allocatePregameCanonicalId("war", allocationKey, occupiedIds);
         occupiedIds.add(id);
         const built = buildPregameWarBaselineRecord({
@@ -473,9 +486,13 @@ export const compilePregameBootstrapCandidate = ({
         });
         if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
         warRecord = built.record;
-        compiled.wars.push(warRecord);
-        receipt.facts.push(receiptOutcome(raw, "applied", id));
+        outcome = "applied";
       }
+      const claimError = claimCanonicalId(canonicalClaims, "war", warRecord.id, raw.ref);
+      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      compiled.wars.push(warRecord);
+      receipt.facts.push(receiptOutcome(raw, outcome, warRecord.id, outcome === "merged" ? "Compatible authoritative war baseline enriched and retained." : ""));
+      expectedByRef.set(clean(raw.ref), { kind: "war", record: warRecord });
       warMetaByRef.set(clean(raw.ref), {
         ref: clean(raw.ref),
         war: warRecord,
@@ -490,18 +507,28 @@ export const compilePregameBootstrapCandidate = ({
       const a = resolvePolity(raw.a, baseWorld);
       const b = resolvePolity(raw.b, baseWorld);
       if (!a || !b || lower(a) === lower(b)) return reject(candidate, receipt, raw, factError(index, "relation contains unresolved or identical current polity identities."));
-      const pair = relationPairKey(a, b, baseWorld);
-      const duplicateKey = `relation|${pair}`;
-      if (candidateIdentity.has(duplicateKey)) return reject(candidate, receipt, raw, factError(index, "duplicates another candidate relation pair."));
-      candidateIdentity.add(duplicateKey);
-      const matches = existingArray(baseWorld, "relations").filter((entry) => relationPairKey(entry.a, entry.b, baseWorld) === pair);
-      const matched = uniqueMatch(matches, `$.facts[${index}] relation`);
-      if (matched.error) return reject(candidate, receipt, raw, matched.error);
+      const currentRelations = overlayRecords(existingArray(baseWorld, "relations"), compiled.relations);
+      const matched = resolvePregameRelationBaselineMatch({ records: currentRelations, a, b, world: baseWorld });
+      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+      let relationRecord;
+      let outcome;
       if (matched.match) {
-        if (Math.round(Number(matched.match.score)) !== Math.round(Number(raw.score))) {
-          return reject(candidate, receipt, raw, factError(index, `conflicts with existing authoritative relation ${matched.match.id} score ${matched.match.score}.`));
-        }
-        receipt.facts.push(receiptOutcome(raw, "merged", matched.match.id, "Existing authoritative relation baseline retained."));
+        const incoming = buildPregameRelationBaselineRecord({
+          id: matched.match.id,
+          a,
+          b,
+          score: raw.score,
+          summary: raw.summary,
+          sourceEventIds: sources.ids,
+          observedDate: startDate,
+          round,
+          world: baseWorld,
+        });
+        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        const merged = mergePregameRelationBaselineRecord({ existing: matched.match, incoming: incoming.record });
+        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        relationRecord = merged.record;
+        outcome = "merged";
       } else {
         const built = buildPregameRelationBaselineRecord({
           a,
@@ -516,9 +543,14 @@ export const compilePregameBootstrapCandidate = ({
         if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
         if (occupiedIds.has(built.record.id)) return reject(candidate, receipt, raw, factError(index, `native relation id ${built.record.id} collides with another canonical record.`));
         occupiedIds.add(built.record.id);
-        compiled.relations.push(built.record);
-        receipt.facts.push(receiptOutcome(raw, "applied", built.record.id));
+        relationRecord = built.record;
+        outcome = "applied";
       }
+      const claimError = claimCanonicalId(canonicalClaims, "relation", relationRecord.id, raw.ref);
+      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      compiled.relations.push(relationRecord);
+      receipt.facts.push(receiptOutcome(raw, outcome, relationRecord.id, outcome === "merged" ? "Compatible authoritative relation baseline enriched and retained." : ""));
+      expectedByRef.set(clean(raw.ref), { kind: "relation", record: relationRecord });
       continue;
     }
 
@@ -526,6 +558,9 @@ export const compilePregameBootstrapCandidate = ({
       const type = lower(raw.type).replace(/[ -]+/g, "_");
       let guarantor = "";
       let beneficiary = "";
+      let grantor = "";
+      let grantee = "";
+      let reciprocalAccess = false;
       let parties = [];
       if (type === "guarantee") {
         guarantor = resolvePolity(raw.guarantor, baseWorld);
@@ -534,39 +569,60 @@ export const compilePregameBootstrapCandidate = ({
           return reject(candidate, receipt, raw, factError(index, "guarantee roles contain unresolved or identical current polity identities."));
         }
         parties = [guarantor, beneficiary];
+      } else if (type === "military_access") {
+        reciprocalAccess = raw.reciprocal === true;
+        if (reciprocalAccess) {
+          parties = resolvePolityList(raw.parties, baseWorld);
+          if (parties.length !== 2 || parties.length !== unique(raw.parties).length) {
+            return reject(candidate, receipt, raw, factError(index, "reciprocal military-access parties contain unresolved identities or are not exactly two distinct polities."));
+          }
+        } else {
+          grantor = resolvePolity(raw.grantor, baseWorld);
+          grantee = resolvePolity(raw.grantee, baseWorld);
+          if (!grantor || !grantee || lower(grantor) === lower(grantee)) {
+            return reject(candidate, receipt, raw, factError(index, "military-access grantor/grantee contain unresolved or identical current polity identities."));
+          }
+          parties = [grantor, grantee];
+        }
       } else {
         parties = resolvePolityList(raw.parties, baseWorld);
         if (parties.length !== unique(raw.parties).length || parties.length < 2) {
           return reject(candidate, receipt, raw, factError(index, "agreement parties contain unresolved current polity identity or fewer than two distinct parties."));
         }
       }
-      const semantic = { ...raw, type, parties, guarantor, beneficiary };
-      const roleKey = agreementRoleKey(semantic);
-      const allocationKey = `${roleKey}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
-      const duplicateKey = `agreement|${allocationKey}`;
-      if (candidateIdentity.has(duplicateKey)) return reject(candidate, receipt, raw, factError(index, "duplicates another candidate agreement identity."));
-      candidateIdentity.add(duplicateKey);
-      const existingAgreements = existingArray(baseWorld, "agreements")
-        .filter((entry) => lower(entry?.status) === "active");
-      let matched = uniqueMatch(existingAgreements.filter((entry) => agreementMatch(semantic, entry)), `$.facts[${index}] agreement`);
-      if (matched.error) return reject(candidate, receipt, raw, matched.error);
-      if (!matched.match) {
-        const unknownDateRoleMatches = existingAgreements.filter((entry) =>
-          agreementRoleKey(entry) === roleKey &&
-          (!clean(entry?.startedDate) || !clean(raw.startedDate))
-        );
-        if (unknownDateRoleMatches.length) {
-          return reject(
-            candidate,
-            receipt,
-            raw,
-            factError(index, `has ${unknownDateRoleMatches.length} active agreement candidate(s) with the same roles/type but incomplete date identity; a renamed agreement cannot be merged or duplicated safely.`),
-          );
-        }
-      }
+      const semantic = { ...raw, type, parties, guarantor, beneficiary, grantor, grantee, reciprocalAccess };
+      const currentAgreements = overlayRecords(existingArray(baseWorld, "agreements"), compiled.agreements);
+      const matched = resolvePregameAgreementBaselineMatch({ records: currentAgreements, candidate: semantic, world: baseWorld });
+      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+
+      let agreementRecord;
+      let outcome;
       if (matched.match) {
-        receipt.facts.push(receiptOutcome(raw, "merged", matched.match.id, "Existing authoritative agreement baseline retained."));
+        const incoming = buildPregameAgreementBaselineRecord({
+          id: matched.match.id,
+          type,
+          title: raw.title,
+          parties,
+          guarantor,
+          beneficiary,
+          grantor,
+          grantee,
+          reciprocalAccess,
+          startedDate: raw.startedDate,
+          terms: raw.terms,
+          sourceEventIds: sources.ids,
+          observedDate: startDate,
+          round,
+          world: baseWorld,
+        });
+        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        const merged = mergePregameAgreementBaselineRecord({ existing: matched.match, incoming: incoming.record, world: baseWorld });
+        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        agreementRecord = merged.record;
+        outcome = "merged";
       } else {
+        const roleKey = pregameAgreementRoleKey(semantic, baseWorld);
+        const allocationKey = `${roleKey}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
         const id = allocatePregameCanonicalId("agreement", allocationKey, occupiedIds);
         occupiedIds.add(id);
         const built = buildPregameAgreementBaselineRecord({
@@ -576,6 +632,9 @@ export const compilePregameBootstrapCandidate = ({
           parties,
           guarantor,
           beneficiary,
+          grantor,
+          grantee,
+          reciprocalAccess,
           startedDate: raw.startedDate,
           terms: raw.terms,
           sourceEventIds: sources.ids,
@@ -584,9 +643,14 @@ export const compilePregameBootstrapCandidate = ({
           world: baseWorld,
         });
         if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
-        compiled.agreements.push(built.record);
-        receipt.facts.push(receiptOutcome(raw, "applied", id));
+        agreementRecord = built.record;
+        outcome = "applied";
       }
+      const claimError = claimCanonicalId(canonicalClaims, "agreement", agreementRecord.id, raw.ref);
+      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      compiled.agreements.push(agreementRecord);
+      receipt.facts.push(receiptOutcome(raw, outcome, agreementRecord.id, outcome === "merged" ? "Compatible authoritative agreement baseline enriched and retained." : ""));
+      expectedByRef.set(clean(raw.ref), { kind: "agreement", record: agreementRecord });
       continue;
     }
 
@@ -605,18 +669,34 @@ export const compilePregameBootstrapCandidate = ({
         status: lower(raw.status),
         participants,
       };
-      const allocationKey = `${semantic.processKind}|${participantKey(participants)}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
-      const duplicateKey = `storyline|${allocationKey}`;
-      if (candidateIdentity.has(duplicateKey)) return reject(candidate, receipt, raw, factError(index, "duplicates another candidate storyline identity."));
-      candidateIdentity.add(duplicateKey);
-      const matched = uniqueMatch(existingArray(baseWorld, "storylines").filter((entry) => storylineMatch(semantic, entry)), `$.facts[${index}] storyline`);
-      if (matched.error) return reject(candidate, receipt, raw, matched.error);
+      const currentStorylines = overlayRecords(existingArray(baseWorld, "storylines"), compiled.storylines);
+      const matched = resolvePregameStorylineBaselineMatch({ records: currentStorylines, candidate: semantic });
+      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+
+      let storylineRecord;
+      let outcome;
       if (matched.match) {
-        if (lower(matched.match.status) !== semantic.status || Number(matched.match.pressure) !== Number(raw.pressure) || Number(matched.match.momentum) !== Number(raw.momentum)) {
-          return reject(candidate, receipt, raw, factError(index, `conflicts with existing authoritative storyline ${matched.match.id} state.`));
-        }
-        receipt.facts.push(receiptOutcome(raw, "merged", matched.match.id, "Existing authoritative storyline baseline retained."));
+        const incoming = buildPregameStorylineBaselineRecord({
+          id: matched.match.id,
+          processKind: raw.processKind,
+          title: raw.title,
+          participants,
+          status: raw.status,
+          pressure: raw.pressure,
+          momentum: raw.momentum,
+          startedDate: raw.startedDate,
+          state: raw.state,
+          sourceEventIds: sources.ids,
+          observedDate: startDate,
+          round,
+        });
+        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        const merged = mergePregameStorylineBaselineRecord({ existing: matched.match, incoming: incoming.record });
+        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        storylineRecord = merged.record;
+        outcome = "merged";
       } else {
+        const allocationKey = `${semantic.processKind}|${participantKey(participants)}|${titleKey(raw.title)}|${clean(raw.startedDate) || "unknown"}`;
         const id = allocatePregameCanonicalId("storyline", allocationKey, occupiedIds);
         occupiedIds.add(id);
         const built = buildPregameStorylineBaselineRecord({
@@ -634,9 +714,14 @@ export const compilePregameBootstrapCandidate = ({
           round,
         });
         if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
-        compiled.storylines.push(built.record);
-        receipt.facts.push(receiptOutcome(raw, "applied", id));
+        storylineRecord = built.record;
+        outcome = "applied";
       }
+      const claimError = claimCanonicalId(canonicalClaims, "storyline", storylineRecord.id, raw.ref);
+      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      compiled.storylines.push(storylineRecord);
+      receipt.facts.push(receiptOutcome(raw, outcome, storylineRecord.id, outcome === "merged" ? "Compatible authoritative storyline baseline enriched, adopted, and retained." : ""));
+      expectedByRef.set(clean(raw.ref), { kind: "storyline", record: storylineRecord });
       storylineMetaByRef.set(clean(raw.ref), {
         ref: clean(raw.ref),
         titleKey: titleKey(raw.title),
@@ -653,18 +738,31 @@ export const compilePregameBootstrapCandidate = ({
       if (!overlord || !puppet || lower(overlord) === lower(puppet)) {
         return reject(candidate, receipt, raw, factError(index, "puppet contains unresolved or identical current polity identities."));
       }
-      const duplicateKey = `puppet|${lower(overlord)}>${lower(puppet)}`;
-      if (candidateIdentity.has(duplicateKey)) return reject(candidate, receipt, raw, factError(index, "duplicates another candidate puppet identity."));
-      candidateIdentity.add(duplicateKey);
-      const semantic = { ...raw, overlord, puppet };
-      const matched = uniqueMatch(existingArray(baseWorld, "puppets").filter((entry) => puppetMatch(semantic, entry)), `$.facts[${index}] puppet`);
-      if (matched.error) return reject(candidate, receipt, raw, matched.error);
+      const currentPuppets = overlayRecords(existingArray(baseWorld, "puppets"), compiled.puppets);
+      const matched = resolvePregamePuppetBaselineMatch({ records: currentPuppets, overlord, puppet });
+      if (matched.error) return reject(candidate, receipt, raw, factError(index, matched.error));
+
+      let puppetRecord;
+      let outcome;
       if (matched.match) {
-        const sameState = lower(matched.match.kind) === lower(raw.puppetKind) &&
-          Number(matched.match.loyalty) === Math.max(0, Math.min(100, Math.round(Number(raw.loyalty)))) &&
-          lower(matched.match.secrecy) === lower(raw.secrecy);
-        if (!sameState) return reject(candidate, receipt, raw, factError(index, `conflicts with existing authoritative puppet ${matched.match.id} state.`));
-        receipt.facts.push(receiptOutcome(raw, "merged", matched.match.id, "Existing authoritative puppet baseline retained."));
+        const incoming = buildPregamePuppetBaselineRecord({
+          id: matched.match.id,
+          overlord,
+          puppet,
+          kind: raw.puppetKind,
+          loyalty: raw.loyalty,
+          secrecy: raw.secrecy,
+          startedDate: raw.startedDate,
+          sourceEventIds: sources.ids,
+          observedDate: startDate,
+          round,
+          world: baseWorld,
+        });
+        if (incoming.error) return reject(candidate, receipt, raw, factError(index, incoming.error));
+        const merged = mergePregamePuppetBaselineRecord({ existing: matched.match, incoming: incoming.record });
+        if (merged.error) return reject(candidate, receipt, raw, factError(index, merged.error));
+        puppetRecord = merged.record;
+        outcome = "merged";
       } else {
         const allocationKey = `${lower(overlord)}>${lower(puppet)}|${lower(raw.puppetKind)}|${clean(raw.startedDate) || "unknown"}`;
         const id = allocatePregameCanonicalId("puppet", allocationKey, occupiedIds);
@@ -683,9 +781,14 @@ export const compilePregameBootstrapCandidate = ({
           world: baseWorld,
         });
         if (built.error) return reject(candidate, receipt, raw, factError(index, built.error));
-        compiled.puppets.push(built.record);
-        receipt.facts.push(receiptOutcome(raw, "applied", id));
+        puppetRecord = built.record;
+        outcome = "applied";
       }
+      const claimError = claimCanonicalId(canonicalClaims, "puppet", puppetRecord.id, raw.ref);
+      if (claimError) return reject(candidate, receipt, raw, factError(index, claimError));
+      compiled.puppets.push(puppetRecord);
+      receipt.facts.push(receiptOutcome(raw, outcome, puppetRecord.id, outcome === "merged" ? "Compatible authoritative puppet baseline enriched and retained." : ""));
+      expectedByRef.set(clean(raw.ref), { kind: "puppet", record: puppetRecord });
     }
   }
 
@@ -705,54 +808,78 @@ export const compilePregameBootstrapCandidate = ({
     }
   }
 
-  // War scheduler mirrors are derived native records, not model facts. Exact id
-  // compatibility is accepted; participant-based legacy matching is deliberately
-  // not used because it can collapse distinct conflicts.
+  // War scheduler mirrors are native-derived. Existing explicit war->storyline
+  // linkage wins; otherwise only the exact native mirror id is eligible. Mere
+  // participant similarity is never enough to adopt a legacy storyline.
   for (const warMeta of warMetaByRef.values()) {
     const war = warMeta.war;
-    const mirrorId = `storyline-${clean(war?.id)}`;
-    const exact = existingArray(baseWorld, "storylines").find((entry) => clean(entry?.id) === mirrorId) ||
-      compiled.storylines.find((entry) => clean(entry?.id) === mirrorId) || null;
+    const currentStorylines = overlayRecords(existingArray(baseWorld, "storylines"), compiled.storylines);
     const warParticipants = participantKey([...(war?.sideA || []), ...(war?.sideB || [])]);
+    const linkedIds = unique(war?.storylineIds).filter(Boolean);
+    const linkedMatches = linkedIds
+      .map((id) => currentStorylines.find((entry) => clean(entry?.id) === id) || null)
+      .filter(Boolean);
+    if (linkedIds.length > 1) return reject(candidate, receipt, null, `War ${war.id} links to multiple canonical storyline ids; Round-Zero mirror identity is ambiguous.`);
+    if (linkedIds.length && linkedMatches.length !== linkedIds.length) return reject(candidate, receipt, null, `War ${war.id} contains a dangling canonical storyline linkage; Round-Zero will not invent a replacement identity.`);
+
+    const preferredId = `storyline-${clean(war?.id)}`;
+    let exact = linkedMatches[0] || currentStorylines.find((entry) => clean(entry?.id) === preferredId) || null;
+    let mirrorId = clean(exact?.id) || preferredId;
     if (exact) {
       if (lower(exact.kind) !== "war" || participantKey(exact.participants) !== warParticipants) {
-        return reject(candidate, receipt, null, `Derived war mirror ${mirrorId} conflicts with an existing storyline id.`);
+        return reject(candidate, receipt, null, `Derived war mirror ${mirrorId} conflicts with the canonical war linkage for ${war.id}.`);
       }
+      const assessment = {
+        pressure: warMeta.assessment?.pressure ?? exact.pressure,
+        momentum: warMeta.assessment?.momentum ?? exact.momentum,
+        state: warMeta.assessment?.state ?? exact.state,
+      };
+      const incoming = buildPregameWarStorylineMirrorRecord({ id: mirrorId, war, assessment, observedDate: startDate, round });
+      if (incoming.error) return reject(candidate, receipt, null, incoming.error);
+      const merged = mergePregameStorylineBaselineRecord({ existing: exact, incoming: incoming.record });
+      if (merged.error) return reject(candidate, receipt, null, merged.error);
+      compiled.storylines.push(merged.record);
+      expectedDerived.set(`war-storyline|${warMeta.ref}`, merged.record);
       receipt.derived.push({ kind: "war-storyline", sourceFactRef: warMeta.ref, outcome: "merged", canonicalId: mirrorId });
-      continue;
+    } else {
+      const legacyPotential = currentStorylines.filter((entry) =>
+        lower(entry?.kind) === "war" && participantKey(entry?.participants) === warParticipants
+      );
+      if (legacyPotential.length) {
+        return reject(candidate, receipt, null, `War ${war.id} has ${legacyPotential.length} participant-matched legacy war storyline(s) but no explicit or exact canonical linkage; automatic participant-based reconciliation is forbidden.`);
+      }
+      const builtMirror = buildPregameWarStorylineMirrorRecord({ id: mirrorId, war, assessment: warMeta.assessment, observedDate: startDate, round });
+      if (builtMirror.error) return reject(candidate, receipt, null, builtMirror.error);
+      if (occupiedIds.has(builtMirror.record.id)) return reject(candidate, receipt, null, `Derived war mirror id ${builtMirror.record.id} collides with unrelated canonical state.`);
+      occupiedIds.add(builtMirror.record.id);
+      compiled.storylines.push(builtMirror.record);
+      expectedDerived.set(`war-storyline|${warMeta.ref}`, builtMirror.record);
+      receipt.derived.push({ kind: "war-storyline", sourceFactRef: warMeta.ref, outcome: "applied", canonicalId: builtMirror.record.id });
     }
-    const legacyPotential = existingArray(baseWorld, "storylines").filter((entry) =>
-      lower(entry?.kind) === "war" && participantKey(entry?.participants) === warParticipants
-    );
-    if (legacyPotential.length) {
-      return reject(candidate, receipt, null, `War ${war.id} has ${legacyPotential.length} participant-matched legacy war storyline(s) but no exact ${mirrorId}; automatic participant-based reconciliation is forbidden.`);
+
+    const linkedWar = {
+      ...war,
+      storylineIds: unique([...array(war.storylineIds), mirrorId]),
+    };
+    warMeta.war = linkedWar;
+    for (let index = compiled.wars.length - 1; index >= 0; index -= 1) {
+      if (clean(compiled.wars[index]?.id) === clean(war.id)) {
+        compiled.wars[index] = linkedWar;
+        break;
+      }
     }
-    const builtMirror = buildPregameWarStorylineMirrorRecord({
-      war,
-      assessment: warMeta.assessment,
-      observedDate: startDate,
-      round,
-    });
-    if (builtMirror.error) return reject(candidate, receipt, null, builtMirror.error);
-    if (occupiedIds.has(builtMirror.record.id)) return reject(candidate, receipt, null, `Derived war mirror id ${builtMirror.record.id} collides with unrelated canonical state.`);
-    occupiedIds.add(builtMirror.record.id);
-    compiled.storylines.push(builtMirror.record);
-    receipt.derived.push({ kind: "war-storyline", sourceFactRef: warMeta.ref, outcome: "applied", canonicalId: builtMirror.record.id });
+    const expected = expectedByRef.get(warMeta.ref);
+    if (expected?.kind === "war") expected.record = linkedWar;
   }
 
-  const puppetRows = [...existingArray(baseWorld, "puppets"), ...compiled.puppets];
-  const puppetError = validatePuppetGraph(puppetRows);
+  const puppetRows = overlayRecords(existingArray(baseWorld, "puppets"), compiled.puppets);
+  const puppetError = validatePregamePuppetGraph(puppetRows);
   if (puppetError) return reject(candidate, receipt, null, puppetError);
 
   let projectedWorld = projectWorld(baseWorld, compiled);
   const storylineMerge = mergePregameStorylineBaselines({ world: projectedWorld, records: compiled.storylines });
   if (storylineMerge.error) return reject(candidate, receipt, null, storylineMerge.error);
 
-  // Project through the real persisted-world normalizer before declaring the
-  // receipt conserved. This catches capacity eviction, pair/id dedupe and any
-  // other save-shape normalization that would otherwise make a successful
-  // compiler result lossy at publication time. Existing authoritative canon is
-  // conserved too: Round Zero may add or merge, never evict unrelated records.
   projectedWorld = normalizeWorldState(storylineMerge.world);
 
   const finalIds = canonicalIdsByFamily(projectedWorld);
@@ -764,17 +891,26 @@ export const compilePregameBootstrapCandidate = ({
       }
     }
   }
+
   for (const outcome of receipt.facts) {
-    const familyIds = finalIds[outcome.kind];
-    if (!outcome.canonicalId || !familyIds?.has(outcome.canonicalId)) {
+    const expected = expectedByRef.get(outcome.ref);
+    const actual = expected ? familyRecordById(projectedWorld, expected.kind, outcome.canonicalId) : null;
+    if (!expected || !actual) {
       return reject(candidate, receipt, null, `Round-Zero receipt lost ${outcome.kind} fact ${outcome.ref}: canonical id ${outcome.canonicalId || "<blank>"} is absent from projected final state.`);
+    }
+    const semanticError = semanticConservationError(expected.kind, expected.record, actual, projectedWorld);
+    if (semanticError) {
+      return reject(candidate, receipt, null, `Round-Zero receipt changed ${outcome.kind} fact ${outcome.ref} (${outcome.canonicalId}): ${semanticError}.`);
     }
   }
   for (const derived of receipt.derived) {
-    const familyIds = derived.kind === "war-storyline" ? finalIds.storyline : null;
-    if (!derived.canonicalId || !familyIds?.has(derived.canonicalId)) {
+    const expected = expectedDerived.get(`${derived.kind}|${derived.sourceFactRef}`);
+    const actual = derived.kind === "war-storyline" ? familyRecordById(projectedWorld, "storyline", derived.canonicalId) : null;
+    if (!expected || !actual) {
       return reject(candidate, receipt, null, `Round-Zero receipt lost derived ${derived.kind}: canonical id ${derived.canonicalId || "<blank>"} is absent from projected final state.`);
     }
+    const semanticError = pregameStorylineBaselineCompatibilityError(expected, actual);
+    if (semanticError) return reject(candidate, receipt, null, `Round-Zero receipt changed derived ${derived.kind} ${derived.canonicalId}: ${semanticError}.`);
   }
   if (receipt.facts.length !== candidate.facts.length) {
     return reject(candidate, receipt, null, `Round-Zero receipt accounted for ${receipt.facts.length}/${candidate.facts.length} candidate facts.`);

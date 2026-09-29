@@ -295,3 +295,39 @@ test("native pregame directive teaches the shallow transport field names", async
   assert.match(source, /updates: warUpdates,\s*events: bootstrapEvents,[\s\S]{0,220}stopDate: ""/);
   assert.doesNotMatch(source, /must link to a real pre-game event/);
 });
+
+test("schema-invalid canonical retry cannot replace independently validated historical events", () => {
+  const first = normalizeGameplayPayload("pregameHistory", {
+    events: [
+      { date: "2020-03-09", title: "Market crash", description: "A valid first-attempt event." },
+      { date: "2020-11-03", title: "Contested election", description: "Another valid first-attempt event." },
+    ],
+    summary: "Stable first interpretation.",
+    canonicalUpdates: [{
+      type: "war:start", id: "war-x", polities: ["A"], opponents: ["B"],
+      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "invalid discriminator",
+    }],
+  });
+  const verdict = validateGameplayPayload("pregameHistory", first);
+  assert.equal(verdict.valid, false);
+  assert.match(verdict.error, /kind is required/);
+
+  const frozen = extractPregameHistoryStableRetrySections(first);
+  assert.deepEqual(frozen.events, first.events);
+  assert.equal(frozen.summary, first.summary);
+  assert.equal(Object.prototype.hasOwnProperty.call(frozen, "canonicalUpdates"), false);
+
+  const retry = normalizeGameplayPayload("pregameHistory", {
+    events: [{ date: "2020-06-15", title: "Regenerated history", description: "This must not replace validated history." }],
+    summary: "A different interpretation that must not replace the frozen summary.",
+    canonicalUpdates: [{
+      kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
+      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Corrected canon.",
+    }],
+  });
+  const corrected = mergePregameHistoryTransportSections(retry, frozen);
+  assert.deepEqual(corrected.events, first.events);
+  assert.equal(corrected.summary, first.summary);
+  assert.equal(corrected.canonicalUpdates[0].kind, "relation");
+  assert.equal(validateGameplayPayload("pregameHistory", corrected).valid, true);
+});

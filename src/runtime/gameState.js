@@ -3610,6 +3610,7 @@ const normalizeWorldStoryline = (entry, index = 0) => {
     nextReviewDate:
       status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
     state: normalizeTextLike(entry.state || entry.summary || entry.description),
+    ...(entry.canonicalIdentity === true ? { canonicalIdentity: true } : {}),
     drivers: uniqueStrings(entry.drivers, 8),
     constraints: uniqueStrings(entry.constraints, 8),
     sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
@@ -3637,6 +3638,7 @@ const normalizeWorldStorylines = (value) => {
   const statusRank = { active: 0, dormant: 1, resolved: 2 };
   return [...deduped.values()]
     .sort((a, b) =>
+      Number(b.canonicalIdentity === true) - Number(a.canonicalIdentity === true) ||
       (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9) ||
       String(b.lastUpdatedDate || b.accountedThroughDate || "").localeCompare(
         String(a.lastUpdatedDate || a.accountedThroughDate || ""),
@@ -3792,6 +3794,13 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
   const beneficiary = type === "guarantee"
     ? resolveWorldDiplomaticPolity(entry.beneficiary || parties[1], identityWorld)
     : "";
+  const reciprocalAccess = type === "military_access" && entry.reciprocalAccess === true;
+  const grantor = type === "military_access" && !reciprocalAccess
+    ? resolveWorldDiplomaticPolity(entry.grantor, identityWorld)
+    : "";
+  const grantee = type === "military_access" && !reciprocalAccess
+    ? resolveWorldDiplomaticPolity(entry.grantee, identityWorld)
+    : "";
   return {
     id,
     title: normalizeOptionalString(entry.title) || id,
@@ -3805,6 +3814,8 @@ const normalizeWorldAgreement = (entry, identityWorld, index = 0) => {
     lastUpdatedDate: canonicalizeDateString(entry.lastUpdatedDate || entry.startedDate),
     terms: normalizeTextLike(entry.terms),
     ...(guarantor && beneficiary ? { guarantor, beneficiary } : {}),
+    ...(type === "military_access" && reciprocalAccess ? { reciprocalAccess: true } : {}),
+    ...(type === "military_access" && grantor && grantee ? { grantor, grantee, reciprocalAccess: false } : {}),
     sourceEventIds: [...new Set(normalizeActionParticipants(entry.sourceEventIds))].slice(-24),
     createdRound: Number.isFinite(Number(entry.createdRound)) ? Math.max(0, Math.trunc(Number(entry.createdRound))) : 0,
     updatedRound: Number.isFinite(Number(entry.updatedRound)) ? Math.max(0, Math.trunc(Number(entry.updatedRound))) : 0,
