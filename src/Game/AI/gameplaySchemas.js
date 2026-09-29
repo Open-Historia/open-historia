@@ -1525,8 +1525,13 @@ export const PREGAME_HISTORY_TRANSPORT_SCHEMA = {
 
 const parsePregameTransportArray = (value, field) => {
   if (Array.isArray(value)) return value;
-  const text = String(value ?? "").trim();
-  if (!text) return [];
+  if (value === undefined || value === null) {
+    throw new Error(`$.${field} is required and must contain JSON array text.`);
+  }
+  const text = String(value).trim();
+  if (!text) {
+    throw new Error(`$.${field} must contain explicit JSON array text; blank is not the same as [].`);
+  }
   try {
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) throw new Error("decoded value is not an array");
@@ -1540,23 +1545,56 @@ const parsePregameTransportArray = (value, field) => {
   }
 };
 
+const decodePregameTransportSection = (value, field) => {
+  try {
+    return { ok: true, value: parsePregameTransportArray(value, field), error: "" };
+  } catch (error) {
+    return { ok: false, value: null, error: String(error?.message || error || `Invalid ${field}.`) };
+  }
+};
+
+// Provider compatibility keeps the two large arrays as JSON text, but one bad
+// text field must not erase a valid sibling section. Return the independently
+// decoded sections even when the overall transport is invalid so the retry path
+// can preserve every section that already decoded cleanly.
 export const decodePregameHistoryTransportPayload = (value) => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return { payload: value, error: "" };
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { payload: value, error: "", validSections: {} };
+  }
   const isTransport = Object.prototype.hasOwnProperty.call(value, "eventsJson")
     || Object.prototype.hasOwnProperty.call(value, "canonicalUpdatesJson");
-  if (!isTransport) return { payload: value, error: "" };
-  try {
-    return {
-      payload: {
-        events: parsePregameTransportArray(value.eventsJson, "eventsJson"),
-        summary: String(value.summary ?? "").trim(),
-        canonicalUpdates: parsePregameTransportArray(value.canonicalUpdatesJson, "canonicalUpdatesJson"),
-      },
-      error: "",
-    };
-  } catch (error) {
-    return { payload: null, error: String(error?.message || error || "Invalid pre-game history transport payload.") };
+  if (!isTransport) return { payload: value, error: "", validSections: {} };
+
+  const events = decodePregameTransportSection(value.eventsJson, "eventsJson");
+  const canonicalUpdates = decodePregameTransportSection(value.canonicalUpdatesJson, "canonicalUpdatesJson");
+  const summary = String(value.summary ?? "").trim();
+  const errors = [events.error, canonicalUpdates.error].filter(Boolean);
+  const validSections = {
+    ...(events.ok ? { events: events.value } : {}),
+    ...(canonicalUpdates.ok ? { canonicalUpdates: canonicalUpdates.value } : {}),
+    ...(Object.prototype.hasOwnProperty.call(value, "summary") && summary ? { summary } : {}),
+  };
+
+  return {
+    payload: {
+      events: events.value,
+      summary,
+      canonicalUpdates: canonicalUpdates.value,
+    },
+    error: errors.join(" "),
+    validSections,
+  };
+};
+
+export const mergePregameHistoryTransportSections = (payload, preserved = {}) => {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const next = { ...payload };
+  if (Array.isArray(preserved.events)) next.events = preserved.events.map((entry) => ({ ...entry }));
+  if (Array.isArray(preserved.canonicalUpdates)) {
+    next.canonicalUpdates = preserved.canonicalUpdates.map((entry) => ({ ...entry }));
   }
+  if (Object.prototype.hasOwnProperty.call(preserved, "summary")) next.summary = String(preserved.summary ?? "").trim();
+  return next;
 };
 
 // The idle-time diplomatic drip: while the player sits between jumps, a polity

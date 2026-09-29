@@ -108,6 +108,7 @@ import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   decodeGameMasterTransportPayload,
   decodePregameHistoryTransportPayload,
+  mergePregameHistoryTransportSections,
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
@@ -228,6 +229,7 @@ import {
   writeGameData,
   writeWorldState,
   writeCanonicalTurnState,
+  mutateCanonicalTurnState,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation } from "../../runtime/politicalBackground.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
@@ -757,8 +759,10 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];
+  const sourceCanonicalUpdates = normalizeArray(candidate.canonicalUpdates);
+  const sourceCounts = { total: sourceCanonicalUpdates.length, storyline: 0, war: 0, relation: 0, agreement: 0, puppet: 0 };
 
-  for (const raw of normalizeArray(candidate.canonicalUpdates)) {
+  for (const raw of sourceCanonicalUpdates) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
 
     const { family, operation } = canonicalUpdateKind(raw.kind);
@@ -766,6 +770,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
     const opponents = normalizeArray(raw.opponents).map(normalizeString).filter(Boolean);
 
     if (family === "storyline") {
+      sourceCounts.storyline += 1;
       storylineUpdates.push({
         id: normalizeString(raw.id),
         status: operation,
@@ -780,6 +785,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
         state: normalizeString(raw.detail),
       });
     } else if (family === "war") {
+      sourceCounts.war += 1;
       warUpdates.push({
         id: normalizeString(raw.id),
         op: operation,
@@ -791,6 +797,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
         note: normalizeString(raw.detail),
       });
     } else if (family === "relation") {
+      sourceCounts.relation += 1;
       relationUpdates.push({
         a: normalizeString(polities[0]),
         b: normalizeString(polities[1]),
@@ -801,6 +808,7 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
         summary: normalizeString(raw.detail),
       });
     } else if (family === "agreement") {
+      sourceCounts.agreement += 1;
       agreementUpdates.push({
         id: normalizeString(raw.id),
         op: operation,
@@ -815,11 +823,23 @@ const expandCanonicalUpdateEnvelope = (candidate) => {
   }
 
   // Subordinations already standing on the start date (puppet:open / puppet:covert).
-  const puppetUpdates = isActiveFeatureEnabled("puppetStates")
-    ? puppetUpdatesFromCanonical(candidate.canonicalUpdates)
-    : [];
+  // Expand them even when the feature is disabled so validation can reject the
+  // unsupported fact explicitly instead of silently dropping accepted canon.
+  sourceCounts.puppet = sourceCanonicalUpdates.filter((raw) => canonicalUpdateKind(raw?.kind).family === "puppet").length;
+  const puppetUpdates = puppetUpdatesFromCanonical(sourceCanonicalUpdates);
 
-  const expanded = { ...candidate, storylineUpdates, warUpdates, relationUpdates, agreementUpdates, puppetUpdates };
+  const expanded = {
+    ...candidate,
+    storylineUpdates,
+    warUpdates,
+    relationUpdates,
+    agreementUpdates,
+    puppetUpdates,
+    // Native-only accounting metadata attached after provider/schema validation.
+    // Round-Zero validation compares these counts against every downstream
+    // representation so an accepted fact can never vanish by truncation/filtering.
+    pregameCanonicalReceipt: sourceCounts,
+  };
   delete expanded.canonicalUpdates;
   return expanded;
 };
@@ -3303,6 +3323,11 @@ const runJsonTask = async (taskKey, {
   const salvageFirst = savingRequests() && !strictFirst;
   // What schema salvage cut out of the answer that was finally taken.
   let removedFromAnswer = [];
+  // Round-Zero transport correction is section-preserving. If one JSON-text
+  // field is malformed, retain every sibling section that decoded cleanly and
+  // reapply it after the corrective attempt. A syntax repair must not silently
+  // reconsider unrelated Day-One canon or historical coverage.
+  let pregamePreservedTransportSections = null;
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
@@ -3471,6 +3496,14 @@ const runJsonTask = async (taskKey, {
         const decoded = decodePregameHistoryTransportPayload(parsed);
         transportDecodeError = normalizeString(decoded?.error);
         parsed = decoded?.payload;
+        if (transportDecodeError && outputAttempt === 1) {
+          pregamePreservedTransportSections = decoded?.validSections || null;
+        } else if (pregamePreservedTransportSections) {
+          parsed = mergePregameHistoryTransportSections(parsed, pregamePreservedTransportSections);
+          logDebugEvent("ai", 'Task "pregameHistory" corrective attempt preserved independently valid Round-Zero sections.', {
+            preserved: Object.keys(pregamePreservedTransportSections),
+          }, { verbose: true });
+        }
       }
       // Lenient jump shapes (gameplaySchemas.js normalizeGameplayPayload): an
       // envelope, a singular event, synonym keys, doubled impacts wrappers —
@@ -3798,7 +3831,10 @@ const runJsonTask = async (taskKey, {
       if (outputAttempt === 1 && !controller.signal.aborted) {
         history.push({
           role: "model",
-          parts: [{ text: rawText || JSON.stringify(parsed ?? null) }],
+          // Tool-only answers have no rawText. Preserve the provider's ORIGINAL
+          // tool arguments here, not a partially decoded/null intermediate, so
+          // the model can repair exactly what it actually sent.
+          parts: [{ text: rawText || JSON.stringify(response?.toolInput ?? parsed ?? null) }],
         });
         // A model that answered with a tool call is told to call it again; one
         // that answered in prose (local models without tool support) is told to
@@ -3807,9 +3843,12 @@ const runJsonTask = async (taskKey, {
         const retryInstruction = response?.toolInput
           ? `Call ${tool?.name || "the required tool"} again with corrected input.`
           : "Respond again with ONLY the corrected JSON object - no prose, no explanations, no markdown fences, just the JSON.";
+        const transportRepairInstruction = taskKey === "pregameHistory" && transportDecodeError
+          ? " This is a transport-syntax correction only: preserve every previous field and historical/canonical fact exactly except the JSON-text field(s) named in the error; repair their JSON syntax without dropping, merging, rewriting, or replacing array items."
+          : "";
         history.push({
           role: "user",
-          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}` }],
+          parts: [{ text: `Your previous structured answer failed validation: ${validation.error} ${retryInstruction}${transportRepairInstruction}` }],
         });
         continue;
       }
@@ -16769,6 +16808,42 @@ const ensurePregameWarStorylineMirrors = (
   candidate.storylineUpdates = storylines;
 };
 
+const pregameCanonicalConservationError = (candidate, { includeNativeMirrors = false } = {}) => {
+  const receipt = candidate?.pregameCanonicalReceipt || null;
+  const rawCounts = {
+    storyline: normalizeArray(candidate?.storylineUpdates).length,
+    war: normalizeArray(candidate?.warUpdates).length,
+    relation: normalizeArray(candidate?.relationUpdates).length,
+    agreement: normalizeArray(candidate?.agreementUpdates).length,
+    puppet: normalizeArray(candidate?.puppetUpdates).length,
+  };
+  if (receipt && !includeNativeMirrors) {
+    for (const family of ["storyline", "war", "relation", "agreement", "puppet"]) {
+      if (Number(receipt[family] || 0) !== rawCounts[family]) {
+        return `Round-Zero canonical ${family} expansion lost state before validation: accepted ${Number(receipt[family] || 0)}, retained ${rawCounts[family]}.`;
+      }
+    }
+    const retainedTotal = Object.values(rawCounts).reduce((sum, count) => sum + count, 0);
+    if (Number(receipt.total || 0) !== retainedTotal) {
+      return `Round-Zero canonical expansion lost state before validation: accepted ${Number(receipt.total || 0)} fact(s), retained ${retainedTotal}.`;
+    }
+  }
+
+  const decodedCounts = {
+    storyline: decodeWorldStorylineUpdates(candidate?.storylineUpdates).length,
+    war: decodeWarUpdates(candidate?.warUpdates).length,
+    relation: decodeRelationUpdates(candidate?.relationUpdates).length,
+    agreement: decodeAgreementUpdates(candidate?.agreementUpdates).length,
+    puppet: decodePuppetUpdates(candidate?.puppetUpdates).length,
+  };
+  for (const family of ["storyline", "war", "relation", "agreement", "puppet"]) {
+    if (decodedCounts[family] !== rawCounts[family]) {
+      return `Round-Zero canonical ${family} processing would be lossy: accepted ${rawCounts[family]} record(s), native decoder retained ${decodedCounts[family]}. Reduce the baseline or raise the native baseline capacity explicitly; silent truncation is forbidden.`;
+    }
+  }
+  return "";
+};
+
 // Validates only the canonical state that must survive INTO round one; it does
 // not demand that every old battle or treaty in the backstory be replayed as a
 // mutation. The ledgers' own decoders and appliers stay the sole owners of the
@@ -16779,6 +16854,12 @@ const validatePregameCanonicalBootstrap = (
 ) => {
   const eventError = validatePregameEvents(candidate, { startDate, strict });
   if (eventError) return eventError;
+
+  const conservationError = pregameCanonicalConservationError(candidate);
+  if (conservationError) return conservationError;
+  if (!isActiveFeatureEnabled("puppetStates") && normalizeArray(candidate?.puppetUpdates).length > 0) {
+    return "Round-Zero canonical bootstrap includes puppet state while the Puppet states feature is disabled; the engine will not silently discard that fact.";
+  }
 
   const polityError = validatePregamePolityVocabulary(candidate, { world, canonicalPolities });
   if (polityError) return polityError;
@@ -16814,6 +16895,8 @@ const validatePregameCanonicalBootstrap = (
   // mirrored into the storyline ledger mechanically (storyline-<warId>) rather
   // than spending a schema slot on the same fact.
   ensurePregameWarStorylineMirrors(candidate, { warProbe, warUpdates, startDate });
+  const mirrorConservationError = pregameCanonicalConservationError(candidate, { includeNativeMirrors: true });
+  if (mirrorConservationError) return mirrorConservationError;
 
   const agreementUpdates = decodeAgreementUpdates(candidate?.agreementUpdates);
   for (let index = 0; index < agreementUpdates.length; index += 1) {
@@ -16889,7 +16972,10 @@ export const maybeGeneratePregameHistory = async () => {
   // finally, which is what makes holding the lock across them safe.
   beginSimulation();
   try {
+    const campaignId = activeCampaignId();
+    const campaignRuntimeGameUrl = String(JSON_URLS.game || "");
     const bundle = await readGameStateBundle({ force: true });
+    if ((campaignId && activeCampaignId() !== campaignId) || String(JSON_URLS.game || "") !== campaignRuntimeGameUrl) return null;
     const briefing = normalizeString(bundle.world.startingTimelineText);
     if (!briefing) return null;
     if (normalizeEvents(bundle.events).length > 0) return null;
@@ -16927,94 +17013,117 @@ export const maybeGeneratePregameHistory = async () => {
       variables,
     });
 
-    // The player may have switched games while this generated — the runtime
-    // endpoints follow the ACTIVE game, so re-verify the same fresh game is
-    // still there before writing anything.
-    const [eventsNow, worldNow, gameNow] = await Promise.all([
-      readEventsState({ force: true }),
-      readWorldState({ force: true }),
-      readGameData({ force: true }),
-    ]);
-    if (normalizeEvents(eventsNow).length > 0) return null;
-    const currentWorld = normalizeWorldState(worldNow);
-    if ((currentWorld.simulationHistory ?? []).length > 0) return null;
-    if (normalizeString(gameNow.startDate || gameNow.gameDate) !== startDate) return null;
+    if ((campaignId && activeCampaignId() !== campaignId) || String(JSON_URLS.game || "") !== campaignRuntimeGameUrl) return null;
 
-    const generatedEvents = normalizeArray(payload?.events)
-      .map((entry, index) =>
-        normalizeGeneratedEvent({ ...entry, impacts: undefined, source: "pregame" }, index))
-      .filter(Boolean);
-    if (generatedEvents.length === 0) return null;
+    // Publish Round Zero through the same guarded canonical transaction seam as
+    // ordinary turn state. The fresh-state check and the event/world write now
+    // happen under one queued commit, so a partial event-only/world-only bootstrap
+    // cannot suppress the next retry.
+    let committedBootstrapEvents = null;
+    const committed = await mutateCanonicalTurnState((current) => {
+      if (normalizeEvents(current.events).length > 0) return null;
+      const currentWorld = normalizeWorldState(current.world);
+      if ((currentWorld.simulationHistory ?? []).length > 0) return null;
+      if (normalizeString(current.game?.startDate || current.game?.gameDate) !== startDate) return null;
 
-    // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
-    // backstory events and merge them into the world the game starts on. The
-    // version stamp tells the legacy migration there is nothing left to seed.
-    // Storyline ids are attached to matching backstory events first when such
-    // provenance exists. A valid baseline war may intentionally have no source
-    // event; its canonical state must still survive Round Zero.
-    const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
-    const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
-    const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
-    const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), bootstrapEvents);
-    const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), bootstrapEvents);
-    const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), bootstrapEvents);
-    const warMerge = applyWarUpdates({
-      world: currentWorld,
-      updates: warUpdates,
-      events: bootstrapEvents,
-      // A baseline war without a known historical date stays unknown; do not
-      // fabricate the campaign start date as the war's start.
-      stopDate: "",
-      round: 1,
-    });
-    const diplomaticMerge = applyDiplomaticUpdates({
-      world: warMerge.world,
-      relationUpdates,
-      agreementUpdates,
-      puppetUpdates,
-      puppetStates: isActiveFeatureEnabled("puppetStates"),
-      events: bootstrapEvents,
-      stopDate: startDate,
-      round: 1,
-      allowUnboundBaseline: true,
-    });
-    const storylineMerge = applyWorldStorylineUpdates({
-      world: diplomaticMerge.world,
-      updates: storylineUpdates,
-      events: bootstrapEvents,
-      stopDate: startDate,
-      round: 1,
-    });
-    const bootstrapWorld = {
-      ...storylineMerge.world,
-      diplomaticLedgerVersion: Math.max(Number(diplomaticMerge.world.diplomaticLedgerVersion) || 0, DIPLOMATIC_LEDGER_VERSION),
-    };
-    console.info(
-      `[ai] pregame bootstrap: ${bootstrapEvents.length} event(s), ${storylineMerge.appliedIds.length} storyline(s), ${warMerge.appliedIds.length} war op(s), ` +
-      `${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`,
-    );
+      const generatedEvents = normalizeArray(payload?.events)
+        .map((entry, index) =>
+          normalizeGeneratedEvent({ ...entry, impacts: undefined, source: "pregame" }, index))
+        .filter(Boolean);
+      if (generatedEvents.length === 0) return null;
 
-    const summary = normalizeString(payload?.summary);
-    bootstrapWorld.simulationHistory = [
-      {
-        date: startDate,
-        eventIds: bootstrapEvents.map((event) => event.id),
-        fallbackReason: "",
-        fromDate: normalizeString(bootstrapEvents[0]?.date) || startDate,
-        mode: "pregame",
-        plannedActions: [],
+      // Round-zero ledgers: bind the Day-1 wars, relations and agreements to the
+      // backstory events and merge them into the world the game starts on. The
+      // version stamp tells the legacy migration there is nothing left to seed.
+      // Storyline ids are attached to matching backstory events first when such
+      // provenance exists. A valid baseline war may intentionally have no source
+      // event; its canonical state must still survive Round Zero.
+      const storylineUpdates = decodeWorldStorylineUpdates(payload?.storylineUpdates);
+      const bootstrapEvents = attachStorylineIdsByIndexes(generatedEvents, storylineUpdates);
+      const warUpdates = bindWarUpdatesToEvents(decodeWarUpdates(payload?.warUpdates), bootstrapEvents);
+      const relationUpdates = bindRelationUpdatesToEvents(decodeRelationUpdates(payload?.relationUpdates), bootstrapEvents);
+      const puppetUpdates = bindPuppetUpdatesToEvents(decodePuppetUpdates(payload?.puppetUpdates), bootstrapEvents);
+      const agreementUpdates = bindAgreementUpdatesToEvents(decodeAgreementUpdates(payload?.agreementUpdates), bootstrapEvents);
+      const warMerge = applyWarUpdates({
+        world: currentWorld,
+        updates: warUpdates,
+        events: bootstrapEvents,
+        // A baseline war without a known historical date stays unknown; do not
+        // fabricate the campaign start date as the war's start.
+        stopDate: "",
         round: 1,
-        summary,
-        source: "ai",
-        storylineIds: [...storylineMerge.appliedIds],
-        toDate: startDate,
-      },
-    ];
-    await Promise.all([
-      writeEventsState(bootstrapEvents),
-      writeWorldState(bootstrapWorld),
-    ]);
-    return bootstrapEvents;
+      });
+      const diplomaticMerge = applyDiplomaticUpdates({
+        world: warMerge.world,
+        relationUpdates,
+        agreementUpdates,
+        puppetUpdates,
+        puppetStates: isActiveFeatureEnabled("puppetStates"),
+        events: bootstrapEvents,
+        stopDate: startDate,
+        round: 1,
+        allowUnboundBaseline: true,
+      });
+      const storylineMerge = applyWorldStorylineUpdates({
+        world: diplomaticMerge.world,
+        updates: storylineUpdates,
+        events: bootstrapEvents,
+        stopDate: startDate,
+        round: 1,
+        preserveUnknownStartedDate: true,
+      });
+
+      const factReceipt = [
+        ["war", warUpdates.length, warMerge.appliedIds.length],
+        ["relation", relationUpdates.length, diplomaticMerge.appliedRelationIds.length],
+        ["agreement", agreementUpdates.length, diplomaticMerge.appliedAgreementIds.length],
+        ["puppet", puppetUpdates.length, diplomaticMerge.appliedPuppetIds.length],
+        ["storyline", storylineUpdates.length, storylineMerge.appliedIds.length],
+      ];
+      const lostFact = factReceipt.find(([, accepted, applied]) => accepted !== applied);
+      if (lostFact) {
+        const [family, accepted, applied] = lostFact;
+        throw new Error(`Round-Zero canonical ${family} conservation failed: ${accepted} validated record(s), ${applied} applied.`);
+      }
+      console.info(
+        "[ai] pregame canonical receipt: " +
+        factReceipt.map(([family, accepted, applied]) => `${family} ${accepted}/${applied}`).join(", "),
+      );
+
+      const bootstrapWorld = {
+        ...storylineMerge.world,
+        diplomaticLedgerVersion: Math.max(Number(diplomaticMerge.world.diplomaticLedgerVersion) || 0, DIPLOMATIC_LEDGER_VERSION),
+      };
+      console.info(
+        `[ai] pregame bootstrap: ${bootstrapEvents.length} event(s), ${storylineMerge.appliedIds.length} storyline(s), ${warMerge.appliedIds.length} war op(s), ` +
+        `${diplomaticMerge.appliedRelationIds.length} relation(s), ${diplomaticMerge.appliedAgreementIds.length} agreement(s).`,
+      );
+
+      const summary = normalizeString(payload?.summary);
+      bootstrapWorld.simulationHistory = [
+        {
+          date: startDate,
+          eventIds: bootstrapEvents.map((event) => event.id),
+          fallbackReason: "",
+          fromDate: normalizeString(bootstrapEvents[0]?.date) || startDate,
+          mode: "pregame",
+          plannedActions: [],
+          round: 1,
+          summary,
+          source: "ai",
+          storylineIds: [...storylineMerge.appliedIds],
+          toDate: startDate,
+        },
+      ];
+      committedBootstrapEvents = bootstrapEvents;
+      return { events: bootstrapEvents, world: bootstrapWorld };
+    }, {
+      expectedGameId: campaignId,
+      guardRuntimeGeneration: true,
+    });
+
+    if (committed?.skipped || !committedBootstrapEvents) return null;
+    return committedBootstrapEvents;
   } catch (error) {
     // The next open retries; logged because this now seeds the ledgers too.
     console.warn("[ai] pregame bootstrap failed; the next open retries.", error);

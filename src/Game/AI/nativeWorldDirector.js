@@ -2499,6 +2499,11 @@ export const applyWorldStorylineUpdates = ({
   events = [],
   stopDate = "",
   round = 0,
+  // Round Zero may know that a process is already active without knowing its
+  // historical start date. Ordinary turn application can still fall back to
+  // the accounting horizon, but bootstrap callers must be able to preserve
+  // explicit "unknown" instead of fabricating the campaign start date.
+  preserveUnknownStartedDate = false,
 } = {}) => {
   const coalescedExisting = coalesceWorldStorylines(world);
   const existing = coalescedExisting.storylines;
@@ -2596,7 +2601,7 @@ export const applyWorldStorylineUpdates = ({
       status,
       pressure,
       momentum,
-      startedDate: prior?.startedDate || validRawStarted || earliestVisible || accountedThroughDate,
+      startedDate: prior?.startedDate || validRawStarted || earliestVisible || (preserveUnknownStartedDate ? "" : accountedThroughDate),
       accountedThroughDate,
       lastUpdatedDate: accountedThroughDate || prior?.lastUpdatedDate,
       lastVisibleEventDate: newestVisible || prior?.lastVisibleEventDate || "",

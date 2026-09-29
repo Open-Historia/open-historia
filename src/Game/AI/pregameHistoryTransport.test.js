@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   GAMEPLAY_TOOLS,
   decodePregameHistoryTransportPayload,
+  mergePregameHistoryTransportSections,
   normalizeGameplayPayload,
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
@@ -162,14 +163,54 @@ test("Round-Zero rejects unknown canonical kinds instead of silently dropping th
   assert.match(verdict.error, /canonicalUpdates\[0\]\.kind/);
 });
 
-test("pregame transport fails closed on malformed nested JSON", () => {
+test("pregame transport fails closed without erasing independently valid sibling sections", () => {
+  const canonicalUpdates = [{
+    kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
+    pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Working relationship.",
+  }];
   const decoded = decodePregameHistoryTransportPayload({
     eventsJson: "not json",
     summary: "x",
-    canonicalUpdatesJson: "[]",
+    canonicalUpdatesJson: JSON.stringify(canonicalUpdates),
   });
-  assert.equal(decoded.payload, null);
   assert.match(decoded.error, /eventsJson must contain valid JSON array text/);
+  assert.equal(decoded.payload.events, null);
+  assert.deepEqual(decoded.payload.canonicalUpdates, canonicalUpdates);
+  assert.deepEqual(decoded.validSections.canonicalUpdates, canonicalUpdates);
+  assert.equal(decoded.validSections.summary, "x");
+  assert.equal(Object.prototype.hasOwnProperty.call(decoded.validSections, "events"), false);
+});
+
+test("pregame transport distinguishes a missing canonical section from explicit empty state", () => {
+  const eventText = JSON.stringify([{ date: "2020-01-01", title: "Opening", description: "History." }]);
+  const missing = decodePregameHistoryTransportPayload({ eventsJson: eventText, summary: "x" });
+  assert.match(missing.error, /canonicalUpdatesJson is required/);
+  assert.equal(missing.payload.canonicalUpdates, null);
+  assert.equal(missing.validSections.events.length, 1);
+
+  const blank = decodePregameHistoryTransportPayload({ eventsJson: eventText, summary: "x", canonicalUpdatesJson: "   " });
+  assert.match(blank.error, /blank is not the same as \[\]/);
+
+  const explicitEmpty = decodePregameHistoryTransportPayload({ eventsJson: eventText, summary: "x", canonicalUpdatesJson: "[]" });
+  assert.equal(explicitEmpty.error, "");
+  assert.deepEqual(explicitEmpty.payload.canonicalUpdates, []);
+});
+
+test("pregame corrective merge preserves valid first-attempt sections", () => {
+  const preserved = {
+    summary: "Original interpretation.",
+    canonicalUpdates: [{ kind: "war:start", id: "war-a", polities: ["A"], opponents: ["B"] }],
+  };
+  const retry = {
+    events: [{ date: "2020-01-02", title: "Corrected JSON", description: "The repaired event array." }],
+    summary: "Regenerated interpretation.",
+    canonicalUpdates: [{ kind: "war:start", id: "war-b", polities: ["C"], opponents: ["D"] }],
+  };
+  const merged = mergePregameHistoryTransportSections(retry, preserved);
+  assert.equal(merged.events[0].title, "Corrected JSON");
+  assert.equal(merged.summary, "Original interpretation.");
+  assert.equal(merged.canonicalUpdates[0].id, "war-a");
+  assert.notEqual(merged.canonicalUpdates, preserved.canonicalUpdates, "the retry must not mutate the preserved snapshot by alias");
 });
 
 test("canonicalUpdates is required by the internal pregame contract", () => {
@@ -210,6 +251,11 @@ test("native pregame directive teaches the shallow transport field names", async
   assert.match(source, /canonical war does NOT require a filler event solely for linkage/);
   assert.match(source, /validatePregameWarBootstrap\(\{/);
   assert.match(source, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
+  assert.match(source, /response\?\.toolInput \?\? parsed \?\? null/);
+  assert.match(source, /transport-syntax correction only/);
+  assert.match(source, /Round-Zero canonical .* processing would be lossy/);
+  assert.match(source, /mutateCanonicalTurnState\(\(current\) =>/);
+  assert.match(source, /preserveUnknownStartedDate: true/);
   assert.match(source, /updates: warUpdates,\s*events: bootstrapEvents,[\s\S]{0,220}stopDate: ""/);
   assert.doesNotMatch(source, /must link to a real pre-game event/);
 });
