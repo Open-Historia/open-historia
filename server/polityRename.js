@@ -127,15 +127,21 @@ const refuseClash = (registry, fromKey, to) => {
 // existing actor record, never recreate it from visible stats. This helper is
 // intentionally local to the shared rename seam so every rename path — event,
 // Workshop and GM — preserves the same actor identity.
+const findPoliticalActorKey = (politicalActors, polityName) => {
+  if (!isRecord(politicalActors) || !isRecord(politicalActors.byPolity)) return "";
+  const registry = politicalActors.byPolity;
+  return Object.keys(registry).find((key) => {
+    const actor = registry[key];
+    return samePolityName(key, polityName)
+      || samePolityName(actor?.polityKey, polityName)
+      || samePolityName(actor?.name, polityName);
+  }) ?? "";
+};
+
 const rekeyPoliticalActors = (politicalActors, fromKey, to) => {
   if (!isRecord(politicalActors) || !isRecord(politicalActors.byPolity)) return politicalActors;
   const registry = politicalActors.byPolity;
-  const sourceKey = Object.keys(registry).find((key) => {
-    const actor = registry[key];
-    return samePolityName(key, fromKey)
-      || samePolityName(actor?.polityKey, fromKey)
-      || samePolityName(actor?.name, fromKey);
-  });
+  const sourceKey = findPoliticalActorKey(politicalActors, fromKey);
   if (!sourceKey) return politicalActors;
 
   const clash = Object.keys(registry).find((key) => {
@@ -161,6 +167,26 @@ const rekeyPoliticalActors = (politicalActors, fromKey, to) => {
   }
   byPolity[to] = moved;
   return { ...politicalActors, byPolity };
+};
+
+// Remove only the Political World profile for one polity. This is intentionally
+// narrower than deleting the polity itself: the manual Political World manager
+// needs to clear a stale/generated actor without touching territory, flags,
+// diplomacy or any other scenario-owned state.
+export const removePoliticalActorFromWorld = (world, polityName) => {
+  if (!isRecord(world)) return { world, removedKey: "" };
+  const politicalActors = world.politicalActors;
+  const sourceKey = findPoliticalActorKey(politicalActors, polityName);
+  if (!sourceKey) return { world, removedKey: "" };
+  const byPolity = { ...politicalActors.byPolity };
+  delete byPolity[sourceKey];
+  return {
+    world: {
+      ...world,
+      politicalActors: { ...politicalActors, byPolity },
+    },
+    removedKey: sourceKey,
+  };
 };
 
 // A subordination names both parties, and whoever knows of it.
@@ -213,6 +239,26 @@ export const renamePolityInWorld = (world, fromName, toName) => {
   }
   put("politicalActors", rekeyPoliticalActors(world?.politicalActors, fromKey, to));
   return { world: next, from: fromKey, to };
+};
+
+// The Workshop owns map/polity authoring, but several canonical records live
+// outside its document. Replay its explicit identity operations before the map
+// fields are overlaid onto the scenario. A map removal clears the corresponding
+// Political World profile here; the Workshop's saved map already owns territory,
+// registry, flags/tags and puppet deletion.
+export const reconcileMapPolityAuthoringOps = (world, operations) => {
+  let next = world;
+  for (const operation of Array.isArray(operations) ? operations : []) {
+    if (operation?.op === "rename") {
+      const from = str(operation.from);
+      const to = str(operation.to);
+      if (from && to && !samePolityName(from, to)) next = renamePolityInWorld(next, from, to).world;
+    } else if (operation?.op === "remove") {
+      const key = str(operation.key);
+      if (key) next = removePoliticalActorFromWorld(next, key).world;
+    }
+  }
+  return next;
 };
 // The stores the world does not hold. Each returns its input untouched when
 // nothing matched.
