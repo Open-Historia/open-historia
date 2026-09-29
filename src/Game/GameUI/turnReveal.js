@@ -5,6 +5,7 @@
 // free of React and of the map so node can test it (turnReveal.test.js);
 // time.jsx hands in the lookups it needs.
 
+import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { normalizeGroupOp } from "../../runtime/groups.js";
 
 // ---------------------------------------------------------------------------
@@ -246,9 +247,10 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
         else if (op?.op === "update" || op?.op === "modify" || op?.op === "destroy") {
             for (const text of describeMarkerUpdate(op, { polity, note })) lines.push({ kind: "structure", text });
         } else if (op?.op === "population") {
-            const population = Number(op.population ?? op.value);
+            const count = Number(op.population ?? op.value);
+            const population = Number.isFinite(count) ? Math.round(count).toLocaleString("en-US") : "";
             const name = op.name || op.markerId;
-            lines.push({ kind: "structure", text: Number.isFinite(population) ? `${name}: population now ${Math.round(population).toLocaleString("en-US")}${note(op.note)}` : `${name}: population changed${note(op.note)}` });
+            lines.push({ kind: "structure", text: population ? `${name}: population now ${population}${note(op.note)}` : `${name}: population changed${note(op.note)}` });
         }
     }
     return lines;
@@ -297,7 +299,9 @@ const describeMarkerUpdate = (op, { polity, note }) => {
     }
     if (source.kind) writers.push((more) => `${name}: its kind is now ${source.kind}${more}`);
     if (coordinate(source.lng) && coordinate(source.lat)) writers.push((more) => `${name}: moved on the map${more}`);
-    if (source.foundedAt) writers.push((more) => `${name}: founding date set to ${source.foundedAt}${more}`);
+    // A game date, read as one (BC spelled out); a prose date shows as written.
+    const foundedAt = source.foundedAt ? formatGameDateReadable(source.foundedAt, "MMM D, YYYY") || String(source.foundedAt) : "";
+    if (foundedAt) writers.push((more) => `${name}: founding date set to ${foundedAt}${more}`);
     if (!writers.length) return [description ? `${name}: description changed${note(description)}` : `${name} updated`];
     return writers.map((write, index) => write(index === 0 ? note(description) : ""));
 };

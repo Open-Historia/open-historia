@@ -195,6 +195,8 @@ test("a structure update says what it changed, a line each, the description on t
         { op: "update", markerId: "m-4", name: "Toulon", changes: { note: "Now the fleet's home port." } },
         { op: "update", name: "Calais", changes: { ownerCode: "" } },
         { op: "update", name: "Metz", changes: { foundedAt: "0050-01-01", lng: 6.17, lat: 49.12 } },
+        { op: "update", name: "Saguntum", changes: { foundedAt: "-0218-03-01" } },
+        { op: "update", name: "Avalon", changes: { foundedAt: "in legend" } },
         { op: "update", name: "Nowhere" },
       ],
     },
@@ -205,7 +207,9 @@ test("a structure update says what it changed, a line each, the description on t
     "Toulon: description changed — Now the fleet's home port.",
     "Calais: no longer held by anyone",
     "Metz: moved on the map",
-    "Metz: founding date set to 0050-01-01",
+    "Metz: founding date set to Jan 1, 50",
+    "Saguntum: founding date set to Mar 1, 218 BC",
+    "Avalon: founding date set to in legend",
     "Nowhere updated",
   ]);
 });
