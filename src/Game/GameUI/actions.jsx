@@ -20,6 +20,7 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { queuedActionIds, selectSavedSuggestions } from "./actionSuggestions.js";
 
 dayjs.extend(advancedFormat);
 
@@ -468,8 +469,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const gameDate = game.gameDate
         ? formatGameDateReadable(game.gameDate, "MMMM Do, YYYY") || dayjs(game.gameDate).format("MMMM Do, YYYY")
         : "the current date";
-    const [suggestions, setSuggestions] = React.useState([]);
-    const [queuedSuggestionIds, setQueuedSuggestionIds] = React.useState(() => new Set());
+    // The suggestions the game saved on the world (a time skip clears them), so
+    // reopening the panel shows them again without spending a request.
+    const suggestions = useRuntimeState("world", selectSavedSuggestions);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     // Why the last change to the queue was not saved, until one is.
@@ -495,7 +497,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         let cancelled = false;
         ensureActionsStyles();
-        setSuggestions([]);
         setHasRequestedSuggestions(false);
         setSaveError("");
 
@@ -545,6 +546,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         setSaveError("");
         return true;
     };
+
+    // A card's order already in the queue shows as queued, restored cards too.
+    const queuedSuggestionIds = React.useMemo(() => queuedActionIds(actions), [actions]);
 
     const submittedActions = React.useMemo(
         () =>
@@ -648,9 +652,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         // Not saved: the card stays unqueued, so it can be tried again.
         if (!(await persistActions([...actions, queuedAction]))) return;
+        // Visible click feedback: the suggestion button flips to "✓ Queued"
+        // (queuedSuggestionIds, from the saved queue).
         logDebugEvent("action", `Suggested order queued: ${queuedAction.title || queuedAction.text || "(untitled)"}`);
-        // Visible click feedback: the suggestion button flips to "✓ Queued".
-        setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));
     };
 
     const refreshSuggestions = async () => {
@@ -661,12 +665,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         setHasRequestedSuggestions(true);
         setIsSuggesting(true);
         try {
-            const topics = await generateActionSuggestions({ force: true });
-            setSuggestions(topics);
-            setQueuedSuggestionIds(new Set());
+            // Saved on the world, which is where the list above reads it from.
+            await generateActionSuggestions({ force: true });
         } catch (error) {
             console.error("Failed to generate suggestions:", error);
-            setSuggestions([]);
         } finally {
             setIsSuggesting(false);
         }
@@ -679,7 +681,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
     };
 
-    const suggestionButtonLabel = hasRequestedSuggestions
+    const suggestionButtonLabel = suggestions.length > 0
     ? (isSuggesting ? "Refreshing AI suggestions..." : "Refresh AI suggestions")
     : (isSuggesting ? "Loading AI suggestions..." : "Get AI suggestions");
 
