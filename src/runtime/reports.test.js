@@ -95,7 +95,7 @@ test("an audience reads the reports addressed to it, newest first; the narrator 
         { op: "create", title: "Berlin memo", body: "…", visibleTo: ["Germany"] },
         { op: "create", title: "Communiqué", body: "…" },
     ], { resolvePolity }).reports;
-    const seesAs = (polity) => (visibleTo) => visibleTo === null || visibleTo.some((name) => name === polity);
+    const seesAs = (polity) => (report) => report.visibleTo === null || report.visibleTo.some((name) => name === polity);
     assert.deepEqual(reportsFor(list, seesAs("France")).map((report) => report.title), ["Communiqué", "Secret Protocol to the Treaty of Amity"]);
     assert.deepEqual(reportsFor(list, seesAs("Italy")).map((report) => report.title), ["Communiqué"]);
     assert.equal(reportsFor(list, null).length, 3);
@@ -109,7 +109,7 @@ test("the prompt is shown one bounded line per report, holders named, and nothin
     assert.match(text, /"Communiqué" · public: x{39}…/);
     assert.ok(text.indexOf("Communiqué") < text.indexOf("pact-1"), "newest first");
     assert.equal(describeReportsForPrompt([], {}), "");
-    assert.equal(describeReportsForPrompt(list, { sees: (visibleTo) => visibleTo === null }).split("\n").length, 2, "scoped to the audience");
+    assert.equal(describeReportsForPrompt(list, { sees: (report) => report.visibleTo === null }).split("\n").length, 2, "scoped to the audience");
 });
 
 // The jump template carries the rule (it was a directive appended at call time
@@ -140,5 +140,24 @@ test("a document keeps who sent it, and a copy passed on keeps who passed it", (
 test("the narrator is told who stole a copy; a holder reading its own file is not", () => {
   const reports = [{ id: "pact", title: "Secret Protocol", body: "Article I.", visibleTo: ["France", "Germany"], interceptedBy: ["Italy"] }];
   assert.match(describeReportsForPrompt(reports), /a copy stolen by Italy/);
-  assert.doesNotMatch(describeReportsForPrompt(reports, { sees: (visibleTo) => visibleTo === null || visibleTo.includes("France") }), /stolen/);
+  assert.doesNotMatch(describeReportsForPrompt(reports, { sees: (report) => report.visibleTo === null || report.visibleTo.includes("France") }), /stolen/);
+});
+
+// The audience rule a leader uses (audience.js audienceSeesReport), inlined:
+// reports.js imports nothing.
+const holdsOrStole = (polity) => (report) => report.visibleTo === null || report.visibleTo.includes(polity) || Boolean(report.interceptedBy?.includes(polity));
+const stoleIt = (polity) => (report) => report.visibleTo !== null && !report.visibleTo.includes(polity) && Boolean(report.interceptedBy?.includes(polity));
+
+test("a government reads what its own agents stole, marked as covert, and never learns who else did", () => {
+  const reports = [
+    { id: "pact", title: "Secret Protocol", body: "Article I.", visibleTo: ["France", "Germany"], interceptedBy: ["Italy", "Spain"] },
+    { id: "memo", title: "Berlin memo", body: "Only Germany.", visibleTo: ["Germany"] },
+  ];
+  const asItaly = describeReportsForPrompt(reports, { sees: holdsOrStole("Italy"), stolen: stoleIt("Italy") });
+  assert.match(asItaly, /"Secret Protocol" · held by France, Germany · obtained covertly by your agents; its holders do not know you have it: Article I\./);
+  assert.doesNotMatch(asItaly, /Spain/, "another thief stays the narrator's secret");
+  assert.doesNotMatch(asItaly, /Berlin memo/);
+  const asFrance = describeReportsForPrompt(reports, { sees: holdsOrStole("France"), stolen: stoleIt("France") });
+  assert.doesNotMatch(asFrance, /covertly|stolen|Italy|Spain/, "a holder is not told its paper was read");
+  assert.equal(describeReportsForPrompt(reports, { sees: holdsOrStole("Portugal"), stolen: stoleIt("Portugal") }), "");
 });

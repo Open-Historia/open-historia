@@ -91,7 +91,7 @@ import {
     openAiMessagesFromHistory,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
-import { viewerAudience } from "./audience.js";
+import { audienceSeesReport, audienceStoleReport, viewerAudience } from "./audience.js";
 import { MAP_SETTING_KEYS, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import {
     buildPromptContext,
@@ -3363,12 +3363,14 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const reminders = renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable });
 
     // The documents this leader's government holds (runtime/reports.js), by the
-    // same audience rule as everything it may read: its own, and what was
-    // published. Never who else stole a copy.
-    const speakerKey = String(speaker || "").trim().toLowerCase();
-    const papers = speakerKey
+    // same audience rule as everything it may read (audience.js
+    // audienceSeesReport): its own, what was published, and what its own agents
+    // stole, marked as such. Never who else stole a copy.
+    const speakerAudience = viewerAudience([speaker]);
+    const papers = String(speaker || "").trim()
         ? describeReportsForPrompt(normalizeReports(worldData?.reports), {
-            sees: (visibleTo) => visibleTo === null || visibleTo.some((name) => String(name).trim().toLowerCase() === speakerKey),
+            sees: (report) => audienceSeesReport(speakerAudience, report),
+            stolen: (report) => audienceStoleReport(speakerAudience, report),
             heading: "[Documents Your Government Holds]",
             limit: 8,
             bodyChars: 220,

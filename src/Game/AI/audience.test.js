@@ -20,7 +20,9 @@ import {
   audienceIncludes,
   audiencePolities,
   audienceSeesChat,
+  audienceSeesReport,
   audienceSeesScoped,
+  audienceStoleReport,
   filterChatsForAudience,
   isSimulationAudience,
   normalizeAudience,
@@ -111,6 +113,21 @@ test("a distribution list: absent is public, empty is nobody, malformed is hidde
   assert.equal(audienceSeesScoped(angola, [{ name: "Portugal" }]), false);
   assert.equal(audienceSeesScoped(angola, "Angola"), false, "a list that is not a list is malformed");
   assert.equal(audienceSeesScoped(SIMULATION_AUDIENCE, []), true);
+});
+
+test("a document is read by its holders, the public, and a government whose agents stole it", () => {
+  const pact = { visibleTo: ["Portugal", "Brazil"], interceptedBy: ["Angola"] };
+  assert.equal(audienceSeesReport(angola, pact), true, "its own agents took a copy");
+  assert.equal(audienceStoleReport(angola, pact), true);
+  assert.equal(audienceSeesReport(viewerAudience(["Portugal"]), pact), true);
+  assert.equal(audienceStoleReport(viewerAudience(["Portugal"]), pact), false, "a holder did not steal it");
+  assert.equal(audienceSeesReport(viewerAudience(["Nigeria"]), pact), false, "another service's theft is not ours");
+  assert.equal(audienceSeesReport(angola, { visibleTo: null }), true);
+  assert.equal(audienceStoleReport(angola, { visibleTo: null, interceptedBy: ["Angola"] }), false, "nothing to steal in a published text");
+  assert.equal(audienceSeesReport(angola, { visibleTo: ["Angola"], interceptedBy: ["Angola"] }), true);
+  assert.equal(audienceStoleReport(angola, { visibleTo: ["Angola"], interceptedBy: ["Angola"] }), false, "held openly wins");
+  assert.equal(audienceSeesReport(SIMULATION_AUDIENCE, { visibleTo: [] }), true);
+  assert.equal(audienceStoleReport(SIMULATION_AUDIENCE, pact), false, "the narrator holds everything openly");
 });
 
 test("a service knows its own agents, but not that one has been turned", () => {

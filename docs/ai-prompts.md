@@ -102,7 +102,7 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 
 **Only the advisor gets the player's standing goal** (`runtime/playerGoal.js`): `[Our Standing Goal]`, after the documents and before the reminders — the government's aim, to weigh advice by and to say plainly when an order works against it. A leader is never told it.
 
-**Both read the documents file** (`world.reports`), bounded to eight, each body cut to 220 characters: the advisor `[Documents Our Government Holds]` — every paper the player's government can read, saying how it came by each (held with whom, ours alone, published, or a copy its agents took, which the holders do not know it has; `describeDocumentsForAdvisor`, `runtime/reportDelivery.js`); a leader `[Documents Your Government Holds]` — its own and the published ones, by the audience rule, never who stole a copy.
+**Both read the documents file** (`world.reports`), bounded to eight, each body cut to 220 characters: the advisor `[Documents Our Government Holds]` — every paper the player's government can read, saying how it came by each (held with whom, ours alone, published, or a copy its agents took, which the holders do not know it has; `describeDocumentsForAdvisor`, `runtime/reportDelivery.js`); a leader `[Documents Your Government Holds]` — its own, the published ones and those its own agents stole (marked as obtained covertly), by the audience rule (`audienceSeesReport`, `audience.js`), never who else stole a copy.
 
 ---
 

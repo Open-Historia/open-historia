@@ -133,6 +133,24 @@ export const audienceSeesScoped = (audience, visibleTo) => {
 };
 
 /**
+ * May this audience read this document (runtime/reports.js)?
+ *
+ * Its holders and the public by the distribution list, as audienceSeesScoped —
+ * and a government whose agents stole a copy (`interceptedBy`) as well: a
+ * stolen paper is on its desk like any other. Which OTHER services stole one
+ * is the narrator's alone; this answers only for the audience asking.
+ */
+export const audienceSeesReport = (audience, report) =>
+  audienceSeesScoped(audience, report?.visibleTo) || audienceAmong(audience, report?.interceptedBy);
+
+// Did this audience come by the document only through its agents? Never for
+// the narrator, which holds everything openly.
+export const audienceStoleReport = (audience, report) =>
+  !isSimulationAudience(audience)
+  && !audienceSeesScoped(audience, report?.visibleTo)
+  && audienceAmong(audience, report?.interceptedBy);
+
+/**
  * What this audience may know about one agent, or null when it may know nothing.
  *
  * An intelligence service knows its own people — but not that one of them has
