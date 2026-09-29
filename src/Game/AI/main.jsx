@@ -63,6 +63,7 @@ import { ANSWER_SENTINEL_DIRECTIVE } from "./jsonSalvage.js";
 import { createModeObserver, nextStructuredMode, startingStructuredMode } from "./structuredMode.js";
 import { createTemperatureMemory, temperatureBody, temperatureRefusalKey } from "./sampling.js";
 import { nativeHttpAvailable, nativeHttpFetch } from "../../runtime/native/http.js";
+import { createRelayOnlyOrigins } from "./relayOrigins.js";
 import { createFirstByteTimer, normalizeUsage, sumUsage } from "./usageStats.js";
 import { toGeminiSchema } from "./geminiSchema.js";
 import {
@@ -457,8 +458,10 @@ const PAGE_IS_LOCAL = isLocallyServed();
 // the relay for the same endpoints — a model on the LAN — with one difference
 // the caller can see: the reply arrives whole, not streamed (native/http.js).
 const NATIVE_HTTP = Boolean(import.meta.env.VITE_OH_NATIVE) && nativeHttpAvailable();// Endpoints that have already proven they need the relay (no browser CORS) —
-// remembered so we skip the doomed direct attempt on every later call.
-const relayOnlyOrigins = new Set();
+// remembered so we skip the doomed direct attempt on later calls. Proven means
+// the relay then answered, and the memory lapses (relayOrigins.js): a network
+// blip used to make an endpoint relay-only until a reload.
+const relayOnlyOrigins = createRelayOnlyOrigins();
 
 function endpointOrigin(url) {
     try {
@@ -512,25 +515,23 @@ async function providerFetch(url, options = {}) {
     const origin = endpointOrigin(url);
 
     if (PAGE_IS_LOCAL && relayOnlyOrigins.has(origin)) {
-        return relayFetch(url, options);
+        return relayOnlyOrigins.remember(origin, await relayFetch(url, options));
     }
     // In the app, a backend on the player's own network goes native first: stock
     // Ollama and LM Studio send no CORS headers, so the direct attempt is doomed
     // and would only cost the request. Anything else proves it first.
     if (NATIVE_HTTP && (relayOnlyOrigins.has(origin) || isLocalEndpoint(url))) {
-        return nativeHttpFetch(url, options);
+        return relayOnlyOrigins.remember(origin, await nativeHttpFetch(url, options));
     }
     try {
         return await directFetch(url, options);
     } catch (error) {
         const aborted = options.signal?.aborted || error?.name === "AbortError";
         if (PAGE_IS_LOCAL && !aborted && error instanceof TypeError) {
-            relayOnlyOrigins.add(origin);
-            return relayFetch(url, options);
+            return relayOnlyOrigins.remember(origin, await relayFetch(url, options));
         }
         if (NATIVE_HTTP && !aborted && error instanceof TypeError) {
-            relayOnlyOrigins.add(origin);
-            return nativeHttpFetch(url, options);
+            return relayOnlyOrigins.remember(origin, await nativeHttpFetch(url, options));
         }
         // Hosted page, local backend, and the browser rejected the reply: this is
         // almost always the backend not allowing this origin, and "Failed to fetch"
