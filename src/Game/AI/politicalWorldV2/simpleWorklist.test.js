@@ -255,6 +255,33 @@ test("a verification task carries the sentinel's challenged paths, not only its 
   assert.deepEqual(task.payload.correctionRequiredPolities, ["B"]);
 });
 
+test("the call estimate covers every stage still to run, not only the current one", () => {
+  const polities = Array.from({ length: 30 }, (_, index) => `P${index + 1}`);
+  const checkpoint = base([]);
+  checkpoint.historicalVerificationRequired = true;
+  checkpoint.stagedWorld.institutions.byId.pact = { id: "pact", name: "Pact", foundedDate: "2000-01-01", members: {} };
+  const summary = summarizePoliticalWorldV2Worklist({ checkpoint, inputs: { polities } });
+  // actors 3 (12 a call) + alignment 1 (48) + discovery 1 + one known
+  // institution's membership 1 + governance 1 + agreements 1 + power 2 (24)
+  // + sentinel 3 (12).
+  assert.equal(summary.pending, 3, "the work queue still counts only the actor stage");
+  assert.equal(summary.estimatedCallsRemaining, 13);
+});
+
+test("the call estimate is zero for a finished world and skips stages behind an exhausted gate", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stagedWorld.powerStatus.byPolity = Object.fromEntries(["A", "B", "C"].map((polity) => [polity, { tier: "minor-power", score: 30, baselineScore: 30, basis: "generated-relative-baseline" }]));
+  checkpoint.attempts["institution-discovery:global"] = 2;
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).estimatedCallsRemaining, 0);
+  delete checkpoint.attempts["institution-discovery:global"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).estimatedCallsRemaining, 0);
+});
+
 test("stale 202/202 coverage reopens an Other-heavy generated electoral roster", () => {
   const checkpoint = base();
   checkpoint.coverage["political-actor"] = ["A", "B", "C"];

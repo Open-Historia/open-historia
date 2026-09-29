@@ -170,6 +170,12 @@ const formatDuration = (milliseconds) => {
 // made it look up each piece alone ("remaining ·", "deferred ·"), and a
 // language pack cannot translate a plural "s" on its own, so every count is a
 // whole phrase ("1 unresolved item" / "{{unresolved}} unresolved items").
+// Every stage still to run, not only the current one (the work queue), so an
+// author can budget against the lifetime ceiling. First-try estimate.
+const CallsToFinish = ({ estimated }) => (estimated > 0
+  ? <div>{estimated === 1 ? "About 1 more AI call to finish" : `About ${estimated} more AI calls to finish`}</div>
+  : null);
+
 const AiCallsTotal = ({ calls, ceiling, style }) => (
   <span style={style}>
     {ceiling
@@ -199,6 +205,7 @@ const LiveProgressCounts = ({ info, polityCount }) => {
       <div>
         {`Work queue: ${pending} remaining · ${deferred} deferred · ${unresolved === 1 ? "1 unresolved item" : `${unresolved} unresolved items`}`}
       </div>
+      <CallsToFinish estimated={info.estimatedCallsRemaining ?? 0} />
     </>
   );
 };
@@ -256,6 +263,7 @@ const CheckpointCounts = ({ checkpoint, pending, deferred, polityCount }) => {
   return (
     <>
       <div>{`Work queue: ${pending} remaining${deferred ? ` · ${deferred} deferred` : ""} · AI calls: ${calls}${ceiling ? `/${ceiling}` : ""}`}</div>
+      <CallsToFinish estimated={Number(checkpoint.worklistSummary?.estimatedCallsRemaining) || 0} />
       <div>{`Political Actors: ${actors}/${polities} · memberships: ${memberships}/${polities} · governing alignment: ${alignment}/${polities}`}</div>
       <div>{`Institutions: ${institutions} · agreements: ${agreements} · power evidence: ${power}/${polities}`}</div>
     </>
@@ -650,6 +658,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
             phase: type || "checkpoint",
             failedJobs: Number(summary?.failed) || 0,
             pendingJobs: (Number(summary?.pending) || 0) + (Number(summary?.running) || 0),
+            estimatedCallsRemaining: Number(summary?.estimatedCallsRemaining) || 0,
             totalPolities,
             resolvedPolities: Number(counts.politicalActors) || 0,
             memberships: Number(counts.memberships) || 0,

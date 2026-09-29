@@ -287,11 +287,12 @@ export const summarizePoliticalWorldV2Worklist = ({ checkpoint, inputs } = {}) =
   // does not authorize membership/governance/agreement work against an incomplete
   // institutional surface. Power/verification can still progress independently.
   let institutionChainBlocked = false;
+  const { landscapeOnly } = politicalWorldV2ActorCompleteness({ checkpoint, inputs });
+  const landscapeRetryable = actorRetryable.filter((polity) => landscapeOnly.has(polity)).length;
+  const actorCalls = chunkCount(landscapeRetryable, SIMPLE_V2_BATCH.landscapeBackfill)
+    + chunkCount(actorRetryable.length - landscapeRetryable, SIMPLE_V2_BATCH.politicalActor);
   if (actorRetryable.length) {
-    const { landscapeOnly } = politicalWorldV2ActorCompleteness({ checkpoint, inputs });
-    const landscapeRetryable = actorRetryable.filter((polity) => landscapeOnly.has(polity)).length;
-    pending += chunkCount(landscapeRetryable, SIMPLE_V2_BATCH.landscapeBackfill)
-      + chunkCount(actorRetryable.length - landscapeRetryable, SIMPLE_V2_BATCH.politicalActor);
+    pending += actorCalls;
   } else if (alignmentRetryable.length) {
     pending += chunkCount(alignmentRetryable.length, SIMPLE_V2_BATCH.governingAlignment);
   } else {
@@ -341,6 +342,44 @@ export const summarizePoliticalWorldV2Worklist = ({ checkpoint, inputs } = {}) =
     paused: checkpoint?.status === "paused" ? 1 : 0,
     skipped: 0,
     runnable: pending > 0 ? 1 : 0,
+    estimatedCallsRemaining: estimatePoliticalWorldV2CallsRemaining({ checkpoint, expected, actorCalls, membership, powerRetryable, verified, challengeList }),
     membership,
   };
+};
+
+// pending counts only the first open stage. This counts every stage still to
+// run, at first-try batch sizes and without retries, so an author can see
+// roughly what finishing will cost against the lifetime ceiling. Stages behind
+// an exhausted institution gate cannot run and cost nothing; membership for
+// institutions not yet discovered is unknown and not counted.
+const estimatePoliticalWorldV2CallsRemaining = ({ checkpoint, expected, actorCalls, membership, powerRetryable, verified, challengeList }) => {
+  const exhausted = (kind, target = "global") => politicalWorldV2TargetExhausted(checkpoint, kind, target);
+  let calls = actorCalls;
+  calls += chunkCount(retryableTargets(missingFromCoverage(expected, checkpoint, "governing-alignment"), checkpoint, "governing-alignment").length, SIMPLE_V2_BATCH.governingAlignment);
+
+  let institutionsOpen = true;
+  if (checkpoint?.stages?.institutionDiscovery !== "complete") {
+    if (exhausted("institution-discovery")) institutionsOpen = false;
+    else calls += 1;
+  }
+  if (institutionsOpen) {
+    const membershipOpen = membership.unresolvedInstitutionIds.filter((id) => !exhausted("institution-membership-resolution", id)).length;
+    if (membership.unresolvedInstitutionIds.length && !membershipOpen) institutionsOpen = false;
+    calls += membershipOpen;
+  }
+  if (institutionsOpen && checkpoint?.stages?.institutionGovernance !== "complete") {
+    if (exhausted("institution-governance")) institutionsOpen = false;
+    else calls += 1;
+  }
+  if (institutionsOpen && checkpoint?.stages?.agreements !== "complete" && !exhausted("agreement-resolution")) calls += 1;
+
+  calls += chunkCount(powerRetryable.length, SIMPLE_V2_BATCH.powerEvidence);
+
+  if (checkpoint?.historicalVerificationRequired === true) {
+    const challenged = new Set(challengeKeys(checkpoint).filter((polity) => !verified.has(polity)));
+    calls += chunkCount(retryableTargets(challengeList, checkpoint, "historical-verification").length, SIMPLE_V2_BATCH.historicalVerification);
+    const sentinel = retryableTargets(expected.filter((polity) => !verified.has(polity) && !challenged.has(polity)), checkpoint, "temporal-sentinel");
+    calls += chunkCount(sentinel.length, SIMPLE_V2_BATCH.temporalSentinel);
+  }
+  return calls;
 };
