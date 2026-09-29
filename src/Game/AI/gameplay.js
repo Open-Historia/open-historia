@@ -2602,10 +2602,14 @@ const buildTaskSystemPrompt = async (taskKey, { variables, lookups = null, remin
     systemPrompt = `${systemPrompt}\n\n[Polity Names]\nEvery polity is identified ONLY by its full country name, exactly as written in the map description — "Spain", "United States", "Soviet Union". NEVER use a country code or abbreviation such as "ESP", "USA" or "SOV", anywhere, in any field. This applies to every owner field despite their names: toCode, fromCode, ownerCode and a polity's code all take the FULL NAME. A code is not a shorter way of writing a country here; it is a different, non-existent polity, and using one creates a phantom country on the map beside the real one. A renamed polity is listed under its new name with its former names as aliases: use the new name, and expect the old one only in history.`;
   }
 
-  // Units kept landing at 0,0 (null island) because the model copied the lng:0,lat:0
-  // placeholder from the output template; guide it to real coordinates.
+  // Units kept landing at 0,0 (null island) when the model guessed coordinates.
+  // The pulse places what it moves with `at` ([Placing Things], appended below);
+  // this is only the format and the one point that is never valid. It used to
+  // be the time skip's block: it pointed at a [City Coordinates] list this task
+  // never gets, demanded coordinates the placement block says to avoid, and
+  // spoke of events' impacts when the pulse returns its unitOps at the top.
   if (taskKey === "idleDiplomacy") {
-    systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nWhenever an event says a force is raised, mobilised, garrisoned, landed, reinforced, redeployed or moved, that event MUST carry the matching impacts.unitOps — a spawn for a force that now exists, a move for one that relocated. An event that describes troops without unitOps produces a story about an army the map never shows.\nWrite every coordinate as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06°E". Every unitOps spawn and move MUST use the real-world longitude and latitude of where the unit actually is or is going. The lng 0 / lat 0 shown in the output template is ONLY a placeholder \u2014 0,0 is open ocean off West Africa, never a valid position, and a unit placed there is discarded. Set lng and lat to the actual coordinates: use the values from [City Coordinates] for a unit at or near one of those cities, or the real coordinates of the region or front where the action happens.`;
+    systemPrompt = `${systemPrompt}\n\n[Unit Coordinates]\nPlace every unit you move with \`at\`, as [Placing Things] below describes. If you give lng and lat at all, write each as a plain decimal number, using a POINT for the decimal mark and no other characters: lng 37.06, not "37,06", not "37.06\u00b0E". Never 0,0: it is open ocean off West Africa, never a valid position, and a unit placed there is discarded.`;
   }
 
   // The Projects & Operations board. It exists precisely so long-running work
