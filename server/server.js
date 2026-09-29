@@ -1573,6 +1573,14 @@ export const httpServer = app.listen(PORT, HOST, () => {
   describeBinding();
 });
 
+// Every open connection, so a rebind can cut the network's and leave this
+// machine's requests running (rebindListener).
+const openSockets = new Set();
+httpServer.on("connection", (socket) => {
+  openSockets.add(socket);
+  socket.once("close", () => openSockets.delete(socket));
+});
+
 // Move the listener to a different interface in place, so the LAN toggle takes
 // effect immediately instead of asking the player to restart a game they are in
 // the middle of. Node lets a closed server listen() again; if the new bind
@@ -1625,10 +1633,24 @@ const rebindListener = (nextHost) => {
   };
 
   rebinding = true;
-  // Keep-alive connections would hold close() open indefinitely, and one of them
-  // is the page that just flipped the switch.
-  httpServer.closeAllConnections?.();
-  httpServer.close(() => {
+  // close() stops taking new connections at once and lets the open ones run to
+  // their end; idle keep-alive ones are closed now. This used to be
+  // closeAllConnections(), which also killed every request in flight — a local
+  // model's relayed generation minutes into a time skip, a turn being saved —
+  // whenever the switch was flipped. Turning sharing OFF still cuts the
+  // network's connections, busy or not: shutting those devices out is what
+  // the player asked for.
+  httpServer.closeIdleConnections?.();
+  if (!isLanHost(nextHost)) {
+    for (const socket of openSockets) {
+      if (!isLoopbackAddress(socket.remoteAddress)) socket.destroy();
+    }
+  }
+  // The new bind does not wait for close()'s callback, which only comes once
+  // the last of those requests has finished; one event-loop turn is enough for
+  // the old listening socket to let go of the port.
+  httpServer.close();
+  setImmediate(() => {
     httpServer.once("error", onError);
     httpServer.once("listening", onListening);
     httpServer.listen(PORT, nextHost);

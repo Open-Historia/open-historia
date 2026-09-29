@@ -211,6 +211,56 @@ describe("LAN sharing", () => {
     await setLan(port, false);
   });
 
+  // The rebind used to closeAllConnections(), which destroyed requests in
+  // flight as well as idle ones: a local model's relayed generation died the
+  // moment the player flipped the switch, and the time skip with it.
+  test("flipping the switch does not cut a request that is still running", async () => {
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      let n = 0;
+      const tick = setInterval(() => {
+        n += 1;
+        res.write(`data: {"n":${n}}\n\n`);
+        if (n === 8) {
+          clearInterval(tick);
+          res.end("data: [DONE]\n\n");
+        }
+      }, 250);
+    });
+    await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/ai/relay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}` },
+        body: JSON.stringify({ url: `http://127.0.0.1:${upstream.address().port}/v1/chat/completions`, payload: {} }),
+      });
+      assert.equal(response.status, 200);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let text = decoder.decode((await reader.read()).value);
+
+      // On, then off again, both while the answer is still streaming.
+      const flips = (async () => {
+        await setLan(port, true);
+        await setLan(port, false);
+      })();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      await flips;
+
+      assert.match(text, /"n":8/);
+      assert.match(text, /\[DONE\]/);
+      const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+      assert.equal(state.lanEnabled, false);
+    } finally {
+      await new Promise((resolve) => upstream.close(resolve));
+    }
+  });
+
   test("the setting survives a restart", async () => {
     await setLan(port, true);
     await stop();
