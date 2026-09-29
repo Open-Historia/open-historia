@@ -18,7 +18,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, decisionOf, decisionsFor, mapChangeStatus, planAccept } from "./suggestionReview.js";
+import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, createRegionCache, decisionOf, decisionsFor, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -380,6 +380,36 @@ test("accepting a list: what it needs first, countries before regions, rows batc
   const later = acceptMapChanges([toBeta], ctx, { changes, accepted: new Set(result.accepted.filter((id) => id !== "region-owner:r1")), renames: result.renames });
   assert.deepEqual(later.accepted, ["region-owner:r1"]);
   assert.equal(api.getRegionSummary("r1").owner, "Beta Republic");
+});
+
+test("a region cache measures each shape once and finds the same regions as the map's own lookups", () => {
+  const { api, ctx } = setup();
+  api.setRegionAttrs(["r2"], { group: "Raiders" });
+  let exports = 0;
+  const exportRegions = api.exportRegions;
+  api.exportRegions = (ids) => { exports += 1; return exportRegions(ids); };
+  const borders = {
+    id: "borders:r1", area: "map", kind: "borders",
+    regions: [{ id: "r1", op: "reshape", feature: { type: "Feature", geometry: square(0, 0, 2), properties: { id: "r1" } }, fromShape: measureGeometry(square(0, 0)) }],
+  };
+  const cache = createRegionCache();
+  assert.equal(mapChangeStatus(borders, ctx, { cache }), "open");
+  assert.equal(mapChangeStatus(borders, ctx, { cache }), "open");
+  assert.equal(exports, 1, "a document edit does not measure the regions again");
+  const changes = [
+    { id: "polity-change:Alpha", area: "map", kind: "polity-change", key: "Alpha", fields: {} },
+    { id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic" },
+    { id: "group-change:Raiders", area: "map", kind: "group-change", key: "Raiders", from: {}, to: {} },
+    { id: "puppet-add:p1", area: "map", kind: "puppet-add", key: "p1", to: { overlord: "Beta", puppet: "Alpha" } },
+  ];
+  for (const change of changes) {
+    const plain = changeTargets(change, ctx, { changes });
+    const cached = changeTargets(change, ctx, { changes, cache });
+    assert.deepEqual([...cached.regionIds].sort(), [...plain.regionIds].sort(), change.id);
+  }
+  assert.deepEqual([...changeTargets(changes[0], ctx, { changes, cache }).regionIds].sort(), ["r1", "r2"]);
+  const remove = { id: "polity-remove:Beta", area: "map", kind: "polity-remove", key: "Beta" };
+  assert.equal(mapChangeStatus(remove, ctx, { cache }), mapChangeStatus(remove, ctx));
 });
 
 test("a save records what the map already has as accepted and what it lost as rejected", () => {

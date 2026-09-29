@@ -35,10 +35,45 @@ export { REVIEW_SECTIONS, sectionOfChange } from "../runtime/suggestionSections.
 // ---- the map as it is open ----------------------------------------------------
 
 const regionOf = (ctx, id) => ctx.api?.getRegionSummary?.(String(id)) ?? null;
-const regionShape = (ctx, id) => {
-  const fc = ctx.api?.exportRegions?.([String(id)]);
+// What a review reads of the map over and over, kept while the regions stay
+// as they are (the hook makes a new one on every MapEditor regionEpoch): each
+// region's measured shape, and which regions each owner and each group has.
+export const createRegionCache = () => ({ shapes: new globalThis.Map(), owners: null, groups: null });
+const regionShape = (ctx, id, cache) => {
+  const key = String(id);
+  if (cache?.shapes.has(key)) return cache.shapes.get(key);
+  const fc = ctx.api?.exportRegions?.([key]);
   const feature = fc?.features?.[0];
-  return feature ? measureGeometry(feature.geometry) : null;
+  const shape = feature ? measureGeometry(feature.geometry) : null;
+  cache?.shapes.set(key, shape);
+  return shape;
+};
+const indexRegions = (ctx, cache) => {
+  if (cache.owners) return cache;
+  cache.owners = new globalThis.Map();
+  cache.groups = new globalThis.Map();
+  const add = (index, key, id) => {
+    if (!key) return;
+    if (!index.has(key)) index.set(key, []);
+    index.get(key).push(id);
+  };
+  for (const region of ctx.api?.queryRegions?.("", Infinity) ?? []) {
+    add(cache.owners, String(region.owner ?? "").trim(), region.id);
+    add(cache.groups, clean(region.group), region.id);
+  }
+  return cache;
+};
+// The ids of the regions an owner holds (as listOwnerRegions finds them), and
+// of those a group controls.
+const ownerRegionIds = (ctx, key, cache) => {
+  const owner = String(key ?? "").trim();
+  if (!owner) return [];
+  if (cache) return indexRegions(ctx, cache).owners.get(owner) ?? [];
+  return (ctx.api?.listOwnerRegions?.(owner) ?? []).map((region) => region.id);
+};
+const groupRegionIds = (ctx, key, cache) => {
+  if (cache) return indexRegions(ctx, cache).groups.get(clean(key)) ?? [];
+  return (ctx.api?.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.group) === key).map((region) => region.id);
 };
 const cityFeatures = (doc) => (doc?.features ?? []).filter((feature) => !clean(feature?.kind));
 const nearCity = (feature, city) => clean(feature?.name).toLowerCase() === clean(city?.name).toLowerCase()
@@ -114,7 +149,7 @@ const polityFieldValue = (ctx, key, field) => {
 // "open" (the map still has the post's value: accepting applies it),
 // "conflict" (the author changed it since), "applied" (already so), or
 // "missing" (what it changes is not on this map any more).
-export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
+export const mapChangeStatus = (change, ctx, { renames = {}, cache = null } = {}) => {
   const fromOwner = (value) => renamed(value, renames);
   switch (change.kind) {
     case "region-owner": {
@@ -152,7 +187,7 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       let applied = 0;
       let conflict = false;
       for (const region of change.regions ?? []) {
-        const shape = regionShape(ctx, region.id);
+        const shape = regionShape(ctx, region.id, cache);
         const suggested = region.toShape ?? (region.feature ? measureGeometry(region.feature.geometry) : null);
         if (region.op === "remove") {
           if (!shape) applied += 1;
@@ -169,12 +204,12 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
     case "polity-add":
       return ctx.doc?.polities?.[change.key] ? "applied" : "open";
     case "polity-remove": {
-      const owned = ctx.api?.listOwnerRegions?.(change.key)?.length ?? 0;
+      const owned = ownerRegionIds(ctx, change.key, cache).length;
       return !ctx.doc?.polities?.[change.key] && !owned ? "applied" : "open";
     }
     case "polity-rename":
       if (ctx.doc?.polities?.[change.to] && !ctx.doc?.polities?.[change.from]) return "applied";
-      return ctx.doc?.polities?.[change.from] || ctx.api?.listOwnerRegions?.(change.from)?.length ? "open" : "missing";
+      return ctx.doc?.polities?.[change.from] || ownerRegionIds(ctx, change.from, cache).length ? "open" : "missing";
     case "polity-change": {
       const key = fromOwner(change.key);
       let open = false;
@@ -720,11 +755,11 @@ export const decisionsFor = (changes, decisions, statuses) => {
 
 // What to outline and zoom to for a change: region ids on this map, suggested
 // shapes (GeoJSON, WGS84) that are not on it yet, and points.
-export const changeTargets = (change, ctx, { changes = [], renames = {} } = {}) => {
+export const changeTargets = (change, ctx, { changes = [], renames = {}, cache = null } = {}) => {
   const regionIds = [];
   const shapes = [];
   const points = [];
-  const ownedBy = (key) => (ctx.api?.listOwnerRegions?.(renamed(key, renames)) ?? []).map((region) => region.id);
+  const ownedBy = (key) => ownerRegionIds(ctx, renamed(key, renames), cache);
   switch (change.kind) {
     case "region-owner": case "region-name": case "region-type": case "region-claims": case "region-group":
       regionIds.push(String(change.regionId));
@@ -748,7 +783,7 @@ export const changeTargets = (change, ctx, { changes = [], renames = {} } = {}) 
       regionIds.push(...ownedBy(change.from), ...ownedBy(change.to));
       break;
     case "group-add": case "group-change": case "group-remove":
-      regionIds.push(...(ctx.api?.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.group) === change.key).map((region) => region.id));
+      regionIds.push(...groupRegionIds(ctx, change.key, cache));
       for (const entry of changes) if (entry.kind === "region-group" && (entry.to === change.key || entry.from === change.key)) regionIds.push(String(entry.regionId));
       break;
     case "city-add": case "city-change": case "city-remove": {
