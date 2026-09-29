@@ -1,5 +1,5 @@
 /*! Open Historia — scenario-defined National Stats sheet editor © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   MAX_CUSTOM_STATS,
   MAX_STAT_SECTIONS,
@@ -286,16 +286,28 @@ const StatsSheetEditor = ({ value, onChange }) => {
   const [dragItem, setDragItem] = useState(null);
   const touch = useTouchPrimary();
   const isMobile = useIsMobile();
+  // The custom sheet "Use standard sheet" last replaced. The editor has no undo
+  // and nothing is written until the scenario is saved, so "Customize full
+  // sheet" brings this back rather than the default layout.
+  const lastCustomSectionsRef = useRef(null);
 
   const emitSections = (nextSections) => onChange?.({ custom: true, version: 2, sections: nextSections });
 
   const enableCustom = () => {
     setEditingStatKey("");
     setEditingSectionKey("");
-    onChange?.(defaultCustomStatSheetDefinition());
+    const restored = lastCustomSectionsRef.current;
+    onChange?.(restored ? { custom: true, version: 2, sections: restored } : defaultCustomStatSheetDefinition());
   };
 
+  // Replaces every section, stat, description and AI guidance at once: asked first.
   const useStandard = () => {
+    const count = flattenStatSheetRows({ custom: true, sections }).length;
+    const question = count === 1
+      ? "Replace your 1 custom statistic with the standard sheet?"
+      : `Replace your ${count} custom statistics with the standard sheet?`;
+    if (!window.confirm(question)) return;
+    lastCustomSectionsRef.current = sections;
     setEditingStatKey("");
     setEditingSectionKey("");
     onChange?.({ custom: false, version: 2, sections: defaultCustomStatSheetDefinition().sections });
@@ -326,6 +338,15 @@ const StatsSheetEditor = ({ value, onChange }) => {
 
   const removeSection = (sectionKey) => {
     if (sections.length <= 1) return;
+    // A section takes its stats with it: asked first when it has any.
+    const doomed = sections.find((section) => section.key === sectionKey);
+    const count = doomed?.stats?.length || 0;
+    if (count > 0) {
+      const question = count === 1
+        ? `Delete the section "${doomed.label}" and the statistic in it?`
+        : `Delete the section "${doomed.label}" and the ${count} statistics in it?`;
+      if (!window.confirm(question)) return;
+    }
     emitSections(sections.filter((section) => section.key !== sectionKey));
     if (editingSectionKey === sectionKey) setEditingSectionKey("");
   };
