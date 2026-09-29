@@ -101,6 +101,7 @@ import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { applyBoardCarriers } from "./boardPassApply.js";
 import { eventReactionAfterFailure, reactionSpeakerWithContext } from "./eventReactionRetry.js";
 import { formalAgendaProposals } from "./formalAgenda.js";
+import { chatParticipantKey, foldGeneratedChatsIntoStorage, isLifecycleNegotiationChat, logGeneratedChat } from "./chatFold.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -151,7 +152,7 @@ import {
 } from "../../runtime/projects.js";
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
-import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
+import { renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
 import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
@@ -4452,97 +4453,6 @@ const regionKey = (value) => normalizeString(value)
   .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase()
   .replace(/\s+/g, " ");
-
-// Case/diacritic-insensitive identity for a chat's participant SET (order-blind:
-// "France, Spain" and "Spain, France" are the same conversation). Drives the
-// dedup below: a country picking up an old thread must land back in that thread,
-// not beside it in a freshly forked one.
-const chatParticipantKey = (countries) =>
-  (Array.isArray(countries) ? countries : [])
-    .map((country) => regionKey(country?.name))
-    .filter(Boolean)
-    .sort()
-    .join("|");
-
-const isLifecycleNegotiationChat = (chat) => Boolean(
-  chat?.lifecycleInstitutionId && normalizeArray(chat?.lifecycleCaseIds).length,
-);
-
-// Every message the game itself puts into a diplomatic thread passes through the
-// fold below — the notes a jump generates, the idle pulse, and the advisor's own
-// "send this to <country>" — so this is where a detailed log records them, with
-// WHICH thread they landed in: "it opened a second thread with France instead of
-// answering in the one I had" is invisible without that.
-const logGeneratedChat = (built, outcome) => {
-  const participants = (built?.countries ?? [])
-    .map((country) => country?.name || country?.code || "")
-    .filter(Boolean)
-    .join(", ") || "(no participants)";
-  logDebugEvent("diplomacy",
-    `Generated note ${outcome} — ${participants}: "${built?.title || "(untitled)"}" (source: ${built?.source || "unknown"}).`,
-    (built?.messages ?? []).map((msg) => `${msg?.speaker || msg?.role || "?"}: ${msg?.text ?? ""}`),
-    { verbose: true });
-};
-
-// Route freshly-generated chats into whichever existing OPEN thread already has
-// the same participants (appending their messages there) instead of always
-// forking a new one. `built` may itself contain chats that duplicate each other
-// (two events in the same turn both reaching out to France), so a match against
-// an entry already folded in THIS pass counts too, not just against `storageChats`.
-// Every message gets stamped with `stampTime` when it has none of its own —
-// including a brand-new chat's own opener: the UI groups and sorts chats by
-// their messages' own `time`, so an unstamped opener left the whole chat
-// looking dateless.
-// `dropEchoes` discards a note that merely parrots something already in the
-// thread it would land in. Even when told not to, a model hands back the line it
-// was just shown, and posting it has the polity repeat the player to their face —
-// worse than saying nothing.
-//
-// `dropped` on the returned array counts the notes discarded this way, so a
-// caller that must know whether anything actually landed can tell without
-// diffing the result.
-const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampTime = "", dropEchoes = false } = {}) => {
-  let chats = [...storageChats];
-  const created = [];
-  let dropped = 0;
-  const stamp = (messages) => (stampTime
-    ? messages.map((msg) => (msg.time ? msg : { ...msg, time: stampTime }))
-    : messages);
-
-  for (const built of builtChats) {
-    const key = chatParticipantKey(built.countries);
-    const existingIdx = key ? chats.findIndex((chat) =>
-      chat.status !== "closed"
-      && !isLifecycleNegotiationChat(chat)
-      && chatParticipantKey(chat.countries) === key) : -1;
-    if (existingIdx !== -1) {
-      if (dropEchoes && built.messages.some((msg) =>
-        echoesExistingMessage(msg.text, chats[existingIdx].messages))) {
-        logGeneratedChat(built, "dropped — it echoed a message already in the thread");
-        dropped += 1;
-        continue;
-      }
-      logGeneratedChat(built, "appended to an existing thread");
-      chats = chats.map((chat, index) => (index === existingIdx
-        ? { ...chat, messages: [...chat.messages, ...stamp(built.messages)] }
-        : chat));
-      continue;
-    }
-    const createdIdx = key ? created.findIndex((chat) => chatParticipantKey(chat.countries) === key) : -1;
-    if (createdIdx !== -1) {
-      logGeneratedChat(built, "merged into another note from the same turn");
-      created[createdIdx] = { ...created[createdIdx], messages: [...created[createdIdx].messages, ...stamp(built.messages)] };
-      continue;
-    }
-    logGeneratedChat(built, "opened a new thread");
-    created.push({ ...built, messages: stamp(built.messages) });
-  }
-
-  const result = [...created, ...chats];
-  // Non-enumerable so this never rides along into a JSON write of the chats.
-  Object.defineProperty(result, "dropped", { value: dropped, enumerable: false });
-  return result;
-};
 
 // The semantic pass answers one resolution per item; a RESOLVED answer must
 // carry ids, and no index may be answered twice.
