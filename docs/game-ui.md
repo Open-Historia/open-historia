@@ -411,7 +411,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 
 ## 9. Cheats panel — `src/Game/GameUI/cheats.jsx`
 
-`CheatsPanel` (`cheats.jsx:164`) — right-side panel (z 10045), opened from Settings → 🧪 Cheats (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup.
+`CheatsPanel` (`cheats.jsx:164`) — right-side panel (z 10045), opened from Settings → 🧪 Cheats (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup. Clicks are handled one at a time, in order (`createSerialQueue`, `src/runtime/serialQueue.js`): each reads, changes and writes the world, and two running at once lost the first one's change.
 
 | Tool id | Does | Writes / calls |
 |---|---|---|

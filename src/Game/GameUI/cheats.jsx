@@ -56,6 +56,7 @@ import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runt
 import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimeline.js";
 import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
+import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -319,6 +320,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     // and map clicks route here instead of opening the region popup.
     const [clickMode, setClickMode] = useState(null);
     const clickHandlerRef = useRef(null);
+    const [enqueueClick] = useState(createSerialQueue);
     const isMobile = useIsMobile();
 
     const refresh = async () => {
@@ -350,12 +352,17 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
             return undefined;
         }
 
+        // One click at a time: each handler reads the world, changes it and
+        // writes it back, so a second click landing before the first had
+        // written overwrote it (two regions annexed in quick succession kept
+        // only the second). A click waits for the one before it.
         setRegionClickInterceptor((props) => {
-            clickHandlerRef.current?.(props);
+            const handler = clickHandlerRef.current;
+            if (handler) enqueueClick(() => handler(props)).catch((error) => console.warn("[cheats] a map click failed:", error));
             return true;
         });
         return () => setRegionClickInterceptor(null);
-    }, [clickMode]);
+    }, [clickMode, enqueueClick]);
 
     const beginClickMode = (label, handler) => {
         clickHandlerRef.current = handler;
