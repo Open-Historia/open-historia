@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Open Historia is a turn-based, AI-driven grand-strategy game that renders the whole Earth as an interactive map. The frontend is a single React 19 SPA (Vite build) that draws the world with MapLibre GL + PMTiles vector tiles and hosts an OpenLayers-based map editor behind a URL flag; the same client bundle runs against **three interchangeable `/api` backends** selected at compile time — a local Express server (desktop download), an in-browser IndexedDB fetch-interceptor (hosted website), and an embedded nodejs-mobile server (Android app). Everything the client needs it asks for through the same `/api/*` calls, so the three variants differ only in what answers those calls.
+Open Historia is a turn-based, AI-driven grand-strategy game that renders the whole Earth as an interactive map. The frontend is a single React 19 SPA (Vite build) that draws the world with MapLibre GL + PMTiles vector tiles and hosts an OpenLayers-based map editor behind a URL flag; the same client bundle runs against **two interchangeable `/api` backends** selected at compile time — a local Express server (the desktop app, or a self-hosted server) and an in-browser IndexedDB fetch-interceptor (the hosted website, and the Android app, which hosts the web build in a WebView; see [mobile.md](mobile.md)). Everything the client needs it asks for through the same `/api/*` calls, so the variants differ only in what answers those calls.
 
 This page is the map of the codebase. Each subsystem has its own page; follow the cross-links.
 
@@ -17,7 +17,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Map editor renderer | OpenLayers 10 (`ol`) — lazy-loaded, editor route only | `src/App.jsx:7`, `src/Editor/OlMap.jsx` |
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
-| Desktop/mobile server | Express 5 | `server/server.js`, `mobile/nodejs-project/` |
+| Desktop / local server | Express 5 | `server/server.js` (inside Electron for the desktop app) |
 | Signing / trust | `@noble/ed25519` (content manifests, node directory) | `trust/`, `src/runtime/web/contentTrust.js` |
 | Bundled tools | Azgaar Fantasy Map Generator (vendored) | `fmg/`, `scripts/fetch-fmg.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js:82` |
@@ -110,11 +110,11 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | Path | What lives there |
 |---|---|
 | `src/` | The React client (all three variants share this) |
-| `server/` | Express server + on-disk stores (desktop + embedded mobile backend) |
+| `server/` | Express server + on-disk stores (the desktop app and a self-hosted local server) |
 | `scripts/` | Build/seed/signing/asset tooling (`.mjs`) — see below |
 | `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, signed `content-manifest.json` / `node-directory.json`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
-| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) + `nodejs-project/` embedded server |
+| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, `map-assets.android.json`); no server of its own — see [mobile.md](mobile.md) |
 | `node-content/` + `server/node.js` | Content-node server (hash-addressed, read-only) — see [Content nodes](assets-and-data.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
@@ -177,7 +177,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 
 ## 5. Data flow: frontend ↔ `/api` ↔ stored assets
 
-The client **never** talks to storage directly. Every state read/write is a same-origin `/api/*` call built in `src/runtime/`. A backend answers it. This indirection is exactly what lets the same client run on Express, IndexedDB, or nodejs-mobile.
+The client **never** talks to storage directly. Every state read/write is a same-origin `/api/*` call built in `src/runtime/`. A backend answers it. This indirection is exactly what lets the same client run on Express or on IndexedDB.
 
 ### The runtime asset endpoints
 
@@ -208,13 +208,12 @@ The client **never** talks to storage directly. Every state read/write is a same
 
 **Security middleware** (`server/server.js:73`, `:112`): blanket permissive CORS (so the Android WebView's cross-origin *probe* works) but state-changing writes are blocked unless same-origin or loopback (`crossOriginWriteAllowed` in `security.js`); override with `OH_ALLOW_CROSS_ORIGIN=1`. See [Server & security](server.md).
 
-### The three backends, one contract
+### The two backends, one contract
 
 | Backend | Entry | How it answers `/api/*` |
 |---|---|---|
-| Express (desktop / mobile) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`) |
-| Web (browser) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. |
-| Embedded mobile | `mobile/nodejs-project/main.js` | Picks a writable `OH_DATA_DIR`, first-run-seeds from a bundled `seed/` snapshot, best-effort downloads map binaries, then `import("./server/server.js")` bound to `127.0.0.1`; the WebView loads it same-origin |
+| Express (desktop app, self-hosted server) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`; the desktop app points `OH_DATA_DIR` at its user-data folder) |
+| Web (browser, and the Android app) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. The Android app is a host of this backend: the same code in a Capacitor WebView, with the map read from the APK (see [mobile.md](mobile.md)). |
 
 Because the web router keys on `url.origin === location.origin && pathname.startsWith("/api/")` (`router.js:153`), the client code (`library.js`, `assets.js`, editor IO, basemap library) is **byte-identical** across variants — it just calls `fetch("/api/…")`.
 

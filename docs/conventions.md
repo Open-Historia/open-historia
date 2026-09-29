@@ -174,7 +174,7 @@ Vite proxies `/api` to `http://localhost:3000` (`vite.config.ts:86-91`), so the 
 | `npm run build` | `vite build` → `dist/` (the desktop client). |
 | `npm run build:web` | Web build → `dist-web/` (base `/`). See [Web build](web-build.md). |
 | `npm run build:site` | Web build at base `/play/` + `scripts/assemble-site.mjs` (landing page at `/`, game at `/play/`) → `dist-site/`. |
-| `npm run build:mobile-server` | `scripts/build-mobile-server.mjs` — assembles the in-process Node server the Android app embeds (nodejs-mobile). |
+| `npm run build:android` | Web-style build with `--mode android` → `dist-android/`, the Android app's bundle (the app has no server; see [mobile.md](mobile.md)). |
 | `npm run lint` | ESLint over the repo. |
 | `npm run preview` / `preview:web` | Serve a built bundle for inspection. |
 

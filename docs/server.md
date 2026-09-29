@@ -1,6 +1,6 @@
 # Server & API
 
-Open Historia ships with a small **Express** server (`server/server.js`) that is the single backend for the whole app: it serves the built SPA, exposes a JSON/binary REST API under `/api/*`, and reads/writes every piece of persistent state (scenarios, games, map-editor docs, basemaps, flags, language packs, UI settings) as plain files under one writable data directory. There is no database — the on-disk layout under `server/data/` *is* the data model, and each concern gets its own self-contained "store" module. The same `server.js` runs unchanged on desktop, Termux, and in-process inside the Android app (via `nodejs-mobile`); portability comes entirely from the `OH_DATA_DIR` indirection in `server/dataDir.js`.
+Open Historia ships with a small **Express** server (`server/server.js`) that is the single backend for the whole app: it serves the built SPA, exposes a JSON/binary REST API under `/api/*`, and reads/writes every piece of persistent state (scenarios, games, map-editor docs, basemaps, flags, language packs, UI settings) as plain files under one writable data directory. There is no database — the on-disk layout under `server/data/` *is* the data model, and each concern gets its own self-contained "store" module. The same `server.js` runs unchanged from a checkout, on Termux, and in-process inside the Electron desktop app; portability comes entirely from the `OH_DATA_DIR` indirection in `server/dataDir.js` (and `OH_ASSETS_DIR` for the stock map archives). The Android app runs no server: it is the web build, whose backend is IndexedDB (see [mobile.md](mobile.md)).
 
 > This page documents the **game server** (`server/server.js`). A second, unrelated entry point — `server/node.js` — is the stateless content-node for the peer network (hash-addressed read-only bytes; run separately with `OH_NODE_PORT`). It is out of scope here beyond this note.
 
@@ -150,7 +150,6 @@ server/data/
       cover-image.bin
       storage/
         actions.json advisor.json chat.json events.json snapshots.json
-  assets/                        # embedded-server ONLY: PMTiles fetched into OH_DATA_DIR on first run
   basemaps/  basemaps-manifest.json
   mapeditor-documents/  mapeditor-manifest.json
   flags-library.json
@@ -160,7 +159,7 @@ server/data/
   .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games (recoverable by hand)
 ```
 
-Key path constants live at `server/libraryStore.js:19-35`: `SCENARIOS_DIR`, `GAMES_DIR`, `SCENARIO_MANIFEST_PATH`, `GAME_MANIFEST_PATH`, `DATA_ASSETS_DIR`, plus the read-only source roots `DIST_DIR`/`PUBLIC_DIR` and `PMTILES_ASSETS_DIR = public/assets`.
+Key path constants live at the top of `server/libraryStore.js`: `SCENARIOS_DIR`, `GAMES_DIR`, `SCENARIO_MANIFEST_PATH`, `GAME_MANIFEST_PATH`, plus the read-only source roots `DIST_DIR`/`PUBLIC_DIR` and `PMTILES_ASSETS_DIR` (`OH_ASSETS_DIR` when set, else `public/assets`).
 
 ### Asset-file groupings (the vocabulary of `assetKey`)
 
@@ -208,7 +207,7 @@ All binary serving funnels through **`streamBinaryFile(req, res, sourcePath, con
   - otherwise `206` with `Content-Length` and `Content-Range: bytes start-end/total`, streaming just that slice.
 - `parseByteRange` correctly handles suffix ranges (`bytes=-N` = final N bytes) and clamps `start`/`end`; a first-byte-position past EOF is a `416`.
 
-PMTiles are served by `resolveRuntimeBinaryAsset` (`server/libraryStore.js:2371-2403`), which resolves in priority order: **(1)** the active scenario's own `<key>.pmtiles` override → **(2)** `DATA_ASSETS_DIR` (`OH_DATA_DIR/assets`, where the embedded Android server downloads them on first run) → **(3)** the shipped `public/assets/<key>.pmtiles`. The `HEAD` route replies with size and `Accept-Ranges` without streaming, for the pmtiles reader's initial probe (`server/server.js:490-502`).
+PMTiles are served by `resolveRuntimeBinaryAsset` (`server/libraryStore.js`), which resolves in priority order: **(1)** the active scenario's own `<key>.pmtiles` override → **(2)** the stock archive in `PMTILES_ASSETS_DIR` — `public/assets/<key>.pmtiles` from a checkout, or the writable folder `OH_ASSETS_DIR` names (the installed desktop app downloads the map there, because its own bundle is read-only). The `HEAD` route replies with size and `Accept-Ranges` without streaming, for the pmtiles reader's initial probe (`server/server.js:490-502`).
 
 Upload assets are written straight from the raw request buffer (`uploadScenarioAsset`/`uploadGameAsset`, `server/libraryStore.js:1909-1972`); the `assetKey` is validated against the uploadable set before any filesystem touch, and a cover upload also records its normalized image content type in meta (PNG/JPEG/WEBP/GIF/AVIF only, `SUPPORTED_IMAGE_CONTENT_TYPES`).
 
@@ -315,13 +314,14 @@ export const DATA_DIR = process.env.OH_DATA_DIR
   : path.join(__dirname, "data");   // server/data
 ```
 
-Every store imports this one constant, so a single env var relocates **all** writable state. Desktop and Termux leave it unset and use `server/data` (byte-identical to how they've always worked). The **embedded Android server** runs `server.js` in-process via `nodejs-mobile`, where the `server/data` shipped inside the APK is **read-only**; the app sets `OH_DATA_DIR` to a writable sandbox path, seeds first-run defaults there, and downloads PMTiles into `OH_DATA_DIR/assets` (which `resolveRuntimeBinaryAsset` prefers over the read-only shipped copies). Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged over* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root, and an updated pack replaces the older AI translations of the strings it covers.
+Every store imports this one constant, so a single env var relocates **all** writable state. A server run from a checkout (or Termux) leaves it unset and uses `server/data`. Any host whose app folder is **read-only** sets it to a writable path instead: the installed desktop app runs `server.js` inside Electron and points `OH_DATA_DIR` at `<userData>/server/data` and `OH_ASSETS_DIR` at `<userData>/public/assets`, where it downloads the map on first launch (`electron/main.cjs`). `OH_ASSETS_DIR` is the same override for the stock PMTiles that `resolveRuntimeBinaryAsset` falls back to. (The Android app runs no server; its library is the web backend's IndexedDB — see [mobile.md](mobile.md).) Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged over* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root, and an updated pack replaces the older AI translations of the strings it covers.
 
 ### Environment variables
 | Var | Default | Effect |
 | --- | --- | --- |
 | `PORT` | `3000` | Listen port (`server/server.js:61`) |
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
+| `OH_ASSETS_DIR` | `public/assets` | Where the stock PMTiles archives are read from (`PMTILES_ASSETS_DIR`, `server/libraryStore.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
 | `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
 | `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |

@@ -34,12 +34,12 @@ The client-side URL and PMTiles-archive tables are declared in `src/runtime/asse
 
 ## 2. Where assets come from — the four sources
 
-An asset can be resolved from up to four places. Which one wins depends on the build (desktop/embedded vs. web) and whether the active scenario ships an override.
+An asset can be resolved from up to four places. Which one wins depends on the build (desktop/server vs. web) and whether the active scenario ships an override.
 
 | Source | What lives there | Which builds |
 |---|---|---|
-| **App bundle** (`public/assets/`, or `dist/assets/` in a built app; `www/assets/` inside the Android APK) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` (the Android app ships the z8 trims and the web-sized seeds, pinned in `mobile/map-assets.android.json`) | Desktop / Termux / Android |
-| **`OH_DATA_DIR`** (`server/data/…`, or a writable sandbox on Android) | Per-scenario overrides, per-game state, and — on the embedded server — the downloaded pmtiles under `<DATA_DIR>/assets/` | All node-server builds |
+| **App bundle** (`public/assets/`, or `dist/assets/` in a built app; `www/assets/` inside the Android APK) | The shared default `*.pmtiles`, `*-seed.*`, immutable `colors.json` (the Android app ships the z8 trims and the web-sized seeds, pinned in `mobile/map-assets.android.json`). The installed desktop app ships no map: it downloads it into the folder `OH_ASSETS_DIR` names | Server from a checkout / Termux / Android |
+| **`OH_DATA_DIR`** (`server/data/…`, or the desktop app's user-data folder) | Per-scenario overrides, per-game state | Every build that runs the Express server |
 | **`map-data` GitHub Release** | Canonical copies of every heavy binary, checksum-pinned | Fetched at install/update time |
 | **Cloudflare / content-node swarm** | Byte-identical pmtiles served over HTTP range requests, hash-verified | Web build only |
 
@@ -51,15 +51,14 @@ An asset can be resolved from up to four places. Which one wins depends on the b
 DATA_DIR = process.env.OH_DATA_DIR ? resolve(OH_DATA_DIR) : <server>/data
 ```
 
-Desktop and Termux leave `OH_DATA_DIR` unset → `server/data` (byte-identical layout). The **Android** app has no server and no data dir: its library is the web backend's IndexedDB, and its map data is read from the APK (see [mobile.md](mobile.md)). `server/libraryStore.js:20` derives `DIST_DIR`, `PUBLIC_DIR`, and `DATA_ASSETS_DIR` (`= <DATA_DIR>/assets`, `:32`) from it.
+A server run from a checkout, and Termux, leave `OH_DATA_DIR` unset → `server/data`. It is a generic writable-data override for a host whose app folder is read-only: the installed desktop app sets it to `<userData>/server/data`, and sets `OH_ASSETS_DIR` (the stock-PMTiles folder, `PMTILES_ASSETS_DIR` in `server/libraryStore.js`, default `public/assets`) to `<userData>/public/assets` (`electron/main.cjs`). The **Android** app has no server and no data dir: its library is the web backend's IndexedDB, and its map data is read from the APK (see [mobile.md](mobile.md)).
 
 ### PMTiles resolution order (server)
 
-`resolveRuntimeBinaryAsset(assetKey)` — `server/libraryStore.js:2371` — resolves in this order and streams the first hit with `streamBinaryFile`:
+`resolveRuntimeBinaryAsset(assetKey)` (`server/libraryStore.js`) resolves in this order and streams the first hit with `streamBinaryFile`:
 
 1. **Scenario override** — `getScenarioUploadPath(scenario.id, assetKey)` (an editor-uploaded per-scenario archive).
-2. **Fetched data-dir copy** — `<DATA_DIR>/assets/<file>.pmtiles` (embedded Android server, downloaded on first run).
-3. **Bundle fallback** — `public/assets/<file>.pmtiles`.
+2. **Stock archive** — `<PMTILES_ASSETS_DIR>/<file>.pmtiles`: `public/assets/` from a checkout, or the folder `OH_ASSETS_DIR` names (where the installed desktop app downloads the map on first launch).
 
 Because step 1 can serve different bytes after a scenario switch, the client rotates its PMTiles caches on token change (§6) — a correctness fix, not just memory hygiene.
 
@@ -321,9 +320,9 @@ Raster tiles are warmed via `warmRemoteResources` / `warmRemoteResource` (`asset
 | `src/runtime/preload.js` | 30 s startup warm sequence + progress model |
 | `src/runtime/web/router.js` | Web-build `fetch` interceptor for `/api/*` (pmtiles → `VITE_OH_PMTILES_URL`) |
 | `src/runtime/web/contentTrust.js` | Web-build hash-verified content-node fetch |
-| `scripts/fetch-map-assets.mjs` | Desktop/updater: sync local tree to the `map-data` Release |
+| `scripts/fetch-map-assets.mjs` | Sync a local tree to the `map-data` Release (the desktop app runs it on launch; run it by hand after a clone) |
 | `scripts/map-assets.json` | The Release manifest (paths, versioned asset names, sha256, bytes) |
-| `mobile/nodejs-project/fetchMapAssets.mjs` | Embedded-server variant → downloads into `OH_DATA_DIR` |
+| `mobile/scripts/stage-map-assets.mjs` | The Android build's variant → downloads the files in `mobile/map-assets.android.json` into `mobile/map-cache/` for the APK |
 | `server/server.js` | Express `/api/runtime/{json,pmtiles}` routes |
 | `server/libraryStore.js` | Server-side asset resolution (scenario override → data-dir → bundle) |
 | `server/dataDir.js` | `DATA_DIR` / `OH_DATA_DIR` resolver |
