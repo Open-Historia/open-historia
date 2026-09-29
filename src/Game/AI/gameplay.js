@@ -4182,7 +4182,12 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
   } catch (error) {
     if (error?.heldKind === HELD_TURN.board) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
-      holdTurn(HELD_TURN.board, { applyArgs });
+      holdTurn(HELD_TURN.board, heldProjectsJump);
+    }
+    // The board answered and a check holds the turn now (checks made after the
+    // board): the turn moves to the checks, which a Retry there can finish.
+    if (error?.heldKind === HELD_TURN.checks && heldProjectsJump.context) {
+      holdTurn(HELD_TURN.checks, { context: heldProjectsJump.context, state: heldProjectsJump.state });
     }
     throw error;
   } finally {
@@ -7874,6 +7879,14 @@ const applySimulationResult = async ({
     logDebugEvent("turn", `Covert operations synced to the board: ${spySync.length} op(s), ${doubtOps.length} doubted.`, undefined, { verbose: true });
   }
 
+  // A check that failed holds the turn before the board is asked. Asked first,
+  // a board failure held the turn on the board, and its Retry then met the
+  // failed check with nothing holding the turn for it: the turn was lost.
+  if (checksHoldTurn(checks)) {
+    logDebugEvent("turn", "Turn HELD: a check after the events failed, so nothing was written.", checks.failures());
+    throw checksHeldError(checks.failures());
+  }
+
   // The board, in its own call, once for the whole round — after the segments
   // merged so it sees the complete story, after espionage so an exposed ring can
   // stall the operation it belonged to, and BEFORE anything is written so its ops
@@ -8222,9 +8235,9 @@ const applySimulationResult = async ({
   }
   for (const { from, to } of renamedPolities) chatsToWrite = renamePolityInChats(chatsToWrite, from, to);
 
-  // Every check a time skip made is in by now. One that failed holds the turn
-  // here, the last point where nothing is written, rather than landing it with
-  // that check's changes silently missing (turnChecks.js).
+  // And again at the last point where nothing is written, for any check made
+  // after the board, rather than landing the turn with that check's changes
+  // silently missing (turnChecks.js).
   if (checksHoldTurn(checks)) {
     logDebugEvent("turn", "Turn HELD: a check after the events failed, so nothing was written.", checks.failures());
     throw checksHeldError(checks.failures());
@@ -14664,7 +14677,9 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     }
     return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
   } catch (error) {
-    if (error?.heldKind === HELD_TURN.board) holdTurn(HELD_TURN.board, { applyArgs });
+    // With the finish's context and state, so a board Retry that a failed check
+    // then holds can hand the turn over to the checks.
+    if (error?.heldKind === HELD_TURN.board) holdTurn(HELD_TURN.board, { applyArgs, context, state });
     // A check made inside the apply failed (the timeline clean-up): held by
     // the checks, like the rest, so the same Retry and Continue answer it.
     if (error?.heldKind === HELD_TURN.checks) holdTurn(HELD_TURN.checks, { context, state });

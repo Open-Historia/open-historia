@@ -133,3 +133,19 @@ test("a retry held again, or failed outright, is not put back as it was", async 
     assert.equal(getHeldTurn(HELD_TURN.checks), null);
     discardHeldTurns();
 });
+
+// ---- A board hold and a failed check ----------------------------------------------
+
+test("a failed check holds the turn before the board is asked", () => {
+    const apply = body(gameplay, "const applySimulationResult = async");
+    const hold = apply.indexOf("if (checksHoldTurn(checks))");
+    const board = apply.indexOf('phases?.enter("board")');
+    assert.ok(hold > -1 && board > hold, "held before the board, so the board cannot hold the turn over a failed check");
+});
+
+test("a board retry that a check then holds hands the turn to the checks", () => {
+    const finish = body(gameplay, "const finishTimelineJump = async");
+    assert.match(finish, /holdTurn\(HELD_TURN\.board, \{ applyArgs, context, state \}\)/);
+    const retry = body(gameplay, "export const retryPendingProjectsJump = async");
+    assert.match(retry, /error\?\.heldKind === HELD_TURN\.checks && heldProjectsJump\.context[\s\S]*holdTurn\(HELD_TURN\.checks, \{ context: heldProjectsJump\.context, state: heldProjectsJump\.state \}\)/);
+});
