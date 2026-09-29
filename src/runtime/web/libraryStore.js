@@ -6,7 +6,7 @@
 // Web build only.
 
 import { STORES, idbGet, idbGetAll, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
-import { serializeWrite } from "./writeQueue.js";
+import { serializeByKey, serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
 import {
   cloneJson, nowIso, jsonResponse, errorResponse, binaryResponse, base64ToBytes, bytesToBase64,
@@ -603,8 +603,30 @@ const ownerMigrationContext = async (record, kind) => {
 // ensureOwnerSchema with the desktop's context, persisted. Every async path runs
 // this before anything reads or rewrites the record's owners; the synchronous
 // ensureOwnerSchema in applyJsonMutations then finds the record already done.
-const migrateOwnerSchema = async (record, kind) => {
-  if (!record?.id || migratedRecords.has(`${kind}:${record.id}`) || !needsOwnerMigration(record.json?.world)) {
+//
+// One migration per record at a time (serializeByKey). A game opening fires
+// several runtime reads at once (gameState.js reads world, game, events… together)
+// and each migrates the active game, and through it the scenario, on its own copy
+// of the record. Unserialized, the first marked the scenario done while its write
+// was still landing, and the next then built the game's context from its own,
+// still unmigrated copy of the scenario (code-keyed regions, no mapRefs to
+// inherit) and migrated the game against that. A caller whose copy was read before
+// another caller's migration landed takes the stored, migrated record instead.
+const migrateOwnerSchema = (record, kind) => {
+  if (!record?.id) return Promise.resolve(false);
+  return serializeByKey(`owner-migration:${kind}:${record.id}`, () => migrateOwnerSchemaNow(record, kind));
+};
+
+const migrateOwnerSchemaNow = async (record, kind) => {
+  if (migratedRecords.has(`${kind}:${record.id}`) && needsOwnerMigration(record.json?.world)) {
+    const stored = await (kind === "game" ? getGame(record.id) : getScenario(record.id));
+    if (stored && !needsOwnerMigration(stored.json?.world)) {
+      for (const field of Object.keys(record)) if (!(field in stored)) delete record[field];
+      Object.assign(record, stored);
+      return false;
+    }
+  }
+  if (migratedRecords.has(`${kind}:${record.id}`) || !needsOwnerMigration(record.json?.world)) {
     return ensureOwnerSchema(record, kind);
   }
   let context;

@@ -125,7 +125,7 @@ scenario:  { id, meta, json:{actions,advisor,chat,events,game,prompts,world},
 game:      { id, meta, json:{…7…}, colors?, flags?, snapshots?, cover?:{contentType,bytes} }
 ```
 
-Unlike the server (which splits a scenario across many files on disk), a web record holds `world`/`game`/`colors`/`geojson` together, so owner migration is **synchronous and in-place** — nothing to keep in step across files.
+Unlike the server (which splits a scenario across many files on disk), a web record holds `world`/`game`/`colors`/`geojson` together, so owner migration is **synchronous and in-place** — nothing to keep in step across files. Gathering what a record resolves against (a game's scenario, migrated first; the stock world for a scenario without a map) is async (`migrateOwnerSchema`), and runs one record at a time (`serializeByKey`, `writeQueue.js`): a game opening fires several runtime reads together, and each would otherwise migrate the game against its own, possibly unmigrated, copy of the scenario.
 
 ### Manifests (in `kv`)
 
