@@ -2,7 +2,7 @@
 
 import { institutionsForPolity, institutionStrategicPriority } from "./institutions.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "./polityIdentity.js";
-import { collectActiveScenarioPolityKeys, createScenarioPolityResolver } from "./scenarioPolities.js";
+import { collectActiveScenarioPolityKeys } from "./scenarioPolities.js";
 
 export const POWER_STATUS_SCHEMA_VERSION = 1;
 export const POWER_TIERS = Object.freeze(["minor-power", "regional-power", "major-power"]);
@@ -112,39 +112,6 @@ export const normalizePowerStatus = (input, world = {}) => {
     if (polityKey && record) byPolity[polityKey] = { ...record, polityKey };
   }
   return { schemaVersion: POWER_STATUS_SCHEMA_VERSION, byPolity };
-};
-
-/**
- * Build an in-memory clean slate for a full-world era-relative recalibration.
- * Only explicit authored power overrides for canonical active scenario actors
- * survive. Generated/campaign-derived rows are intentionally removed so an old
- * bad calibration cannot become an anchor for its own replacement. Derived
- * ledgers such as countryStats never define membership in the calibration set.
- */
-export const preparePowerStatusForGlobalCalibration = (worldLike, polityInputs = []) => {
-  const world = clone(worldLike || {});
-  const requested = new Set(array(polityInputs).map(clean).filter(Boolean));
-  const resolveScenarioPolity = createScenarioPolityResolver(world);
-  const source = world?.powerStatus?.byPolity && typeof world.powerStatus.byPolity === "object"
-    ? world.powerStatus.byPolity
-    : (world?.powerStatus && typeof world.powerStatus === "object" ? world.powerStatus : {});
-  const byPolity = {};
-
-  for (const [rawKey, rawValue] of Object.entries(source)) {
-    if (rawKey === "schemaVersion" || lower(rawValue?.basis) !== "authored") continue;
-    const polityKey = resolveScenarioPolity(rawKey);
-    if (!polityKey || !requested.has(polityKey) || byPolity[polityKey]) continue;
-    const record = normalizePowerRecord(rawValue, polityKey);
-    if (record) byPolity[polityKey] = { ...record, polityKey };
-  }
-
-  return {
-    ...world,
-    powerStatus: {
-      schemaVersion: POWER_STATUS_SCHEMA_VERSION,
-      byPolity,
-    },
-  };
 };
 
 const actorFor = (world, polity) => world?.politicalActors?.byPolity?.[polity] || null;
