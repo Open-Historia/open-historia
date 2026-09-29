@@ -2409,10 +2409,9 @@ const SettingsMenu = ({
         hideCountryLabels: getMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
         disableIdleRotation: getMapSetting(MAP_SETTING_KEYS.disableIdleRotation),
         disableEventCamera: getMapSetting(MAP_SETTING_KEYS.disableEventCamera),
-        // Not getMapSetting: this one ships ON, and an absent key must read as
-        // on rather than off (see mapSettings.js).
+        // Off by default, so getMapSetting: an absent key reads as off.
         limitAiGeneration: getMapSetting(MAP_SETTING_KEYS.limitAiGeneration),
-        // Same again: ships ON.
+        // Off by default too.
         chunkLongJumps: getMapSetting(MAP_SETTING_KEYS.chunkLongJumps),
         // Ships ON: an absent key reads as on (see mapSettings.js).
         lookupFunctions: getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions),
@@ -2439,7 +2438,8 @@ const SettingsMenu = ({
         setMapSettingValue(MAP_SETTING_KEYS.labelFont, value);
     };
 
-    // Telemetry switches (telemetry.js): their own keys, both on by default.
+    // Telemetry switches (telemetry.js): their own keys; recording is on by
+    // default, rating off.
     const [telemetryOn, setTelemetryOn] = useState(() => isTelemetryEnabled());
     const [ratingOn, setRatingOn] = useState(() => isRatingEnabled());
     // Logged here rather than in telemetry.js, which imports nothing on purpose.
