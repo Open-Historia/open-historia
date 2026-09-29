@@ -13,6 +13,7 @@ import {
   resolveScenarioReferencePacks,
 } from "../../../runtime/canonReferencePacks.js";
 import { resolvePolityIdentity } from "../../../runtime/polityIdentity.js";
+import { gameDateDayNumber, isCanonicalGameDate } from "../../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -22,10 +23,9 @@ const clone = (value) => {
   return JSON.parse(JSON.stringify(value));
 };
 const unique = (values) => [...new Set(array(values).map(clean).filter(Boolean))];
-const dateKey = (value) => {
-  const match = clean(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match ? Number(`${match[1]}${match[2]}${match[3]}`) : null;
-};
+// A canonical game date's day number, BC included (runtime/gameDates.js), or
+// null. Zero is a date (1970-01-01): test for null, never for truth.
+const dateKey = (value) => (isCanonicalGameDate(clean(value)) ? gameDateDayNumber(clean(value)) : null);
 
 const activePolityKeys = (polities = []) => array(polities)
   .filter((entry) => typeof entry === "string" || entry?.active !== false)
@@ -96,7 +96,7 @@ const seedReferenceInstitutions = (world, scenarioDate, references) => {
 const seedReferenceMemberships = (world, scenarioDate, polities) => {
   const history = resolveScenarioInstitutionMembershipHistory(world, { scenarioDate });
   const scenarioKey = dateKey(scenarioDate);
-  if (!scenarioKey || !history || typeof history !== "object") return { world: clone(world), seededMemberships: 0 };
+  if (scenarioKey === null || !history || typeof history !== "object") return { world: clone(world), seededMemberships: 0 };
   const polityKeys = activePolityKeys(polities);
   const allowed = new Map(polityKeys.map((key) => [key.toLocaleLowerCase(), key]));
   const institutionIdMap = referenceInstitutionIdMap(world, scenarioDate);
@@ -110,7 +110,7 @@ const seedReferenceMemberships = (world, scenarioDate, polities) => {
       const active = array(intervals).find((interval) => {
         const from = dateKey(interval?.from || interval?.joinedAt);
         const to = dateKey(interval?.to || interval?.leftAt);
-        return from && from <= scenarioKey && (!to || (interval?.referenceSnapshot ? scenarioKey <= to : scenarioKey < to));
+        return from !== null && from <= scenarioKey && (to === null || (interval?.referenceSnapshot ? scenarioKey <= to : scenarioKey < to));
       });
       if (!active) continue;
       updates.push({

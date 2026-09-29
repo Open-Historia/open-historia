@@ -16,6 +16,7 @@ import {
   formatGameDateReadable,
   gameDateDaysInMonth,
   gameDateYear,
+  isCanonicalGameDate,
   isGameDate,
   normalizeGameDate,
   parseGameDate,
@@ -98,4 +99,13 @@ test("reads as a date a person would write, with BC spelled out", () => {
   assert.equal(formatGameDateReadable("2016-01-31", "MMM D, YYYY"), "Jan 31, 2016");
   assert.equal(formatGameDateReadable("0044-03-15", "MMMM Do, YYYY"), "March 15th, 44");
   assert.equal(formatGameDateReadable("1200 BCE"), "", "prose dates are left to the caller");
+});
+
+test("a canonical game date is the stored spelling, BC included", () => {
+  assert.equal(isCanonicalGameDate("-0218-03-01"), true);
+  assert.equal(isCanonicalGameDate("2014-04-21"), true);
+  assert.equal(isCanonicalGameDate("-218-03-01"), false, "unpadded");
+  assert.equal(isCanonicalGameDate("0218-03-01 BC"), false, "era word");
+  assert.equal(isCanonicalGameDate("2014-02-30"), false, "no such day");
+  assert.equal(isCanonicalGameDate(""), false);
 });

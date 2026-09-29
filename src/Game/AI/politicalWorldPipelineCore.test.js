@@ -258,3 +258,20 @@ test("unified legacy pipeline propagates one history-authority contract through 
     ["geopolitics", historyAuthority],
   ]);
 });
+
+test("a BC scenario date passes the pipeline's date check, and a misspelt one stops it before any provider call", async () => {
+  let called = 0;
+  const run = (date) => generatePoliticalWorldPipelineCore({
+    scenarioDate: date,
+    polities: [{ polityKey: "Carthage" }],
+    politicalActors: { byPolity: {} },
+    world: { politicalActors: { byPolity: {} } },
+    generatePolitics: async () => { called += 1; throw new Error("politics reached"); },
+    generateGoverningAlignment: async () => alignmentResult,
+    generateGeopolitics: async () => geopoliticalResult,
+  });
+  await assert.rejects(run("-0218-03-01"), /politics reached/);
+  assert.equal(called, 1);
+  await assert.rejects(run("218-03-01 BC"), /canonical scenario date/);
+  assert.equal(called, 1, "no generator ran for the misspelt date");
+});

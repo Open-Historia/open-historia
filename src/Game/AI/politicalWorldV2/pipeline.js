@@ -1,6 +1,7 @@
 /*! Open Historia Continuum — resumable Political World v2 orchestration */
 
 import { materializeScenarioCanon } from "../../../runtime/scenarioCanon.js";
+import { compareGameDates, isCanonicalGameDate } from "../../../runtime/gameDates.js";
 import { resolveScenarioHistoryAuthority } from "../../../runtime/scenarioHistoryAuthority.js";
 import { isFinitePowerScore, refreshPowerStatus } from "../../../runtime/powerStatus.js";
 import { initializePoliticalDispositionsForWorld } from "../../../runtime/politicalDisposition.js";
@@ -28,10 +29,6 @@ const clone = (value) => {
   if (typeof structuredClone === "function") return structuredClone(value);
   return JSON.parse(JSON.stringify(value));
 };
-const dateKey = (value) => {
-  const match = clean(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return match ? Number(`${match[1]}${match[2]}${match[3]}`) : null;
-};
 
 const activePolityKeys = (polities = []) => array(polities)
   .filter((entry) => typeof entry === "string" || entry?.active !== false)
@@ -51,10 +48,8 @@ const temporalVerificationRequiredFor = (world, scenarioDate) => {
   // round-zero-only exact-date verification may use external/reference canon on
   // the target date itself, so retain the future-date safeguard.
   if (authority.referenceAuthority === "round-zero-only") {
-    const scenarioKey = dateKey(scenarioDate);
-    const today = new Date();
-    const todayKey = Number(`${today.getUTCFullYear()}${String(today.getUTCMonth() + 1).padStart(2, "0")}${String(today.getUTCDate()).padStart(2, "0")}`);
-    return Boolean(scenarioKey && scenarioKey <= todayKey);
+    const today = new Date().toISOString().slice(0, 10);
+    return isCanonicalGameDate(scenarioDate) && compareGameDates(scenarioDate, today) <= 0;
   }
 
   return false;
@@ -175,7 +170,7 @@ export const generateOrResumePoliticalWorldV2 = async ({
   const id = clean(scenarioId);
   const scenarioDate = clean(inputs?.scenarioDate);
   if (!id) throw new Error("Political World v2 requires a scenario id.");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(scenarioDate)) throw new Error("Political World v2 requires the canonical saved scenario date.");
+  if (!isCanonicalGameDate(scenarioDate)) throw new Error("Political World v2 requires the canonical saved scenario date.");
 
   const inputFingerprint = buildPoliticalWorldInputFingerprint({
     scenarioId: id,

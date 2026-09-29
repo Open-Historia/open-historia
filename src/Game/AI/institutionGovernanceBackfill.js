@@ -21,6 +21,7 @@ import {
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
 import { buildRoundZeroCanonContextText } from "../../runtime/roundZeroCanonContext.js";
 import { resolveScenarioHistoryAuthority } from "../../runtime/scenarioHistoryAuthority.js";
+import { isCanonicalGameDate } from "../../runtime/gameDates.js";
 import {
   applyGeopoliticalInstitutionGovernanceBaseline,
   generateGeopoliticalInstitutionGovernanceJob,
@@ -72,7 +73,7 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
   }
 
   const scenarioDate = clean(game?.startDate || game?.gameDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(scenarioDate)) {
+  if (!isCanonicalGameDate(scenarioDate)) {
     throw new Error("Cannot resolve institutional voting law because this campaign has no canonical scenario start date.");
   }
   const capturedGameDate = clean(game?.gameDate);

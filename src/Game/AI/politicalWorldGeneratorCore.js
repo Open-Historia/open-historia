@@ -12,6 +12,7 @@ import {
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
 import { POLITICAL_TRAIT_KEYS, validatePoliticalTraitPatch } from "../../runtime/politicalTraitRegistry.js";
+import { compareGameDates, isCanonicalGameDate } from "../../runtime/gameDates.js";
 
 export const POLITICAL_WORLD_GENERATOR_RESULT_VERSION = 1;
 export const POLITICAL_WORLD_GENERATOR_MAX_ATTEMPTS = 2;
@@ -2078,10 +2079,10 @@ const shouldHistoricallyVerifyEntry = (entry) => {
 };
 
 const scenarioDateIsNotFuture = (scenarioDate, generatedAt) => {
-  const start = /^\d{4}-\d{2}-\d{2}$/.test(clean(scenarioDate)) ? clean(scenarioDate) : "";
+  const start = isCanonicalGameDate(clean(scenarioDate)) ? clean(scenarioDate) : "";
   const generated = clean(generatedAt).slice(0, 10);
-  if (!start || !/^\d{4}-\d{2}-\d{2}$/.test(generated)) return true;
-  return start <= generated;
+  if (!start || !isCanonicalGameDate(generated)) return true;
+  return compareGameDates(start, generated) <= 0;
 };
 
 const temporalAuthorityVerificationAllowed = (scenarioDate, generatedAt, historyAuthority) => {

@@ -5,6 +5,7 @@ import {
   POLITICAL_WORLD_GENERATION_SCHEMA_VERSION,
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
+import { isCanonicalGameDate } from "../../runtime/gameDates.js";
 
 export const POLITICAL_GOVERNING_ALIGNMENT_BATCH_SIZE = 48;
 export const POLITICAL_GOVERNING_ALIGNMENT_MAX_ATTEMPTS = 2;
@@ -337,7 +338,7 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
 } = {}) => {
   if (typeof callModel !== "function") throw new Error("Governing alignment repair requires a callModel function");
   const date = clean(scenarioDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Governing alignment repair requires the canonical scenario date");
+  if (!isCanonicalGameDate(date)) throw new Error("Governing alignment repair requires the canonical scenario date");
   const actors = politicalActors?.byPolity ?? {};
   const polityKeys = (Array.isArray(polities) ? polities : [])
     .map((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey))

@@ -81,6 +81,13 @@ export const formatGameDate = (parts) => {
 
 export const normalizeGameDate = (value) => formatGameDate(parseGameDate(value));
 
+// Already in the canonical text above (a stored scenario date, a contract that
+// asks for YYYY-MM-DD): BC years included, no other spelling.
+export const isCanonicalGameDate = (value) => {
+  const raw = text(value);
+  return Boolean(raw) && normalizeGameDate(raw) === raw;
+};
+
 // Days since 1970-01-01, or null.
 export const gameDateDayNumber = (value) => {
   const parts = parseGameDate(value);
