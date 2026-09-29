@@ -79,3 +79,11 @@ test("a rename onto a name the old registry still holds keeps the world but move
   assert.equal(out.world, world);
   assert.equal(out.game.country, "Nippon");
 });
+
+test("after a refused step, a later rename does not move the other polity's records", () => {
+  const world = { polityOverrides: { Japan: { name: "Japan" }, Nippon: { name: "Nippon" } }, countryTags: { Japan: ["imperial"], Nippon: ["shogunate"] } };
+  const renames = [{ from: "Japan", to: "Nippon" }, { from: "Nippon", to: "Empire of Japan" }];
+  const out = scenarioAfterWorkshopRenames(world, { country: "Japan" }, renames);
+  assert.deepEqual(out.world.countryTags, { Japan: ["imperial"], Nippon: ["shogunate"] });
+  assert.equal(out.game.country, "Empire of Japan");
+});

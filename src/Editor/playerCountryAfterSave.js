@@ -41,16 +41,27 @@ export const playerCountryAfterSave = (currentCountry, seed) => {
 export const scenarioAfterWorkshopRenames = (world, game, renames) => {
   let nextWorld = world ?? {};
   let country = game?.country;
+  // Names whose world records a refused step left under an older name: the
+  // records under such a name belong to another polity, so a later rename of
+  // it must not move them.
+  const stranded = new Set();
   for (const rename of Array.isArray(renames) ? renames : []) {
     const from = String(rename?.from ?? "").trim();
     const to = String(rename?.to ?? "").trim();
     if (!from || !to || from === to) continue;
-    try {
-      nextWorld = renamePolityInWorld(nextWorld, from, to).world;
-    } catch (error) {
-      // The old registry already holds the new name (a polity deleted in the
-      // Workshop and its name reused): its records are left as they are.
-      console.warn("[editor] could not carry a rename into the scenario's world:", error);
+    if (stranded.has(from)) {
+      stranded.delete(from);
+      stranded.add(to);
+    } else {
+      try {
+        nextWorld = renamePolityInWorld(nextWorld, from, to).world;
+        stranded.delete(to);
+      } catch (error) {
+        // The old registry already holds the new name (a polity deleted in the
+        // Workshop and its name reused): its records are left as they are.
+        console.warn("[editor] could not carry a rename into the scenario's world:", error);
+        stranded.add(to);
+      }
     }
     if (clean(country) === from) country = to;
   }
