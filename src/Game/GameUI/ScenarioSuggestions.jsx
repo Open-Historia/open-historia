@@ -34,7 +34,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "../../runtime/scenarioSuggestion.js";
-import { buildDetailSave, detailChangeStatus, detailValueIn } from "../../runtime/suggestionApply.js";
+import { applyToSnapshot, buildDetailSave, detailChangeStatus, detailValueIn, diffWords, inverseOf } from "../../runtime/suggestionApply.js";
 import { openHubSuggestions } from "../../../server/hubProvenance.js";
 import { FEATURE_DEFINITIONS } from "../../../server/gameFeatures.js";
 import { PROMPT_EDITOR_SECTIONS } from "../AI/gameplayPrompts.js";
@@ -147,7 +147,7 @@ const promptLabelOf = (path) => {
 };
 
 // Where in the editor a details change lives, and what it is called there.
-export const describeDetailChange = (change) => {
+const describeDetailChange = (change) => {
   if (change.kind === "field") {
     const [area, ...rest] = change.path;
     if (area === "features") {
@@ -167,61 +167,6 @@ export const describeDetailChange = (change) => {
   if (change.kind === "institutionLogos") return { tab: "Politics", title: "Institution logos", detail: "" };
   if (change.kind === "cover") return { tab: "Assets", title: "Cover Image", detail: "" };
   return { tab: "", title: change.kind, detail: "" };
-};
-
-// Word by word, like tracked changes: what was taken out and what was put in.
-const tokens = (text) => String(text ?? "").split(/(\s+)/).filter((part) => part !== "");
-export const diffWords = (before, after) => {
-  const a = tokens(before);
-  const b = tokens(after);
-  if (a.length * b.length > 2_500_000) {
-    return [...(a.length ? [{ type: "del", text: a.join("") }] : []), ...(b.length ? [{ type: "add", text: b.join("") }] : [])];
-  }
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const table = new Uint32Array(rows * cols);
-  for (let i = a.length - 1; i >= 0; i -= 1) {
-    for (let j = b.length - 1; j >= 0; j -= 1) {
-      table[i * cols + j] = a[i] === b[j] ? table[(i + 1) * cols + j + 1] + 1 : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1]);
-    }
-  }
-  const parts = [];
-  const push = (type, text) => {
-    const last = parts[parts.length - 1];
-    if (last?.type === type) last.text += text;
-    else parts.push({ type, text });
-  };
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) { push("same", a[i]); i += 1; j += 1; }
-    else if (table[(i + 1) * cols + j] >= table[i * cols + j + 1]) { push("del", a[i]); i += 1; }
-    else { push("add", b[j]); j += 1; }
-  }
-  while (i < a.length) { push("del", a[i]); i += 1; }
-  while (j < b.length) { push("add", b[j]); j += 1; }
-  // A replaced phrase reads as one: the words taken out together, then the
-  // words put in, rather than alternating word by word. The spaces between
-  // changed words belong to both sides.
-  const grouped = [];
-  let removed = "";
-  let added = "";
-  const flush = () => {
-    if (removed) grouped.push({ type: "del", text: removed });
-    if (added) grouped.push({ type: "add", text: added });
-    removed = "";
-    added = "";
-  };
-  parts.forEach((part, index) => {
-    const between = part.type === "same" && !part.text.trim()
-      && parts[index - 1] && parts[index - 1].type !== "same" && parts[index + 1] && parts[index + 1].type !== "same";
-    if (part.type === "del") removed += part.text;
-    else if (part.type === "add") added += part.text;
-    else if (between) { removed += part.text; added += part.text; }
-    else { flush(); grouped.push(part); }
-  });
-  flush();
-  return grouped;
 };
 
 const TrackedText = ({ before, after }) => {
@@ -325,7 +270,7 @@ const DetailValue = ({ change, coverBefore }) => {
   );
 };
 
-const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, onReject, onUndo, coverBefore, touch }) => {
+const DetailChangeRow = ({ change, status, decision, canUndo = true, busy, readOnly, onAccept, onReject, onUndo, coverBefore, touch }) => {
   const label = describeDetailChange(change);
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, display: "grid", gap: "0.45rem", padding: "0.65rem 0.75rem" }}>
@@ -347,7 +292,9 @@ const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, o
               <span style={{ color: decision === "accepted" ? "#86efac" : "rgba(255,255,255,0.55)", fontSize: "0.78rem", fontWeight: 700 }}>
                 {decision === "accepted" ? "Accepted" : "Rejected"}
               </span>
-              <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+              {canUndo
+                ? <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+                : <span style={quietTextStyle}>It can no longer be undone here: the game was closed after it was accepted. Change it back in the editor.</span>}
             </>
           ) : (
             <>
@@ -597,27 +544,22 @@ export const SuggestChangesDialog = ({ scenario, onClose }) => {
 
 // The review record's key: the comment for a suggestion found on the hub, the
 // file's own id for one opened from a file.
-export const suggestionReviewKey = (source) => source?.ref?.id || source?.suggestion?.id || "";
+const suggestionReviewKey = (source) => source?.ref?.id || source?.suggestion?.id || "";
 
 const decisionsOf = (review) => ({
   accepted: new Set(review?.accepted ?? []),
   rejected: new Set(review?.rejected ?? []),
 });
 
-const setDetailValueIn = (snapshot, change, value) => {
-  if (!snapshot) return;
-  if (change.kind === "field") {
-    const [area, ...rest] = change.path;
-    if (area === "meta" || area === "game" || area === "world") snapshot[area][rest[0]] = value;
-    else if (area === "features") snapshot.features[rest[0]] = { ...(snapshot.features[rest[0]] ?? {}), [rest[1]]: value };
-    else if (area === "prompts") snapshot.prompts[rest.join(".")] = value;
-  } else if (change.kind === "stats") snapshot.stats = value;
-  else if (change.kind === "institutionLogos") snapshot.institutionLogos = value;
-  else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
+// What Undo puts back, per review: change id -> inverse change. Kept outside
+// the dialog, so closing it, or going to the Workshop and back, keeps it;
+// kept until the game closes, after which an accepted change has no Undo.
+const undoStore = new Map();
+const undoesOf = (scenarioId, key) => {
+  const id = `${scenarioId}\n${key}`;
+  if (!undoStore.has(id)) undoStore.set(id, new Map());
+  return undoStore.get(id);
 };
-
-// A change that puts back `value` where `change` went: what Undo applies.
-const inverseOf = (change, value, extra = {}) => ({ ...change, from: change.to, to: value, ...extra });
 
 export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap, onChanged, onLoaded, onRejectContributor }) => {
   const touch = useTouchPrimary();
@@ -631,7 +573,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const [busy, setBusy] = useState(false);
   const snapshotRef = useRef(null);
   const coverRef = useRef(null); // the author's cover before any accept: { base64, contentType } | null
-  const undoRef = useRef(new Map()); // change id -> inverse change
+  const undoes = useMemo(() => undoesOf(scenario?.id, key), [scenario?.id, key]);
 
   useEffect(() => {
     let alive = true;
@@ -707,14 +649,12 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     try {
       for (const change of pending) {
         const before = change.kind === "cover" ? coverRef.current : detailValueIn(snapshotRef.current, change);
-        undoRef.current.set(change.id, change.kind === "cover"
+        undoes.set(change.id, change.kind === "cover"
           ? inverseOf(change, before ? { hash: before.hash, contentType: before.contentType, base64: before.base64 } : null)
           : inverseOf(change, before));
       }
       await applyChanges(pending);
-      for (const change of pending) {
-        setDetailValueIn(snapshotRef.current, change, change.kind === "cover" ? change.to?.hash ?? null : change.to);
-      }
+      for (const change of pending) applyToSnapshot(snapshotRef.current, change);
       setStatuses((current) => ({ ...current, ...Object.fromEntries(pending.map((change) => [change.id, "applied"])) }));
       await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected });
     } catch (nextError) {
@@ -736,13 +676,14 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const undo = async (change) => {
     setBusy(true);
     try {
-      if (decisions.accepted.has(change.id)) {
-        const inverse = undoRef.current.get(change.id);
-        if (inverse) {
-          await applyChanges([inverse]);
-          setDetailValueIn(snapshotRef.current, change, inverse.kind === "cover" ? inverse.to?.hash ?? null : inverse.to);
-          undoRef.current.delete(change.id);
-        }
+      // An accepted change is undone only by putting back what was there; one
+      // accepted before the game was last closed has nothing to put back,
+      // and its row offers no Undo.
+      const inverse = decisions.accepted.has(change.id) ? undoes.get(change.id) : null;
+      if (decisions.accepted.has(change.id) && !inverse) return;
+      if (inverse) {
+        await applyChanges([inverse]);
+        applyToSnapshot(snapshotRef.current, inverse);
       }
       const accepted = new Set(decisions.accepted);
       const rejected = new Set(decisions.rejected);
@@ -750,6 +691,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       rejected.delete(change.id);
       setStatuses((current) => ({ ...current, [change.id]: detailChangeStatus(change, snapshotRef.current) }));
       await decide({ accepted, rejected }, "reviewing");
+      undoes.delete(change.id);
     } catch (nextError) {
       setError(nextError?.message || String(nextError));
     } finally {
@@ -829,6 +771,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
                   change={change}
                   status={statuses[change.id]}
                   decision={decisions.accepted.has(change.id) ? "accepted" : decisions.rejected.has(change.id) ? "rejected" : null}
+                  canUndo={!decisions.accepted.has(change.id) || undoes.has(change.id)}
                   busy={busy}
                   coverBefore={coverBefore}
                   touch={touch}
