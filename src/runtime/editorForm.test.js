@@ -2,7 +2,7 @@
 // Run: node --test src/runtime/editorForm.test.js
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { changedFields, followSavedFields } from "./editorForm.js";
+import { changedFields, followSavedFields, formDiffers } from "./editorForm.js";
 
 test("after a Workshop save the form follows the country and date it moved, unless the author changed them", () => {
   // The Workshop deleted Prussia and the save moved the player to Austria and
@@ -31,4 +31,13 @@ test("a game editor save carries only the fields changed in the form", () => {
   assert.deepEqual(changedFields(form, baseline, ["country", "gameDate", "language"]), {}, "nothing for game.json: its date stays where play took it");
   assert.deepEqual(changedFields(form, baseline, ["labelFont", "language"]), { labelFont: "Georgia" });
   assert.deepEqual(changedFields({ ...form, gameDate: "" }, baseline, ["gameDate"]), { gameDate: "" }, "a field cleared on purpose is a change");
+});
+
+test("a form differs from what is saved only when a value does, not the order it was written in", () => {
+  const saved = { description: "A long passage", prompts: { guidance: { leader: { tone: "Grim" }, tasks: {} } } };
+  assert.equal(formDiffers({ prompts: { guidance: { tasks: {}, leader: { tone: "Grim" } } }, description: "A long passage" }, saved), false);
+  assert.equal(formDiffers({ ...saved, description: "A longer passage" }, saved), true);
+  assert.equal(formDiffers({ ...saved, prompts: { guidance: { leader: { tone: "Hopeful" }, tasks: {} } } }, saved), true);
+  assert.equal(formDiffers({ custom: false, sections: [] }, { custom: false, sections: [] }), false);
+  assert.equal(formDiffers({ sections: [{ key: "a" }, { key: "b" }] }, { sections: [{ key: "b" }, { key: "a" }] }), true, "a list's order is its content");
 });

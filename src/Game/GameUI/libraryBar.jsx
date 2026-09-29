@@ -64,7 +64,7 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
 import { createLatestRequest } from "../../runtime/latestRequest.js";
-import { changedFields, followSavedFields } from "../../runtime/editorForm.js";
+import { changedFields, followSavedFields, formDiffers } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
 import { buildScenarioCountryOptions, isOfferedCountry, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
@@ -1818,6 +1818,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [editorDetails, setEditorDetails] = useState(null);
   const [editorState, setEditorState] = useState(null);
   const [editorStats, setEditorStats] = useState(() => normalizeStatsEditorValue(null));
+  // The Stats sheet as last loaded or saved, to tell an unsaved edit from none.
+  const editorStatsSavedRef = useRef(editorStats);
+  const adoptSavedStats = (value) => {
+    editorStatsSavedRef.current = value;
+    setEditorStats(value);
+  };
   // The open scenario's Stats sheet failed to download: Save leaves it alone.
   const [editorStatsFailed, setEditorStatsFailed] = useState(false);
   const [editorError, setEditorError] = useState(null);
@@ -1840,11 +1846,24 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setEditorKind(null);
     setEditorDetails(null);
     setEditorState(null);
-    setEditorStats(normalizeStatsEditorValue(null));
+    adoptSavedStats(normalizeStatsEditorValue(null));
     setEditorStatsFailed(false);
     setEditorError(null);
     setEditorSection("overview");
     setPromptSectionKey("leader");
+  };
+
+  // The drawer's X and a phone's Back: asks first when the form or the Stats
+  // sheet holds changes not saved. Returns false when the player stays, which
+  // keeps Back's step (runtime/backToClose.js).
+  const closeEditor = () => {
+    const unsaved = Boolean(editorKind && editorDetails && editorState) && (
+      formDiffers(editorState, editorKind === "scenario" ? buildScenarioEditorState(editorDetails) : buildGameEditorState(editorDetails))
+      || formDiffers(editorStats, editorStatsSavedRef.current)
+    );
+    if (unsaved && !window.confirm("Close the editor? The changes you have not saved will be lost.")) return false;
+    resetEditor();
+    return true;
   };
 
   const openScenarioEditor = async (scenarioId) => {
@@ -1866,7 +1885,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       setEditorKind("scenario");
       setEditorDetails(details);
       setEditorState(buildScenarioEditorState(details));
-      setEditorStats(normalizeStatsEditorValue(statsAsset));
+      adoptSavedStats(normalizeStatsEditorValue(statsAsset));
       setEditorStatsFailed(statsFailed);
       if (statsFailed) setEditorError("This scenario's Stats sheet could not be loaded, so Save leaves it as it is. Close the editor and open it again to edit it.");
       setEditorSection("overview");
@@ -2699,12 +2718,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           }
           const blob = new Blob([JSON.stringify(serializeStatSheet(definition), null, 2)], { type: "application/json" });
           details = await uploadScenarioAsset(editorDetails.scenario.id, "stats", blob);
-          setEditorStats({ custom: true, version: definition.version, sections: definition.sections });
+          adoptSavedStats({ custom: true, version: definition.version, sections: definition.sections });
         } else {
           if (editorDetails.assetStatus?.stats || details.assetStatus?.stats) {
             details = await clearScenarioAsset(editorDetails.scenario.id, "stats");
           }
-          setEditorStats(normalizeStatsEditorValue(null));
+          adoptSavedStats(normalizeStatsEditorValue(null));
         }
         setEditorDetails(details);
         setEditorState(buildScenarioEditorState(details));
@@ -2793,12 +2812,9 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         editorKind === "scenario"
           ? await uploadScenarioAsset(editorDetails.scenario.id, assetKey, file)
           : await uploadGameAsset(editorDetails.game.id, assetKey, file);
+      // The details only: the form holds no asset, and rebuilding it from the
+      // saved record threw away everything typed since the last Save.
       setEditorDetails(details);
-      setEditorState(
-        editorKind === "scenario"
-          ? buildScenarioEditorState(details)
-          : buildGameEditorState(details),
-      );
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -2819,12 +2835,8 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         editorKind === "scenario"
           ? await clearScenarioAsset(editorDetails.scenario.id, assetKey)
           : await clearGameAsset(editorDetails.game.id, assetKey);
+      // As an upload: the details only, so the form keeps what was typed.
       setEditorDetails(details);
-      setEditorState(
-        editorKind === "scenario"
-          ? buildScenarioEditorState(details)
-          : buildGameEditorState(details),
-      );
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {
@@ -3067,7 +3079,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // itself has no Back of its own here: its close button saves first and asks
   // before dropping work, and that lives in src/Editor/MapEditor.jsx.
   useBackToClose(menuOpen && menuOverGame && Boolean(activeGame), () => setMenuOpen(false));
-  useBackToClose(Boolean(editorKind && editorDetails && editorState) && !isMapEditorOpen, resetEditor);
+  useBackToClose(Boolean(editorKind && editorDetails && editorState) && !isMapEditorOpen, closeEditor);
   useBackToClose(Boolean(countryPicker), closeCountryPicker);
   // The difficulty step goes back to the country step, as its own Back does.
   useBackToClose(Boolean(countryPicker && difficultyPick), () => setDifficultyPick(null));
@@ -4130,7 +4142,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         onChange={handleEditorChange}
         onChangePrompt={handlePromptChange}
         onClearAsset={handleEditorAssetClear}
-        onClose={resetEditor}
+        onClose={closeEditor}
         onDelete={handleDelete}
         onExportBundle={handleExportBundle}
         onExportPrompts={handleExportPrompts}

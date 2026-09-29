@@ -28,3 +28,16 @@ export const changedFields = (form, baseline, keys) => {
   }
   return patch;
 };
+
+// JSON with every object's keys in order, so two equal values compare equal
+// whatever order their keys were written in.
+const stableJson = (value) => JSON.stringify(value ?? null, (_key, entry) => (
+  entry && typeof entry === "object" && !Array.isArray(entry)
+    ? Object.fromEntries(Object.keys(entry).sort().map((key) => [key, entry[key]]))
+    : entry
+));
+
+// Whether the form holds anything not saved: it differs from the form the
+// saved record builds. Closing the drawer asks first when it does; authors
+// write long passages here, and one Back press used to throw them away.
+export const formDiffers = (form, saved) => stableJson(form) !== stableJson(saved);
