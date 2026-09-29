@@ -37,7 +37,7 @@ import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { fetchCommunityFlags, loadCommunityFlagDataUrl } from "../../runtime/communityFlags.js";
 import { logDebugEvent } from "../../runtime/debugLog.js";
 import { getLibraryState } from "../../runtime/library.js";
-import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen } from "../../runtime/gameState.js";
+import { readChatsState, writeChatsState, readWorldState, readWorldStateView, writeWorldState, applyProjectOpsToWorld, viewAsSeen, mergeChatKnowledgeCursors } from "../../runtime/gameState.js";
 import { describeRole, livePuppetsFor, puppetKindLabel } from "../../runtime/puppets.js";
 import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
@@ -77,12 +77,11 @@ const saveAllChats = async (chats) => {
 };
 
 // How far each leader has been shown of its other threads
-// (AI/crossChatKnowledge.js). Written straight to world state, merged rather
-// than replaced: a turn in one chat must not forget what another chat showed.
+// (AI/crossChatKnowledge.js), merged into world state (gameState.js
+// mergeChatKnowledgeCursors: queued, coalesced and quiet).
 const saveChatKnowledgeCursors = async (cursors) => {
     try {
-        const world = await readWorldState({ force: true });
-        await writeWorldState({ ...world, chatKnowledgeCursors: { ...(world?.chatKnowledgeCursors ?? {}), ...cursors } });
+        await mergeChatKnowledgeCursors(cursors);
     } catch (err) { console.error("Failed to save what each leader has been shown:", err); }
 };
 

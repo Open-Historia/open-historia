@@ -4559,6 +4559,37 @@ const enqueueCanonicalGenerationWrite = (write) => {
   return pending;
 };
 
+// How far each leader has been shown of its other threads
+// (AI/crossChatKnowledge.js), merged into the saved world after a diplomatic
+// reply. Merged rather than replaced: a turn in one chat must not forget what
+// another chat showed. In the canonical write queue, so it can neither land
+// between a canonical commit's read and its write nor be overwritten by one,
+// and it re-reads the world first. Quiet: no echo to parse and no
+// world-updated event for the map and every panel, for a few ids nothing on
+// screen shows. Calls made while one is waiting to run join it, and nothing is
+// written when every cursor already stands at what it is given.
+let pendingCursorMerge = null;
+
+export const mergeChatKnowledgeCursors = (cursors) => {
+  if (!cursors || typeof cursors !== "object" || !Object.keys(cursors).length) return Promise.resolve(false);
+  if (pendingCursorMerge) {
+    Object.assign(pendingCursorMerge.cursors, cursors);
+    return pendingCursorMerge.done;
+  }
+  const merge = { cursors: { ...cursors }, done: null };
+  pendingCursorMerge = merge;
+  merge.done = enqueueCanonicalGenerationWrite(async () => {
+    if (pendingCursorMerge === merge) pendingCursorMerge = null;
+    const world = await readWorldState({ force: true });
+    const current = world?.chatKnowledgeCursors ?? {};
+    const moved = Object.entries(merge.cursors).some(([key, value]) => JSON.stringify(current[key]) !== JSON.stringify(value));
+    if (!moved) return false;
+    await writeWorldState({ ...world, chatKnowledgeCursors: { ...current, ...merge.cursors } }, { echo: false, emitEvents: false });
+    return true;
+  });
+  return merge.done;
+};
+
 export const writeCanonicalTurnState = (state = {}, {
   expectedGameId = "",
   emitEvents = true,
