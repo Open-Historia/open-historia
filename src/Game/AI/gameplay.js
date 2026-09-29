@@ -302,7 +302,7 @@ import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
 import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
-import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor } from "../../runtime/turnCommit.js";
+import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor, storedActionsForMerge } from "../../runtime/turnCommit.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -8013,10 +8013,12 @@ const applySimulationResult = async ({
   // new one. The turn's settlement stands for the orders it read.
   let actionsToWrite;
   try {
+    // No defaultValue: a failed read is not an empty queue (storedActionsForMerge).
+    const storedActions = storedActionsForMerge(await readJson(JSON_URLS.actions, { force: true }));
     actionsToWrite = mergeActionsAtCommit({
       base: normalizeActions(baseActions),
       turn: nextActions,
-      stored: await readActionsState({ force: true }),
+      stored: storedActions && normalizeActions(storedActions),
     });
   } catch {
     actionsToWrite = nextActions;

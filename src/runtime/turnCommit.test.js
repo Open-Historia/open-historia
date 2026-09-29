@@ -6,6 +6,7 @@ import {
   mergeActionsAtCommit,
   restorePointProblem,
   restorePointsFor,
+  storedActionsForMerge,
   undoableTurns,
 } from "./turnCommit.js";
 
@@ -45,6 +46,18 @@ test("nothing changed while the turn ran: the turn's list is written as it was",
 test("a failed re-read writes the turn's list, as before the re-read existed", () => {
   const turn = [order("a", "resolved")];
   assert.equal(mergeActionsAtCommit({ base: [order("a")], turn, stored: null }), turn);
+});
+
+test("a stored list the merge cannot match by id is not merged, so no order is written twice", () => {
+  const stored = [order("a"), order("new")];
+  assert.equal(storedActionsForMerge(stored), stored);
+  assert.deepEqual(storedActionsForMerge([]), [], "every order deleted while the turn ran");
+  // Saved without an id: normalizeActions would give it a fresh one on every read.
+  assert.equal(storedActionsForMerge([order("a"), { kind: "action", text: "Hold the line" }]), null);
+  assert.equal(storedActionsForMerge(["Hold the line"]), null);
+  // Not a list at all (a failed or garbled read).
+  assert.equal(storedActionsForMerge(null), null);
+  assert.equal(storedActionsForMerge({}), null);
 });
 
 test("a held turn may be retried only on the round it was read on", () => {

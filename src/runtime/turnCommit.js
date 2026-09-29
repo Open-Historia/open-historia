@@ -33,6 +33,16 @@ export const mergeActionsAtCommit = ({ base = [], turn = [], stored = null } = {
   return queued.length ? [...kept, ...queued] : kept;
 };
 
+// The stored list as read again at the write (raw, before normalizeActions), or
+// null when the merge cannot trust it and the turn's list is written, as before:
+// the read failed, or an entry was saved without an id. normalizeActions gives
+// such an entry a new id on every read, so it could never be matched with the
+// turn's copy and would be kept as an order queued meanwhile: written twice.
+// The read must not carry a defaultValue either: a failed read served as []
+// would look like every order deleted while the turn ran.
+export const storedActionsForMerge = (raw) =>
+  (Array.isArray(raw) && raw.every((entry) => idOf(entry)) ? raw : null);
+
 // A turn held for the player (a failed segment, the Projects board) was
 // generated from the campaign as it stood when it was read, and may only land on
 // that. While it waits the world is locked to the player's edits and the
