@@ -1,6 +1,6 @@
 # In-Game UI (HUD, Panels & Buttons)
 
-The in-game UI is a flat set of `position: fixed` React components layered over a full-screen MapLibre canvas — there is no single container div, each widget positions itself against the viewport edges and competes for the stacking order through an explicit z-index ladder. `src/Game/GameUI/main.jsx` is the shell: it mounts every HUD element, owns the panel-open booleans, and computes `rightShift` (the horizontal offset that slides the bottom-right cluster left when the advisor drawer opens). Everything the UI reads or writes flows through the runtime state stores (`readJson`/`writeJson`, `readGameData`/`readWorldState`, `useLibraryState`) and the AI layer (`src/Game/AI/*`) — the components hold almost no game data of their own, they poll the stores on a 5-second cadence and push edits back.
+The in-game UI is a flat set of `position: fixed` React components layered over a full-screen MapLibre canvas — there is no single container div, each widget positions itself against the viewport edges and competes for the stacking order through an explicit z-index ladder. `src/Game/GameUI/main.jsx` is the shell: it mounts every HUD element, owns the panel-open booleans, and computes `advisorDockStyle` (the `right`, `transform` and `transition` that keep the top-right cluster beside the advisor drawer as it opens, closes and is resized). Everything the UI reads or writes flows through the runtime state stores and the AI layer (`src/Game/AI/*`) — the components hold almost no game data of their own. Most read the shared HUD store (`useRuntimeState`, see [state distribution](world-state.md#9-state-distribution-three-stores-no-panel-polls)), which a write updates on arrival, and push edits back through `writeJson` and the `gameState.js` writers; a few panels named below still poll on their own while open.
 
 - Shell & mount point: `src/App.jsx` (`GameApp`) renders `<UI>` = `src/Game/GameUI/main.jsx` once `isReady`, passing `mapRef`, `isGlobeEnabled`, `isTerrainEnabled`, and their setters.
 - Related pages: [World state](world-state.md) · [AI gameplay pipeline](ai-overview.md) · [Map rendering](game-map.md) · [Library & scenarios runtime](runtime-services.md) · [Diplomacy & chat](ai-overview.md)
@@ -58,7 +58,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `Other` | `other.jsx` | Player-country flag badge (desktop only) |
 | `Search` | `search.jsx` | Place search (Nominatim) → `map.flyTo` |
 | `ForcesPanel` | `forces.jsx` | Unit list + deploy controls + mode banner |
-| `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; sits at `rightShift` |
+| `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; placed by `advisorDockStyle` |
 | `AdvisorPanel` | `advisor.jsx` (lazy) | Advisor chat + Stats tabs, resizable drawer |
 | `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from Settings) |
 | `InteractivePanel` | `interactive.jsx` (lazy) | Interactive events: an event a time skip offered, played out as a scene beat by beat (opened by `oh:open-interactive-event` from the offered event's card or the time panel). See [§10-bis](#10-bis-interactive-events--srcgamegameuiinteractivejsx) |
@@ -299,11 +299,13 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 
 ## 6. Date widget & timeline — `src/Game/GameUI/time.jsx`
 
-`DateWidget` (`time.jsx:1226`) is the top-right pill (z 9999) plus two slide-up panels (z 9998). It's the time-advance control center.
+`DateWidget` (`time.jsx`) is the top-right pill (z 9999) plus two slide-up panels (z 9998). It's the time-advance control center.
 
 ### 6.1 The pill
 
-Shows player country + formatted date (`«` opens Events history, `»` opens the Skip panel; `»` becomes a spinner during a jump). `rightShift`/`topOffset` come from `Main`. Polls `readGameData`/`readEventsState`/`readWorldState` every 5 s, but **never regresses** — a stale poll with a lower round/date than what's on screen is skipped (`gameStampRef`), so a just-completed jump is never reverted.
+Shows player country + formatted date (`«` opens the Events panel, `»` the Timeline panel; `»` becomes a spinner while a skip, an undo, an intervention or a held turn's retry runs, and pressing it then always opens the Timeline panel). Props from `Main`: `activePanel`/`onSetPanel`/`onTogglePanel` (the panel slot is `Main`'s `activeBottomPanel`), `mapRef`, `dockStyle` (`advisorDockStyle`) and `topOffset`. While something runs, `«` opens the Events panel only during a skip being watched live, so the player can go back to it after looking for Cancel.
+
+It holds no copy of the game: `game`, `events` and `world` come from the shared HUD store (`useRuntimeState`), and a finished turn, undo or intervention is published straight back with `primeRuntimeValue`. The store owns the refresh and the **never-regress** guard — a read behind the published round and date is refused (`isStaleGameRead`, see [the HUD store](world-state.md#the-hud-store-srcruntimeruntimestorejs)), so a just-completed jump is never reverted; the widget only reacts to `oh:rolled-back` by dropping the undone turn's fallback warning.
 
 ### 6.2 Timeline skip panel (`»`)
 
@@ -312,10 +314,13 @@ Shows player country + formatted date (`«` opens Events history, `»` opens the
 | Fixed jumps (6h…1yr) | `runJump(days, "jump")` → `simulateTimelineJump` | `src/Game/AI/gameplay.js` |
 | Custom amount + unit | same, arbitrary days | — |
 | **Auto-jump** | `runJump(365, "auto")` → `simulateAutoJump` (AI picks how far) | — |
-| **↩ Undo last turn** | `runUndo()` → `rollBackToSnapshot(0)`; `undoCount` from `loadRollbackSnapshots` — the Spies file goes back with the turn | rollback snapshots |
-| Cancel (during load) | `cancelJump()` aborts the in-flight `AbortController` | — |
+| **↩ Undo last turn** | `runUndo()` → `rollBackToSnapshot(0)`; `undoCount` from `loadRollbackSnapshotCount` (the snapshot index, not the archive), re-read when the round changes — the Spies file goes back with the turn | rollback snapshots |
+| Cancel (during a skip or a held turn's retry) | `cancelJump()` aborts the in-flight `AbortController` (`jumpAbortRef`) | — |
+| **Retry the segment** / **Retry the board** / **Discard the turn** | A held turn (amber, nothing written): `retryHeldSegment` → `retryPendingJumpSegment`, `retryHeldProjects` → `retryPendingProjectsJump`, or discard. A retry runs as a skip does (`isLoading`): the skips, Undo and Intervene wait, and the progress row carries its Cancel | `gameplay.js` |
 
-On success it swaps to the **history panel** with `visibleEventCount = 1`. Fallback generations surface a warning banner.
+Under the skip buttons a caption says what today has cost and what the next skip will (`RequestsTodayCaption`, `AI/requestBudget.js`): *N of M AI requests used today*, then *a skip uses N, at most M* (*, plus one per extra segment* when long skips are split) or *a skip can use twenty or more*, and *· the last used N*. It turns amber when a tenth of the day's requests or fewer are left (three at least), refreshes on `ai:request-budget` and every minute, and its tooltip says it counts on this device since midnight Pacific time.
+
+**The live skip** (Settings → AI → **Show time skip events as they are written**, on by default, `MAP_SETTING_KEYS.liveSkipEvents`). A skip opens the **Events panel** at once and fills it as the model writes (`onEvents` → `streamedEvents`, from `AI/streamedEvents.js`): each streamed event becomes a card (`liveEventCard`, `buildLiveTurnRecord`, `turnReveal.js`) under a record keyed `live-turn`, with the panel's subtitle the span being written. **Next event** / **Skip to end** reveal them as they arrive; the camera follows, and the map stages each revealed event live onto the world on screen (`liveStageBase`, no snapshot needed since nothing is written yet). The spinner and **Cancel** sit under the cards (`SkipProgressRow`), and the Timeline panel shows the same row. When the turn lands, what the player uncovered is carried over (`captureRevealCarry` / `resolveRevealCarry`): by headline, through the furthest uncovered event that survived the engine's checks, or back to one event when none did; a fallback turn starts from its first event. With the setting off, the skip stays behind the Timeline panel's spinner and lands on the Events panel with its first event shown. Either way a failed, held or cancelled skip goes back to the Timeline panel, where those notices live. Fallback generations surface a warning banner.
 
 While an interactive event is in progress (`isSceneInProgress(world.activeInteractive)`), the jumps, auto-jump and the custom amount are disabled and a yellow note says why, with **Return to the scene** (`oh:open-interactive-event`). Undo stays available, and undoing the turn a scene was built on takes the scene with it. While one is on offer instead (the last skip's, once the reveal has reached its event), a quieter yellow note names it — *⚡ An interactive event is on offer: «title». The next time skip lets it pass.* — with **Play it out**; the skips stay available.
 
@@ -357,7 +362,7 @@ Each card's **N map changes** pill is a button: it opens a *What changed on the 
 
 ### 6.4 Pregame history
 
-If a fresh game (round 1, no events/turns) has a "World Before Round One" briefing and the menu is closed, `maybeGeneratePregameHistory()` runs once (`time.jsx:1351`). The `isMainMenuOpen()` gate ensures tokens aren't spent on a game the player is only hovering past in the menu.
+If a fresh game (round 1, no events/turns) has a "World Before Round One" briefing and the menu is closed, `maybeGeneratePregameHistory()` runs once (the pregame effect in `DateWidget`). The `isMainMenuOpen()` gate ensures tokens aren't spent on a game the player is only hovering past in the menu.
 
 ---
 
