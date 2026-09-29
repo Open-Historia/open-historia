@@ -442,6 +442,10 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     case "polity-rename": {
       const from = change.from;
       const to = change.to;
+      // Both names as they were: the rename carries the country's own colour,
+      // flag and tags to the new name and the suggestion's go over them, so
+      // renaming back alone would leave the suggestion's on the old country.
+      const savedFrom = capturePolity(ctx, from);
       const savedTo = capturePolity(ctx, to);
       api.renameOwner(from, to);
       d.renamePolity(from, to);
@@ -454,6 +458,7 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       return () => {
         api.renameOwner(to, from);
         d.renamePolity(to, from);
+        restorePolity(ctx, savedFrom);
         restorePolity(ctx, savedTo);
       };
     }

@@ -538,7 +538,7 @@ When a player suggests changes to a community scenario, the author reviews the m
   - regions through the map's own API: `setRegionAttrs` for owners, names, types, claims and groups, and `applyRegionPatch` for borders, one undo step;
   - the document's records (countries, groups, cities, units, features, puppet states, the basemap and background) through `useMapDocument`'s setters.
 
-  What a change needs is accepted first (`changeDependencies`: a country or group the suggestion adds). A change written against a country's old name follows a rename the author accepted in the same review. **Undo** takes an acceptance back.
+  What a change needs is accepted first (`changeDependencies`: a country or group the suggestion adds). A change written against a country's old name follows a rename the author accepted in the same review. **Undo** takes an acceptance back. Undoing a rename renames the country back and then puts both names as they were, so the old country gets its own record, colour, flag and tags back, not the suggestion's.
 - **The markup layer** (`useSuggestionMarkup`, zIndex 57). Each change's regions are outlined in amber while it waits, green once accepted and grey once rejected. The suggested new borders are drawn dashed in blue over the old ones, and cities, units and features get a dot. The focused change is drawn in white.
 - **Nothing reaches the scenario until the map is saved**, as with any other edit here. After each save, `review.onSaved(review.decisionsForSave())` records the map decisions in the scenario's `hubReviews`. The suggestion is `done` once every change, on the map and off it, is decided. Closing without saving keeps nothing.
 

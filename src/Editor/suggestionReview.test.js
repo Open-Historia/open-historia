@@ -200,6 +200,34 @@ test("a rename re-keys the country on the map and in the document, and Undo rena
   assert.ok(state.doc.polities.Beta);
 });
 
+test("undoing a rename puts back the country's own colour, flag, tags and record", () => {
+  const { api, state, d, ctx } = setup();
+  d.upsertPolity("Beta", { note: "The old kingdom." });
+  d.setColorOverride("Beta", [9, 9, 9]);
+  d.setFlag("Beta", "data:image/png;base64,OLD");
+  d.setTags("Beta", ["monarchy"]);
+  const before = clone({ polity: state.doc.polities.Beta, color: state.doc.colorOverrides.Beta, flag: state.doc.flags.Beta, tags: state.doc.tags.Beta });
+  const rename = {
+    id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic",
+    record: { name: "Beta Republic", note: "The new republic." }, color: [1, 2, 3], flag: "data:image/png;base64,NEW", tags: ["republic"],
+  };
+  const undo = applyMapChange(rename, ctx);
+  assert.equal(state.doc.polities["Beta Republic"].note, "The new republic.");
+  assert.deepEqual(state.doc.colorOverrides["Beta Republic"], [1, 2, 3]);
+  undo();
+  assert.equal(api.getRegionSummary("r3").owner, "Beta");
+  assert.deepEqual(
+    { polity: state.doc.polities.Beta, color: state.doc.colorOverrides.Beta, flag: state.doc.flags.Beta, tags: state.doc.tags.Beta },
+    before,
+    "the suggestion's values do not stay on the old country",
+  );
+  assert.equal(state.doc.polities["Beta Republic"], undefined);
+  assert.equal(state.doc.colorOverrides["Beta Republic"], undefined);
+  assert.equal(state.doc.flags["Beta Republic"], undefined);
+  assert.equal(state.doc.tags["Beta Republic"], undefined);
+  assert.equal(mapChangeStatus(rename, ctx), "open", "the row is open again, not quietly changed");
+});
+
 test("cities, units, map features, puppets and groups: applied and taken back", () => {
   const { api, state, ctx } = setup();
   const cityChange = { id: "city-change:x", area: "map", kind: "city-change", name: "Alphaville", from: { name: "Alphaville", coord: [0.5, 0.5], population: 1000, capital: false }, to: { name: "Alphaville", coord: [0.5, 0.5], population: 5000, capital: true } };
