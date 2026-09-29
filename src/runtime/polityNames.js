@@ -45,9 +45,11 @@ const seed = async () => {
     countryNames ?? loadCountryNames().catch(() => []),
     readJson(JSON_URLS.world, { defaultValue: {}, clone: false }).catch(() => ({})),
   ]);
+  // A game switched while the read was out: its answer is the old game's, so
+  // read again for the new one. The switch's own ensurePolityNames joined this
+  // read rather than starting its own, so nobody else would.
+  if (startedIn !== generation) return seed();
   countryNames = countries ?? [];
-  // A game switched while the read was out: its answer is the old game's.
-  if (startedIn !== generation) return;
   const newest = writtenDuringSeed ?? world;
   writtenDuringSeed = null;
   loaded = true;

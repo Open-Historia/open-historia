@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { JSON_URLS, primeJson } from "./assets.js";
+import { JSON_URLS, primeJson, setRuntimeAssetEndpoints } from "./assets.js";
 
 // The lookup installs its listeners when it loads, so the window comes first,
 // and each case loads its own copy of the module.
@@ -64,4 +64,41 @@ test("a game switch drops the old game's names and reads the new one's", async (
   await ensurePolityNames();
   assert.equal(polityDisplayName("BOR"), "Borduria");
   assert.ok(told >= 2, "told of the reset and of the new names");
+});
+
+// The switch lands while the first read is still out (a game opened at start-up,
+// say). That read answers for the old save, so the new one's is read after it,
+// and whoever was waiting on the first read gets the new names.
+test("a game switch during the first read still ends with the new game's names", async () => {
+  const { ensurePolityNames, polityDisplayName, subscribePolityNames } = await loadNames();
+  const originalFetch = globalThis.fetch;
+  let releaseOldRead = () => {};
+  const answer = (polityOverrides) => new Response(JSON.stringify({ polityOverrides }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(init.method || "GET").toUpperCase() !== "GET") return new Response("", { status: 404 });
+    if (String(url).includes("v=old-save")) {
+      return new Promise((resolve) => { releaseOldRead = () => resolve(answer({ RUR: { code: "RUR", name: "Kingdom of Ruritania" } })); });
+    }
+    if (String(url).includes("v=new-save")) return answer({ BOR: { code: "BOR", name: "Borduria" } });
+    return new Response("", { status: 404 });
+  };
+  try {
+    setRuntimeAssetEndpoints({ token: "old-save" });
+    subscribePolityNames(() => {});
+    const firstRead = ensurePolityNames();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    setRuntimeAssetEndpoints({ token: "new-save" });
+    globalThis.window.dispatchEvent(new CustomEvent("oh:active-game-changed", { detail: { gameId: "new" } }));
+    releaseOldRead();
+    await firstRead;
+
+    assert.equal(polityDisplayName("BOR"), "Borduria");
+    assert.equal(polityDisplayName("RUR"), "RUR", "the old save's names never come back");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
