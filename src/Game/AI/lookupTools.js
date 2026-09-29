@@ -313,7 +313,7 @@ export const LOOKUP_DIRECTIVE = [
   "1. Before you write ANY regionTransfers, regionControlOps or regionClaims entry, look the region up (find_region or list_regions) and copy its id and exact name into the entry. Never guess a region name. And the reverse holds: an event that narrates a capture, occupation, liberation or cession MUST carry that entry, with the id you looked up — narration alone never moves the map.",
   "2. Every owner field (fromCode, toCode, ownerCode, claimantCode, actorCode) must be a power's exact name as returned by list_powers or power_info. A short form, a translation or a code names nobody.",
   "3. Who owns what around a place comes from map_around (one region and its surroundings, grouped by owner) and border_between (where two powers' regions touch); region_info for one region's neighbours; find_city when you know the city but not the region. Never ask for a whole power's regions just to see a front.",
-  "4. What is already in motion is on the ledgers: storylines, list_projects, war_ledger, relations_between, spy_network. Continue those rather than restarting them.",
+  "4. What is already in motion is on the ledgers: storylines, list_projects, war_ledger, relations_between, spy_network. Continue those rather than restarting them. A polity's politics (government, factions, goals) is political_actor; an institution's members and open business are list_institutions and institution_info.",
   "5. You have at most THREE lookup rounds, and the first is the one that counts: call every function you will need in the same turn (every region you will name, every power you will check, the front you will move on) rather than one per turn.",
   "6. Then call the output function once with the complete answer. Do not narrate your lookups.",
 ].join("\n");
@@ -389,12 +389,14 @@ const distanceSquared = (a, b) => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
  *   chats     the save's chats
  *   units     [{ id, name, type, ownerCode, strength, posture, regionId, lng, lat }]
  *   player    the player's polity name
- *   audience  who is asking (audience.js). Two of these functions answer from
- *             material a government keeps to itself — chat_history and
- *             spy_network — and they answer only what this audience could know.
- *             Every task that carries lookups today is the narrator, so the
- *             default is the narrator; a surface that speaks AS a polity (a
- *             leader, an envoy) MUST pass a viewer, or it can read the player's
+ *   audience  who is asking (audience.js). Seven of these functions answer from
+ *             material a government keeps to itself — chat_history,
+ *             spy_network, list_projects, political_actor, institution_info and
+ *             the subordinations of power_info and relations_between — and they
+ *             answer only what this audience could know. Every structured task
+ *             that carries lookups today is the narrator, so the default is the
+ *             narrator; a surface that speaks AS a polity (a leader, an envoy,
+ *             the advisor) MUST pass a viewer, or it can read the player's
  *             letters to everyone else through a function call.
  */
 export const buildLookupContext = ({ regions = [], world = {}, cities = [], events = [], chats = [], units = [], player = "", audience = SIMULATION_AUDIENCE } = {}) => {

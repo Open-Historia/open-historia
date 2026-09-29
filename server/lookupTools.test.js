@@ -94,6 +94,9 @@ test("the catalogue is well formed and the directive names the rules", () => {
   assert.ok(!isLookupToolName("submit_jump_result"));
   assert.match(LOOKUP_DIRECTIVE, /find_region/);
   assert.match(LOOKUP_DIRECTIVE, /exact name/);
+  // Every lookup the catalogue declares is one the directive can point the model at.
+  assert.equal(LOOKUP_TOOL_NAMES.length, 23);
+  for (const name of ["political_actor", "list_institutions", "institution_info"]) assert.match(LOOKUP_DIRECTIVE, new RegExp(name));
 });
 
 test("list_powers: exact names, counts by current control, the player flagged", () => {
