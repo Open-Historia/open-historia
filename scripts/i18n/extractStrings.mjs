@@ -271,11 +271,16 @@ const DISPLAY_KEYS = new Set([
   "actionLabel", "buttonLabel", "heroTitle", "heroSubtitle", "shortLabel", "longLabel", "question", "answer",
   "explanation", "detail", "details", "note", "warning", "helper", "help", "intro", "tagline", "headline",
   "prompt_label", "noun", "plural", "singular", "verb", "phase", "stage", "step", "publicDescription",
+  // A difficulty level's profile (runtime/difficulty.js), shown in the GM panel.
+  "playerLeniency", "npcCompetence", "consequencePressure", "diplomaticFirmness",
 ]);
 // A camelCase key ending in "Label" (mappedLabel, centerSubLabel) holds display
 // text too, and may be a single lowercase word ("landscape").
 const LABEL_KEY = /^[a-z][A-Za-z0-9]*Label$/;
 const isDisplayKey = (key) => DISPLAY_KEYS.has(key) || LABEL_KEY.test(key ?? "");
+// Keys whose value is a list of display sentences: a difficulty level's
+// `effects` (runtime/difficulty.js), bullets in the GM panel.
+const DISPLAY_LIST_KEYS = new Set(["effects"]);
 const STATUS_CALLS = new Set([
   "setStatus", "setError", "setMessage", "setNotice", "setToast", "showToast", "notify", "alert", "confirm",
   "setHint", "setLabel", "setWarning", "setInfo", "setBanner", "setNote", "setSaveMessage", "setStatusText",
@@ -516,6 +521,14 @@ export const extractFromSource = (code, file, { jsx = true, catchAll = jsx, fact
     },
     ObjectProperty(p) {
       const key = p.node.key?.name ?? p.node.key?.value;
+      if (DISPLAY_LIST_KEYS.has(key) && !p.node.computed && p.node.value?.type === "ArrayExpression") {
+        if (insideNoTranslate(p)) return;
+        for (const el of p.node.value.elements) {
+          const shape = el ? shapeOf(el, code) : null;
+          if (shape) addShape(shape, el, { requireProse: true });
+        }
+        return;
+      }
       if (!isDisplayKey(key) || p.node.computed) return;
       if (insideNoTranslate(p)) return;
       const shape = shapeOf(p.node.value, code);

@@ -132,6 +132,23 @@ test("technical strings are not interface text", () => {
   assert.deepEqual(patterns, []);
 });
 
+test("a difficulty level's profile values and effect bullets are read", () => {
+  const result = extractFromSource(
+    "const LEVEL = { profile: { playerLeniency: \"Very high\", npcCompetence: \"Relaxed\", consequencePressure: \"Low\", diplomaticFirmness: \"Soft\" },\n" +
+    "  effects: [\"NPCs react promptly to threats.\", \"Mistakes have durable consequences.\"], directives: { simulation: \"Resolve uncertainty generously.\" } };\n" +
+    "const other = { effects: [\"boost-economy\"] };",
+    "src/runtime/difficulty.js",
+    { jsx: false, catchAll: false },
+  );
+  assert.deepEqual([...result.exact.keys()].sort(), [
+    "Low", "Mistakes have durable consequences.", "NPCs react promptly to threats.", "Relaxed", "Soft", "Very high",
+  ], "the model's directives and an id list are not interface text");
+  const real = extractTree(process.cwd()).exact;
+  for (const text of ["Interest-based", "Low–medium", "Ambiguous but reasonable player intent is interpreted generously."]) {
+    assert.ok(real.has(text), `${text} is in the catalog`);
+  }
+});
+
 test("tab lists and status messages are read", () => {
   const { exact, patterns } = extract(
     "const TABS = [[\"map\", \"World map\"], [\"stats\", \"Statistics\"]];\n" +
