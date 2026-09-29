@@ -20,6 +20,7 @@ import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
+import { difficultyPassage } from "../../runtime/difficulty.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -910,22 +911,11 @@ export const formatDateReadable = (value) => {
   return parsed.isValid() ? parsed.format("D MMMM YYYY") : normalizeString(value);
 };
 
-export const buildDifficultyGuidance = (difficulty, mode = "general") => {
-  const normalized = normalizeString(difficulty).toLowerCase().replace(/[\s_]+/g, "-");
-  const intro = mode === "chats"
-    ? "Diplomatic concessions and cooperation should scale with the difficulty."
-    : "Long-term success and geopolitical leverage should scale with the difficulty.";
-
-  switch (normalized) {
-    case "very-easy": return `${intro} The player can turn even modest preparation into results, and setbacks should stay forgiving.`;
-    case "easy": return `${intro} The player can convert reasonable preparation into results relatively easily.`;
-    case "hard": return `${intro} The player should need stronger leverage, preparation, and credibility before major outcomes stick.`;
-    case "very-hard":
-    case "extreme": return `${intro} Major outcomes should require overwhelming preparation, sustained leverage, or unusually favorable conditions.`;
-    case "impossible": return `${intro} Outcomes should almost never break the player's way without extraordinary, sustained, multi-front effort.`;
-    default: return `${intro} Outcomes should feel plausible and earned without becoming static.`;
-  }
-};
+// Difficulty 2.0 (runtime/difficulty.js), as the templates carry it: the
+// leader's diplomacy directive, and the time skip's simulation one. Nothing
+// appends a second copy to those prompts.
+export const buildDifficultyGuidance = (difficulty, mode = "general") =>
+  difficultyPassage(difficulty, mode === "chats" ? "diplomacy" : "simulation");
 
 export const buildRecentRoundsWithDates = (bundle) => {
   const history = normalizeArray(bundle.world?.simulationHistory);

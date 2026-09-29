@@ -38,7 +38,6 @@ import {
   parseDiplomaticEnvelope,
 } from "../../runtime/diplomaticEnvelope.js";
 import { chatLanguageDirective, languageDirective } from "../../runtime/i18n.js";
-import { difficultyDirective } from "../../runtime/difficulty.js";
 import { normalizePromptPack } from "./gameplayPrompts.js";
 import { promptTranslationsVersion } from "../../runtime/promptTranslations.js";
 import {
@@ -3392,8 +3391,9 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
         ? describePuppetBriefing(puppetBriefingFor(worldData, speaker, { present: [...countries, playerCountry || gameData?.country] }), speaker)
         : "";
 
-    // Leaders negotiate as softly or ruthlessly as the chosen difficulty.
-    return `${rendered}${politicalSection}${espionage}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}\n\n${difficultyDirective(gameData?.difficulty)}`;
+    // How softly or firmly a leader bargains at the chosen difficulty is in its
+    // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
+    return `${rendered}${politicalSection}${espionage}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 let advisorHistory = [];

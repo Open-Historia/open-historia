@@ -295,7 +295,7 @@ import {
   statSheetKeys,
 } from "../../runtime/statsSheet.js";
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
-import { difficultyDirective, difficultyMeta } from "../../runtime/difficulty.js";
+import { difficultyDirective } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
@@ -2347,12 +2347,6 @@ const JUMP_LIVE_STATE_BANNER = [
   "============================================================",
 ].join("\n");
 
-// The chosen difficulty as the simulation reads it (runtime/difficulty.js).
-const jumpDifficultyDirective = (difficulty) => {
-  const meta = difficultyMeta(difficulty);
-  return `[Difficulty — ${meta.label}]\n${meta.directives?.simulation || meta.directive || ""}`.trim();
-};
-
 // Groups (runtime/groups.js): the rule and the current areas, on every jump,
 // because the world may found one at any time.
 const buildJumpGroupsBlock = (groupsContext) => [
@@ -2380,7 +2374,8 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   } catch {
     // The template's own [Real History Is the Default] still stands.
   }
-  if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
+  // The chosen difficulty is in the template, under its [Difficulty] heading
+  // (${DIFFICULTY_DESCRIPTION_JUMP_FORWARD}, the simulation directive).
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
   blocks.push(buildJumpGroupsBlock(variables.groupsContext));
