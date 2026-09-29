@@ -9,7 +9,7 @@ import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_T
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { dismissRegionPopup } from "./Regions.jsx";
 import { dismissUnitPopup } from "./Units.jsx";
-import { useCardScreenPos } from "./mapCards.js";
+import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -22,11 +22,7 @@ let _dismiss = null;
 export const onFeatureSelected = (payload) => {
   if (!_setSelection || !payload?.name) return;
 
-  const isSame =
-    _currentSelection &&
-    _currentSelection.name === payload.name &&
-    _currentSelection.source === payload.source;
-  if (isSame) {
+  if (isSameFeatureSelection(_currentSelection, payload)) {
     _dismiss?.();
     return;
   }

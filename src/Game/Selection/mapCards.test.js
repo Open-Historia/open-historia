@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { cardScreenPoint, isBehindGlobe } from "./mapCards.js";
+import { cardScreenPoint, isBehindGlobe, isSameFeatureSelection, isSameRegionSelection } from "./mapCards.js";
 
 // A stand-in for MapLibre: a flat map projects longitude straight across the
 // screen, `pixelsPerDegree` to the degree, centred on `center`.
@@ -54,4 +54,30 @@ test("no map or no place, no card", () => {
   assert.equal(cardScreenPoint(null, TOKYO), null);
   assert.equal(cardScreenPoint(fakeMap(), null), null);
   assert.equal(cardScreenPoint(fakeMap(), { lng: Number.NaN, lat: 0 }), null);
+});
+
+test("a second structure of the same name is another structure", () => {
+  const base = { source: "marker", id: "marker-1", name: "Naval Base", lng: 10, lat: 50 };
+  assert.equal(isSameFeatureSelection(base, { ...base }), true, "the same marker closes its card");
+  assert.equal(isSameFeatureSelection(base, { ...base, id: "marker-2", lng: 20 }), false);
+});
+
+test("two towns of one name are told apart by where they are", () => {
+  const springfield = { source: "city", name: "Springfield", lng: -89.65, lat: 39.8 };
+  assert.equal(isSameFeatureSelection(springfield, { ...springfield }), true);
+  assert.equal(isSameFeatureSelection(springfield, { ...springfield, lng: -72.59, lat: 42.1 }), false);
+  assert.equal(isSameFeatureSelection(springfield, { ...springfield, source: "marker" }), false, "a city is never a structure");
+  assert.equal(isSameFeatureSelection(null, springfield), false);
+});
+
+test("two drawn regions of one name are two regions", () => {
+  const first = { COUNTRY: "", NAME_1: "New Region", GID_1: "reg_1" };
+  assert.equal(isSameRegionSelection(first, { ...first }), true);
+  assert.equal(isSameRegionSelection(first, { ...first, GID_1: "reg_2" }), false);
+  assert.equal(
+    isSameRegionSelection({ COUNTRY: "France", NAME_1: "Bretagne" }, { COUNTRY: "France", NAME_1: "Bretagne" }),
+    true,
+    "without ids, the country and the name",
+  );
+  assert.equal(isSameRegionSelection(null, first), false);
 });

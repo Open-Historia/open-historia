@@ -16,7 +16,7 @@ import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { useCardScreenPos } from "./mapCards.js";
+import { isSameRegionSelection, useCardScreenPos } from "./mapCards.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -145,10 +145,9 @@ const commitRegionSelection = (props) => {
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;
 
-    const isSame =
-    _currentSelection &&
-    _currentSelection.COUNTRY === COUNTRY &&
-    _currentSelection.NAME_1 === NAME_1;
+    // By the region's id where both have one (mapCards.js): a drawn map's
+    // regions often share a name and no country.
+    const isSame = isSameRegionSelection(_currentSelection, props);
 
     // Clicking the region already shown closes its card. Clicking a DIFFERENT
     // one shows that region: it used to only close the open card, so every

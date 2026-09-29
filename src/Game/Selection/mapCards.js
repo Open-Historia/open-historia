@@ -56,6 +56,31 @@ export const cardScreenPoint = (map, lngLat) => {
   return null;
 };
 
+// Whether a click landed on the place whose card is already open, which closes
+// it; any other place replaces it. Names are not identities: two structures
+// called "Naval Base", two towns of one name, a drawn map's many "New Region"s.
+const SAME_SPOT_DEGREES = 1e-5;
+const cleanId = (value) => String(value ?? "").trim();
+
+export const isSameFeatureSelection = (current, next) => {
+  if (!current || !next || current.source !== next.source) return false;
+  const currentId = cleanId(current.id);
+  const nextId = cleanId(next.id);
+  if (currentId && nextId) return currentId === nextId;
+  // A city carries no id: its name at its own spot.
+  return current.name === next.name
+    && Math.abs(Number(current.lng) - Number(next.lng)) <= SAME_SPOT_DEGREES
+    && Math.abs(Number(current.lat) - Number(next.lat)) <= SAME_SPOT_DEGREES;
+};
+
+export const isSameRegionSelection = (current, next) => {
+  if (!current || !next) return false;
+  const currentId = cleanId(current.GID_1);
+  const nextId = cleanId(next.GID_1);
+  if (currentId && nextId) return currentId === nextId;
+  return current.COUNTRY === next.COUNTRY && current.NAME_1 === next.NAME_1;
+};
+
 // A card's spot on screen, followed as the camera moves (once a frame at most).
 // null while `active` is off (a phone's sheet follows no point) or the spot is
 // not on screen.
