@@ -100,6 +100,15 @@ test("polities and colours come from live, named states only", () => {
   assert.deepEqual(seed.colors, { Kuizltan: [255, 0, 0], Orvia: [0, 255, 0] });
 });
 
+test("land still marked with a removed state makes no region, as that state makes no polity", () => {
+  const data = bundle();
+  data.cells.features.push(cell(3, 0, { height: 30, biome: 5, type: "island", state: 3, province: 0, population: 4 }));
+  const seed = fmgToEditorSeed(data);
+  const owners = new Set(seed.regions.features.map((f) => f.properties.owner));
+  assert.deepEqual([...owners].sort(), ["Kuizltan", "Orvia"]);
+  for (const owner of owners) assert.ok(seed.polities.some((p) => p.name === owner), `${owner} is a polity`);
+});
+
 test("cities come from burgs: removed and unplaced burgs are skipped, the capital is flagged", () => {
   const seed = fmgToEditorSeed(bundle());
   const cities = seed.cities.features.map((f) => f.properties);
