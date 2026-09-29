@@ -800,6 +800,16 @@ const refusedRequestError = (providerLabel, message, failure, requestChars = 0) 
     failure,
 );
 
+// Every provider loop ends in an answer or a throw: a one-shot retry inside it
+// (an overload mid-stream, a step down the structured-output ladder) only goes
+// round while an attempt is left. A loop that runs out anyway used to return
+// undefined, which passed for an answer and cleared the busy mark; it says so
+// instead, as busy, so the Fallback list moves on.
+const retriesSpentError = (providerLabel, retries) => providerFailureError(
+    `${providerLabel} gave no answer after ${retries} attempts. Try again in a minute.`,
+    { kind: "busy", reason: "busy" },
+);
+
 // Spent and Unusable: no retry, and none of a provider's own concessions
 // (streaming off, a lower structured-output rung) can fix them either.
 const waitingCannotFix = (failure) => failure.kind === "unusable" || failure.kind === "spent";
@@ -1184,7 +1194,7 @@ async function callGemini(systemPrompt, history, {
             // from. (Mirrors the OpenAI-compatible path.)
             const streamedError = data?.error;
             const streamedText = joinGeminiParts(data?.candidates?.[0]?.content?.parts);
-            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload
+            if (!streamedText && isBusyErrorPayload(streamedError) && !retriedAfterOverload && attempt < retries
                 && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedAfterOverload = true;
                 console.warn(`[ai] Gemini reported "${errorPayloadText(streamedError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
@@ -1212,6 +1222,7 @@ async function callGemini(systemPrompt, history, {
 
         return text;
     }
+    throw retriesSpentError("Gemini", retries);
 }
 
 // Extra output tokens allowed when reasoning is on, because on an OpenAI-style
@@ -1699,6 +1710,7 @@ async function callOpenAIStyleChatCompletions({
 
         return text;
     }
+    throw retriesSpentError(providerLabel, retries);
 }
 
 async function callOpenAI(systemPrompt, history, opts = {}) {
@@ -1981,7 +1993,7 @@ async function callAnthropic(systemPrompt, history, {
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
-            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError) && attempt < retries
                 && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedAfterOverload = true;
                 console.warn(`[ai] Anthropic reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
@@ -2014,7 +2026,7 @@ async function callAnthropic(systemPrompt, history, {
             // Streaming moved the overload refusal from an HTTP status into an
             // error EVENT on a 200, which the status-code retry above cannot see.
             // Without this a provider hiccup costs the player the whole turn.
-            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload
+            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload && attempt < retries
                 && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedAfterOverload = true;
                 console.warn(`[ai] Anthropic reported "${errorPayloadText(data.error)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
@@ -2048,6 +2060,7 @@ async function callAnthropic(systemPrompt, history, {
 
         return text;
     }
+    throw retriesSpentError("Anthropic", retries);
 }
 
 async function callAnthropicCompatible(systemPrompt, history, {
@@ -2243,7 +2256,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             if (streamResult.text) return streamResult.text;
             // overloaded_error arrives as an error EVENT on a 200 stream, so the
             // status-code retry above never sees it. Wait and ask once more.
-            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError)
+            if (!retriedAfterOverload && isBusyErrorPayload(streamResult.streamError) && attempt < retries
                 && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedAfterOverload = true;
                 console.warn(`[ai] Anthropic-compatible reported "${errorPayloadText(streamResult.streamError)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
@@ -2276,7 +2289,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // Streaming moved the overload refusal from an HTTP status into an
             // error EVENT on a 200, which the status-code retry above cannot see.
             // Without this a provider hiccup costs the player the whole turn.
-            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload
+            if (isBusyErrorPayload(data?.error) && !retriedAfterOverload && attempt < retries
                 && canRetryBeforeDeadline(deadline, OVERLOADED_RETRY_DELAY)) {
                 retriedAfterOverload = true;
                 console.warn(`[ai] Anthropic-compatible reported "${errorPayloadText(data.error)}" mid-stream; retrying once in ${OVERLOADED_RETRY_DELAY / 1000}s`);
@@ -2300,7 +2313,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // tool_choice without enforcing it, so asking again more firmly
             // achieves nothing — change the channel instead. There is only one
             // step down on this API, but it is the step that matters.
-            if (structuredMode === "tool" && !insistedOnToolCall
+            if (structuredMode === "tool" && !insistedOnToolCall && attempt < retries
                 && looksLikeDeliberation(anthropicText) && canRetryBeforeDeadline(deadline, 0)) {
                 insistedOnToolCall = true;
                 structuredMode = "text_json";
@@ -2326,6 +2339,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
 
         return text;
     }
+    throw retriesSpentError("The Anthropic-compatible endpoint", retries);
 }
 
 function dispatchToProvider(provider, systemPrompt, history, providerOpts) {
