@@ -1,6 +1,7 @@
 /*! Open Historia — portions (era diplomacy + mobile panel sizing) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, isTouchPrimary, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { dedupeByName } from "../../runtime/countryList.js";
@@ -2011,8 +2012,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     ref={composerRef}
                     placeholder={canDemand && makeDemand ? `Your demand of ${countries[0]?.name}…` : isInstitutionCouncil ? "Address the council…" : isLifecycleConversation ? "Address the accession table…" : "Send a diplomatic message…"}
                     rows={1} value={playerInput}
+                    enterKeyHint="enter"
                     onChange={e => setPlayerInput(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handlePlayerSubmit(); } }}
+                    onKeyDown={e => { if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handlePlayerSubmit(); } }}
                     onInput={fitComposer}
                     // On a touch screen the keyboard takes up to half the screen,
                     // and the panel shrinks with it: a composer grown to 12rem then

@@ -1,6 +1,7 @@
 /*! Open Historia — portions (panel sizing on small screens) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React from "react";
 import { APP_HEIGHT, useCanHover, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
@@ -289,6 +290,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     const [saving, setSaving] = React.useState(false);
     const [error, setError] = React.useState("");
     const draftRef = React.useRef(null);
+    const isTouch = useTouchPrimary();
 
     React.useEffect(() => {
         if (!isOpen) {
@@ -337,7 +339,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
     const canSave = !saving && !turnRunning && draft.trim() !== goal;
 
     const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (isComposerSendKey(event, { touch: isTouch })) {
             event.preventDefault();
             if (canSave) void save(draft);
         } else if (event.key === "Escape") {
@@ -366,6 +368,7 @@ const StandingGoal = ({ country, round, gameDate, isOpen }) => {
             placeholder="What is your government steering toward? e.g. Keep out of the war and grow the economy"
             rows={2}
             value={draft}
+            enterKeyHint="enter"
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
             style={{
@@ -651,7 +654,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     };
 
     const handleKeyDown = (event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
+        if (isComposerSendKey(event, { touch: isTouch })) {
             event.preventDefault();
             handleSubmit();
         }
@@ -883,6 +886,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Enter your action…" : "Enter your action…  (Shift+Enter for a new line)"}
         value={inputValue}
+        enterKeyHint="enter"
         onChange={(event) => setInputValue(event.target.value)}
         onKeyDown={handleKeyDown}
         style={{

@@ -8,6 +8,7 @@ import { formatReportFields, logDebugEvent } from "../../runtime/debugLog.js";
 import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
+import { isComposerSendKey } from "../../runtime/composerKeys.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, planAdvisorActionEdits } from "./advisorBlocks.js";
@@ -1307,7 +1308,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     useEffect(() => { runTurnRef.current = runTurn; });
 
     const handleKeyDown = (e) => {
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+        if (isComposerSendKey(e, { touch: isTouch })) { e.preventDefault(); handleSend(); }
     };
 
     // "Ask for the next batch" under a projects block that was cut off. A
@@ -1604,6 +1605,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         // A phone's keyboard has no Shift+Enter to speak of.
         placeholder={isTouch ? "Ask your advisor…" : "Ask your advisor…  (Shift+Enter for a new line)"}
         rows={1} value={input}
+        enterKeyHint="enter"
         onChange={e => {
             setInput(e.target.value);
             resizeTextarea();
