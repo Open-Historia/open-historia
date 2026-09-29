@@ -464,6 +464,9 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   const [pipelineResult, setPipelineResult] = useState(null);
   const [v2Checkpoint, setV2Checkpoint] = useState(null);
   const [v2CallBudget, setV2CallBudget] = useState(20);
+  // The last checkpoint save's persistence marker; durable false means a
+  // reload would lose the work done since the last good save.
+  const [v2Persistence, setV2Persistence] = useState(null);
   // Discarding paid work takes a second press within four seconds.
   const [discardArmed, setDiscardArmed] = useState(false);
   useEffect(() => {
@@ -603,6 +606,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     setGeopoliticalResult(null);
     setProgress(v2Checkpoint ? "Resuming Political World generation checkpoint…" : "Initializing Political World generation…");
     setProgressInfo(null);
+    setV2Persistence(null);
     generationStartedAtRef.current = Date.now();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -634,7 +638,8 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         allowEntityExpansion: allowRosterExpansion,
         retryDeferred,
         signal: controller.signal,
-        onProgress: ({ checkpoint, summary, quality, runningJob }) => {
+        onProgress: ({ checkpoint, summary, quality, runningJob, persistence }) => {
+          setV2Persistence(persistence || null);
           setV2Checkpoint(checkpoint);
           const type = clean(runningJob?.type);
           const labels = {
@@ -712,7 +717,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       } else if (next.status === "paused" && next.pauseReason === "bounded-unresolved") {
         const deferred = Number(next.worklistSummary?.failed) || 0;
         setProgress(`Political World generation deferred ${deferred} stubborn target(s) after bounded retries. Completed work is saved; normal Resume keeps those retry limits and continues independent unfinished work. Use Retry Deferred Targets only when you want another bounded attempt at the deferred set.`);
-      } else if (next.status === "paused" && ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error"].includes(next.pauseReason)) {
+      } else if (next.status === "paused" && ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error", "storage-unavailable"].includes(next.pauseReason)) {
         setProgress(next.lastError || "Political World generation paused because the current provider task could not complete. No unresolved polity was penalized for this provider failure.");
       } else {
         const unresolved = next.quality?.unresolved?.length ?? 0;
@@ -1002,6 +1007,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       await discardPoliticalWorldV2Checkpoint(v2Checkpoint.scenarioId || details?.scenario?.id);
       setV2Checkpoint(null);
       setProgressInfo(null);
+      setV2Persistence(null);
       setProgress("Political World checkpoint discarded. Generate Political World starts a fresh run.");
     } catch (nextError) {
       setError(nextError?.message || String(nextError));
@@ -1669,6 +1675,11 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         </div>
       )}
       {progress && <div style={{ color: "rgba(255,255,255,0.62)", fontSize: "0.75rem", marginTop: "0.7rem" }}>{progress}</div>}
+      {v2Persistence?.durable === false && (
+        <div style={{ background: "rgba(245,158,11,0.11)", border: "1px solid rgba(245,158,11,0.28)", borderRadius: 12, color: "#fde68a", fontSize: "0.75rem", marginTop: "0.7rem", padding: "0.65rem" }}>
+          This device did not save the latest Political World progress. Reloading now would lose the work done since the last save.
+        </div>
+      )}
       {error && <div style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.3)", borderRadius: 12, color: "#fecaca", fontSize: "0.75rem", marginTop: "0.7rem", padding: "0.65rem" }}>{error}</div>}
       {lastApplied?.length > 0 && (
         <div style={{ background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.24)", borderRadius: 12, color: "#bbf7d0", fontSize: "0.75rem", marginTop: "0.7rem", padding: "0.65rem" }}>
@@ -1695,7 +1706,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                   ? (v2Checkpoint.lastError || "Paused at the lifetime AI-call safety ceiling. Completed work is saved; inspect unresolved targets before spending more calls.")
                   : v2Checkpoint.pauseReason === "bounded-unresolved"
                   ? `Deferred ${v2FailedJobs} stubborn target(s) after bounded retries. Resume preserves those retry limits and continues independent unfinished work; use Retry Deferred Targets for another bounded attempt.`
-                  : ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error"].includes(v2Checkpoint.pauseReason)
+                  : ["provider-quota", "provider-rate-limit", "provider-unavailable", "provider-config", "task-error", "storage-unavailable"].includes(v2Checkpoint.pauseReason)
                     ? (v2Checkpoint.lastError || "The current AI provider task paused before producing a usable result. Resume after the provider issue is resolved.")
                     : `${v2Unresolved.length} item(s) remain unresolved.`}
               {v2Unresolved.length > 0 && <div style={{ marginTop: "0.25rem" }}>Sample: {v2Unresolved.slice(0, 8).map((entry) => `${entry.polityKey} (${entry.kind})`).join(" · ")}{v2Unresolved.length > 8 ? "…" : ""}</div>}

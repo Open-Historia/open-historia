@@ -241,15 +241,19 @@ export const generateOrResumePoliticalWorldV2 = async ({
     }
   }
 
+  // Returns the save's persistence marker, which the runner checks before
+  // spending another call; the panel warns when the save was not durable.
   const persistAndReport = async (next, summary = null) => {
-    await savePoliticalWorldV2Checkpoint(next);
+    const saved = await savePoliticalWorldV2Checkpoint(next);
     const resolvedSummary = summary || summarizePoliticalWorldV2Worklist({ checkpoint: next, inputs });
     onProgress?.({
       checkpoint: clone(next),
       summary: resolvedSummary,
       quality: clone(next.quality || {}),
       runningJob: clone(next.currentTask || null),
+      persistence: clone(saved?.persistence || null),
     });
+    return saved?.persistence;
   };
 
   checkpoint = await runSimplePoliticalWorldV2({
@@ -275,12 +279,13 @@ export const generateOrResumePoliticalWorldV2 = async ({
     checkpoint.pauseReason = "";
     checkpoint.currentTask = null;
   }
-  await savePoliticalWorldV2Checkpoint(checkpoint);
+  const saved = await savePoliticalWorldV2Checkpoint(checkpoint);
   onProgress?.({
     checkpoint: clone(checkpoint),
     summary: summarizePoliticalWorldV2Worklist({ checkpoint, inputs }),
     quality: clone(checkpoint.quality || {}),
     runningJob: null,
+    persistence: clone(saved?.persistence || null),
   });
   return checkpoint;
 };

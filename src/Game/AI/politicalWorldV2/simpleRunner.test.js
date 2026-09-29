@@ -324,6 +324,37 @@ test("a run paused at its lifetime ceiling resumes after the author allows more 
   assert.deepEqual(resumed.membership.resolvedInstitutionIds, ["pact"]);
 });
 
+test("a save that did not reach durable storage pauses the run before its next call", async () => {
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint: withUncoveredInstitution(),
+    inputs,
+    maxModelCalls: 5,
+    callModel: noCalls,
+    onCheckpoint: async () => ({ primary: false, backup: false, durable: false }),
+  });
+  assert.equal(result.pauseReason, "storage-unavailable");
+  assert.equal(result.modelCalls, 0);
+  assert.match(result.lastError, /could not be saved on this device/);
+});
+
+test("the pipeline reports each save's persistence and will not spend calls it cannot keep", async () => {
+  const { generateOrResumePoliticalWorldV2 } = await import("./pipeline.js");
+  const reports = [];
+  // No IndexedDB in node: every save is memory-only, as in a browser whose
+  // storage is blocked.
+  const result = await generateOrResumePoliticalWorldV2({
+    scenarioId: "storage-test",
+    inputs: { scenarioDate: "2014-03-22", polities, world: {}, politicalActors: { byPolity: {} } },
+    maxModelCalls: 5,
+    callModel: noCalls,
+    onProgress: (report) => reports.push(report.persistence),
+  });
+  assert.equal(result.pauseReason, "storage-unavailable");
+  assert.equal(result.modelCalls, 0);
+  assert.ok(reports.length > 0);
+  assert.ok(reports.every((persistence) => persistence?.durable === false));
+});
+
 test("the session budget counts calls across tasks and stops exactly at the limit", async () => {
   const checkpoint = finishedCheckpoint();
   checkpoint.stagedWorld.powerStatus.byPolity = {};

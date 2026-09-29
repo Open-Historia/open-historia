@@ -246,6 +246,7 @@ export const runSimplePoliticalWorldV2 = async ({
 
   const executor = createExecutor({ inputs, allowEntityExpansion, ...(callModel ? { callModel } : {}), signal });
 
+  let savedDurably = true;
   const persist = async () => {
     if (typeof reconcileDeterministic === "function") current = reconcileDeterministic(current, inputs);
     // The same relevance the pipeline's final evaluation uses, so an actor that
@@ -260,7 +261,9 @@ export const runSimplePoliticalWorldV2 = async ({
     const worklistSummary = summarizePoliticalWorldV2Worklist({ checkpoint: current, inputs });
     current.worklistSummary = clone(worklistSummary);
     current.updatedAt = new Date().toISOString();
-    await onCheckpoint?.(clone(current), worklistSummary);
+    // onCheckpoint may report whether the save reached durable storage.
+    const persisted = await onCheckpoint?.(clone(current), worklistSummary);
+    savedDurably = persisted?.durable !== false;
   };
 
   await persist();
@@ -315,6 +318,17 @@ export const runSimplePoliticalWorldV2 = async ({
       if (current.pauseReason === "total-model-call-budget") {
         current.lastError = `Political World generation reached its lifetime safety ceiling of ${totalLimit} AI calls. Completed work is saved; inspect unresolved targets instead of blindly spending more calls.`;
       }
+      current.currentTask = null;
+      await persist();
+      return current;
+    }
+
+    // Paid work that cannot be saved is lost on a reload, so no further call is
+    // spent until storage works again. Resume retries the save.
+    if (!savedDurably) {
+      current.status = "paused";
+      current.pauseReason = "storage-unavailable";
+      current.lastError = "Political World progress could not be saved on this device, so generation paused before spending another AI call. Free up storage or leave private browsing, then press Resume Generation.";
       current.currentTask = null;
       await persist();
       return current;
