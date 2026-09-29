@@ -228,6 +228,45 @@ test("a settings change during a turn commit keeps both", async () => {
   assert.equal(details.assetStatus.cover, true, "the cover survived");
 });
 
+const SNAPSHOT = { id: "snap-1", round: 1, fromDate: "2016-01-01", toDate: "2016-02-01", capturedAt: "2026-09-28T00:00:00.000Z", state: { game: {} } };
+
+test("restore points travel out of a game and into another", async () => {
+  await reset();
+  const source = await newGame("With restore points");
+  ok(await runtime("PUT", "snapshots", [SNAPSHOT]));
+  const exported = ok(await games("GET", `${source}/snapshots`));
+  assert.deepEqual(exported, [SNAPSHOT]);
+
+  const bundle = ok(await games("GET", `${source}/export`));
+  const target = ok(await games("POST", "import", bundle)).game.id;
+  ok(await games("PUT", `${target}/snapshots`, exported));
+  ok(await games("PUT", "active", { gameId: target }));
+
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
+  assert.deepEqual(ok(await runtime("GET", "snapshotsIndex")).entries, [
+    { id: "snap-1", round: 1, fromDate: "2016-01-01", toDate: "2016-02-01", capturedAt: "2026-09-28T00:00:00.000Z" },
+  ]);
+  assert.equal("snapshots" in db.get("games").get(target).json, false, "nothing left in the old slot");
+});
+
+test("restore points an earlier import stranded in record.json are found, and moved on the next write", async () => {
+  await reset();
+  const id = await newGame("Stranded");
+  const stored = db.get("games").get(id);
+  delete stored.snapshots;
+  stored.json.snapshots = [SNAPSHOT];
+
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
+  assert.equal(ok(await runtime("GET", "snapshotsIndex")).entries.length, 1);
+  assert.deepEqual(ok(await games("GET", `${id}/snapshots`)), [SNAPSHOT]);
+
+  const next = { ...SNAPSHOT, id: "snap-2" };
+  ok(await runtime("PUT", "snapshots", [SNAPSHOT, next]));
+  const after = db.get("games").get(id);
+  assert.equal("snapshots" in after.json, false);
+  assert.deepEqual(after.snapshots.map((entry) => entry.id), ["snap-1", "snap-2"]);
+});
+
 test("making a game active from inside a runtime write does not wait on itself", async () => {
   await reset();
   const catalog = await library();

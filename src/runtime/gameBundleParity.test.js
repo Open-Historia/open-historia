@@ -12,9 +12,8 @@
 // export still succeeds, the import still succeeds, and one file quietly stops
 // carrying a piece of the campaign.
 //
-// What this does NOT cover: an actual round trip through the web store, which
-// needs an IndexedDB harness this repo does not have (no fake-indexeddb, no
-// existing test touches web/libraryStore.js). Nor whether web's `default`
+// What this does NOT cover: an actual round trip through the web store; that is
+// web/libraryStore.test.js, which runs the store over an in-memory idb.js. Nor whether web's `default`
 // scenario is the same world as desktop's — see .scratch/save-export-zip/spec.md §9.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";

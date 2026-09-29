@@ -572,8 +572,9 @@ const ensureOwnerSchema = (record, kind) => {
     if (regions) record.geojson.regionsGeojson = migrateRegions(regions, renames);
     // Roll-back points hold a full nested copy of every owner-keyed structure and
     // are blind-written back over live state, with no marker to catch a stale one.
-    if (record.snapshots) {
+    if (gameSnapshots(record)) {
       delete record.snapshots;
+      delete record.json.snapshots;
       warn("discarded roll-back snapshots — they predate the owner rename");
     }
     // World last: it carries the marker, so a failure leaves the record unmarked
@@ -680,14 +681,28 @@ const readRuntimeJsonAsset = async (assetKey) => {
   return cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {});
 };
 
+// A game's restore points live at record.snapshots, where the running game reads
+// and writes them. The per-game route a game zip moves them through used
+// record.json.snapshots instead, so a web export carried none and an import put
+// them where Roll back never looked. A game imported before that was fixed still
+// holds them there; they are read from it until the next write moves them.
+const gameSnapshots = (record) =>
+  (Array.isArray(record?.snapshots) ? record.snapshots
+    : Array.isArray(record?.json?.snapshots) ? record.json.snapshots : undefined);
+
+const setGameSnapshots = (record, snapshots) => {
+  record.snapshots = snapshots;
+  if (record.json) delete record.json.snapshots;
+};
+
 // The stored value for a runtime key on a record, or undefined if "no file".
 const runtimeValueFromRecord = (record, assetKey, scenarioScope = false) => {
   if (OPTIONAL_JSON_ASSET_KEYS.includes(assetKey)) return record[assetKey];
-  if (assetKey === "snapshots") return scenarioScope ? undefined : record.snapshots; // snapshots are game-only
+  if (assetKey === "snapshots") return scenarioScope ? undefined : gameSnapshots(record); // snapshots are game-only
   // Derived, read-only: the same projection the desktop server keeps on disk.
   if (assetKey === "snapshotsIndex") {
     if (scenarioScope) return undefined;
-    const list = Array.isArray(record.snapshots) ? record.snapshots : [];
+    const list = gameSnapshots(record) ?? [];
     return {
       entries: list.map((snap) => ({
         id: snap?.id ?? "",
@@ -803,7 +818,7 @@ const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
   else if (assetKey === "colors") canonical = canonicalizeColorKeys(value, activeGame.json?.world ?? null);
 
   if (OPTIONAL_JSON_ASSET_KEYS.includes(assetKey)) activeGame[assetKey] = canonical;
-  else if (assetKey === "snapshots") activeGame.snapshots = canonical;
+  else if (assetKey === "snapshots") setGameSnapshots(activeGame, canonical);
   else activeGame.json = { ...activeGame.json, [assetKey]: canonical };
   writeGameMeta(activeGame, {});
   await putGame(activeGame);
@@ -1755,17 +1770,16 @@ const importGameBundle = async (bundle) => {
   return getGameDetails(id);
 };
 
+// The same slot the running game uses (gameSnapshots), so a zip carries the
+// restore points Roll back and Intervene see, and an imported zip's reach them.
 const readGameSnapshots = async (id) => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
-  return jsonAsset(record, "snapshots");
+  return gameSnapshots(record) ?? [];
 };
 
 const writeGameSnapshots = async (id, snapshots) => {
-  const record = await getGame(id);
-  if (!record) throw new Error(`Game not found: ${id}`);
-  record.json = { ...record.json, snapshots: Array.isArray(snapshots) ? snapshots : [] };
-  await putGame(record);
+  await mutateGame(id, (record) => setGameSnapshots(record, Array.isArray(snapshots) ? snapshots : []));
   return { ok: true };
 };
 

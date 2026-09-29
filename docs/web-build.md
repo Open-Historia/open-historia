@@ -125,6 +125,8 @@ scenario:  { id, meta, json:{actions,advisor,chat,events,game,prompts,world},
 game:      { id, meta, json:{…7…}, colors?, flags?, snapshots?, cover?:{contentType,bytes} }
 ```
 
+Restore points have one slot, `record.snapshots`: the runtime `snapshots`/`snapshotsIndex` keys and the game-zip route `/api/games/:id/snapshots` all read and write it. A game imported before the zip route used it has them in `record.json.snapshots`; they are read from there until the next write moves them.
+
 Unlike the server (which splits a scenario across many files on disk), a web record holds `world`/`game`/`colors`/`geojson` together, so owner migration is **synchronous and in-place** — nothing to keep in step across files.
 
 ### Manifests (in `kv`)
@@ -151,7 +153,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 `writeRuntimeJsonAsset(key, value)` (`:481`) writes onto the active game (auto-creating one from the selected scenario if none exists), canonicalizing country refs on the way in: `world`→`canonicalizeWorldCountryRefs`, `game`→`canonicalizeGameCountry`, `colors`→`canonicalizeColorKeys`. `flags` are **not** canonicalized (a flag key is always the raw code the editor painted).
 
-Every runtime asset of a game lives in its one record, so every change to a game is a read-modify-write of the whole save. All of them run through one write queue (`writeQueue.js` `serializeWrite`): the turn commit, the runtime JSON writes, and `mutateGame(id, fn)`, which the game routes use (`updateGame`, the play stamp, cover upload and removal, the built-in scenario's fork and refresh). A write outside the queue could read the record before a turn commit and put its stale copy back after it. Code already inside the queue must not call `mutateGame` (it would wait on itself); `createGame`, which the runtime writers call from inside it, stamps its play count before its first put for that reason.
+Every runtime asset of a game lives in its one record, so every change to a game is a read-modify-write of the whole save. All of them run through one write queue (`writeQueue.js` `serializeWrite`): the turn commit, the runtime JSON writes, and `mutateGame(id, fn)`, which the game routes use (`updateGame`, the play stamp, cover upload and removal, the restore-point route, the built-in scenario's fork and refresh). A write outside the queue could read the record before a turn commit and put its stale copy back after it. Code already inside the queue must not call `mutateGame` (it would wait on itself); `createGame`, which the runtime writers call from inside it, stamps its play count before its first put for that reason.
 
 ### Owner-schema migration (`ensureOwnerSchema`, `:357`)
 
