@@ -10,7 +10,7 @@
 // save status, live region count) also lives here for the panels to read.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { OWNER_SCHEMA } from "./documentMigration.js";
+import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { mergeCityMarkers } from "./cityMarkers.js";
@@ -111,6 +111,40 @@ export const createDocument = ({ name = "Untitled Map", kind = "import-world" } 
     // Puppet states the scenario starts with, as world.puppets rows
     // (scenarioPuppets.js); set in the Countries panel.
     puppets: [],
+  };
+};
+
+// A saved document as the editor holds it, and its regions, for Open. Built in
+// full before anything on screen changes, so a document that cannot be read
+// throws with the open map untouched (MapEditor openDoc).
+export const openStoredDocument = (stored) => {
+  // Bring a pre-rename document forward before anything reads it. A document
+  // saved when owners were codes renders in hash colours (every palette lookup
+  // misses) and forks a country in two on the first edit. It is also the one
+  // path where legacy owners can reach a scenario already wearing an
+  // ownerSchema marker, past the store's migration. No-op once migrated.
+  const doc = migrateDocumentOwners(stored);
+  const base = createDocument();
+  return {
+    regions: doc.regions,
+    doc: {
+      id: doc.id,
+      version: doc.version || 1,
+      ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
+      metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
+      types: doc.types?.length ? doc.types : base.types,
+      features: doc.features || [],
+      // Default to {} rather than leaving them undefined: a map saved before these
+      // existed has neither key, and setColorOverride/setFlag spread the current
+      // value.
+      colorOverrides: doc.colorOverrides || {},
+      flags: doc.flags || {},
+      tags: doc.tags || {},
+      polities: doc.polities || {},
+      units: Array.isArray(doc.units) ? doc.units : [],
+      groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
+      puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
+    },
   };
 };
 

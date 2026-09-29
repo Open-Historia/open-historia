@@ -46,12 +46,12 @@ import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
 import SearchBar from "./SearchBar.jsx";
 import BasemapPicker from "./BasemapPicker.jsx";
 import FlagPicker from "./FlagPicker.jsx";
-import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
+import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
 import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
-import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
+import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
 import { buildGameSeed } from "./exportPreset.js";
@@ -574,37 +574,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // document's fields over an emptied map while the saves still wrote to the
   // old id, and said nothing.
   const openDoc = async (id) => {
-    let next;
-    let doc;
+    let opened;
     let background;
     try {
-      const stored = await loadDocument(id);
-      // Bring a pre-rename document forward before anything reads it. A document
-      // saved when owners were codes renders in hash colours (every palette lookup
-      // misses) and forks a country in two on the first edit. It is also the one
-      // path where legacy owners can reach a scenario already wearing an
-      // ownerSchema marker, past the store's migration. No-op once migrated.
-      const doc = migrateDocumentOwners(stored);
-      const base = createDocument();
-      next = {
-        id: doc.id,
-        version: doc.version || 1,
-        ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
-        metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
-        types: doc.types?.length ? doc.types : base.types,
-        features: doc.features || [],
-        // Default to {} rather than leaving them undefined: a map saved before these
-        // existed has neither key, and setColorOverride/setFlag spread the current
-        // value.
-        colorOverrides: doc.colorOverrides || {},
-        flags: doc.flags || {},
-        tags: doc.tags || {},
-        polities: doc.polities || {},
-        units: Array.isArray(doc.units) ? doc.units : [],
-        groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
-        puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
-      };
-      background = rebuildPersistedBackground(doc.metadata?.customBackground);
+      opened = openStoredDocument(await loadDocument(id));
+      background = rebuildPersistedBackground(opened.doc.metadata.customBackground);
     } catch (e) {
       console.warn("[editor] open failed:", e);
       window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
@@ -612,16 +586,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     }
     if (!(await settleBeforeReplacing("This map has changes that could not be saved. Open the other map and lose them?"))) return;
     try {
-      api?.loadRegions(doc.regions);
+      api?.loadRegions(opened.regions);
     } catch (e) {
       console.warn("[editor] open failed:", e);
       window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
       return;
     }
-    d.setDoc(next);
+    d.setDoc(opened.doc);
     setCustomBg(background);
     setCustomBgId(null);
-    markLoaded(doc.id);
+    markLoaded(opened.doc.id);
   };
 
   // Debounced autosave whenever the document is dirty.
