@@ -148,7 +148,7 @@ import {
 import { activeSpies, applySpyOps, espionageBrief, intelligenceOf, isIntelligenceRated, normalizeIntelligenceRating, normalizeIntercepts, normalizeSpies, redactText, resolveEspionage, signalClarity } from "../../runtime/spycraft.js";
 import { buildSpyOrdersDirective } from "./spyOrdersDirective.js";
 import { echoesExistingMessage, renderOpenChatsForPrompt } from "../../runtime/chatEcho.js";
-import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment } from "../../runtime/spySeal.js";
+import { isSeal, newSeal, newSpyReportId, openExchange, openPoliticalAssessment, sealExchange, sealPoliticalAssessment, spySealingWorks } from "../../runtime/spySeal.js";
 import {
   buildActionHistoryText,
   buildChatSummaryText,
@@ -10991,6 +10991,8 @@ export const gatherIntelligence = async (target, { signal, requestKind } = {}) =
   const bundle = await readGameStateBundle({ force: true });
   const spy = playersAgentIn(bundle, name);
   if (!spy) throw new Error("No agent of yours is in " + name + ".");
+  // The report is stored sealed; a device that cannot seal must not pay for it.
+  if (!(await spySealingWorks())) throw new Error("This device cannot seal intercepts, so no report was requested.");
   const prepared = await prepareSpyReport(bundle, spy);
   const { payload } = await runJsonTask("spyIntercept", {
     lookups: buildTaskLookups(bundle),
