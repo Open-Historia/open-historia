@@ -1,5 +1,5 @@
 /*! Open Historia — country info panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -14,9 +14,21 @@ import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { generateCountryStats } from "../AI/gameplayLazy.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { createReportRequests } from "./reportRequests.js";
 
 // Bridge: the region popup's info button opens this panel from outside React.
 let _openPanel = null;
+
+// Advisor Reports by campaign and country, outside the panel: the panel is
+// pointed at one country after another while a report is still being written
+// (reportRequests.js).
+const advisorReports = createReportRequests();
+const reportKeyFor = (country) =>
+    `${String(getLibraryState()?.activeGameId ?? "")}|${country?.code || country?.name || ""}`;
+const reportFromOutcome = (outcome) => (outcome.error
+    ? { error: outcome.error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." }
+    : (outcome.text || "No information available."));
 
 export const openCountryPanel = (country) => {
     _openPanel?.(country);
@@ -113,12 +125,45 @@ const CountryInfoPanel = () => {
     const [displayName, setDisplayName] = useState("");
     const [flagPickerOpen, setFlagPickerOpen] = useState(false);
     const [playerCountry, setPlayerCountry] = useState("");
+    // Which country's report the panel shows now: a report only ever lands on
+    // its own country.
+    const shownReportKey = useRef("");
+    useEffect(() => {
+        if (!country) shownReportKey.current = "";
+    }, [country]);
+
+    // Shows a report when it comes back, if its country is still the one on
+    // screen; otherwise keeps it for when that country is opened again.
+    const deliverReport = (key, pending) => {
+        pending
+            .then((text) => ({ text }), (error) => ({ error }))
+            .then((outcome) => {
+                if (shownReportKey.current !== key) {
+                    advisorReports.keep(key, outcome);
+                    return;
+                }
+                setReport(reportFromOutcome(outcome));
+            });
+    };
 
     _openPanel = (next) => {
         setCountry(next);
         setSearch("");
         setFilterIndex(0);
-        setReport(null);
+        // A report still being written for this country is joined, and one that
+        // came back while another country was shown is handed over.
+        const key = reportKeyFor(next);
+        shownReportKey.current = key;
+        const pending = advisorReports.pending(key);
+        const kept = pending ? null : advisorReports.take(key);
+        if (pending) {
+            setReport("loading");
+            deliverReport(key, pending);
+        } else if (kept) {
+            setReport(reportFromOutcome(kept));
+        } else {
+            setReport(null);
+        }
         setFlagFailed(false);
         setFlagPickerOpen(false);
         setPolityKey("");
@@ -258,15 +303,15 @@ const CountryInfoPanel = () => {
         flags: flagCatalog,
     });
 
-    const runAdvisorReport = async () => {
+    const runAdvisorReport = () => {
         if (report === "loading") return;
+        const key = reportKeyFor(country);
+        shownReportKey.current = key;
         setReport("loading");
-        try {
-            const text = await generateCountryStats({ code: polityKey || country.code, name: displayName || country.name });
-            setReport(text || "No information available.");
-        } catch (error) {
-            setReport({ error: error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." });
-        }
+        // Joins a report already being written for this country rather than
+        // asking again.
+        deliverReport(key, advisorReports.request(key, () =>
+            generateCountryStats({ code: polityKey || country.code, name: displayName || country.name })));
     };
 
     const openDiplomacy = () => {

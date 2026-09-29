@@ -403,7 +403,7 @@ Its rules live in the template, with one exception injected at call time: `build
 - **Purpose:** In-character strategic advice, ≤3000 chars, may append a `chart`-fenced Chart.js block. **Assembly:** `buildAdvisorSystemPrompt` (`main.jsx`) + `sendMessage` with rolling `advisorHistory`; language directive only (no difficulty, no schema).
 
 ### 7.16 Not in the prompt pack: `generateCountryStats` — intel briefing
-- **Purpose:** Free-text bulleted intelligence briefing on a polity. Builds its **own inline system prompt** (dossier + world snapshot + recent events) and calls `callAI` **directly** (no tool, no `runJsonTask`, so only the language directive is appended). Entry: `generateCountryStats({code, name})` `gameplay.js`. Distinct from `countryStatSheet` (§7.12).
+- **Purpose:** Free-text bulleted intelligence briefing on a polity. Builds its **own inline system prompt** (dossier + world snapshot + recent events) and calls `callAI` **directly** (no tool, no `runJsonTask`, so only the language directive is appended). Entry: `generateCountryStats({code, name})` `gameplay.js`. Distinct from `countryStatSheet` (§7.12). Asked by the country panel's **Advisor Report** button, one request per campaign and country at a time (`Selection/reportRequests.js`): reopening a country while its report is being written joins that request, and a report that comes back while the panel shows another country is kept and shown when its own country is opened again, never on the other one.
 
 ---
 
