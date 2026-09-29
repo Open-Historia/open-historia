@@ -32,6 +32,7 @@ import {
     finalizeCountryStatSheet,
     isCompleteCountryStatSheet,
     isCompleteCustomCountryStatSheet,
+    isTrackedStatSheetReady,
     mergeCountryStatPatch,
     mergeCountryStatsHistory,
     normalizeCountryStatHistorySample,
@@ -1173,6 +1174,8 @@ const HistoricalTrackingModal = ({
     world,
     playerCountry,
     currentCountry,
+    statSheetDefinition,
+    onAssess,
 }) => {
     const [search, setSearch] = useState("");
     // As Advanced Statistics: a phone gets the whole screen and one column that
@@ -1208,6 +1211,33 @@ const HistoricalTrackingModal = ({
     const candidateRows = trackingCandidates.rows;
 
     const trackedPolities = settings?.trackedPolities || [];
+    // Which countries the automatic refresh can carry, by the scheduler's own
+    // rule (isTrackedStatSheetReady) under the key it looks sheets up by. A
+    // country without one is skipped every turn until its first reading, which
+    // the label used to hide by calling any sheet at all ready.
+    const readyKeys = useMemo(() => {
+        const customKeys = statSheetDefinition?.custom ? statSheetKeys(statSheetDefinition) : null;
+        const ready = new Set();
+        for (const [key, sheet] of Object.entries(world?.countryStats || {})) {
+            if (isTrackedStatSheetReady(sheet, customKeys)) ready.add(lowerText(key));
+        }
+        return ready;
+    }, [world, statSheetDefinition]);
+    const sheetReady = useCallback(
+        (key) => readyKeys.has(lowerText(trackingCandidates.index.canonicalKey(key) || key)),
+        [readyKeys, trackingCandidates],
+    );
+    // When the refresh last ran, per country and for the whole batch — written
+    // by the scheduler after every skip, and shown nowhere until now.
+    const refreshRecord = useMemo(
+        () => normalizeCountryStatsTracking(world?.countryStatsTracking, { playerCountry }),
+        [world, playerCountry],
+    );
+    const lastRefreshOf = useCallback((key) => {
+        const canonical = lowerText(trackingCandidates.index.canonicalKey(key) || key);
+        const entry = Object.entries(refreshRecord.lastAutoRefreshByPolity || {}).find(([polity]) => lowerText(polity) === canonical);
+        return entry ? entry[1] : "";
+    }, [refreshRecord, trackingCandidates]);
     const filteredCandidates = useMemo(
         () => filterHistoricalTrackingCandidateRows(candidateRows, search),
         [candidateRows, search],
@@ -1320,6 +1350,7 @@ const HistoricalTrackingModal = ({
                                         >
                                             <span>{label}</span>
                                             {isPlayer && <span style={{ color: "#fbbf24", fontSize: "0.62rem", fontWeight: 800 }}>you</span>}
+                                            {!sheetReady(key) && <span style={{ color: "#fbbf24", fontSize: "0.62rem", fontWeight: 800 }}>baseline needed</span>}
                                             <span style={{ color: "rgba(255,255,255,0.45)" }}>×</span>
                                         </button>
                                     );
@@ -1367,8 +1398,8 @@ const HistoricalTrackingModal = ({
                                                     {isPlayer && <span style={{ color: "#fbbf24" }}>your country</span>}
                                                     {isViewed && !isPlayer && <span style={{ color: "#93c5fd" }}>currently viewed</span>}
                                                     {!isPlayer && !isViewed && <span>{cleanText(key)}</span>}
-                                                    <span style={{ color: world?.countryStats?.[key] ? "#86efac" : "#fbbf24" }}>
-                                                        {world?.countryStats?.[key] ? "Stats ready" : "baseline needed"}
+                                                    <span style={{ color: sheetReady(key) ? "#86efac" : "#fbbf24" }}>
+                                                        {sheetReady(key) ? "Stats ready" : "baseline needed"}
                                                     </span>
                                                 </span>
                                             </span>
@@ -1390,6 +1421,51 @@ const HistoricalTrackingModal = ({
                                 {" "}When tracked countries become due, Continuum refreshes all initialized sheets in one bounded AI batch after a completed turn. Countries marked <span style={{ color: "#fbbf24" }}>baseline needed</span> begin auto-refreshing after their first normal Stats sheet exists.
                             </div>
                         </div>
+                        {trackedPolities.length > 0 && (
+                            <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
+                                <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.74rem", fontWeight: 800 }}>Refresh status</div>
+                                <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.67rem", lineHeight: 1.5, marginTop: "0.3rem" }}>
+                                    {refreshRecord.lastBatchDate
+                                        ? `The last automatic refresh ran on ${formatGameDateReadable(refreshRecord.lastBatchDate)}.`
+                                        : "No automatic refresh has run yet."}
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.55rem" }}>
+                                    {trackedPolities.map((key) => {
+                                        const label = trackingCandidates.index.displayName(key);
+                                        const ready = sheetReady(key);
+                                        const last = lastRefreshOf(key);
+                                        return (
+                                            <div key={key} style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
+                                                <span style={{ minWidth: 0 }}>
+                                                    <span style={{ color: "rgba(255,255,255,0.82)", display: "block", fontSize: "0.7rem", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+                                                    <span style={{ color: ready ? "rgba(255,255,255,0.42)" : "#fbbf24", display: "block", fontSize: "0.62rem" }}>
+                                                        {!ready
+                                                            ? "Needs a first reading"
+                                                            : last
+                                                                ? `Last refreshed on ${formatGameDateReadable(last)}`
+                                                                : "Not refreshed automatically yet"}
+                                                    </span>
+                                                </span>
+                                                {!ready && typeof onAssess === "function" && (
+                                                    <button
+                                                        type="button"
+                                                        className="oh-tap-row"
+                                                        onClick={() => onAssess(trackingCandidates.index.canonicalKey(key) || key)}
+                                                        aria-label={`Assess ${label} now`}
+                                                        style={{ backgroundColor: "rgba(43,193,243,0.1)", border: "1px solid rgba(43,193,243,0.3)", borderRadius: "999px", color: "#2bc1f3", cursor: "pointer", flexShrink: 0, fontSize: "0.64rem", fontWeight: 800, padding: "0.3rem 0.6rem" }}
+                                                    >
+                                                        Assess now
+                                                    </button>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                                <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem", lineHeight: 1.45, marginTop: "0.55rem" }}>
+                                    A country without a complete Stats sheet is skipped by the automatic refresh. Assessing it opens its Stats, which builds the first sheet with one request.
+                                </div>
+                            </div>
+                        )}
                         <div style={{ backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: "12px", padding: "0.85rem 0.9rem" }}>
                             <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.74rem", fontWeight: 800 }}>Suggested approach</div>
                             <ul style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.67rem", lineHeight: 1.5, margin: "0.5rem 0 0", paddingLeft: "1rem" }}>
@@ -2372,6 +2448,14 @@ const StatsPaneBody = ({ active }) => {
             world={worldSnapshot}
             playerCountry={player.code}
             currentCountry={targetCountry}
+            statSheetDefinition={statSheetDefinition}
+            // Opening a country's sheet is how its first reading is built: the
+            // same request the Stats pane makes for any country it opens.
+            onAssess={(key) => {
+                setTrackingOpen(false);
+                setTargetCountry(key);
+                setStatsView("economy");
+            }}
             />
         )}
         </div>

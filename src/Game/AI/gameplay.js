@@ -278,6 +278,7 @@ import {
   guardCountryStatContinuity,
   isCompleteCountryStatSheet,
   isCompleteCustomCountryStatSheet,
+  isTrackedStatSheetReady,
   mergeCountryStatPatch,
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
@@ -10215,7 +10216,7 @@ const refreshTrackedCustomStatsIfDue = async ({ bundle, signal, definition, requ
   for (const rawPolity of tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES)) {
     const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
     const previous = normalizeCountryStatSheet(world?.countryStats?.[polity]);
-    if (!previous || !isCompleteCustomCountryStatSheet(previous, keys)) {
+    if (!isTrackedStatSheetReady(previous, keys)) {
       pendingBaseline.push(polity);
       continue;
     }
@@ -10364,7 +10365,7 @@ const refreshTrackedCountryStatsIfDue = async ({
   for (const rawPolity of tracking.trackedPolities.slice(0, COUNTRY_STATS_TRACKING_MAX_POLITIES)) {
     const polity = canonicalStatsPolity(rawPolity, world) || normalizeString(rawPolity);
     const previous = normalizeCountryStatSheet(world?.countryStats?.[polity]);
-    if (!previous || !isCompleteCountryStatSheet(previous)) {
+    if (!isTrackedStatSheetReady(previous)) {
       pendingBaseline.push(polity);
       continue;
     }

@@ -1365,6 +1365,18 @@ export const isCompleteCustomCountryStatSheet = (value, expectedKeys = []) => {
   return keys.length > 0 && keys.every((key) => Number.isFinite(Number(sheet.customStats?.[key])));
 };
 
+// Whether a tracked polity's sheet is complete enough for the periodic refresh
+// to carry it: every one of the scenario's own values for a custom sheet
+// (`customKeys`), the whole standard sheet otherwise. A polity without one is
+// skipped until its first reading. The scheduler (gameplay.js) and the tracking
+// panel (stats.jsx) both ask this, so the panel says what the scheduler does —
+// it used to call any sheet at all "Stats ready".
+export const isTrackedStatSheetReady = (value, customKeys = null) => {
+  const sheet = normalizeCountryStatSheet(value);
+  if (!sheet) return false;
+  return Array.isArray(customKeys) ? isCompleteCustomCountryStatSheet(sheet, customKeys) : isCompleteCountryStatSheet(sheet);
+};
+
 export const buildEconomicConditionSummary = (value) => {
   const sheet = finalizeCountryStatSheet(value);
   if (!sheet || !sheet.economy) return "No canonical economic stat sheet is available yet.";
