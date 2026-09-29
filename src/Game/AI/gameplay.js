@@ -294,7 +294,6 @@ import {
   normalizeCustomStatValues,
   statSheetKeys,
 } from "../../runtime/statsSheet.js";
-import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
 import { difficultyDirective, difficultyMeta } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
@@ -8390,40 +8389,22 @@ const buildWorldInitiativeContextBackground = async (bundle, options = {}, signa
 // `hardLimitMs` when the caller has a time budget to keep. The abort is on a
 // local controller: the caller's `signal` stays un-aborted, so its catch sees an
 // ordinary failure, while the player's Cancel still cancels.
-const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null } = {}) => {
-  const now = () =>
-    typeof performance !== "undefined" && typeof performance.now === "function"
-      ? performance.now()
-      : Date.now();
-  const startedAt = now();
-  try {
-    const response = await runBoundedRepairCall(
-      ({ signal: callSignal, deadline, onActivity }) =>
-        callAI(systemPrompt, [
-          { role: "user", parts: [{ text: userMessage }] },
-        ], {
-          deadline,
-          onActivity,
-          ...(reasoningEnabled === undefined ? {} : { reasoningEnabled }),
-          signal: callSignal,
-          taskKey,
-          tool,
-          lookups,
-        }),
-      { taskKey, signal, hardLimitMs },
-    );
-    recordTurnPerfAiAttempt({ taskKey, attempt: 1, ms: Math.max(0, now() - startedAt) });
-    return response;
-  } catch (error) {
-    recordTurnPerfAiAttempt({
-      taskKey,
-      attempt: 1,
-      ms: Math.max(0, now() - startedAt),
-      error: normalizeString(error?.message || error),
-    });
-    throw error;
-  }
-};
+const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null } = {}) =>
+  runBoundedRepairCall(
+    ({ signal: callSignal, deadline, onActivity }) =>
+      callAI(systemPrompt, [
+        { role: "user", parts: [{ text: userMessage }] },
+      ], {
+        deadline,
+        onActivity,
+        ...(reasoningEnabled === undefined ? {} : { reasoningEnabled }),
+        signal: callSignal,
+        taskKey,
+        tool,
+        lookups,
+      }),
+    { taskKey, signal, hardLimitMs },
+  );
 
 // ---- Storyline motion repair (Continuum 07.2) -----------------------------
 // A selected storyline that the finished skip still left objectively unchanged

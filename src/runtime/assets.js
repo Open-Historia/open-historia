@@ -475,7 +475,6 @@ export const resolveCountryDisplayName = (name, code) => countryNameResolver(nam
 setRuntimeAssetEndpoints();
 
 const PERF_WARN_MS = 50;
-const PERF_STALL_MS = 120;
 
 // Performance telemetry stays active, but routine console noise is opt-in.
 // Temporary diagnostics can be re-enabled at runtime with:
@@ -520,91 +519,6 @@ const warnSlowJson = (operation, url, startedAt, extra = "") =>
     perfNow() - startedAt,
     { extra },
   );
-
-// Temporary stabilization watchdog. Named timers cannot see GC, browser layout,
-// React commits, MapLibre rendering, compositor stalls, etc. This catches any
-// visible frame gap and correlates it with recent input/map motion/named OH work.
-export const installPerformanceWatchdog = () => {
-  if (typeof window === "undefined" || typeof document === "undefined") return () => {};
-  if (window.__OH_PERF_WATCHDOG_INSTALLED__) return () => {};
-  window.__OH_PERF_WATCHDOG_INSTALLED__ = true;
-
-  let rafId = 0;
-  let lastFrame = perfNow();
-  let mapMoving = Boolean(window.__OH_MAP_MOVING__);
-  let lastInput = { type: "none", at: 0 };
-  let longTaskObserver = null;
-
-  const noteInput = (event) => {
-    lastInput = { type: event?.type || "input", at: perfNow() };
-  };
-  const onMapMotion = (event) => {
-    mapMoving = Boolean(event?.detail?.active);
-    window.__OH_MAP_MOVING__ = mapMoving;
-  };
-
-  const inputEvents = ["pointerdown", "pointermove", "wheel", "keydown", "click"];
-  for (const type of inputEvents) {
-    window.addEventListener(type, noteInput, { capture: true, passive: true });
-  }
-  window.addEventListener("oh:map-motion", onMapMotion);
-
-  try {
-    if (typeof PerformanceObserver !== "undefined") {
-      longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.duration < PERF_STALL_MS) continue;
-          const last = window.__OH_LAST_PERF_OPERATION__;
-          const recentNamed = last && Math.abs(perfNow() - Number(last.at || 0)) < 1800;
-          if (isPerfConsoleVerbose()) {
-            console.warn(
-              `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
-              `${mapMoving ? " · map moving" : ""}` +
-              `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
-            );
-          }
-        }
-      });
-      longTaskObserver.observe({ entryTypes: ["longtask"] });
-    }
-  } catch {
-    longTaskObserver = null;
-  }
-
-  const frame = (now) => {
-    const gap = now - lastFrame;
-    if (gap >= PERF_STALL_MS && document.visibilityState === "visible") {
-      const inputAge = now - Number(lastInput.at || 0);
-      const last = window.__OH_LAST_PERF_OPERATION__;
-      const opAge = last ? now - Number(last.at || 0) : Infinity;
-      if (isPerfConsoleVerbose()) {
-        console.warn(
-          `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
-          ` · map moving: ${mapMoving ? "yes" : "no"}` +
-          ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
-          ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
-        );
-      }
-    }
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  };
-
-  rafId = window.requestAnimationFrame((now) => {
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  });
-
-  return () => {
-    if (rafId) window.cancelAnimationFrame(rafId);
-    longTaskObserver?.disconnect?.();
-    for (const type of inputEvents) {
-      window.removeEventListener(type, noteInput, true);
-    }
-    window.removeEventListener("oh:map-motion", onMapMotion);
-    window.__OH_PERF_WATCHDOG_INSTALLED__ = false;
-  };
-};
 
 const cloneJson = (value) => {
   if (value == null) return value;
