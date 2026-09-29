@@ -24,7 +24,25 @@
 //
 // DELIBERATELY IMPORT-FREE.
 
-const copy = (value) => (value === undefined ? undefined : structuredClone(value));
+// What the turn changes of a turn review's answer: its parts, which the
+// directors place in place. The agents' reports it carries hold a whole world
+// each and are only read, so they are shared, as the failure's error is.
+export const copyReviewParts = (review) => (review && typeof review === "object"
+    ? { ...review, parts: copyAll(review.parts) }
+    : review);
+
+// A kept answer is copied, because what the turn does with an answer (placing a
+// unit's orders resolves their places in place) must not change the one a retry
+// is given. Something that cannot be copied is kept as it is rather than
+// costing the turn: it is only ever handed back once more, on a retry.
+const copyAll = (value) => {
+    if (value === undefined) return undefined;
+    try {
+        return structuredClone(value);
+    } catch {
+        return value;
+    }
+};
 
 // Player-facing names, for the held notice.
 const CHECK_LABELS = Object.freeze({
@@ -47,13 +65,15 @@ export const createTurnChecks = () => {
         // when one check is asked more than once in a turn. ask() makes the
         // request; failureOf(answer) is a reason string when the answer is a
         // failure, or "" when it is usable. A throw from ask() is not kept: it
-        // is the caller's to handle, as it was before.
-        run: async (check, ask, failureOf = () => "", { about = "" } = {}) => {
+        // is the caller's to handle, as it was before. `copy` copies only what
+        // the turn changes, for an answer too large to copy whole (the turn
+        // review carries the world for each agent's report).
+        run: async (check, ask, failureOf = () => "", { about = "", copy = copyAll } = {}) => {
             const key = JSON.stringify([check, about]);
             const kept = answers.get(key);
-            if (kept && (!kept.reason || accepted)) return copy(kept.answer);
+            if (kept && (!kept.reason || accepted)) return kept.copy(kept.answer);
             const answer = await ask();
-            answers.set(key, { check, answer: copy(answer), reason: String(failureOf(answer) || "") });
+            answers.set(key, { check, copy, answer: copy(answer), reason: String(failureOf(answer) || "") });
             return answer;
         },
         failures: () => [...answers.values()]

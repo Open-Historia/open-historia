@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { checksHeldError, checksHoldTurn, createTurnChecks, describeCheck } from "./turnChecks.js";
+import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks, describeCheck } from "./turnChecks.js";
 
 const fellBack = (answer) => (answer?.generation?.source === "fallback" ? answer.generation.fallbackReason : "");
 const ai = (payload) => ({ payload, generation: { source: "ai" } });
@@ -102,4 +102,23 @@ test("a cancelled Continue is taken back: the failed checks hold the turn again"
     assert.equal(checksHoldTurn(checks), false);
     checks.accept(false);
     assert.equal(checksHoldTurn(checks), true);
+});
+
+test("the turn review is kept without copying the world each agent's report carries", async () => {
+    const checks = createTurnChecks();
+    const world = { units: new Array(1000).fill({ id: "u" }) };
+    const answer = { asked: true, parts: { units: { eventOrders: [{ at: "Kyiv" }] } }, agentReports: [{ key: "spy", bundle: { world } }], failure: null, missing: [] };
+    const first = await checks.run("review", async () => answer, () => "", { copy: copyReviewParts });
+    first.parts.units.eventOrders[0].lng = 30.5; // placement resolves `at` in place
+    const again = await checks.run("review", async () => assert.fail("asked twice"), () => "", { copy: copyReviewParts });
+    assert.deepEqual(again.parts.units.eventOrders[0], { at: "Kyiv" });
+    assert.equal(again.agentReports[0].bundle.world, world, "shared, not copied");
+});
+
+test("an answer that cannot be copied is kept as it is instead of failing the turn", async () => {
+    const checks = createTurnChecks();
+    const answer = ai({ eventOrders: [], note: () => "not cloneable" });
+    await assert.doesNotReject(checks.run("units", async () => answer, fellBack));
+    const again = await checks.run("units", async () => assert.fail("asked twice"), fellBack);
+    assert.equal(again, answer);
 });

@@ -141,7 +141,7 @@ import {
   remapBoardOps,
   shareRepeatedBlocks,
 } from "./turnReview.js";
-import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
+import { checksHeldError, checksHoldTurn, copyReviewParts, createTurnChecks } from "./turnChecks.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -14601,7 +14601,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // player has no reason to retry.
   if (normalizeString(state.generation?.source) === "fallback") checks.accept();
   const review = state.requests?.saving
-    ? await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure)
+    ? await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure, { copy: copyReviewParts })
     : null;
   // Held here rather than at the write when the one request is what failed:
   // nothing after it has anything to go on.
