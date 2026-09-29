@@ -1116,12 +1116,38 @@ const createGame = async (body = {}) => {
 };
 
 const updateGame = async (id, body = {}) => {
+  // "Import & play" points a game whose map was missing at the scenario it just
+  // imported, which may have been given a different id (server twin).
+  const relinkTo = trimmed(body.scenarioId);
+  if (relinkTo && !(await listScenarioIds()).has(relinkTo)) throw new Error(`Scenario not found: ${relinkTo}`);
+  let wasArchived = false;
   await mutateGame(id, (record) => {
-    writeGameMeta(record, pickMetaUpdates(body));
+    wasArchived = readGameMeta(id, record.meta ?? {}).archived;
+    const updates = pickMetaUpdates(body);
+    if (typeof body.archived === "boolean") updates.archived = body.archived;
+    if (relinkTo) updates.scenarioId = relinkTo;
+    writeGameMeta(record, updates);
     applyJsonMutations(record, body, true, "game");
   });
+  if (body.archived === true && !wasArchived) await handOffActiveSlot(id);
   if (body.setActive) await setActiveGame(id);
   return getGameDetails(id);
+};
+
+// Archiving the game you are in would hide it from the library while leaving it
+// active, with no list left to switch away from. Hand the active slot to the most
+// recently played game still shown; archiving the last one leaves it active, as
+// the server twin (updateGame) does.
+const handOffActiveSlot = async (archivedId) => {
+  const manifest = await getGameManifest();
+  if (manifest.activeGameId !== archivedId) return;
+  const rows = new Map((await readGameMetas()).map((row) => [row.id, row]));
+  const fallback = resolveOrderedIds(manifest.order, new Set(rows.keys()), DEFAULT_GAME_ID)
+    .filter((gameId) => gameId !== archivedId)
+    .map((gameId) => readGameMeta(gameId, rows.get(gameId)?.meta ?? {}))
+    .filter((meta) => !meta.archived)
+    .sort((left, right) => String(right.lastPlayedAt ?? "").localeCompare(String(left.lastPlayedAt ?? "")))[0];
+  if (fallback) await saveGameManifest({ ...manifest, activeGameId: fallback.id });
 };
 
 // Play stamps for the main menu's "Last Played"/"Most Played" rows — patches

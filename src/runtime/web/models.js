@@ -250,6 +250,10 @@ export const readGameMeta = (gameId, raw = {}) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
   return {
     accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
+    // Server twin: hidden from the library, intact in storage. Read here or the
+    // catalog never shows it, and every later meta write (which starts from
+    // this) would unarchive the game.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? nowIso(),
     description,

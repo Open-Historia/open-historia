@@ -301,6 +301,52 @@ test("a revision of the built-in scenario reaches its games one at a time", asyn
   assert.equal(db.get("scenarios").get("default").json.world.builtInRevision, 2);
 });
 
+test("archiving a game shelves it and hands the active slot to the last one played", async () => {
+  await reset();
+  const older = await newGame("Older");
+  const current = await newGame("Current");
+  assert.equal((await library()).activeGameId, current);
+
+  const archived = ok(await games("PUT", current, { archived: true }));
+  assert.equal(archived.game.archived, true);
+  const after = await library();
+  assert.equal(after.games.find((game) => game.id === current).archived, true);
+  assert.equal(after.activeGameId, older, "the player is not left inside a game the list hides");
+
+  // A later metadata write keeps it archived.
+  ok(await games("PUT", current, { name: "Renamed" }));
+  assert.equal((await library()).games.find((game) => game.id === current).archived, true);
+
+  ok(await games("PUT", current, { archived: false }));
+  const restored = await library();
+  assert.equal(restored.games.find((game) => game.id === current).archived, false);
+  assert.equal(restored.activeGameId, older, "unarchiving does not move the active slot");
+});
+
+test("archiving the only game leaves it active", async () => {
+  await reset();
+  const catalog = await library();
+  for (const game of catalog.games) ok(await games("DELETE", game.id));
+  const only = await newGame("Only");
+  ok(await games("PUT", only, { archived: true }));
+  assert.equal((await library()).activeGameId, only);
+});
+
+test("Import & play points the game at the scenario it fetched", async () => {
+  await reset();
+  const imported = ok(await games("POST", "import", {
+    schema: "open-historia-game-bundle/1",
+    game: { name: "Mapless" },
+    scenarioRef: { scenarioId: "gone-map", scenarioName: "Gone Map" },
+    data: { game: { country: "Testland" }, world: { ownerSchema: 4 } },
+  })).game.id;
+  const scenarioId = ok(await scenarios("POST", "import", scenarioBundle("Gone Map"))).scenario.id;
+  const relinked = ok(await games("PUT", imported, { scenarioId }));
+  assert.equal(relinked.game.scenarioId, scenarioId);
+  assert.equal(relinked.game.scenarioMissing, false);
+  assert.equal((await games("PUT", imported, { scenarioId: "not-here" })).status, 400);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },

@@ -2359,6 +2359,7 @@ const updateGame = (
     name,
     prompts,
     promptsPatch,
+    scenarioId,
     setActive,
     storage,
     subtitle,
@@ -2372,8 +2373,17 @@ const updateGame = (
     throw new Error(`Game not found: ${gameId}`);
   }
 
+  // "Import & play" points a game whose map was missing at the scenario it just
+  // imported, which may have been given a different id. Dropped until now, so
+  // the game went on naming the id that is not here.
+  const relinkTo = String(scenarioId ?? "").trim();
+  if (relinkTo && !fs.existsSync(getScenarioDirectory(relinkTo))) {
+    throw new Error(`Scenario not found: ${relinkTo}`);
+  }
+
   const currentMeta = readGameMeta(gameId);
   writeGameMeta(gameId, {
+    ...(relinkTo ? { scenarioId: relinkTo } : {}),
     accentColor: String(accentColor ?? currentMeta.accentColor).trim() || currentMeta.accentColor,
                 archived: typeof archived === "boolean" ? archived : currentMeta.archived,
                 features: features !== undefined ? normalizeFeatureOverrides(features) : currentMeta.features,
