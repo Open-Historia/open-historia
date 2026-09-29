@@ -357,7 +357,7 @@ Espionage resolves once per turn in `applySimulationResult`, **after** the stand
 
 ## 4. `isPolityLandless` — "does this polity hold territory?"
 
-`isPolityLandless(world, code)` (`src/runtime/gameState.js`) is the single source of truth for "landless" (a government-in-exile, movement, or stateless person), used by both the AI prompt (`buildPlayerPolityRegionsText`) and the flag resolvers (a landless polity must NOT borrow the code-derived country flag). The subtlety: owning a region via an override = has land; but a scenario that ships **no** `regionOwnershipOverrides` at all means every polity owns its country through the base map tiles (a stock modern map), which is NOT landless.
+`isPolityLandless(world, code)` (`src/runtime/gameState.js`) is the single source of truth for "landless" (a government-in-exile, movement, or stateless person), used by both the AI prompt (`buildPlayerPolityRegionsText`) and the flag resolvers (a landless polity must NOT borrow the code-derived country flag). The subtlety: owning a region via an override = has land; but a scenario that ships **no** `regionOwnershipOverrides` at all means every polity owns its country through the base map tiles (a stock modern map), which is NOT landless. It reads `regionOwnershipOverrides`, `regionSovereigntyOverrides` and `polityOverrides` straight off the world and folds owners through `createOwnerResolver(buildOwnerAliasMap(...))`; it never calls `normalizeWorldState`, because the UI asks it on every world change.
 
 ---
 

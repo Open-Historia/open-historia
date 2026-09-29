@@ -4200,18 +4200,34 @@ export const normalizeWorldState = (world) => {
 // The distinction that matters: owning a region via an override = has land; but
 // a scenario that ships NO override list at all means the polity owns its country
 // through the base map tiles (a stock modern map), which is NOT landless.
+//
+// Reads the three maps straight off the world rather than normalizing all of it:
+// the UI asks this on every world change, and normalizeWorldState rebuilds
+// institutions, actors and relations to answer a question about two maps. Owners
+// fold through the same alias resolver normalization uses, built only when a
+// region's owner is not already the polity's exact key.
 export const isPolityLandless = (world, code) => {
   const polityCode = normalizeString(code);
   if (!polityCode) return false;
-  const normalized = normalizeWorldState(world);
-  const entries = Object.entries(normalized.regionOwnershipOverrides);
+  const source = world && typeof world === "object" ? world : {};
+  const polityOverrides = source.polityOverrides && typeof source.polityOverrides === "object" ? source.polityOverrides : {};
+  const entries = Object.entries(source.regionOwnershipOverrides ?? {})
+    .filter(([regionId, ownerCode]) => normalizeOptionalString(regionId) && normalizeOptionalString(ownerCode));
+  const wanted = polityCode.toLowerCase();
+  let resolveOwner = null;
+  const isPolity = (ownerCode) => {
+    const raw = normalizeString(ownerCode);
+    if (raw.toLowerCase() === wanted) return true;
+    resolveOwner ??= createOwnerResolver(buildOwnerAliasMap(polityOverrides));
+    return normalizeString(resolveOwner(raw)).toLowerCase() === wanted;
+  };
   // Administering a region or being its lawful sovereign both count: an
   // occupied homeland is still a homeland.
-  const owns = [...entries, ...Object.entries(normalized.regionSovereigntyOverrides || {})].some(
-    ([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === polityCode.toLowerCase(),
+  const owns = [...entries, ...Object.entries(source.regionSovereigntyOverrides ?? {})].some(
+    ([, ownerCode]) => isPolity(ownerCode),
   );
   if (owns) return false;
-  const isKnownPolity = Boolean(normalized.polityOverrides?.[polityCode]);
+  const isKnownPolity = Boolean(polityOverrides[polityCode]);
   // No override list AND not a declared polity = stock map, owns via base tiles.
   if (entries.length === 0 && !isKnownPolity) return false;
   return true;
