@@ -40,7 +40,9 @@ const FAMILY_RULES = [
   },
   {
     family: MARKER_FAMILY.resource,
-    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oilfield|gas field|coalfield|ore field|quarry|well)\b/,
+    // "<x>field" in one word or two: the Workshop's kind is "oil field", and
+    // normalizeText reads the AI's "oil_field" the same way.
+    pattern: /\b(lithium|resource|basin|mine|mining|deposit|oil ?field|gas ?field|coal ?field|ore ?field|quarry|well)\b/,
     glyph: "◆",
     priority: 70,
   },
