@@ -3332,6 +3332,11 @@ const normalizeEventImpacts = (value) => {
   };
 };
 
+// Every family of operation an event's impacts can carry, from the normalizer
+// itself, so a list built from it (the GM Console preview) cannot leave out a
+// family added later.
+export const EVENT_IMPACT_KEYS = Object.freeze(Object.keys(normalizeEventImpacts({})));
+
 // An event's kind and a turn record's mode. A played-out scene was "catalyst"
 // in both until interactive events were renamed (18 September 2026).
 const normalizeRenamedKind = (value) => {

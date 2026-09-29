@@ -60,6 +60,7 @@ import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { polityNameInUse } from "../../runtime/gmPolityNames.js";
 import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
+import { collectImpactOps, countImpactOps, otherImpactFamilies } from "./gmPreviewOps.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -3096,26 +3097,10 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const agreementUpdates = Array.isArray(transaction?.agreementUpdates) ? transaction.agreementUpdates : [];
         const puppetUpdates = Array.isArray(transaction?.puppetUpdates) ? transaction.puppetUpdates : [];
         const outreach = Array.isArray(transaction?.diplomaticOutreach) ? transaction.diplomaticOutreach : [];
-        const impactCounts = events.reduce((acc, event) => {
-            const impacts = event?.impacts ?? {};
-            acc.territory += (Array.isArray(impacts.regionTransfers) ? impacts.regionTransfers.length : 0)
-                + (Array.isArray(impacts.regionClaims) ? impacts.regionClaims.length : 0);
-            acc.polities += Array.isArray(impacts.polityChanges) ? impacts.polityChanges.length : 0;
-            acc.politics += Array.isArray(impacts.politicalActorOps) ? impacts.politicalActorOps.length : 0;
-            acc.units += Array.isArray(impacts.unitOps) ? impacts.unitOps.length : 0;
-            acc.markers += Array.isArray(impacts.markerOps) ? impacts.markerOps.length : 0;
-            acc.chats += Array.isArray(impacts.createdChats) ? impacts.createdChats.length : 0;
-            return acc;
-        }, { territory: 0, polities: 0, politics: 0, units: 0, markers: 0, chats: 0 });
-
-        const eventOps = (field) => events.flatMap((event, eventIndex) =>
-            (Array.isArray(event?.impacts?.[field]) ? event.impacts[field] : []).map((op, opIndex) => ({
-                ...op,
-                _eventIndex: eventIndex,
-                _eventTitle: event?.title || `Event ${eventIndex}`,
-                _opIndex: opIndex,
-            }))
-        );
+        // Every impact family is counted and listed (gmPreviewOps.js): one
+        // with no section of its own goes under "Other operations".
+        const impactCounts = countImpactOps(events);
+        const eventOps = (field) => collectImpactOps(events, field);
         const transferOps = eventOps("regionTransfers");
         const claimOps = eventOps("regionClaims");
         const controlOps = eventOps("regionControlOps");
@@ -3124,6 +3109,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
         const unitOps = eventOps("unitOps");
         const markerOps = eventOps("markerOps");
         const eventChats = eventOps("createdChats");
+        const groupOps = eventOps("groupOps");
+        const institutionOps = eventOps("institutionLifecycleOps");
+        const otherFamilies = otherImpactFamilies(events);
 
         const compactJson = (value) => {
             try { return JSON.stringify(value); } catch { return String(value ?? ""); }
@@ -3334,6 +3322,9 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                             {countChip("agreements", agreementUpdates.length)}
                             {countChip("subordinations", puppetUpdates.length)}
                             {countChip("chats", impactCounts.chats + outreach.length)}
+                            {countChip("groups", impactCounts.groups)}
+                            {countChip("institutions", impactCounts.institutions)}
+                            {impactCounts.other > 0 && countChip("other", impactCounts.other)}
                         </div>
 
                         {events.length > 0 && (
@@ -3531,6 +3522,57 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     })}
                                 </div>
                             )}
+
+                            {groupOps.length > 0 && (
+                                <div data-gm-group-ops="true">
+                                    {subsectionTitle("Groups", groupOps.length, "world.groups")}
+                                    {groupOps.map((entry, index) => {
+                                        const regions = Array.isArray(entry.regionIds) ? entry.regionIds : [];
+                                        return (
+                                            <div key={`group-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                                <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                    {String(entry.op || "update").toUpperCase()} · {entry.name || "Unnamed group"}{entry.newName ? ` → ${entry.newName}` : ""}
+                                                </strong>
+                                                <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                                {regions.length > 0 ? <div style={{ marginTop: "0.12rem" }}>Regions: {regions.join(", ")}</div> : null}
+                                                {entry.description ? <div style={{ color: "rgba(255,255,255,0.44)", marginTop: "0.12rem" }}>{entry.description}</div> : null}
+                                                {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+
+                            {institutionOps.length > 0 && (
+                                <div data-gm-institution-ops="true">
+                                    {subsectionTitle("Institutions", institutionOps.length, "world.institutions")}
+                                    {institutionOps.map((entry, index) => (
+                                        <div key={`institution-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>
+                                                {String(entry.op || "update").toUpperCase()} · {entry.name || entry.institutionId || "Unknown institution"}
+                                            </strong>
+                                            <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                            <div style={{ marginTop: "0.12rem" }}>Actor: {entry.actorPolity || "—"}{entry.targetPolity ? ` · Target: ${entry.targetPolity}` : ""}</div>
+                                            {entry.reason || entry.terms ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.reason || entry.terms}</div> : null}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {otherFamilies.map(({ field, ops }) => (
+                                <div key={`other-${field}`} data-gm-other-ops={field}>
+                                    {subsectionTitle("Other operations", ops.length, field)}
+                                    {ops.map((entry, index) => (
+                                        <div key={`other-${field}-${entry._eventIndex}-${entry._opIndex}-${index}`} style={exactRowStyle}>
+                                            <strong style={{ color: "rgba(255,255,255,0.88)" }}>{String(entry.op || entry.operation || "operation").toUpperCase()}</strong>
+                                            <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
+                                            <div style={{ color: "rgba(255,255,255,0.5)", marginTop: "0.14rem" }}>
+                                                {compactJson(Object.fromEntries(Object.entries(entry).filter(([key]) => !key.startsWith("_"))))}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
 
                             {storylineUpdates.length > 0 && (
                                 <div>
