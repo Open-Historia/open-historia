@@ -4,6 +4,8 @@ import {
   TERRITORY_BASIS_DESCRIPTION_SHORT,
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
+import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
+import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
 const textSchema = (description) => ({
   type: "string",
@@ -825,7 +827,7 @@ const institutionLifecycleImpactOpSchema = {
     targetPolity: textSchema("invite/expel/suspend/reinstate: exact target polity name."),
     caseId: textSchema("respond: exact pending lifecycle case id supplied by canonical context."),
     requestedStatus: textSchema("invite/apply: requested status such as member or observer."),
-    decision: { type: "string", enum: ["accept", "reject", "seek-observer", "request-terms", "delay"] },
+    decision: { type: "string", enum: [...INSTITUTION_LIFECYCLE_DECISIONS] },
     reason: textSchema("Concise political/strategic reason grounded in current relations, PWv2 context and institution fit."),
     terms: textSchema("Counterconditions or accession terms when relevant."),
     name: textSchema("found: institution name."),
@@ -1627,8 +1629,8 @@ const chatActionSchema = {
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
         + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
-        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.",
-      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
+        + `${INSTITUTION_CHAT_ACTION_KINDS.join(" / ")} are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.`,
+      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", ...INSTITUTION_CHAT_ACTION_KINDS],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
     content: textSchema("send_message: spoken message only, in its leader's voice. Match the length and tone of what it answers. actorName already identifies the speaker; never prefix content with the polity name plus a colon or dash."),
@@ -1681,7 +1683,7 @@ export const CHAT_ACTIONS_SCHEMA = {
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
-    lifecycleResponsesJson: textSchema("Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is accept, reject, seek-observer, request-terms, or delay. Use [] when this is not a lifecycle negotiation."),
+    lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
   additionalProperties: false,

@@ -8,6 +8,7 @@
 
 import {
   INSTITUTION_KINDS,
+  INSTITUTION_LIFECYCLE_DECISIONS,
   applyInstitutionMembershipResolution,
   applyInstitutionStatusResolution,
   canonicalInstitutionIdentity,
@@ -458,7 +459,7 @@ export const buildInstitutionLifecycleDecisionContext = (world = {}, {
     "- Consider the actor's PWv2 government, ideology, goals, fears, domestic pressure, leader disposition and current perceptions supplied elsewhere in this same request.",
     "- Consider geographic/political scope, obligations, current members, rivalries and the institution's stated threat model. A regional identity can make observer/partnership status more plausible than full accession.",
     "- If the actor itself is explicitly the institution's stated adversary/threat, full accession is ordinarily incompatible unless current canonical context clearly describes a transformation or negotiated change; do not accept just because an invitation exists.",
-    "- Put membership decisions in the top-level lifecycleResponsesJson field as JSON array text. Each object must use the exact acting government and exact case id: {actorName, caseId, decision, reason?, terms?}. Valid decisions: accept, reject, seek-observer, request-terms, delay. Use [] if nobody decides now. Never act for the human player.",
+    `- Put membership decisions in the top-level lifecycleResponsesJson field as JSON array text. Each object must use the exact acting government and exact case id: {actorName, caseId, decision, reason?, terms?}. Valid decisions: ${INSTITUTION_LIFECYCLE_DECISIONS.join(", ")}. Use [] if nobody decides now. Never act for the human player.`,
     playerCountry ? `Human-controlled polity: ${playerCountry}.` : "",
   ].filter(Boolean).join("\n");
   return { text: text.slice(0, 7000), institution, cases };
@@ -724,7 +725,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     if (!actor || !caseId) throw new Error("Lifecycle response requires actorPolity and caseId.");
     const authority = lifecycleAuthority({ actor, player, authority: command.authority });
     if (!authority.allowed) throw new Error(authority.reason);
-    if (!["accept", "reject", "seek-observer", "request-terms", "delay"].includes(decision)) throw new Error(`Unsupported lifecycle decision ${decision || "<blank>"}.`);
+    if (!INSTITUTION_LIFECYCLE_DECISIONS.includes(decision)) throw new Error(`Unsupported lifecycle decision ${decision || "<blank>"}.`);
     const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
       const current = caseMap(institution)[caseId];
       if (!current || !caseIsOpen(current)) return { error: `Lifecycle case ${caseId} is not open.` };
