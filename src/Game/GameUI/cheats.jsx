@@ -53,6 +53,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimeline.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -1551,123 +1552,6 @@ const sortEventsChronologically = (events) => events
         return left.index - right.index;
     })
     .map(({ event }) => event);
-
-const eventDateLooksIso = (value) => isGameDate(cleanEventText(value));
-
-const historyEntryDate = (entry) => cleanEventText(entry?.toDate || entry?.date || entry?.fromDate);
-
-const historyEntryCoversDate = (entry, date) => {
-    const wanted = cleanEventText(date);
-    if (!wanted) return false;
-    const from = cleanEventText(entry?.fromDate || entry?.date || entry?.toDate);
-    const to = cleanEventText(entry?.toDate || entry?.date || entry?.fromDate);
-    if (eventDateLooksIso(wanted) && eventDateLooksIso(from) && eventDateLooksIso(to)) {
-        const low = from <= to ? from : to;
-        const high = from <= to ? to : from;
-        return wanted >= low && wanted <= high;
-    }
-    return wanted === cleanEventText(entry?.date) || wanted === to || wanted === from;
-};
-
-const isManualTimelineEvent = (event) => {
-    const source = cleanEventText(event?.source).toLowerCase();
-    const id = cleanEventText(event?.id).toLowerCase();
-    return source === "manual" || id.startsWith("event-manual-");
-};
-
-// Manual Exact Events live in the same canonical event ledger as AI events, but the
-// visible Events panel is turn-oriented: time.jsx renders only IDs referenced by
-// world.simulationHistory. Keep manual events linked there without advancing a turn,
-// changing the game date, or applying any gameplay-state effects.
-const syncManualEventTimelineHistory = (worldInput, eventsInput, game) => {
-    const world = worldInput && typeof worldInput === "object" ? { ...worldInput } : {};
-    const manualEvents = (Array.isArray(eventsInput) ? eventsInput : [])
-        .filter((event) => isManualTimelineEvent(event) && cleanEventText(event?.id) && cleanEventText(event?.date));
-    const manualIds = new Set(manualEvents.map((event) => cleanEventText(event.id)));
-    const knownEventIds = new Set((Array.isArray(eventsInput) ? eventsInput : []).map((event) => cleanEventText(event?.id)).filter(Boolean));
-
-    let changed = false;
-    let history = (Array.isArray(world.simulationHistory) ? world.simulationHistory : []).map((entry) => ({
-        ...entry,
-        eventIds: Array.isArray(entry?.eventIds) ? [...entry.eventIds] : [],
-    }));
-
-    // First remove every manual ID from prior links. This makes date edits deterministic
-    // and prevents duplicate links if the editor is opened repeatedly.
-    history = history
-        .map((entry) => {
-            const before = entry.eventIds;
-            const after = before.filter((id) => {
-                const normalizedId = cleanEventText(id);
-                if (manualIds.has(normalizedId)) return false;
-                if (normalizedId.toLowerCase().startsWith("event-manual-") && !knownEventIds.has(normalizedId)) return false;
-                return true;
-            });
-            if (after.length !== before.length) changed = true;
-            return after.length === before.length ? entry : { ...entry, eventIds: after };
-        })
-        .filter((entry) => {
-            if (entry.eventIds.length) return true;
-            const source = cleanEventText(entry?.source).toLowerCase();
-            const mode = cleanEventText(entry?.mode).toLowerCase();
-            // Manual and GM-authored history entries exist only to make their linked
-            // canonical events visible in time.jsx. If the Event Editor deletes the
-            // event, remove the empty history shell too; structured world effects are
-            // deliberately left untouched.
-            if (
-                source === "manual" ||
-                mode === "manual-event" ||
-                source === "gm-console" ||
-                mode === "game-master"
-            ) {
-                changed = true;
-                return false;
-            }
-            return true;
-        });
-
-    const orderedManual = [...manualEvents].sort((a, b) => compareGameDates(cleanEventText(a.date), cleanEventText(b.date)));
-
-    for (const event of orderedManual) {
-        const eventId = cleanEventText(event.id);
-        const date = cleanEventText(event.date);
-        let targetIndex = history.findIndex((entry) => historyEntryCoversDate(entry, date));
-
-        if (targetIndex >= 0) {
-            const ids = history[targetIndex].eventIds;
-            if (!ids.some((id) => cleanEventText(id) === eventId)) {
-                history[targetIndex] = { ...history[targetIndex], eventIds: [...ids, eventId] };
-                changed = true;
-            }
-            continue;
-        }
-
-        const manualRecord = {
-            date,
-            eventIds: [eventId],
-            fallbackReason: "",
-            fromDate: date,
-            mode: "manual-event",
-            plannedActions: [],
-            round: Math.max(0, Math.trunc(Number(game?.round) || 0)),
-            source: "manual",
-            summary: `Manual exact event: ${cleanEventText(event?.title) || "Untitled event"}`,
-            toDate: date,
-        };
-
-        let insertAt = history.findIndex((entry) => {
-            const entryDate = historyEntryDate(entry);
-            return eventDateLooksIso(date) && eventDateLooksIso(entryDate) && compareGameDates(date, entryDate) > 0;
-        });
-        if (insertAt < 0) insertAt = history.length;
-        history.splice(insertAt, 0, manualRecord);
-        changed = true;
-    }
-
-    return changed
-        ? { changed: true, world: { ...world, simulationHistory: history } }
-        : { changed: false, world };
-};
 
 const eventBadgeStyle = (tone = "rgba(255,255,255,0.55)") => ({
     background: "rgba(255,255,255,0.05)",
