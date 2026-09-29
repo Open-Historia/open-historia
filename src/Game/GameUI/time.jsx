@@ -1,9 +1,6 @@
 /*! Open Historia — portions (defensive date rendering) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, useTouchPrimary } from "../../runtime/mobileUi.js";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
 import dayjs from "dayjs";
 import advancedFormat from "dayjs/plugin/advancedFormat";
 import {
@@ -30,7 +27,7 @@ import { unseenEvents } from "../../runtime/unseenEvents.js";
 import { isSceneInProgress } from "../AI/interactiveRewind.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { describeReceiptForPlayer } from "../../runtime/applicationReceipt.js";
-import { normalizeMarkdown } from "./markdownText.js";
+import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { isMainMenuOpen, useMainMenuOpen } from "./libraryBar";
 import {
@@ -118,13 +115,13 @@ const ensureTimelineStyles = () => {
 
 // An event description is written in paragraphs now, and a model that separates
 // them with a single newline used to have them glued back into one block:
-// CommonMark treats a lone newline as a space. remark-breaks makes it a real
-// break, remark-gfm gets the rest of the vocabulary a model reaches for, and
-// normalizeMarkdown repairs the <br>/<b> tags it writes instead of markdown -
-// the same three the advisor and the chat have always had (markdown.jsx). The
-// card keeps its own stylesheet rather than borrowing .oh-md, which is sized for
-// a side panel.
-const EVENT_REMARK_PLUGINS = [remarkGfm, remarkBreaks];
+// CommonMark treats a lone newline as a space. So event bodies and documents go
+// through the shared renderer (markdown.jsx) like every other model text:
+// remark-breaks makes a lone newline a real break, remark-gfm gets the rest of
+// the vocabulary a model reaches for (tables), normalizeMarkdown repairs the
+// <br>/<b> tags it writes instead of markdown, and links open in the system
+// browser. `bare`: the card keeps its own stylesheet (.timeline-markdown) rather
+// than borrowing .oh-md, which is sized for a side panel.
 const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
     useEffect(() => {
         ensureTimelineStyles();
@@ -828,9 +825,9 @@ const EventDocument = ({ report }) => {
         </span>
         </button>
         {open && (
-            <div className="timeline-markdown" style={{ borderTop: "1px solid rgba(251,191,36,0.12)", color: "rgba(228,228,231,0.84)", fontSize: "0.74rem", lineHeight: 1.55, padding: "0.55rem 0.8rem 0.7rem" }}>
-            <ReactMarkdown>{report.body}</ReactMarkdown>
-            </div>
+            <Markdown bare className="timeline-markdown" style={{ borderTop: "1px solid rgba(251,191,36,0.12)", color: "rgba(228,228,231,0.84)", fontSize: "0.74rem", lineHeight: 1.55, padding: "0.55rem 0.8rem 0.7rem" }}>
+            {report.body}
+            </Markdown>
         )}
         </div>
     );
@@ -929,9 +926,9 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
         </div>
 
         {event.description && (
-            <div className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
-            <ReactMarkdown remarkPlugins={EVENT_REMARK_PLUGINS}>{normalizeMarkdown(event.description)}</ReactMarkdown>
-            </div>
+            <Markdown bare className="timeline-markdown" style={{ color: "rgba(228,228,231,0.82)", fontSize: "0.77rem", lineHeight: "1.58" }}>
+            {event.description}
+            </Markdown>
         )}
 
         {documents.length > 0 && (
@@ -1875,6 +1872,8 @@ const TimelineHistoryPanel = ({
         title="Events"
         topOffset={topOffset}
         >
+        {/* The shared markdown sheet: tables in an event body or a document. */}
+        <MarkdownStyleInjector />
         {warning && (
             <div
             style={{

@@ -4,7 +4,7 @@ import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
+import Markdown, { MarkdownStyleInjector } from "../GameUI/markdown.jsx";
 import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
@@ -490,9 +490,14 @@ const CountryInfoPanel = () => {
             ) : report?.error ? (
                 <div style={{ color: "#f87171", fontSize: "0.78rem" }}>{report.error}</div>
             ) : (
-                <div className="timeline-markdown" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.79rem", lineHeight: 1.55 }}>
-                <ReactMarkdown>{String(report)}</ReactMarkdown>
-                </div>
+                // The shared renderer (markdown.jsx): a table or a <br> in the
+                // model's report reads as one, not as pipes and a literal tag.
+                <>
+                <MarkdownStyleInjector />
+                <Markdown bare className="timeline-markdown" style={{ color: "rgba(255,255,255,0.85)", fontSize: "0.79rem", lineHeight: 1.55 }}>
+                {String(report)}
+                </Markdown>
+                </>
             )}
             </div>
         )}
