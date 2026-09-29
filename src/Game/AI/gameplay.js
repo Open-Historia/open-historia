@@ -6915,6 +6915,10 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
       cloneResult: false,
       echo: false,
     });
+    // The turn was written well before this (the agents' reports come in
+    // between), so the timeline counted its restore points on the new round
+    // and found this one missing: no Rollback button until the next turn.
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:restore-point-saved"));
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
   }

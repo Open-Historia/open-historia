@@ -2679,14 +2679,22 @@ const DateWidget = ({
     };
 
     // How many turns can be undone (a restore point is captured at the start of
-    // each turn). Re-checked whenever the round changes — after a jump or undo.
+    // each turn). Re-checked whenever the round changes — after a jump or undo —
+    // and when a restore point is saved, which is after the round has changed:
+    // counted on the round alone, the newest turn could never be rolled back
+    // from here, though the cheats menu (which reads when opened) could.
     useEffect(() => {
         let active = true;
         // The index, not the snapshots: the full list carries every prior world.
-        loadRollbackSnapshotCount().then((count) => {
+        const refresh = () => loadRollbackSnapshotCount().then((count) => {
             if (active) setUndoCount(count);
         });
-        return () => { active = false; };
+        refresh();
+        window.addEventListener("oh:restore-point-saved", refresh);
+        return () => {
+            active = false;
+            window.removeEventListener("oh:restore-point-saved", refresh);
+        };
     }, [gameData?.round]);
 
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
@@ -2733,12 +2741,18 @@ const DateWidget = ({
     // jump runs so a half-revealed turn is never stopped under a new one.
     const [canInterveneTurn, setCanInterveneTurn] = useState(false);
     const latestTurnDate = worldState?.simulationHistory?.[0]?.date ?? "";
+    // Also on a saved restore point, for the reason the undo count is.
     useEffect(() => {
         let active = true;
-        canInterveneInLastTurn()
+        const refresh = () => canInterveneInLastTurn()
             .then((can) => { if (active) setCanInterveneTurn(Boolean(can)); })
             .catch(() => { if (active) setCanInterveneTurn(false); });
-        return () => { active = false; };
+        refresh();
+        window.addEventListener("oh:restore-point-saved", refresh);
+        return () => {
+            active = false;
+            window.removeEventListener("oh:restore-point-saved", refresh);
+        };
     }, [gameData?.round, latestTurnDate]);
 
     // Stop the round after the events revealed so far. The engine rolls back to
