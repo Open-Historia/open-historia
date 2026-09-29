@@ -236,6 +236,7 @@ export const createPoliticalWorldV2Executor = ({
         polities: allPolities,
         world: stagedWorld,
         scenarioContext: inputs?.scenarioContext,
+        baseCountryTags: inputs?.baseCountryTags || null,
         recovery: depth > 0,
         excludeInstitutionIds: array(job?.payload?.excludeInstitutionIds),
         callModel: trackedCallModel,
@@ -368,6 +369,7 @@ export const createPoliticalWorldV2Executor = ({
         polities: allPolities,
         world: stagedWorld,
         scenarioContext: inputs?.scenarioContext,
+        baseCountryTags: inputs?.baseCountryTags || null,
         callModel: trackedCallModel,
         signal,
       });

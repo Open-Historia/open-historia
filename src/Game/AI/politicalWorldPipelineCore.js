@@ -70,6 +70,7 @@ export const generatePoliticalWorldPipelineCore = async ({
   world = {},
   relevanceByPolity = {},
   scenarioContext = "",
+  baseCountryTags = null,
   contextByPolity = {},
   maxBatchSize = 8,
   prioritizeQuantitativeLandscapeBackfill = true,
@@ -186,6 +187,7 @@ export const generatePoliticalWorldPipelineCore = async ({
     polities,
     world: stagedWorld,
     scenarioContext,
+    baseCountryTags,
     signal,
     onBatch: (batch) => onProgress?.({ stage: "geopolitics", ...batch }),
   });
@@ -213,6 +215,7 @@ export const resumePoliticalWorldPipelineGeopoliticsCore = async ({
   politicalActors = null,
   world = {},
   scenarioContext = "",
+  baseCountryTags = null,
   priorResult,
   signal,
   onProgress,
@@ -262,6 +265,7 @@ export const resumePoliticalWorldPipelineGeopoliticsCore = async ({
     polities,
     world: stagedWorld,
     scenarioContext,
+    baseCountryTags,
     signal,
     onBatch: (batch) => onProgress?.({ stage: "geopolitics", ...batch }),
   });

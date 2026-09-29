@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-import { loadScenarioDetails, saveScenario } from "../../runtime/library.js";
+import { downloadScenarioJsonAsset, loadScenarioDetails, saveScenario } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { activeReferencePackIds, normalizeCanonContext, readScenarioCanon } from "../../runtime/scenarioCanon.js";
@@ -456,18 +456,34 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   const [pipelineResult, setPipelineResult] = useState(null);
   const [v2Checkpoint, setV2Checkpoint] = useState(null);
   const [v2CallBudget, setV2CallBudget] = useState(20);
+  const [scenarioTags, setScenarioTags] = useState(null);
   const abortRef = useRef(null);
   const restoreRunLogInputRef = useRef(null);
   const generationStartedAtRef = useRef(0);
   const progressPhaseRef = useRef("");
 
+  // Scenario details do not carry the author's country tags (tags.json), so
+  // they are read here for generation to see the tags the Workshop set.
+  useEffect(() => {
+    let cancelled = false;
+    const scenarioId = clean(details?.scenario?.id);
+    if (!scenarioId) {
+      setScenarioTags(null);
+      return () => { cancelled = true; };
+    }
+    downloadScenarioJsonAsset(scenarioId, "tags").then((tags) => {
+      if (!cancelled) setScenarioTags(tags);
+    });
+    return () => { cancelled = true; };
+  }, [details]);
+
   const inputs = useMemo(() => {
     try {
-      return buildScenarioPoliticalGenerationInputs(details, { mode, maxBatchSize: 8 });
+      return buildScenarioPoliticalGenerationInputs(details, { mode, maxBatchSize: 8, countryTags: scenarioTags });
     } catch {
       return null;
     }
-  }, [details, mode]);
+  }, [details, mode, scenarioTags]);
 
   const testInputs = useMemo(() => {
     try {
@@ -604,7 +620,8 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       // React/editor snapshot after the user has just saved universe/reference
       // settings.
       const freshDetails = await loadScenarioDetails(details?.scenario?.id);
-      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8 });
+      const freshTags = await downloadScenarioJsonAsset(freshDetails?.scenario?.id || details?.scenario?.id, "tags");
+      const freshInputs = buildScenarioPoliticalGenerationInputs(freshDetails, { mode, maxBatchSize: 8, countryTags: freshTags });
       if (freshInputs.scenarioDate !== inputs.scenarioDate) {
         throw new Error(`Scenario start date changed from ${inputs.scenarioDate} to ${freshInputs.scenarioDate || "<blank>"}. Save/reload before generating Political World.`);
       }
@@ -1301,6 +1318,7 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
         polities: inputs.polities,
         world: inputs.world,
         scenarioContext: inputs.scenarioContext,
+        baseCountryTags: inputs.baseCountryTags || null,
         signal: controller.signal,
         onBatch: ({ phase = "memberships", batchIndex, totalBatches, resolvedPolities, totalPolities, warning }) => {
           if (phase === "memberships-rescue") setProgress("Rescuing only unresolved geopolitical membership profiles…");

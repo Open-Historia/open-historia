@@ -498,7 +498,7 @@ A dependency-free module (imported by the editor, the game, and the server) that
 | `resolveCountryTags(baseTags, world, country)` | | The tags in force NOW for one country: the AI's live `world.countryTags[name]` if it has ever set one, ELSE the author's `tags.json` list. **Not a merge** — a revolution that dropped "socialist" must not have it restored by the scenario file underneath. Keyed by country NAME verbatim. |
 | `resolveAllCountryTags(baseTags, world)` | | Every tagged country, live winning over author, for the world summary the model reads. Emits keys verbatim (no uppercasing — see the desync note). |
 
-Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tags.json`); live changes land in `world.countryTags` via `polityChanges.tags` (§5/§8). See [Country tags](world-state.md).
+Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tags.json`); live changes land in `world.countryTags` via `polityChanges.tags` (§5/§8). Political World generation reads a library scenario rather than the active game, so the Politics panel downloads that scenario's own `tags.json` and passes it as `baseCountryTags` (`buildScenarioPoliticalGenerationInputs` → `geopoliticalWorldGenerator.js`), where the power and membership prompts and the tag-implied regime character go through `resolveCountryTags`. See [Country tags](world-state.md).
 
 ---
 

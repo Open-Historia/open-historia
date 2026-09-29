@@ -26,6 +26,7 @@ import {
   seedPowerBaselineScore,
 } from "../../runtime/powerStatus.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { resolveCountryTags } from "../../runtime/countryTags.js";
 import {
   applyGeopoliticalInstitutionGovernanceBaseline,
   geopoliticalInstitutionGovernanceTargets,
@@ -172,12 +173,15 @@ const dateKey = (value, edge = "start") => {
   return year * 10000 + month * 100 + day;
 };
 
-const actorSummary = (world, polity) => {
+// baseCountryTags is the scenario's own tags.json (the author's starting
+// tags). world.countryTags holds only tags changed since the start, so at
+// Round Zero it is usually empty; resolveCountryTags gives the tags in force.
+const actorSummary = (world, polity, baseCountryTags = null) => {
   const actor = world?.politicalActors?.byPolity?.[polity] || {};
   const system = clean(actor?.politicalSystem?.type || actor?.government?.form);
   const representation = clean(actor?.politicalSystem?.representation);
   const regimeCharacter = lower(actor?.politicalSystem?.regimeCharacter);
-  const legacyTags = array(world?.countryTags?.[polity]).join(", ");
+  const legacyTags = resolveCountryTags(baseCountryTags, world, polity).join(", ");
   return `${polity}${system ? ` | system: ${system}` : ""}${representation ? ` | representation: ${representation}` : ""}${REGIME_CHARACTER_SET.has(regimeCharacter) ? ` | canonical regimeCharacter: ${regimeCharacter}` : ""}${legacyTags ? ` | authored descriptors: ${legacyTags}` : ""}`;
 };
 
@@ -408,9 +412,9 @@ ${allPolityKeys.join(" | ").slice(0, 16000)}
 Return institutionsJson as a JSON array of {"id":"canonical institution id","name":"canonical name","shortName":"common abbreviation or blank","aliases":[],"kind":"...","foundedDate":"...","dissolvedDate":"","predecessors":[{"id":"...","name":"...","shortName":"","aliases":[],"foundedDate":"...","dissolvedDate":"...","membershipContinuity":true}],"badgeKey":"short token or blank","priority":0-100,"note":"short purpose"}. No members.`,
 });
 
-const buildPowerPrompt = ({ scenarioDate, historyAuthority = null, world, scenarioContext, requestedPolities, allPolityKeys, accepted = [], singleton = false }) => ({
+const buildPowerPrompt = ({ scenarioDate, historyAuthority = null, world, scenarioContext, requestedPolities, allPolityKeys, accepted = [], singleton = false, baseCountryTags = null }) => ({
   systemPrompt: `You provide ERA-RELATIVE STRATEGIC BASELINE EVIDENCE for OpenHistoria. Native code owns and computes the final major-power/regional-power/minor-power tier; you MUST NOT return a tier.\n\n${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Compare actors against the other active polities in THIS scenario and THIS era, not thresholds remembered from another canon. strategicWeight is an integer 0-100 estimate of underlying sovereign capacity/reach at Round Zero, before bonuses from formal-institution leadership or campaign events. Native score boundaries are ${POWER_MAJOR_SCORE_MIN}+ for major-power candidacy and ${POWER_REGIONAL_SCORE_MIN}-${POWER_MAJOR_SCORE_MIN - 1} for regional-power candidacy, so calibrate the evidence to those boundaries rather than using a conflicting prose scale. Reserve ${POWER_MAJOR_SCORE_MIN}+ for actors with genuinely major, independently system-shaping or sustained cross-regional/global sovereign reach; ordinary regional importance, alliance membership, diplomatic activism, or being a strong local state is NOT enough by itself. Roughly 85-100 should remain the tiny handful of exceptional system-shaping powers. Use ${POWER_REGIONAL_SCORE_MIN}-${POWER_MAJOR_SCORE_MIN - 1} for meaningful regional powers and below ${POWER_REGIONAL_SCORE_MIN} for smaller/local actors. Do not make every country cluster around the middle.\n\nUse political/military/economic/diplomatic capacity appropriate to the era. This is an approximate Round-Zero prior, not a permanent truth. No prose outside the tool.`,
-  userMessage: `Scenario context:\n${clean(scenarioContext).slice(0, 5000) || "(none)"}\n\nFull active polity vocabulary for relative comparison:\n${allPolityKeys.join(" | ").slice(0, 16000)}\n\n${accepted.length ? `Already accepted calibration anchors from earlier accepted batches:\n${accepted.map((entry) => `${entry.polityKey}:${entry.strategicWeight}`).join(" | ").slice(0, 8000)}\n\n` : ""}Return exactly one record for each requested polity below:\n${requestedPolities.map((polity) => `- ${actorSummary(world, polity)}`).join("\n")}\n\n${singleton ? "This is a ONE-POLITY recovery. Submit the direct tool fields polityKey, strategicWeight, and note. Do not serialize them into powerJson and do not wrap them in an array." : 'powerJson = [{"polityKey":"exact key","strategicWeight":0-100,"note":"brief basis"}].'}`,
+  userMessage: `Scenario context:\n${clean(scenarioContext).slice(0, 5000) || "(none)"}\n\nFull active polity vocabulary for relative comparison:\n${allPolityKeys.join(" | ").slice(0, 16000)}\n\n${accepted.length ? `Already accepted calibration anchors from earlier accepted batches:\n${accepted.map((entry) => `${entry.polityKey}:${entry.strategicWeight}`).join(" | ").slice(0, 8000)}\n\n` : ""}Return exactly one record for each requested polity below:\n${requestedPolities.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}\n\n${singleton ? "This is a ONE-POLITY recovery. Submit the direct tool fields polityKey, strategicWeight, and note. Do not serialize them into powerJson and do not wrap them in an array." : 'powerJson = [{"polityKey":"exact key","strategicWeight":0-100,"note":"brief basis"}].'}`,
 });
 
 const compactMembershipCatalogSummary = (catalog) => array(catalog)
@@ -449,7 +453,7 @@ ${allPolityKeys.join(" | ").slice(0, 20000)}
 membersJson = [{"polityKey":"EXACT active polity key","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":"brief/blank"}]. Return [] if this institution truly has no positive members among the active polities.`,
 });
 
-const buildMembershipPrompt = ({ scenarioDate, historyAuthority = null, batch, world, scenarioContext, catalog, recovery = false }) => {
+const buildMembershipPrompt = ({ scenarioDate, historyAuthority = null, batch, world, scenarioContext, catalog, recovery = false, baseCountryTags = null }) => {
   if (recovery) {
     return {
       systemPrompt: `OpenHistoria membership COVERAGE RECOVERY for ${scenarioDate}. ${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Return EXACTLY one row for every requested polity. Do not omit a polity because it has no memberships or because an accession date is uncertain. Use only exact institution ids from the closed catalog. If membership exists but the exact joinedDate is uncertain, leave joinedDate blank. Keep notes blank/minimal. Preserve an already supplied canonical regimeCharacter; otherwise classify it. No prose outside the tool.`,
@@ -457,7 +461,7 @@ const buildMembershipPrompt = ({ scenarioDate, historyAuthority = null, batch, w
 ${compactMembershipCatalogSummary(catalog) || "(none)"}
 
 Requested polities (${batch.length}) — return all ${batch.length} rows:
-${batch.map((polity) => `- ${actorSummary(world, polity)}`).join("\n")}
+${batch.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}
 
 politiesJson = [{"polityKey":"EXACT requested key","regimeCharacter":"canonical/generated/blank","memberships":[{"institutionId":"EXACT catalog id","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":""}]}].`,
     };
@@ -484,7 +488,7 @@ FIXED institution catalog:
 ${catalogSummary(catalog) || "(no strategically relevant formal institutions exist in this scenario/date)"}
 
 Requested polities (${batch.length}):
-${batch.map((polity) => `- ${actorSummary(world, polity)}`).join("\n")}
+${batch.map((polity) => `- ${actorSummary(world, polity, baseCountryTags)}`).join("\n")}
 
 politiesJson = [{"polityKey":"exact key","regimeCharacter":"canonical value, generated value, or blank when canonical supplied","memberships":[{"institutionId":"EXACT catalog id","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":""}]}].`,
   };
@@ -535,8 +539,8 @@ const canonicalPoliticalActorRegimeCharacter = (world, polity) => {
   return REGIME_CHARACTER_SET.has(explicit) ? explicit : "";
 };
 
-const legacyRegimeCharacter = (world, polity) => {
-  const tags = [...array(world?.countryTags?.[polity]), ...array(world?.politicalActors?.byPolity?.[polity]?.tags)].map(lower);
+const legacyRegimeCharacter = (world, polity, baseCountryTags = null) => {
+  const tags = [...resolveCountryTags(baseCountryTags, world, polity), ...array(world?.politicalActors?.byPolity?.[polity]?.tags)].map(lower);
   if (tags.includes("totalitarian")) return "totalitarian";
   if (tags.includes("authoritarian")) return "authoritarian";
   if (tags.includes("democratic")) return "democratic";
@@ -545,7 +549,7 @@ const legacyRegimeCharacter = (world, polity) => {
   return "";
 };
 
-const knownRegimeCharacter = (world, polity) => canonicalPoliticalActorRegimeCharacter(world, polity) || legacyRegimeCharacter(world, polity);
+const knownRegimeCharacter = (world, polity, baseCountryTags = null) => canonicalPoliticalActorRegimeCharacter(world, polity) || legacyRegimeCharacter(world, polity, baseCountryTags);
 
 
 // Political World v2 one-request domain seams. Each helper performs at most one
@@ -672,6 +676,7 @@ export const generateGeopoliticalMembershipJob = async ({
   scenarioContext = "",
   recovery = false,
   excludeInstitutionIds = [],
+  baseCountryTags = null,
   callModel = callAI,
   signal,
 } = {}) => {
@@ -696,7 +701,7 @@ export const generateGeopoliticalMembershipJob = async ({
       skippedModelCall: true,
     };
   }
-  const prompt = buildMembershipPrompt({ scenarioDate, historyAuthority, batch: requested, world, scenarioContext, catalog, recovery });
+  const prompt = buildMembershipPrompt({ scenarioDate, historyAuthority, batch: requested, world, scenarioContext, catalog, recovery, baseCountryTags });
   const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_MEMBERSHIP_TOOL, signal, logLabel: recovery ? "geopolitical membership recovery" : "geopolitical memberships" });
   const rows = parseArrayText(source.politiesJson ?? source.polities);
   const records = [];
@@ -704,7 +709,7 @@ export const generateGeopoliticalMembershipJob = async ({
   for (const raw of rows) {
     const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
     if (!polityKey || acceptedKeys.has(polityKey) || !requested.includes(polityKey)) continue;
-    const canonicalRegime = knownRegimeCharacter(world, polityKey);
+    const canonicalRegime = knownRegimeCharacter(world, polityKey, baseCountryTags);
     const candidateRegime = lower(raw?.regimeCharacter || raw?.regime);
     const regimeCharacter = canonicalRegime || (REGIME_CHARACTER_SET.has(candidateRegime) ? candidateRegime : "");
     if (!regimeCharacter) continue;
@@ -812,6 +817,7 @@ export const generateGeopoliticalPowerEvidenceJob = async ({
   polities = [],
   world = {},
   scenarioContext = "",
+  baseCountryTags = null,
   callModel = callAI,
   signal,
 } = {}) => {
@@ -844,6 +850,7 @@ export const generateGeopoliticalPowerEvidenceJob = async ({
     allPolityKeys,
     accepted: acceptedAnchors,
     singleton,
+    baseCountryTags,
   });
   const source = await callTool({
     callModel,
@@ -933,6 +940,7 @@ export const generateGeopoliticalWorldBaseline = async ({
   polities = [],
   world = {},
   scenarioContext = "",
+  baseCountryTags = null,
   callModel = callAI,
   signal,
   onBatch,
@@ -1058,7 +1066,7 @@ export const generateGeopoliticalWorldBaseline = async ({
   let unresolvedPower = [...requestedPolities];
   for (let attempt = 1; attempt <= 2 && unresolvedPower.length && !catalogBlocked; attempt += 1) {
     try {
-      const prompt = buildPowerPrompt({ scenarioDate, historyAuthority, world, scenarioContext, requestedPolities: unresolvedPower, allPolityKeys, accepted: [...powerMap.values()] });
+      const prompt = buildPowerPrompt({ scenarioDate, historyAuthority, world, scenarioContext, requestedPolities: unresolvedPower, allPolityKeys, accepted: [...powerMap.values()], baseCountryTags });
       modelCalls += 1;
       const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_POWER_CALIBRATION_TOOL, signal, logLabel: "geopolitical power calibration" });
       const rows = parseArrayText(source.powerJson ?? source.power);
@@ -1088,6 +1096,7 @@ export const generateGeopoliticalWorldBaseline = async ({
       scenarioContext,
       catalog: institutionCatalog,
       recovery: meta.phase && meta.phase !== "memberships",
+      baseCountryTags,
     });
     modelCalls += 1;
     const source = await callTool({ callModel, ...prompt, tool: GEOPOLITICAL_MEMBERSHIP_TOOL, signal, logLabel: "geopolitical memberships" });
@@ -1097,7 +1106,7 @@ export const generateGeopoliticalWorldBaseline = async ({
     for (const raw of rows) {
       const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
       if (!polityKey || acceptedKeys.has(polityKey) || !targets.includes(polityKey)) continue;
-      const canonicalRegime = knownRegimeCharacter(world, polityKey);
+      const canonicalRegime = knownRegimeCharacter(world, polityKey, baseCountryTags);
       const candidateRegime = lower(raw?.regimeCharacter || raw?.regime);
       const regimeCharacter = canonicalRegime || (REGIME_CHARACTER_SET.has(candidateRegime) ? candidateRegime : "");
       if (!regimeCharacter) continue;

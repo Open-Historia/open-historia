@@ -19,6 +19,8 @@ registerHooks({
 
 const {
   generateGeopoliticalInstitutionMembersJob,
+  generateGeopoliticalMembershipJob,
+  generateGeopoliticalPowerEvidenceJob,
   generateGeopoliticalWorldBaseline,
 } = await import("./geopoliticalWorldGenerator.js");
 
@@ -131,4 +133,40 @@ test("the baseline stops asking once a phase has already blocked Apply", async (
   ]);
   assert.equal(result.modelCalls, 3);
   assert.deepEqual(result.unresolvedMembershipPolities, polities);
+});
+
+test("power and membership prompts show the scenario author's country tags, with live tags winning", async () => {
+  const prompts = [];
+  const callModel = async (systemPrompt, messages, options) => {
+    prompts.push(messages[0].parts[0].text);
+    return { toolInput: { powerJson: "[]" } };
+  };
+  const baseCountryTags = { Avalon: ["socialist", "authoritarian"], Borduria: ["democratic"] };
+  await generateGeopoliticalPowerEvidenceJob({
+    scenarioDate: "2014-03-22",
+    targets: ["Avalon", "Borduria"],
+    polities: ["Avalon", "Borduria"],
+    // Borduria's tags have changed during play; the live list wins.
+    world: { countryTags: { Borduria: ["military-junta"] } },
+    baseCountryTags,
+    callModel,
+  });
+  assert.match(prompts[0], /- Avalon \| authored descriptors: socialist, authoritarian/);
+  assert.match(prompts[0], /- Borduria \| authored descriptors: military-junta/);
+  assert.doesNotMatch(prompts[0], /Borduria \| authored descriptors: democratic/);
+});
+
+test("a regime character implied by the author's tags outranks the model's classification", async () => {
+  const world = {
+    institutions: { byId: { "north-pact": { id: "north-pact", name: "North Pact", kind: "military_alliance", foundedDate: "1990-01-01" } } },
+  };
+  const result = await generateGeopoliticalMembershipJob({
+    scenarioDate: "2014-03-22",
+    targets: ["Avalon"],
+    polities: ["Avalon"],
+    world,
+    baseCountryTags: { Avalon: ["military-junta"] },
+    callModel: async () => ({ toolInput: { politiesJson: JSON.stringify([{ polityKey: "Avalon", regimeCharacter: "democratic", memberships: [] }]) } }),
+  });
+  assert.deepEqual(result.records.map((record) => [record.polityKey, record.regimeCharacter]), [["Avalon", "military"]]);
 });
