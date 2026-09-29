@@ -3,10 +3,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildNativeWorldExplorationSlate,
   createWorldActorResolver,
   createWorldEventScopeClassifier,
+  deferredStorylineReentryHasConcreteTrigger,
   deriveWorldExplorationAudit,
   screenGeneratedWorldEvents,
+  validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
 
 const quietly = (run) => {
@@ -223,4 +226,214 @@ test("a treaty between two other states names both as sovereign actors and no on
     [["Republic of Estonia", "autonomous"], ["Russian Federation", "autonomous"]],
   );
   assert.equal(screened.events[0].actors, undefined, "derived actors are never stored on the event");
+});
+
+// --- The screen's own regression cases (once an in-bundle self-test) ---
+
+const empireWorld = {
+  polityOverrides: {
+    DEU: { code: "German Empire", name: "German Empire", aliases: ["Germany"] },
+    POL: { code: "Poland", name: "Poland", aliases: [] },
+    RUS: { code: "Russian Empire", name: "Russian Empire", aliases: ["Russia"] },
+    "Austrian Empire": { code: "Austrian Empire", name: "Austria-Hungary", aliases: ["Austria-Hungary"] },
+  },
+  regionClaimants: { "reg-masovia": ["Russian Empire"] },
+  wars: [{ id: "polish-war", status: "active", sideA: ["Poland"], sideB: ["Russian Empire"] }],
+};
+const empireGame = { country: "German Empire", gameDate: "1916-03-01", round: 1 };
+const empireEvent = (title, description, impacts = {}) => ({
+  id: title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+  title,
+  description,
+  impacts: {
+    regionTransfers: [],
+    regionControlOps: [],
+    polityChanges: [],
+    unitOps: [],
+    markerOps: [],
+    createdChats: [],
+    ...impacts,
+  },
+});
+const screenEmpire = (event) => quietly(() => screenGeneratedWorldEvents({ events: [event], world: empireWorld, game: empireGame }));
+
+test("a non-belligerent's wartime rationing is rejected", () => {
+  const screened = screenEmpire(empireEvent(
+    "German Wartime Rationing Continues",
+    "Germany expands its wartime rationing as shortages deepen.",
+  ));
+  assert.equal(screened.events.length, 0);
+  assert.equal(screened.dropped[0].route, "NON_BELLIGERENT_WARTIME_CAUSALITY");
+});
+
+test("preparing for a possible war stays legal", () => {
+  const screened = screenEmpire(empireEvent(
+    "Germany Tests Wartime Food Reserves",
+    "German officials simulate wartime ration allocations for a potential future conflict.",
+  ));
+  assert.equal(screened.events.length, 1);
+});
+
+test("routine artillery that changes nothing stays off the timeline", () => {
+  const screened = screenEmpire(empireEvent(
+    "Russian Artillery Bombardment Outside Warsaw",
+    "Russian artillery resumes bombardment and localized probing outside Warsaw.",
+  ));
+  assert.equal(screened.events.length, 0);
+  assert.equal(screened.hidden[0].route, "ROUTINE_MILITARY_PRECURATION");
+});
+
+test("a breakthrough with a control consequence survives", () => {
+  const screened = screenEmpire(empireEvent(
+    "Russian Forces Break Through Outside Warsaw",
+    "Russian forces break through and capture the outer defensive belt.",
+    { regionControlOps: [{ op: "control", regionId: "Warsaw", fromCode: "Poland", toCode: "Russian Empire" }] },
+  ));
+  assert.equal(screened.events.length, 1);
+});
+
+test("a process-only polity update is stripped and the event kept", () => {
+  const screened = screenEmpire(empireEvent(
+    "Reichstag Reviews Food Policy",
+    "The Reichstag debates food policy without adopting a measure.",
+    { polityChanges: [{ operation: "update", code: "German Empire", stats: { stability: 82 } }] },
+  ));
+  assert.equal(screened.events.length, 1);
+  assert.equal(screened.strippedPolityUpdates, 1);
+});
+
+test("same-lineage polity updates merge before persistence", () => {
+  const screened = screenEmpire(empireEvent(
+    "Austro-Hungarian Ministry Reports Severe Fiscal Strain",
+    "The finance ministry reports severe fiscal strain and a material stability decline.",
+    {
+      polityChanges: [
+        { operation: "update", code: "Austria-Hungary", stats: { stability: 43, economy: { inflation: "13%" } } },
+        { operation: "update", code: "Austrian Empire", stats: { stability: 43, economy: { budgetBalance: "-16% GDP" } } },
+      ],
+    },
+  ));
+  assert.equal(screened.events.length, 1);
+  assert.equal(screened.mergedDuplicatePolityUpdates, 1);
+  const changes = screened.events[0].impacts.polityChanges;
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].stats.stability, 43);
+  assert.equal(changes[0].stats.economy.inflation, "13%");
+  assert.equal(changes[0].stats.economy.budgetBalance, "-16% GDP");
+});
+
+test("an already-existing contest cannot smuggle routine combat onto the timeline", () => {
+  const screened = screenEmpire(empireEvent(
+    "Russian Artillery Probe in Masovia",
+    "Russian artillery resumes localized probing in Masovia; Polish positions remain unchanged.",
+    { regionControlOps: [{ op: "contest", regionId: "reg-masovia", regionName: "Masovia", fromCode: "Poland", actorCode: "Russian Empire" }] },
+  ));
+  assert.equal(screened.events.length, 0);
+  assert.equal(screened.strippedNoOpRegionControlOps, 1);
+  assert.equal(screened.dropped[0].route, "ROUTINE_MILITARY_PRECURATION");
+});
+
+const deferredPrior = {
+  id: "storyline-deferred-motion-test",
+  status: "active",
+  pressure: 78,
+  momentum: 20,
+  participants: ["Poland", "Russian Empire"],
+};
+const reentry = (title, description, momentum) => deferredStorylineReentryHasConcreteTrigger(
+  { events: [empireEvent(title, description)], warUpdates: "", relationUpdates: "", agreementUpdates: "" },
+  [0],
+  deferredPrior,
+  { ...deferredPrior, pressure: 82, momentum },
+);
+
+test("routine artillery cannot reactivate a deferred storyline", () => {
+  assert.equal(reentry(
+    "Russian Artillery Exchanges Continue",
+    "Russian and Polish batteries exchange localized artillery fire while the trench line remains unchanged.",
+    28,
+  ), false);
+});
+
+test("a material offensive can reactivate a deferred storyline", () => {
+  assert.equal(reentry(
+    "Polish Counteroffensive Retakes Forward Positions",
+    "Polish forces launch a counteroffensive, repulse Russian units and regain ground after exploiting an overextended sector.",
+    34,
+  ), true);
+});
+
+const emptyCandidate = () => ({
+  events: [],
+  storylineUpdates: "",
+  diplomaticOutreach: [],
+  warUpdates: "",
+  relationUpdates: "",
+  agreementUpdates: "",
+  summary: "",
+});
+
+test("a long silence asks for one re-check, and a quiet final answer is legal", () => {
+  const analysis = { explorationSlate: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }], visibleSilenceDays: 75 };
+  assert.match(validateWorldExplorationAudit(emptyCandidate(), analysis, { finalAttempt: false }), /no canonical visible milestone for 75 days/);
+  assert.equal(validateWorldExplorationAudit(emptyCandidate(), analysis, { finalAttempt: true }), "");
+});
+
+test("exploration coverage is derived natively, with no audit bookkeeping from the model", () => {
+  const candidate = {
+    ...emptyCandidate(),
+    events: [empireEvent(
+      "Russian Cabinet Reviews Railway Finance",
+      "Russian ministers approve a railway financing package after a domestic cabinet review.",
+    )],
+  };
+  const analysis = {
+    explorationSlate: [
+      { id: 1, actor: "Austria-Hungary", type: "actor-domain" },
+      { id: 2, actor: "German Empire", type: "actor-domain" },
+      { id: 3, actor: "Cross-border system", type: "global" },
+      { id: 4, actor: "Wider world", type: "global" },
+    ],
+    visibleSilenceDays: 10,
+  };
+  assert.equal(validateWorldExplorationAudit(candidate, analysis, { finalAttempt: false, world: empireWorld, gameCountry: empireGame.country }), "");
+});
+
+const slateActors = (world, diplomaticActors) => buildNativeWorldExplorationSlate({
+  bundle: { game: { country: "German Empire", gameDate: "1916-04-12", round: 54 }, world },
+  allStorylines: [],
+  selectedStorylines: [],
+  diplomaticActors,
+  causalCandidates: [],
+}).filter((slot) => slot.type === "actor-domain").map((slot) => slot.actor);
+
+test("exploration actor aliases collapse to one polity", () => {
+  const actors = slateActors({
+    polityOverrides: {
+      "Austrian Empire": { code: "Austrian Empire", name: "Austria-Hungary", aliases: ["Austrian Empire", "Austria-Hungary"] },
+    },
+    countryStats: { "Austrian Empire": {} },
+    wars: [],
+    relations: [],
+    agreements: [],
+    storylines: [],
+  }, ["Austrian Empire", "Austria-Hungary"]);
+  assert.ok(actors.filter((actor) => actor === "Austria-Hungary").length <= 1, actors.join(", "));
+  assert.ok(!actors.includes("Austrian Empire"), actors.join(", "));
+});
+
+test("a passive catalog polity cannot take an exploration slot", () => {
+  const actors = slateActors({
+    polityOverrides: {
+      "Protectorate Bohemia-Moravia": { code: "Protectorate Bohemia-Moravia", name: "Protectorate Bohemia-Moravia", aliases: [] },
+    },
+    countryStats: { "Protectorate Bohemia-Moravia": {} },
+    wars: [{ id: "test-war", status: "active", sideA: ["Poland"], sideB: ["Russian Empire"] }],
+    relations: [],
+    agreements: [],
+    storylines: [],
+    units: [],
+  }, ["British Empire"]);
+  assert.ok(!actors.includes("Protectorate Bohemia-Moravia"), actors.join(", "));
+  for (const expected of ["British Empire", "Poland", "Russian Empire"]) assert.ok(actors.includes(expected), actors.join(", "));
 });
