@@ -241,7 +241,9 @@ const LifecycleRuleRow = ({ label, rule }) => <div style={{ ...panel, padding: "
   {Number(rule?.noticeDays) > 0 && <span style={{ fontSize: ".59rem", color: "rgba(255,255,255,.36)" }}>{rule.noticeDays}d notice</span>}
 </div>;
 
-const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Select governments", multiple = true }) => {
+// allowUnlisted: Enter takes the typed name as written when no polity in the
+// list matches it (the scenario editor, where an author may name one on purpose).
+export const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Select governments", multiple = true, allowUnlisted = false }) => {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const selected = useMemo(() => multiple ? splitList(value) : [clean(value)].filter(Boolean), [value, multiple]);
@@ -268,7 +270,7 @@ const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Selec
   const remove = (polity) => commitSelected(selected.filter((entry) => lower(entry) !== lower(polity)));
   const chooseFirst = () => {
     const exact = polities.find((polity) => lower(polity) === normalizedQuery);
-    const candidate = exact || matches[0];
+    const candidate = exact || matches[0] || (allowUnlisted ? query : "");
     if (candidate) choose(candidate);
   };
 
@@ -297,7 +299,7 @@ const PolityMultiPicker = ({ value = "", onChange, polities = [], label = "Selec
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{polity}</span>
       </button>)}
     </div>}
-    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>No canonical polity matches “{query}”.</div>}
+    {open && query && matches.length === 0 && <div style={{ position: "absolute", zIndex: 30, left: 0, right: 0, top: "calc(100% + .28rem)", border: "1px solid rgba(255,255,255,.08)", borderRadius: 9, background: "rgba(20,20,25,.985)", color: "rgba(255,255,255,.38)", padding: ".55rem .6rem", fontSize: ".6rem" }}>{allowUnlisted ? `No polity in this scenario matches “${query}”. Press Enter to add it as written.` : <>No canonical polity matches “{query}”.</>}</div>}
   </div>;
 };
 

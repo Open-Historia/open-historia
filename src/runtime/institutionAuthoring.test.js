@@ -6,7 +6,9 @@ import {
   institutionAuthoringId,
   institutionAuthoringRows,
   institutionMemberNames,
+  institutionMemberRoster,
   removeScenarioInstitution,
+  unmatchedInstitutionMembers,
   upsertScenarioInstitution,
 } from "./institutionAuthoring.js";
 
@@ -140,4 +142,31 @@ test("removing an institution the scenario does not have is refused", () => {
   assert.match(result.error, /not in this scenario/);
   assert.equal(result.world, source);
   assert.equal(removeScenarioInstitution(source, "").institution, null);
+});
+
+const rosterWorld = () => ({
+  ...world(),
+  ownerCodes: ["Latvia", "Estonia"],
+  regionOwnershipOverrides: { r1: "Bonaire, Sint Eustatius and Saba" },
+  polityOverrides: {
+    "Russian Federation": { name: "Russian Federation", aliases: ["Russia"] },
+    "Kingdom of Prussia": { name: "Kingdom of Prussia", status: "dormant" },
+    "Free City of Danzig": { name: "Free City of Danzig", status: "inactive" },
+  },
+});
+
+test("the member roster offers every polity in the scenario, dormant ones included", () => {
+  const roster = institutionMemberRoster(rosterWorld());
+  for (const name of ["Latvia", "Estonia", "Bonaire, Sint Eustatius and Saba", "Russian Federation", "Kingdom of Prussia", "Free City of Danzig"]) {
+    assert.ok(roster.includes(name), `${name} is offered`);
+  }
+});
+
+test("members that name no polity in the scenario are flagged exactly as written", () => {
+  const names = ["Latvia", "Latvija", "latvia", "Russia", "Free City of Danzig", "Bonaire, Sint Eustatius and Saba", "Bonaire"];
+  assert.deepEqual(unmatchedInstitutionMembers(names, rosterWorld()), ["Latvija", "latvia", "Bonaire"]);
+});
+
+test("with no roster to compare against, no member is flagged", () => {
+  assert.deepEqual(unmatchedInstitutionMembers(["Latvia", "Anything"], { institutions: {} }), []);
 });

@@ -6,6 +6,7 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { collectScenarioPoliticalPolities } from "./scenarioPolities.js";
 
 const clean = (value) => String(value ?? "").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -37,6 +38,29 @@ const uniqueText = (value) => {
 // The member list, one polity per line. Polity names are exact keys and may
 // hold commas ("Bonaire, Sint Eustatius and Saba"), so it never splits on them.
 export const institutionMemberNames = (membersText) => uniqueText(String(membersText ?? "").split(/\r?\n/g));
+
+// The polities an author can pick as members: every polity in the scenario,
+// dormant ones included, since an author may list one on purpose.
+export const institutionMemberRoster = (world = {}) => collectScenarioPoliticalPolities(world)
+  .map((entry) => entry.polityKey);
+
+// Members that name no polity in the scenario, exactly as written. Polity names
+// are exact keys, so a typo or a near-name would found a phantom member that
+// votes and counts toward quorum without matching any country. Kept, not
+// refused: this only warns. An exact name or alias a polity is known by counts.
+// With no roster to compare against there is nothing to warn about.
+export const unmatchedInstitutionMembers = (names = [], world = {}) => {
+  const roster = institutionMemberRoster(world);
+  if (!roster.length) return [];
+  const known = new Set(roster);
+  for (const override of Object.values(world?.polityOverrides ?? {})) {
+    if (!override || typeof override !== "object") continue;
+    for (const token of [override.name, ...(Array.isArray(override.aliases) ? override.aliases : [])]) {
+      if (clean(token)) known.add(clean(token));
+    }
+  }
+  return (Array.isArray(names) ? names : []).filter((name) => clean(name) && !known.has(clean(name)));
+};
 
 export const institutionAuthoringRows = (world = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
