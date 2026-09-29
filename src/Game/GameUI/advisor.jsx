@@ -1019,7 +1019,9 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // A reply already in the chat language must skip the UI translator, which
     // would render it back into the interface language.
     const chatDiffers = chatLanguageDiffersFromUi();
-    const chatDir = chatDiffers && isRtlLanguage(resolveChatLanguage()) ? "rtl" : undefined;
+    // Said both ways: an English reply under an Arabic interface otherwise
+    // inherits the page's right-to-left and reads ".We should secure the border".
+    const chatDir = chatDiffers ? (isRtlLanguage(resolveChatLanguage()) ? "rtl" : "ltr") : undefined;
 
     useEffect(() => {
         if (isAdvisorOpen) setHasOpened(true);
