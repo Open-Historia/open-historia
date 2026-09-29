@@ -340,8 +340,6 @@ const describeEventMapChanges = (event, { polityLookup = new Map(), regionLookup
     return lines;
 };
 
-const getEventMapChangeCount = (event) => describeEventMapChanges(event).length;
-
 const collectEventTags = (event, { polityLookup, regionLookup }) => {
     const labels = new Set();
 
@@ -515,7 +513,8 @@ const focusMapOnBounds = (mapRef, bounds) => {
 const filterPlannedActions = (actions) =>
 normalizeActions(actions).filter((action) => action.status === "planned");
 
-const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) => {
+// Built for the newest turn only: that is the one the Events panel shows.
+const buildTurnRecord = ({ entry, index, history, eventLookup, game }) => {
     if (!entry) {
         return null;
     }
@@ -531,23 +530,6 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
     const fromDate = fallbackStartDate || toDate;
     const events = (entry.eventIds ?? []).map((eventId) => eventLookup.get(eventId)).filter(Boolean);
     const plannedActions = filterPlannedActions(entry.plannedActions || entry.actions);
-    const mapChangeCount = events.reduce((sum, event) => sum + getEventMapChangeCount(event), 0);
-    const tags = new Set();
-
-    for (const action of plannedActions) {
-        for (const invitee of action?.invitees ?? []) {
-            if (invitee) {
-                tags.add(invitee);
-            }
-        }
-    }
-
-    for (const event of events) {
-        for (const label of collectEventTags(event, lookups)) {
-            tags.add(label);
-        }
-    }
-
     const primaryEvent = events.find((event) => String(event.importance).toLowerCase() === "major") || events[0];
 
     return {
@@ -556,7 +538,6 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         events,
         fromDate,
         id: `${entry.toDate || entry.date || index}-${index}`,
-        mapChangeCount,
         mode: entry.mode || "jump",
         fallbackReason: entry.fallbackReason || "",
         plannedActions,
@@ -567,7 +548,6 @@ const buildTurnRecord = ({ entry, index, history, eventLookup, game, lookups }) 
         round: entry.round || 0,
         source: entry.source || "ai",
         summary: entry.summary || "",
-        tags: Array.from(tags).slice(0, 10),
         title:
         primaryEvent?.title ||
         (plannedActions[0]?.title ? `Turn centered on ${plannedActions[0].title}` : `Round ${entry.round || Math.max(1, (game?.round || 1) - index)}`),
@@ -590,23 +570,6 @@ const cloneWorldForStaging = (world) => {
     } catch {
         return null;
     }
-};
-
-// A field on the shape that is rarely read, computed the first time it is.
-const onFirstRead = (target, key, compute) => {
-    let value;
-    let read = false;
-    Object.defineProperty(target, key, {
-        configurable: true,
-        enumerable: true,
-        get() {
-            if (!read) {
-                value = compute();
-                read = true;
-            }
-            return value;
-        },
-    });
 };
 
 // The card for one streamed event, made once and kept. Cached against the event
@@ -650,13 +613,13 @@ const liveEventCard = (event) => {
     return card;
 };
 
-const buildLiveTurnRecord = ({ events, fromDate, toDate, round, lookups }) => {
+const buildLiveTurnRecord = ({ events, fromDate, toDate, round }) => {
     // Filtered before anything reads a field off one: this record is built on
     // every arriving event, and a throw here takes the whole panel down blank.
     const numbered = events.filter((event) => event && typeof event === "object").map(liveEventCard);
     const primaryEvent = numbered.find((event) => String(event.importance).toLowerCase() === "major") || numbered[0];
 
-    const record = {
+    return {
         date: toDate || fromDate,
         eventCount: numbered.length,
         events: numbered,
@@ -673,22 +636,6 @@ const buildLiveTurnRecord = ({ events, fromDate, toDate, round, lookups }) => {
         title: primaryEvent?.title || "",
         toDate,
     };
-
-    // Both cost a pass over every event and every impact on it, and this record
-    // is rebuilt on every arrival, so computing them eagerly was quadratic for
-    // two fields the Events panel never reads. They belong to the history list,
-    // which never sees a live record.
-    onFirstRead(record, "tags", () => {
-        const tags = new Set();
-        for (const event of numbered) {
-            for (const label of collectEventTags(event, lookups)) tags.add(label);
-        }
-        return Array.from(tags).slice(0, 10);
-    });
-    onFirstRead(record, "mapChangeCount", () => (
-        numbered.reduce((sum, event) => sum + getEventMapChangeCount(event), 0)
-    ));
-    return record;
 };
 
 const MetricPill = ({ children, icon = null, tone = "default", onClick = null, active = false }) => {
@@ -2726,21 +2673,18 @@ const DateWidget = ({
     const eventLookup = useMemo(() => buildEventLookup(events), [events]);
     const lookups = useMemo(() => ({ polityLookup, regionLookup }), [polityLookup, regionLookup]);
 
-    const historyRecords = useMemo(() => {
+    // The newest turn alone: it is all the panel shows, and this runs on every
+    // world write, so the other eleven were built and thrown away each time.
+    const latestTurnRecord = useMemo(() => {
         const rawHistory = worldState?.simulationHistory ?? [];
-        return rawHistory
-        .map((entry, index) => buildTurnRecord({
-            entry,
-            index,
+        return buildTurnRecord({
+            entry: rawHistory[0],
+            index: 0,
             history: rawHistory,
             eventLookup,
             game: gameData,
-            lookups,
-        }))
-        .filter(Boolean);
-    }, [eventLookup, gameData, lookups, worldState]);
-
-    const latestTurnRecord = historyRecords[0] || null;
+        });
+    }, [eventLookup, gameData, worldState]);
     const persistedFallbackWarning = latestTurnRecord?.source === "fallback"
     ? `Turn generated by fallback: ${latestTurnRecord.fallbackReason || "structured AI output was unavailable"}`
     : "";
@@ -2752,9 +2696,8 @@ const DateWidget = ({
             fromDate: liveRange.from,
             toDate: liveRange.to,
             round: (gameData?.round || 0) + 1,
-            lookups,
         })
-        : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round, lookups]);
+        : null), [skipInFlight, streamedEvents, liveRange.from, liveRange.to, gameData?.round]);
     const displayRecord = liveTurnRecord ?? latestTurnRecord;
     const totalVisibleEvents = displayRecord?.events?.length || 0;
     // The newest revealed event, written turn or not: the camera follows the
