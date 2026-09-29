@@ -23,6 +23,7 @@ import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { commitInstitutionGovernanceCommand, commitInstitutionalPlayerProposal, commitInstitutionalPlayerVoteRequest } from "../../runtime/institutionalGovernance.js";
 import { commitInstitutionLifecycleCommand } from "../../runtime/institutionLifecycle.js";
 import { getLibraryState } from "../../runtime/library.js";
+import { campaignChanged } from "../../runtime/campaignGuard.js";
 
 Chart.register(...registerables);
 
@@ -1175,6 +1176,11 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // main.jsx), so the model never sees the question twice either.
     const runTurn = async (text, { replaceTrailingError = false } = {}) => {
         if (!text || isLoading) return;
+        // The campaign the question is asked in. Its orders, projects and
+        // transcript are written through endpoints that follow the open
+        // campaign, so a reply that lands after a switch writes nothing.
+        const campaignId = String(getLibraryState()?.activeGameId || "").trim();
+        const leftCampaign = () => campaignChanged(campaignId, getLibraryState()?.activeGameId);
 
         // `round` rides along with the date for applyAdvisorProjects — see its
         // comment for why a project update without one reads as stale.
@@ -1227,6 +1233,10 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
 
         try {
             const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
+            if (leftCampaign()) {
+                logDebugEvent("advisor", "Advisor reply dropped: the campaign was switched while it was being written, so none of its orders or projects were applied.");
+                return;
+            }
             // Apply any ```actions proposal in the reply to the real queue BEFORE
             // finalising the message, so the confirmation card that renders with it
             // reflects what actually happened — not a re-derivation done later at
@@ -1305,6 +1315,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 return next;
             });
         } catch (err) {
+            if (leftCampaign()) return;
             setMessages(prev => {
                 const last = prev[prev.length - 1];
                 const base = last && last.role === "advisor" && last.streaming ? prev.slice(0, -1) : prev.slice();
