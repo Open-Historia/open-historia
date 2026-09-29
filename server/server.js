@@ -61,6 +61,15 @@ import {
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
+  clearHubCache,
+  hubCacheUsage,
+  pruneHubCache,
+  saveCappedBody,
+  sweepHubCache,
+  tooLargeError,
+  touchEntry,
+} from "./hubCache.js";
+import {
   allowedCorsOrigin,
   allowedHostNames,
   crossOriginWriteAllowed,
@@ -1313,11 +1322,31 @@ app.post("/api/server/shutdown", (req, res) => {
 // Cache fetched bundles on disk so re-importing the same scenario doesn't keep
 // bumping its GitHub download count — the second import onward is served locally
 // and never touches GitHub. Bundle URLs are immutable (a new version gets a new
-// URL), so a cached copy can't go stale. Keyed on the requested URL.
+// URL), so a cached copy can't go stale. Keyed on the requested URL, and capped
+// by total size: the entries used longest ago go first (server/hubCache.js).
 const HUB_CACHE_DIR = path.join(DATA_DIR, "hub-cache");
 const hubCachePaths = (fileUrl) => {
   const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
   return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
+};
+
+// Leftover downloads from a crash, and anything past the size cap, go at
+// startup (server/hubCache.js).
+sweepHubCache(HUB_CACHE_DIR);
+
+// Serves a downloaded file from disk, with the guards every hub file gets.
+const sendHubFile = (res, filePath, contentType, { removeAfter = false } = {}) => {
+  res.setHeader("Cache-Control", "no-store");
+  setHubFileGuards(res);
+  // Pass the upstream content type through untouched. JSON bundles still parse
+  // via response.json() (which ignores the header), while binary bundles (.zip)
+  // and raw basemap images (.png/.jpg) arrive byte-for-byte.
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Length", fs.statSync(filePath).size);
+  const stream = fs.createReadStream(filePath);
+  stream.once("error", (error) => res.destroy(error));
+  if (removeAfter) stream.once("close", () => fs.rm(filePath, { force: true }, () => {}));
+  stream.pipe(res);
 };
 
 app.get("/api/hub/file", async (req, res) => {
@@ -1334,10 +1363,8 @@ app.get("/api/hub/file", async (req, res) => {
     if (fs.existsSync(cache.body)) {
       let cachedType = "application/octet-stream";
       try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
-      res.setHeader("Cache-Control", "no-store");
-      setHubFileGuards(res);
-      res.setHeader("Content-Type", cachedType);
-      return fs.createReadStream(cache.body).pipe(res);
+      touchEntry(cache.body);
+      return sendHubFile(res, cache.body, cachedType);
     }
 
     // Follow redirects manually so every hop is re-checked against the host
@@ -1363,33 +1390,45 @@ app.get("/api/hub/file", async (req, res) => {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }
 
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    if (buffer.length > HUB_MAX_BUNDLE_BYTES) {
-      return sendError(res, 413, new Error("Scenario bundle is too large."));
+    // Refuse before reading a byte when the size is declared; saveCappedBody
+    // stops mid-body when it is not.
+    const declared = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > HUB_MAX_BUNDLE_BYTES) {
+      await upstream.body?.cancel().catch(() => {});
+      return sendError(res, 413, tooLargeError());
     }
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    // Cache for next time — best-effort; a cache write failure must not fail the
-    // import. Temp file + rename so a concurrent serve never sees a half-written body.
+    // Downloaded to a temp file of its own (two imports of the same file at
+    // once must not share one), then renamed into the cache so a concurrent
+    // serve never sees a half-written body. Failing to cache must not fail the
+    // import: the temp file is served and removed instead.
+    fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
+    const download = `${cache.body}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await saveCappedBody(upstream.body, download, HUB_MAX_BUNDLE_BYTES);
     try {
-      fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
-      fs.writeFileSync(`${cache.body}.tmp`, buffer);
-      fs.renameSync(`${cache.body}.tmp`, cache.body);
       fs.writeFileSync(cache.type, contentType);
+      fs.renameSync(download, cache.body);
     } catch (cacheError) {
       console.warn("[hub] cache write failed:", cacheError.message);
+      return sendHubFile(res, download, contentType, { removeAfter: true });
     }
-
-    res.setHeader("Cache-Control", "no-store");
-    setHubFileGuards(res);
-    // Pass the upstream content type through untouched. JSON bundles still parse
-    // via response.json() (which ignores the header), while binary bundles (.zip)
-    // and raw basemap images (.png/.jpg) arrive byte-for-byte.
-    res.setHeader("Content-Type", contentType);
-    res.send(buffer);
+    sendHubFile(res, cache.body, contentType);
+    pruneHubCache(HUB_CACHE_DIR, undefined, { keep: cache.body });
   } catch (error) {
-    sendError(res, 502, error);
+    sendError(res, error?.status === 413 ? 413 : 502, error);
   }
+});
+
+// Settings → Storage: how much the download cache holds, and emptying it. A
+// cleared file downloads again (and counts on GitHub again) next time.
+app.get("/api/hub/cache", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(hubCacheUsage(HUB_CACHE_DIR));
+});
+
+app.delete("/api/hub/cache", (_req, res) => {
+  res.json(clearHubCache(HUB_CACHE_DIR));
 });
 
 // Best-effort scenario-import telemetry. On a successful import the client pings

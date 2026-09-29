@@ -82,6 +82,7 @@ import {
     isDebugLogVerbose,
     logDebugEvent,
     logSettingChange,
+    logSettingMessage,
     setDebugLogEnabled,
     setDebugLogVerbose,
     subscribeToDebugLog,
@@ -1395,6 +1396,93 @@ const NetworkSharing = () => {
     );
 };
 
+// --- Storage: the community download cache ------------------------------------
+// Every scenario, basemap and flag downloaded from the community is kept on the
+// server's disk (server/hubCache.js), so opening it again needs no download and
+// does not count on GitHub again. It is capped at 1 GB, the files used longest
+// ago going first, but a player who wants the space back now should not have to
+// go looking for a hidden folder. Server-backed builds only, like Network.
+const formatCacheSize = (bytes) => (bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+    : `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`);
+
+const DownloadCache = () => {
+    const [usage, setUsage] = useState(null);   // null until we know there is a server
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        if (import.meta.env.VITE_OH_WEB) return undefined;
+        let cancelled = false;
+        (async () => {
+            try {
+                const response = await fetch("/api/hub/cache", { cache: "no-store" });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!cancelled) setUsage(data);
+            } catch {
+                /* no server behind this build — nothing is stored here */
+            }
+        })();
+        return () => { cancelled = true; };
+    }, []);
+
+    if (!usage) {
+        return (
+            <div style={{ ...helperStyle, marginTop: 0 }}>
+            No local server is behind this build, so nothing is stored here.
+            </div>
+        );
+    }
+
+    const clear = async () => {
+        if (busy) return;
+        setBusy(true);
+        setError("");
+        try {
+            const response = await fetch("/api/hub/cache", { method: "DELETE" });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || "Could not clear the download cache.");
+            setUsage(data);
+            logSettingMessage("download-cache", "Download cache cleared.");
+        } catch (nextError) {
+            setError(nextError.message);
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const size = formatCacheSize(usage.bytes);
+    return (
+        <div>
+        <div style={{ alignItems: "center", display: "flex", gap: "0.5rem", justifyContent: "space-between", marginBottom: "0.5rem" }}>
+        <span style={{ fontSize: "0.8rem" }}>
+        {usage.files === 0
+            ? "No community downloads are stored."
+            : usage.files === 1
+            ? `1 community download is stored (${size}).`
+            : `${usage.files} community downloads are stored (${size}).`}
+        </span>
+        <button
+        type="button"
+        className="oh-tap-row"
+        onClick={clear}
+        disabled={busy || usage.files === 0}
+        style={{ ...diagnosticsButton, opacity: busy || usage.files === 0 ? 0.5 : 1, whiteSpace: "nowrap" }}
+        >
+        Clear download cache
+        </button>
+        </div>
+        <div style={{ ...helperStyle, marginTop: 0 }}>
+        Scenarios, maps and flags you download from the community are kept so opening them again needs no new download. Past 1 GB, the ones used longest ago are removed on their own.
+        </div>
+        {error && (
+            <div style={{ color: "#fca5a5", fontSize: "0.72rem", lineHeight: 1.4, marginTop: "0.4rem" }}>{error}</div>
+        )}
+        </div>
+    );
+};
+
 // Settings → Diagnostics → View log: the Logging file's entries, newest first,
 // so a player can look before they send — the page's own and, on desktop, the
 // desktop app's and server's, exactly as the file would hold them
@@ -2190,6 +2278,11 @@ const SettingsWorkspace = ({
                 {!import.meta.env.VITE_OH_WEB && (
                     <SettingsSection title="Network" description="Other devices — the Android app, a browser on another computer — reach this server only while you say so.">
                         <NetworkSharing />
+                    </SettingsSection>
+                )}
+                {!import.meta.env.VITE_OH_WEB && (
+                    <SettingsSection title="Storage" description="What this server keeps on disk for you.">
+                        <DownloadCache />
                     </SettingsSection>
                 )}
                 <SettingsSection title="Diagnostics" description="The log a bug report needs. Copy it for Discord, save it for a GitHub issue.">

@@ -27,6 +27,7 @@ Route ordering matters: `/fmg/*` and `express.static` are mounted **before** the
 | Owner-code → country-name schema-2 migration | `server/ownerMigration.js` | `resolveOwnerName` + record migrators |
 | Writable data-root resolution | `server/dataDir.js` | `DATA_DIR` |
 | Path containment, CSRF guard, range parsing, hub host allowlist | `server/security.js` | Pure, unit-tested helpers |
+| Community download cache (hub-cache): capped streaming download, size cap with least-recently-used eviction, startup sweep, clear | `server/hubCache.js` | `/api/hub/file`'s disk cache, `/api/hub/cache` |
 | Map-editor documents | `server/mapEditorStore.js` | `/api/mapeditor/*` |
 | User basemap library ("Your basemaps") | `server/basemapStore.js` | `/api/basemaps/*` |
 | Saved flag library ("My flags") | `server/flagStore.js` | `/api/flags/*` |
@@ -94,7 +95,8 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, on silence (restarted by every chunk), and it replies `504` rather than hanging. Once the answer has started, a failure (that deadline, the 64 MB cap, the endpoint dropping mid-answer) destroys the connection instead of ending it cleanly, so the browser's reader fails rather than taking half an answer for a whole one | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
-| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256 | `server/server.js:575` |
+| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256. A download over 200 MB (`HUB_MAX_BUNDLE_BYTES`) is refused with `413` from its `Content-Length`, or as it passes the cap while being streamed to disk (never held in memory). The cache is capped at 1 GB (`HUB_CACHE_MAX_BYTES`, `server/hubCache.js`): past it the entries used longest ago go first (a hit counts as a use), and leftover `.tmp` downloads are swept at startup | `server/server.js:575` |
+| GET / DELETE | `/api/hub/cache` | How much the download cache holds (`{ files, bytes }`), and emptying it (Settings → Advanced → Storage → "Clear download cache"); downloads in progress are left alone | `server/server.js`, `server/hubCache.js` |
 | POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
 | GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
 
@@ -156,7 +158,7 @@ server/data/
   mapeditor-documents/  mapeditor-manifest.json
   flags-library.json
   lang/<code>.json               # runtime-saved translations (survive app updates)
-  hub-cache/<sha256>.body|.type  # cached hub bundle downloads
+  hub-cache/<sha256>.body|.type  # cached hub downloads (bundles, basemaps, flags), capped at 1 GB, least recently used first
   import-pings/<sha256>          # one-per-scenario import telemetry markers
   .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games (recoverable by hand)
 ```
