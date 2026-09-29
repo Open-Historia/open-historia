@@ -235,6 +235,35 @@ test("a governing alignment rejected at staging is not counted as aligned", asyn
   assert.equal(result.attempts["governing-alignment:B"], 1);
 });
 
+test("the sentinel's challenged paths reach the exact-date verification prompt", async () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.historicalVerificationRequired = true;
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  const actorPatch = { government: { form: "Parliamentary republic", headOfGovernment: "Leader Old" } };
+  checkpoint.generationEntriesByPolity.B = {
+    item: { polityKey: "B", depth: "standard", needs: ["governing_structure"] },
+    proposal: { polityKey: "B", actorPatch },
+    validation: { actor: { ...completeActor("B"), ...actorPatch } },
+  };
+  checkpoint.verification.challenges.B = {
+    issue: "The head of government changed before the scenario date.",
+    challengedFacts: [{ id: "F2", path: "government.headOfGovernment", display: "Leader Old" }],
+  };
+  let prompt = "";
+  await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 1,
+    callModel: async (_system, history) => {
+      prompt = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { verifications: [] } };
+    },
+  });
+  assert.match(prompt, /CHALLENGED GENERATED TEMPORAL PATHS:\n- government\.headOfGovernment = Leader Old/);
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

@@ -101,11 +101,11 @@ test("PWV2 party coverage is a political-actor Canonical Gate invariant without 
   assert.doesNotMatch(executor, /missingCoalitionEntities/);
 });
 
+// Behaviour: simpleWorklist.test.js and simpleRunner.test.js check that the
+// live worklist's verification task carries the challenged paths to the prompt.
 test("v2 temporal sentinel forwards challenged semantic paths into the existing exact-date adjudicator", () => {
-  const executor = fs.readFileSync(new URL("./executor.js", import.meta.url), "utf8");
-  assert.match(executor, /challengedFacts/);
-  assert.match(executor, /CHALLENGED GENERATED TEMPORAL PATHS/);
-  assert.match(executor, /type: "historical-verification"/);
+  assert.match(worklist, /historicalChallengeReviewContext\(challengeMap\?\.\[polity\]\)/);
+  assert.match(worklist, /type: "historical-verification"/);
   assert.doesNotMatch(worklist, /semantic-verification/);
 });
 

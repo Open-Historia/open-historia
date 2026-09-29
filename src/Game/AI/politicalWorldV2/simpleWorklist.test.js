@@ -230,6 +230,31 @@ test("landscape-only actors take the fast call's 48-polity batch", () => {
   assert.deepEqual(task.targets, polities.slice(0, 48));
 });
 
+test("a verification task carries the sentinel's challenged paths, not only its one-line issue", () => {
+  const checkpoint = base();
+  checkpoint.historicalVerificationRequired = true;
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stages.institutionGovernance = "complete";
+  checkpoint.stages.agreements = "complete";
+  checkpoint.stagedWorld.powerStatus.byPolity = Object.fromEntries(["A", "B", "C"].map((polity) => [polity, { tier: "minor-power", score: 30, baselineScore: 30, basis: "generated-relative-baseline" }]));
+  checkpoint.verification.challenges.B = {
+    issue: "The head of government changed before the scenario date.",
+    challengedFacts: [{ id: "F2", path: "government.headOfGovernment", display: "Leader Old" }],
+    temporalCorrectionEstablished: true,
+  };
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "historical-verification");
+  assert.deepEqual(task.targets, ["B"]);
+  assert.equal(task.payload.reviewContextByPolity.B, [
+    "The head of government changed before the scenario date.",
+    "CHALLENGED GENERATED TEMPORAL PATHS:",
+    "- government.headOfGovernment = Leader Old",
+  ].join("\n"));
+  assert.deepEqual(task.payload.correctionRequiredPolities, ["B"]);
+});
+
 test("stale 202/202 coverage reopens an Other-heavy generated electoral roster", () => {
   const checkpoint = base();
   checkpoint.coverage["political-actor"] = ["A", "B", "C"];

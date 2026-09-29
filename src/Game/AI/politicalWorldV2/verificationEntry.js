@@ -120,6 +120,20 @@ export const rebasePoliticalWorldVerificationEntry = (entry, stagedActor) => {
   return next;
 };
 
+// The exact-date adjudicator's focused context for one sentinel challenge: the
+// issue plus up to 12 of the generated paths the sentinel challenged, so the
+// adjudicator knows precisely which facts to re-check.
+export const historicalChallengeReviewContext = (challenge) => {
+  const challengedFacts = (Array.isArray(challenge?.challengedFacts) ? challenge.challengedFacts : [])
+    .slice(0, 12)
+    .map((fact) => `${clean(fact?.path)} = ${clean(fact?.display)}`)
+    .filter((value) => value && value !== " = ");
+  return [
+    clean(challenge?.issue),
+    ...(challengedFacts.length ? ["CHALLENGED GENERATED TEMPORAL PATHS:", ...challengedFacts.map((value) => `- ${value}`)] : []),
+  ].filter(Boolean).join("\n");
+};
+
 const challengeDisplayForValue = (value) => {
   if (value === undefined || value === null) return "";
   if (typeof value === "string") return clean(value);

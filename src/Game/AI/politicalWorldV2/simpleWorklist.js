@@ -8,6 +8,7 @@
 import { normalizeInstitutions, validateInstitutionTemporalBaseline } from "../../../runtime/institutions.js";
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
 import { POLITICAL_GENERATION_NEEDS, buildPoliticalGenerationPlan } from "../../../runtime/politicalWorldGeneration.js";
+import { historicalChallengeReviewContext } from "./verificationEntry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -236,7 +237,7 @@ export const deriveNextPoliticalWorldV2Task = ({ checkpoint, inputs } = {}) => {
         stage: "verification",
         targets,
         payload: {
-          reviewContextByPolity: Object.fromEntries(targets.map((polity) => [polity, clean(challengeMap?.[polity]?.issue)])),
+          reviewContextByPolity: Object.fromEntries(targets.map((polity) => [polity, historicalChallengeReviewContext(challengeMap?.[polity])])),
           correctionRequiredPolities: targets.filter((polity) => challengeMap?.[polity]?.temporalCorrectionEstablished === true),
         },
       };

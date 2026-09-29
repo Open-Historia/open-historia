@@ -28,7 +28,7 @@ import { normalizeInstitutions, validateInstitutionTemporalBaseline } from "../.
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
 import { acceptedPoliticalWorldV2Targets, createPoliticalWorldV2Job } from "./jobGraph.js";
 import { applyValidatedHistoricalCorrectionToStagedActor } from "./historicalCorrectionStaging.js";
-import { historicalChallengeStillAppliesToEntry, rebasePoliticalWorldVerificationEntry } from "./verificationEntry.js";
+import { historicalChallengeReviewContext, historicalChallengeStillAppliesToEntry, rebasePoliticalWorldVerificationEntry } from "./verificationEntry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -635,17 +635,7 @@ export const createPoliticalWorldV2Executor = ({
       const challenges = Object.entries(result?.challenges || {}).filter(([polity]) => !alreadyVerified.has(clean(polity)) && !openVerificationTargets.has(clean(polity)));
       for (const [index, group] of chunk(challenges, 4).entries()) {
         const targets = group.map(([polity]) => polity);
-        const reviewContextByPolity = Object.fromEntries(group.map(([polity, diagnostic]) => {
-          const challengedFacts = array(diagnostic?.challengedFacts)
-            .slice(0, 12)
-            .map((fact) => `${clean(fact?.path)} = ${clean(fact?.display)}`)
-            .filter((value) => value && value !== " = ");
-          const context = [
-            clean(diagnostic?.issue),
-            ...(challengedFacts.length ? ["CHALLENGED GENERATED TEMPORAL PATHS:", ...challengedFacts.map((value) => `- ${value}`)] : []),
-          ].filter(Boolean).join("\n");
-          return [polity, context];
-        }));
+        const reviewContextByPolity = Object.fromEntries(group.map(([polity, diagnostic]) => [polity, historicalChallengeReviewContext(diagnostic)]));
         const correctionRequiredPolities = group.filter(([, diagnostic]) => diagnostic?.temporalCorrectionEstablished === true).map(([polity]) => polity);
         newJobs.push(createPoliticalWorldV2Job({
           id: `verify:${job.id}:${String(index + 1).padStart(2, "0")}`,
