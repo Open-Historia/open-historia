@@ -675,8 +675,10 @@ const Main = ({
           }}
         />
       </Presence>
-      <FallbackSwitchNotice />
+      {/* Same place on screen: the lasting borders note goes first so a
+          passing fallback-switch notice draws over it, not under it. */}
       <BordersFallbackNotice />
+      <FallbackSwitchNotice />
     </>
   );
 };

@@ -1559,6 +1559,10 @@ const WorldMap = ({ isGlobe = false }) => {
       return undefined;
     }
     polityBoundaryWorkerRef.current = worker;
+    // A worker that starts has its own chance, on the same geometry too (the
+    // effect reruns when the map instance changes): only its own final failure
+    // marks the borders failed again.
+    bordersFailedRef.current = false;
 
     // Groups' areas: asked of THIS worker only once it has published its
     // catalog (before that it holds no regions, or the last map's), and every
