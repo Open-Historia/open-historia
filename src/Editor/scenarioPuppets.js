@@ -13,7 +13,8 @@
 // nobody's puppet, and a puppet holds none of its own. Ended rows (released,
 // annexed, revolted) are history and pass through untouched.
 //
-// Import-free, so the export and the tests share it.
+// Imports only the import-free runtime/puppets.js, so the export and the tests
+// share it.
 
 export const PUPPET_KIND_OPTIONS = Object.freeze([
   { id: "protectorate", label: "Protectorate" },
@@ -24,8 +25,9 @@ export const PUPPET_SECRECY_OPTIONS = Object.freeze([
   { id: "open", label: "Openly known" },
   { id: "covert", label: "Covert" },
 ]);
-// Below this the game seeds a hidden coup storyline on the first turn.
-export const PUPPET_COUP_LOYALTY = 35;
+// Below this the game seeds a hidden coup storyline on the first turn. The
+// game's own number (runtime/puppets.js, import-free like this module).
+export { PUPPET_COUP_LOYALTY } from "../runtime/puppets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const rows = (puppets) => (Array.isArray(puppets) ? puppets.filter((row) => row && typeof row === "object") : []);

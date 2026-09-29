@@ -11,7 +11,7 @@
 // diplomatic facts; any one AI request sees only the relevant slice.
 
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
-import { MAX_PUPPETS, PUPPET_KINDS } from "../../runtime/puppets.js";
+import { MAX_PUPPETS, PUPPET_COUP_LOYALTY, PUPPET_KINDS } from "../../runtime/puppets.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { compareGameDates, isGameDate } from "../../runtime/gameDates.js";
@@ -1409,8 +1409,8 @@ const SUPPRESSED_COUP_LOYALTY_GAIN = 25;
 
 // Below this, resentment is a situation rather than a mood, and the world
 // director is given something to ripen. Not a trigger: the Storyline decides
-// WHEN, and may decide never.
-const COUP_STORYLINE_LOYALTY = 35;
+// WHEN, and may decide never. Shared with the Workshop (runtime/puppets.js).
+const COUP_STORYLINE_LOYALTY = PUPPET_COUP_LOYALTY;
 
 // Swallowing a client costs standing, and costs more the more openly it was a
 // client — the world watched a country disappear. Deterministic rather than left

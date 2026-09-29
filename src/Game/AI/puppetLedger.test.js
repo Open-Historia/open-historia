@@ -4,6 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { applyPuppetUpdates, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import { PUPPET_COUP_LOYALTY } from "../../runtime/puppets.js";
+import { PUPPET_COUP_LOYALTY as WORKSHOP_COUP_LOYALTY } from "../../Editor/scenarioPuppets.js";
 
 // A subordination rides the same compact-line transport as wars, relations and
 // agreements: the model never writes the ledger, it emits lines that must
@@ -286,6 +288,16 @@ test("a contented Puppet gets no Storyline", () => {
     puppets: [{ id: "p1", overlord: "USSR", puppet: "Poland", kind: "satellite", loyalty: 80, secrecy: "open", status: "active" }],
   };
   assert.deepEqual(apply(world, "loyalty~USSR~Poland~~80~~1~Calm").storylineSeeds, []);
+});
+
+test("the coup Storyline opens just under the threshold the Workshop warns at", () => {
+  assert.equal(WORKSHOP_COUP_LOYALTY, PUPPET_COUP_LOYALTY);
+  const at = (loyalty) => apply({
+    ...baseWorld,
+    puppets: [{ id: "p1", overlord: "USSR", puppet: "Poland", kind: "satellite", loyalty, secrecy: "open", status: "active" }],
+  }, `loyalty~USSR~Poland~~${loyalty}~~1~Unrest`).storylineSeeds;
+  assert.equal(at(PUPPET_COUP_LOYALTY - 1).length, 1);
+  assert.deepEqual(at(PUPPET_COUP_LOYALTY), []);
 });
 
 test("a revolt settles the Storyline that led to it", () => {

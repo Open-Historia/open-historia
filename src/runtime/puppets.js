@@ -52,6 +52,11 @@ export const PUPPET_KINDS = ["protectorate", "satellite", "client"];
 export const PUPPET_SECRECY_LEVELS = ["open", "covert"];
 export const PUPPET_STATUSES = ["active", "released", "annexed", "revolted"];
 export const MAX_PUPPETS = 64;
+// Below this Loyalty the game opens a hidden coup storyline for the Puppet
+// (AI/nativeDiplomaticDirector.js), and the Workshop warns an author who sets
+// a scenario's starting Loyalty under it (Editor/PuppetFields.jsx). One number,
+// so tuning the game cannot leave the Workshop's warning wrong.
+export const PUPPET_COUP_LOYALTY = 35;
 
 const str = (value) => String(value ?? "").trim();
 const norm = (value) => str(value).toLocaleLowerCase();
