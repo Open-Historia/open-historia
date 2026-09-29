@@ -102,6 +102,8 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 
 **Only the advisor gets the player's standing goal** (`runtime/playerGoal.js`): `[Our Standing Goal]`, after the documents and before the reminders — the government's aim, to weigh advice by and to say plainly when an order works against it. A leader is never told it.
 
+**The advisor's diplomatic options are cut a row at a time** (`advisorPoliticalDiplomacyContextCore.js`): `[Current Diplomatic & Institutional Options]` sends its capability manifest and the advisor's authority boundary first and whole, whatever the campaign holds. Its three lists (institutions, pending lifecycle cases, threads) share what is left of `ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS` (7,600, never under 1,500): each row in full while it fits (twelve at most), then a one-line short form (an institution's name, id, standing and `vote pending`; a case's kind and status; a thread's identity and participants), then `N more … omitted from this brief`. The builder passes every pending lifecycle case and counts the threads past the 18 it reads. The advisor has no institution lookups, so the brief never tells it to use them.
+
 **Both read the documents file** (`world.reports`), bounded to eight, each body cut to 220 characters: the advisor `[Documents Our Government Holds]` — every paper the player's government can read, saying how it came by each (held with whom, ours alone, published, or a copy its agents took, which the holders do not know it has; `describeDocumentsForAdvisor`, `runtime/reportDelivery.js`); a leader `[Documents Your Government Holds]` — its own and the published ones, by the audience rule, never who stole a copy.
 
 ---
