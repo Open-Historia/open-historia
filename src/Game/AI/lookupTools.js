@@ -186,7 +186,7 @@ export const LOOKUP_TOOLS = Object.freeze([
     name: "storylines",
     description:
       "The world's persistent storylines (the processes already in motion): id, kind, title, status, participants, "
-      + "pressure and momentum, when they started, their current state, drivers and constraints. Continue these rather than restarting them.",
+      + "pressure and momentum, when they started, and their current state. Continue these rather than restarting them.",
     schema: object("Optional filters.", {
       participant: text("Optional exact power name: only storylines it takes part in."),
       status: text("Optional status filter (active, dormant, resolved...)."),
@@ -797,8 +797,6 @@ const storylineBrief = (storyline) => ({
   startedDate: clean(storyline?.startedDate),
   lastUpdatedDate: clean(storyline?.lastUpdatedDate),
   state: clean(storyline?.state).slice(0, 500),
-  ...(array(storyline?.drivers).length ? { drivers: array(storyline.drivers).map(clean) } : {}),
-  ...(array(storyline?.constraints).length ? { constraints: array(storyline.constraints).map(clean) } : {}),
 });
 
 const spyBrief = (spy) => ({

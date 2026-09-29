@@ -3607,8 +3607,6 @@ const normalizeWorldStoryline = (entry, index = 0) => {
     nextReviewDate:
       status === "resolved" ? "" : canonicalizeDateString(entry.nextReviewDate),
     state: normalizeTextLike(entry.state || entry.summary || entry.description),
-    drivers: uniqueStrings(entry.drivers, 8),
-    constraints: uniqueStrings(entry.constraints, 8),
     sourceEventIds: uniqueStrings(entry.sourceEventIds, 16),
     createdRound:
       Number.isFinite(Number(entry.createdRound)) && Number(entry.createdRound) > 0

@@ -50,7 +50,7 @@ const WORLD = {
     { id: "p2", name: "Pipeline", kind: "industry", ownerCode: "Russian Federation", status: "completed", progress: 100 },
   ],
   storylines: [
-    { id: "s1", kind: "war", title: "Eastern front", status: "active", participants: ["Ukraine", "Russian Federation"], pressure: 70, momentum: 20, startedDate: "2014-03-01", state: "Stalemate along the river.", drivers: ["mobilisation"] },
+    { id: "s1", kind: "war", title: "Eastern front", status: "active", participants: ["Ukraine", "Russian Federation"], pressure: 70, momentum: 20, startedDate: "2014-03-01", state: "Stalemate along the river." },
     { id: "s2", kind: "politics", title: "Moscow succession", status: "dormant", participants: ["Russian Federation"], pressure: 10, momentum: 0 },
   ],
   spies: [
@@ -399,7 +399,7 @@ test("storylines: filtered by participant and status", () => {
   assert.deepEqual(run("storylines", {}).storylines.map((storyline) => storyline.id), ["s1", "s2"]);
   const ukraine = run("storylines", { participant: "Ukraine" });
   assert.deepEqual(ukraine.storylines.map((storyline) => storyline.id), ["s1"]);
-  assert.deepEqual(ukraine.storylines[0].drivers, ["mobilisation"]);
+  assert.equal(ukraine.storylines[0].state, "Stalemate along the river.");
   assert.deepEqual(run("storylines", { status: "dormant" }).storylines.map((storyline) => storyline.id), ["s2"]);
 });
 

@@ -811,8 +811,6 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
     lastVisibleEventDate: normalizeString(entry.lastVisibleEventDate),
     nextReviewDate: status === "resolved" ? "" : normalizeString(entry.nextReviewDate),
     state: truncate(entry.state || entry.summary || entry.description, 520),
-    drivers: [...new Set(normalizeArray(entry.drivers).map(normalizeString).filter(Boolean))].slice(0, 8),
-    constraints: [...new Set(normalizeArray(entry.constraints).map(normalizeString).filter(Boolean))].slice(0, 8),
     sourceEventIds: [...new Set(normalizeArray(entry.sourceEventIds).map(normalizeString).filter(Boolean))].slice(0, 16),
     createdRound: Math.max(0, Math.trunc(Number(entry.createdRound) || 0)),
     updatedRound: Math.max(0, Math.trunc(Number(entry.updatedRound) || 0)),
@@ -954,18 +952,6 @@ const coalesceWorldStorylines = (worldLike) => {
         .filter(Boolean),
     )].slice(-16);
 
-    const drivers = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.drivers))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
-
-    const constraints = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.constraints))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
-
     const createdRounds = group
       .map((entry) => Math.max(0, Math.trunc(Number(entry?.createdRound) || 0)))
       .filter((value) => value > 0);
@@ -980,8 +966,6 @@ const coalesceWorldStorylines = (worldLike) => {
       )],
       startedDate: startedDates[0] || freshest?.startedDate,
       lastVisibleEventDate: lastVisibleDates.at(-1) || "",
-      drivers,
-      constraints,
       sourceEventIds,
       createdRound: createdRounds.length
         ? Math.min(...createdRounds)
@@ -2602,8 +2586,6 @@ export const applyWorldStorylineUpdates = ({
         activeWar,
       }),
       state: normalizeString(raw?.state) || prior?.state || title,
-      drivers: normalizeArray(prior?.drivers),
-      constraints: normalizeArray(prior?.constraints),
       sourceEventIds,
       createdRound: prior?.createdRound || Math.max(0, Math.trunc(Number(round) || 0)),
       updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
@@ -3586,8 +3568,6 @@ export const buildWorldInitiativeContext = (
     const detail = [
       storyline.participants.length ? `participants: ${storyline.participants.join(", ")}` : "",
       storyline.state ? `state: ${storyline.state}` : "",
-      storyline.drivers.length ? `drivers: ${storyline.drivers.join("; ")}` : "",
-      storyline.constraints.length ? `constraints: ${storyline.constraints.join("; ")}` : "",
       visibleAge == null ? "no visible event yet" : `last visible event ${visibleAge} day(s) before this jump`,
       atBackstop
         ? `MUST MOVE THIS PERIOD: ${stagnationAge} days with no visible development by the stop date; it must ${describeAntiStasisObjectiveRule()}.`
