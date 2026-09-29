@@ -169,3 +169,20 @@ test("Round-Zero initializer materializes deterministic native C4 without changi
   assert.deepEqual(second.world, first.world, "repeated Round-Zero initialization must not drift");
 });
 
+
+test("ground held by groups or foreign powers raises regime vulnerability and threat perception", () => {
+  const calm = derivePoliticalDispositionForActor(makeActor(), { updatedAt: "2014-04-22" });
+  const pressed = derivePoliticalDispositionForActor(makeActor({
+    politicalPressures: {
+      updatedAt: "2014-04-22",
+      issues: {
+        regionalism: { salience: 80, strain: 85, lean: 55, persistence: 0.86 },
+        sovereignty: { salience: 70, strain: 75, lean: 85, persistence: 0.88 },
+        national_identity: { salience: 80, strain: 60, lean: 75, persistence: 0.85 },
+      },
+    },
+  }), { updatedAt: "2014-04-22" });
+  assert.ok(pressed.regimeVulnerability > calm.regimeVulnerability);
+  assert.ok(pressed.threatPerception > (calm.threatPerception ?? 0));
+  assert.ok(pressed.escalationPressure > (calm.escalationPressure ?? 0));
+});

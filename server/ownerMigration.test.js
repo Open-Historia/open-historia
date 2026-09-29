@@ -14,10 +14,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   OWNER_SCHEMA,
+  buildMigrationContext,
   buildOwnerRenameMap,
+  inheritedMapRefsOf,
   migrateChat,
   migrateEvents,
   migrateGame,
+  migrateOwnerRecord,
   migrateRegions,
   migrateWorld,
   needsMigration,
@@ -259,4 +262,77 @@ test("migration is idempotent", () => {
   const renames2 = buildOwnerRenameMap(ctxOf(second));
   const twice = { world: migrateWorld(once.world, renames2, () => {}), regions: migrateRegions(once.regions, renames2) };
   assert.deepEqual(twice, once);
+});
+
+// ---------------------------------------------------------------------------
+// One record, from its parts: what BOTH stores run (server/libraryStore.js
+// migrateOwnerRecordAtPaths, src/runtime/web/libraryStore.js ensureOwnerSchema).
+// ---------------------------------------------------------------------------
+
+// wwii-1939's shape: the scenario labels THA "Siam" and its map says so; a game
+// made from it carries neither the label nor the map in its own record.
+const WWII_SCENARIO = () => ({
+  world: {
+    polityOverrides: { Siam: { name: "Siam", mapRefs: { gadm0: ["THA"] } } },
+    ownerCodes: ["THA", "DEU"],
+  },
+  meta: { countryNameOverrides: { THA: "Siam" } },
+  regions: { type: "FeatureCollection", features: [region("THA.1_1", "THA", "THA", "Thailand"), region("DEU.1_1", "DEU", "DEU", "Germany")] },
+});
+const WWII_GAME = () => ({
+  world: {
+    regionOwnershipOverrides: { "DEU.1_1": "THA" }, // a conquest during play
+    regionSovereigntyOverrides: { "THA.1_1": "DEU" },
+    regionClaimants: { "THA.1_1": ["THA", "DEU"] },
+    ownerCodes: ["THA", "DEU"],
+  },
+  game: { country: "THA" },
+  colors: { THA: [1, 2, 3] },
+});
+
+test("a game migrated alone names THA differently from its own map", () => {
+  const alone = migrateOwnerRecord({ ...WWII_GAME(), registry: REGISTRY });
+  assert.equal(alone.game.country, "Thailand", "the web store's old game path: no scenario label, no scenario map");
+});
+
+test("a game migrated in its scenario's context names THA as its map does", () => {
+  const scenario = WWII_SCENARIO();
+  const migrated = migrateOwnerRecord({
+    ...WWII_GAME(),
+    meta: scenario.meta,
+    regions: scenario.regions,
+    regionsReadOnly: true,
+    inheritedMapRefs: inheritedMapRefsOf(scenario.world),
+    deriveMapRefsFromFeatures: false,
+    registry: REGISTRY,
+  }, { warn: () => {} });
+  assert.equal(migrated.game.country, "Siam");
+  assert.deepEqual(Object.keys(migrated.colors), ["Siam"]);
+  assert.equal(migrated.world.regionOwnershipOverrides["DEU.1_1"], "Siam");
+  assert.equal(migrated.regions, null, "the scenario's map is context only, never rewritten from a game");
+});
+
+test("the context carries sovereignty and claimants, so their codes are renamed too", () => {
+  const context = buildMigrationContext({ ...WWII_GAME(), registry: REGISTRY });
+  assert.deepEqual(context.sovereigntyOverrides, { "THA.1_1": "DEU" });
+  assert.deepEqual(context.regionClaimants, { "THA.1_1": ["THA", "DEU"] });
+  assert.equal(context.deriveMapRefsFromFeatures, true, "a scenario derives map references unless told not to");
+  const { renames } = migrateOwnerRecord({ ...WWII_GAME(), registry: REGISTRY });
+  assert.equal(renames.get("DEU"), "Germany");
+});
+
+test("a scenario's own map is rewritten with it; parts it lacks stay null", () => {
+  const scenario = WWII_SCENARIO();
+  const migrated = migrateOwnerRecord({ ...scenario, registry: REGISTRY }, { warn: () => {} });
+  assert.equal(migrated.regions.features[0].properties.owner, "Siam");
+  assert.equal(migrated.colors, null);
+  assert.equal(migrated.events, null);
+  assert.equal(migrated.world.ownerSchema, OWNER_SCHEMA);
+});
+
+test("a game inherits only the polities that have map references", () => {
+  assert.deepEqual(inheritedMapRefsOf({
+    polityOverrides: { Siam: { mapRefs: { gadm0: ["THA"] } }, Germany: { mapRefs: { gadm0: [] } }, Custom: {} },
+  }), { Siam: { gadm0: ["THA"] } });
+  assert.deepEqual(inheritedMapRefsOf(null), {});
 });

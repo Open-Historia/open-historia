@@ -5,6 +5,10 @@ import {
   institutionAuthoringDraft,
   institutionAuthoringId,
   institutionAuthoringRows,
+  institutionMemberNames,
+  institutionMemberRoster,
+  removeScenarioInstitution,
+  unmatchedInstitutionMembers,
   upsertScenarioInstitution,
 } from "./institutionAuthoring.js";
 
@@ -99,4 +103,76 @@ test("authoring preserves the dedicated uploaded-logo marker without embedding i
   assert.equal(result.error, "");
   assert.equal(result.institution.logoAsset, true);
   assert.equal(result.institution.logoUrl, "");
+});
+
+test("a member whose name holds a comma survives a save as one polity", () => {
+  const source = world();
+  source.institutions.byId.council.members.push({ polity: "Bonaire, Sint Eustatius and Saba", status: "member", role: "member", sinceDate: "2010-10-10", note: "special municipality" });
+  const draft = institutionAuthoringDraft(institutionAuthoringRows(source)[0]);
+  draft.logoUrl = "/scenario-assets/institutions/northern-council.svg";
+  const result = upsertScenarioInstitution(source, draft);
+  assert.equal(result.error, "");
+  const names = result.institution.members.map((member) => member.polity).sort();
+  assert.deepEqual(names, ["Bonaire, Sint Eustatius and Saba", "Estonia", "Latvia"]);
+  const bonaire = result.institution.members.find((member) => member.polity === "Bonaire, Sint Eustatius and Saba");
+  assert.equal(bonaire.note, "special municipality");
+});
+
+test("the member list splits on lines only", () => {
+  assert.deepEqual(
+    institutionMemberNames("Bonaire, Sint Eustatius and Saba\r\n  Latvia \n\nLatvia\nSaint Helena; Ascension"),
+    ["Bonaire, Sint Eustatius and Saba", "Latvia", "Saint Helena; Ascension"],
+  );
+});
+
+test("removing an authored institution takes it out of canon and leaves the others", () => {
+  const source = world();
+  source.institutions.byId.league = { id: "league", name: "Southern League", shortName: "SL", kind: "regional_bloc", members: [{ polity: "Chile", status: "member" }] };
+  const result = removeScenarioInstitution(source, "council");
+  assert.equal(result.error, "");
+  assert.equal(result.institution.name, "Northern Council");
+  assert.deepEqual(Object.keys(result.world.institutions.byId), ["league"]);
+  assert.equal(result.world.institutions.ledgerVersion, 7);
+  assert.ok(source.institutions.byId.council, "the world passed in is left as it was");
+});
+
+test("removing an institution the scenario does not have is refused", () => {
+  const source = world();
+  const result = removeScenarioInstitution(source, "missing");
+  assert.match(result.error, /not in this scenario/);
+  assert.equal(result.world, source);
+  assert.equal(removeScenarioInstitution(source, "").institution, null);
+});
+
+const rosterWorld = () => ({
+  ...world(),
+  ownerCodes: ["Latvia", "Estonia"],
+  regionOwnershipOverrides: { r1: "Bonaire, Sint Eustatius and Saba" },
+  polityOverrides: {
+    "Russian Federation": { name: "Russian Federation", aliases: ["Russia"] },
+    "Kingdom of Prussia": { name: "Kingdom of Prussia", status: "dormant" },
+    "Free City of Danzig": { name: "Free City of Danzig", status: "inactive" },
+  },
+});
+
+test("the member roster offers every polity in the scenario, dormant ones included", () => {
+  const roster = institutionMemberRoster(rosterWorld());
+  for (const name of ["Latvia", "Estonia", "Bonaire, Sint Eustatius and Saba", "Russian Federation", "Kingdom of Prussia", "Free City of Danzig"]) {
+    assert.ok(roster.includes(name), `${name} is offered`);
+  }
+});
+
+test("members that name no polity in the scenario are flagged exactly as written", () => {
+  const names = ["Latvia", "Latvija", "latvia", "Russia", "Free City of Danzig", "Bonaire, Sint Eustatius and Saba", "Bonaire"];
+  assert.deepEqual(unmatchedInstitutionMembers(names, rosterWorld()), ["Latvija", "latvia", "Bonaire"]);
+});
+
+test("with no roster to compare against, no member is flagged", () => {
+  assert.deepEqual(unmatchedInstitutionMembers(["Latvia", "Anything"], { institutions: {} }), []);
+});
+
+test("on the stock map, where the drawn countries are not listed, no member is flagged", () => {
+  const { ownerCodes: _unlisted, ...stock } = rosterWorld();
+  assert.deepEqual(unmatchedInstitutionMembers(["France", "Latvija"], stock), []);
+  assert.deepEqual(unmatchedInstitutionMembers(["France"], { ...stock, ownerCodes: [] }), []);
 });

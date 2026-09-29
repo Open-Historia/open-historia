@@ -6,6 +6,7 @@ import {
 } from "./politicalActors.js";
 import { isReferenceDatePermitted } from "./scenarioHistoryAuthority.js";
 import { validatePoliticalTraitPatch } from "./politicalTraitRegistry.js";
+import { compareGameDates, isCanonicalGameDate, parseGameDate } from "./gameDates.js";
 
 export const POLITICAL_WORLD_GENERATION_SCHEMA_VERSION = 1;
 
@@ -160,25 +161,11 @@ const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value ?? {},
 const hasKeys = (value) => isPlainObject(value) && Object.keys(value).length > 0;
 const hasText = (value) => Boolean(clean(value));
 
+// A canonical YYYY-MM-DD game date, BC years with a leading minus
+// (runtime/gameDates.js), or null.
 const parseScenarioDate = (value) => {
-  const match = clean(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (year < 1 || month < 1 || month > 12 || day < 1) return null;
-  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (day > daysInMonth[month - 1]) return null;
-  return { year, month, day, text: match[0] };
-};
-
-const compareScenarioDates = (left, right) => {
-  for (const key of ["year", "month", "day"]) {
-    if (left[key] < right[key]) return -1;
-    if (left[key] > right[key]) return 1;
-  }
-  return 0;
+  const text = clean(value);
+  return isCanonicalGameDate(text) ? { ...parseGameDate(text), text } : null;
 };
 
 export const classifyPoliticalGenerationDepth = (relevance = {}) => {
@@ -966,7 +953,7 @@ export const validatePoliticalGenerationProposal = (proposal, {
             ? `reference date ${rawDate} crosses the external-reference boundary (${relation} ${cutoff})`
             : `reference date ${rawDate} is not permitted because this scenario grants no external-reference authority`);
         }
-      } else if (compareScenarioDates(parsed, expectedDate) > 0) {
+      } else if (compareGameDates(parsed.text, expectedDate.text) > 0) {
         // Legacy compatibility for callers that have not yet supplied the
         // universal history-authority object.
         errors.push(`reference date ${rawDate} crosses the scenario-date boundary ${expectedDate.text}`);

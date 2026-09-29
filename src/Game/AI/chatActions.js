@@ -59,12 +59,23 @@ const escapeRegex = (value) => String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g
 // which makes the UI render the polity twice. Strip only an exact leading actor
 // display name plus punctuation; aliases and later mentions are deliberately left
 // untouched so normalization can never eat real speech.
+//
+// A dash counts only with space on both sides, and not when the same dash closes
+// an aside later in the sentence: "France-German friendship ..." and "France —
+// as it always has — stands with its allies." are the speaker's own words.
 export const stripRedundantChatSpeakerPrefix = (content, actorName) => {
     const text = asText(content);
     const actor = asText(actorName);
     if (!text || !actor) return text;
-    const prefix = new RegExp(`^${escapeRegex(actor)}\\s*(?::|[-–—])\\s*`, "iu");
-    return text.replace(prefix, "").trim();
+    const name = escapeRegex(actor);
+    const labelled = new RegExp(`^${name}\\s*:\\s*`, "iu");
+    if (labelled.test(text)) return text.replace(labelled, "").trim();
+    const dashed = text.match(new RegExp(`^${name}\\s+([-–—])\\s+`, "iu"));
+    if (!dashed) return text;
+    const rest = text.slice(dashed[0].length);
+    const firstSentence = rest.split(/[.!?]/)[0];
+    if (new RegExp(`\\s${escapeRegex(dashed[1])}\\s`, "u").test(firstSentence)) return text;
+    return rest.trim();
 };
 
 // An option's label, usable as its ref when the model gave none.

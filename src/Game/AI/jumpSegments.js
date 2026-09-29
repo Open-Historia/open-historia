@@ -225,6 +225,8 @@ export const buildSegmentInstruction = ({
 //                       so joining them describes the whole period without asking
 //                       any one call to summarise time it never saw.
 //   diplomaticOutreach  concatenated — every approach made during the round.
+//   ledger records      concatenated — war, relation, agreement, puppet and
+//                       storyline updates alike (see below).
 //   clearActions        the final segment's word, keeping the `!== false` default
 //                       (absent means resolved) the single-call path has always had.
 const asLedgerRecords = (value) => {
@@ -238,14 +240,16 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
   const events = [];
   const diplomaticOutreach = [];
   // Ledger records (warUpdates / relationUpdates / agreementUpdates /
-  // storylineUpdates). By the
-  // time a segment is accepted its records are bound to that segment's own
-  // event ids (gameplay.js validateSegmentLedgers), so they simply concatenate;
-  // a record still in its raw line form is split into lines, which the ledger
-  // decoders accept too.
+  // puppetUpdates / storylineUpdates). By the time a segment is accepted its
+  // records are bound to that segment's own event ids (gameplay.js
+  // validateSegmentLedgers), so they simply concatenate; a record still in its
+  // raw line form is split into lines, which the ledger decoders accept too.
+  // A family left out here never reaches the apply: every skip, segmented or
+  // not, is built from this merge.
   const warUpdates = [];
   const relationUpdates = [];
   const agreementUpdates = [];
+  const puppetUpdates = [];
   const storylineUpdates = [];
   const summaries = [];
   let clearActions = true;
@@ -257,6 +261,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     warUpdates.push(...asLedgerRecords(payload.warUpdates));
     relationUpdates.push(...asLedgerRecords(payload.relationUpdates));
     agreementUpdates.push(...asLedgerRecords(payload.agreementUpdates));
+    puppetUpdates.push(...asLedgerRecords(payload.puppetUpdates));
     storylineUpdates.push(...asLedgerRecords(payload.storylineUpdates));
     const summary = normalizeString(payload.summary);
     if (summary) summaries.push(summary);
@@ -270,6 +275,7 @@ export const mergeSegmentPayloads = (payloads, { targetDate = "" } = {}) => {
     agreementUpdates,
     diplomaticOutreach,
     events,
+    puppetUpdates,
     relationUpdates,
     stopDate: stopDate || normalizeString(targetDate),
     storylineUpdates,

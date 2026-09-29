@@ -6,6 +6,7 @@ import {
   normalizeInstitutions,
 } from "./institutions.js";
 import { normalizeInstitutionLogoUrl } from "./institutionLogos.js";
+import { collectScenarioPoliticalPolities } from "./scenarioPolities.js";
 
 const clean = (value) => String(value ?? "").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -32,6 +33,37 @@ const uniqueText = (value) => {
     out.push(next);
   }
   return out;
+};
+
+// The member list, one polity per line. Polity names are exact keys and may
+// hold commas ("Bonaire, Sint Eustatius and Saba"), so it never splits on them.
+export const institutionMemberNames = (membersText) => uniqueText(String(membersText ?? "").split(/\r?\n/g));
+
+// The polities an author can pick as members: every polity in the scenario,
+// dormant ones included, since an author may list one on purpose.
+export const institutionMemberRoster = (world = {}) => collectScenarioPoliticalPolities(world)
+  .map((entry) => entry.polityKey);
+
+// Members that name no polity in the scenario, exactly as written. Polity names
+// are exact keys, so a typo or a near-name would found a phantom member that
+// votes and counts toward quorum without matching any country. Kept, not
+// refused: this only warns. An exact name or alias a polity is known by counts.
+// With no roster to compare against there is nothing to warn about, and a
+// world without ownerCodes has none: on the stock map every country the map
+// draws owns its land without being listed, as the country picker assumes, so
+// "France" would be flagged there although it is on the map.
+export const unmatchedInstitutionMembers = (names = [], world = {}) => {
+  if (!Array.isArray(world?.ownerCodes) || !world.ownerCodes.length) return [];
+  const roster = institutionMemberRoster(world);
+  if (!roster.length) return [];
+  const known = new Set(roster);
+  for (const override of Object.values(world?.polityOverrides ?? {})) {
+    if (!override || typeof override !== "object") continue;
+    for (const token of [override.name, ...(Array.isArray(override.aliases) ? override.aliases : [])]) {
+      if (clean(token)) known.add(clean(token));
+    }
+  }
+  return (Array.isArray(names) ? names : []).filter((name) => clean(name) && !known.has(clean(name)));
 };
 
 export const institutionAuthoringRows = (world = {}) => {
@@ -102,7 +134,7 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   const id = clean(draft.id) ? institutionAuthoringId(draft.id) : institutionAuthoringId(draft.name);
   const existing = institutions.byId?.[id] || null;
   const existingMembers = new Map((existing?.members || []).map((member) => [lower(member?.polity), member]));
-  const members = uniqueText(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
+  const members = institutionMemberNames(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
   const memberKeys = new Set(members.map((member) => lower(member.polity)));
   const leaders = (existing?.leaders || []).filter((polity) => memberKeys.has(lower(polity)));
 
@@ -137,6 +169,23 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   return {
     world: { ...world, institutions: nextInstitutions },
     institution: normalized,
+    error: "",
+  };
+};
+
+// Takes an institution out of the scenario's canon, members, proposals and
+// history with it. The uploaded logo lives in a separate scenario asset, which
+// the Politics tab clears on its own.
+export const removeScenarioInstitution = (world = {}, institutionId = "") => {
+  const institutions = normalizeInstitutions(world?.institutions, world);
+  const id = clean(institutionId);
+  const existing = id && Object.hasOwn(institutions.byId || {}, id) ? institutions.byId[id] : null;
+  if (!existing) return { world, institution: null, error: "That institution is not in this scenario." };
+  const byId = { ...(institutions.byId || {}) };
+  delete byId[id];
+  return {
+    world: { ...world, institutions: { ...institutions, byId } },
+    institution: existing,
     error: "",
   };
 };

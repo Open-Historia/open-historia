@@ -264,6 +264,30 @@ test("a clicked country's subordination is summarised the same way everywhere, a
   assert.equal(puppetSummaryFor(world, "Germany", "Germany"), null);
 });
 
+test("a country released by one Overlord and taken by another shows its standing arrangement", async () => {
+  const { puppetSummaryFor } = await import("./puppets.js");
+  const world = {
+    puppets: [
+      { id: "p1", overlord: "France", puppet: "Monaco", kind: "protectorate", loyalty: 60, secrecy: "open", knownTo: [], status: "released", startedDate: "1861-02-02", endedDate: "1918-07-17" },
+      { id: "p2", overlord: "Italy", puppet: "Monaco", kind: "client", loyalty: 20, secrecy: "open", knownTo: [], status: "active", startedDate: "1940-06-24" },
+    ],
+  };
+  assert.equal(puppetSummaryFor(world, "Italy", "Monaco")?.headline, "Our client state");
+  assert.ok(puppetSummaryFor(world, "Italy", "Monaco").facts.includes("Seething"), "the Overlord sees its Puppet's mood");
+  assert.equal(puppetSummaryFor(world, "Germany", "Monaco")?.headline, "Client state of Italy");
+  assert.equal(puppetSummaryFor(world, "Monaco", "Italy")?.headline, "Italy's client state");
+  assert.equal(puppetSummaryFor(world, "France", "Monaco")?.headline, "Client state of Italy", "the old Overlord is a third party now");
+});
+
+test("a country whose only arrangement has ended shows none", async () => {
+  const { puppetSummaryFor } = await import("./puppets.js");
+  const world = {
+    puppets: [{ id: "p1", overlord: "France", puppet: "Monaco", kind: "protectorate", loyalty: 60, secrecy: "open", knownTo: [], status: "released", startedDate: "1861-02-02", endedDate: "1918-07-17" }],
+  };
+  assert.equal(puppetSummaryFor(world, "France", "Monaco"), null);
+  assert.equal(puppetSummaryFor(world, "Germany", "Monaco"), null);
+});
+
 test("with no viewer there is no view: the panel shows nothing rather than a stranger's wording", async () => {
   // The map card reads who is playing asynchronously and drew before the answer
   // came back, so the player's own overlord was described to them as if it were

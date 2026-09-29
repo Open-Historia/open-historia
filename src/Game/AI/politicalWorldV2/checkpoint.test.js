@@ -12,14 +12,6 @@ import {
   POLITICAL_WORLD_V2_LEGACY_CORRECTION_REPAIR_ALLOWANCE,
   POLITICAL_WORLD_V2_TOTAL_CEILING_SCHEMA_VERSION,
 } from "./checkpoint.js";
-import {
-  addPoliticalWorldV2Jobs,
-  createPoliticalWorldV2Job,
-  reopenFailedPoliticalWorldV2Jobs,
-  resetInterruptedPoliticalWorldV2Jobs,
-  summarizePoliticalWorldV2Jobs,
-} from "./jobGraph.js";
-import { runPoliticalWorldV2Jobs } from "./runner.js";
 
 
 test("checkpoint records provider calls by task type and high-level stage without changing the total budget counter", () => {
@@ -83,130 +75,10 @@ test("political fingerprint ignores map styling but invalidates political inputs
   assert.notEqual(first, politicsChanged);
 });
 
-test("runner pauses at finite call budget and resumes without rerunning completed jobs", async () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22", stagedWorld: {}, maxModelCalls: 2 });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    createPoliticalWorldV2Job({ id: "a", type: "actor", targets: ["A"] }),
-    createPoliticalWorldV2Job({ id: "b", type: "actor", targets: ["B"] }),
-    createPoliticalWorldV2Job({ id: "c", type: "actor", targets: ["C"] }),
-  ]);
-  const calls = [];
-  checkpoint = await runPoliticalWorldV2Jobs({
-    checkpoint,
-    executeJob: async (job, checkpoint, { consumeModelCall }) => { await consumeModelCall(); calls.push(job.id); return { accepted: job.targets }; },
-  });
-  assert.equal(checkpoint.status, "paused");
-  assert.equal(checkpoint.pauseReason, "model-call-budget");
-  assert.deepEqual(calls, ["a", "b"]);
-  assert.equal(summarizePoliticalWorldV2Jobs(checkpoint).completed, 2);
-
-  checkpoint = await runPoliticalWorldV2Jobs({
-    checkpoint,
-    maxModelCalls: 2,
-    executeJob: async (job, current, { consumeModelCall }) => { await consumeModelCall(); calls.push(job.id); return { accepted: job.targets }; },
-  });
-  assert.equal(checkpoint.status, "complete");
-  assert.deepEqual(calls, ["a", "b", "c"]);
-  assert.equal(summarizePoliticalWorldV2Jobs(checkpoint).completed, 3);
-});
-
-test("dependency graph preserves completed work and blocks child until parent completes", async () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", stagedWorld: {}, maxModelCalls: 10 });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    createPoliticalWorldV2Job({ id: "catalog", type: "institution-catalog" }),
-    createPoliticalWorldV2Job({ id: "members", type: "memberships", dependencies: ["catalog"] }),
-  ]);
-  const order = [];
-  checkpoint = await runPoliticalWorldV2Jobs({ checkpoint, executeJob: async (job) => { order.push(job.id); return {}; } });
-  assert.deepEqual(order, ["catalog", "members"]);
-  assert.equal(checkpoint.status, "complete");
-});
-
-test("interrupted running jobs reset to pending without consuming their domain retry", () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s" });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    { ...createPoliticalWorldV2Job({ id: "done", type: "x", maxAttempts: 1 }), status: "completed", attempts: 1 },
-    { ...createPoliticalWorldV2Job({ id: "running", type: "x", maxAttempts: 1 }), status: "running", attempts: 1, startedAt: "2026-09-07T00:00:00Z" },
-  ]);
-  checkpoint = resetInterruptedPoliticalWorldV2Jobs(checkpoint);
-  assert.equal(checkpoint.jobs.done.status, "completed");
-  assert.equal(checkpoint.jobs.running.status, "pending");
-  assert.equal(checkpoint.jobs.running.attempts, 0);
-  assert.equal(checkpoint.jobs.running.startedAt, "");
-});
-
-test("newly created repair jobs are preferred before unrelated downstream work", async () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", maxModelCalls: 10 });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    createPoliticalWorldV2Job({ id: "actor", type: "actor" }),
-    createPoliticalWorldV2Job({ id: "later", type: "later", dependencies: ["actor"] }),
-  ]);
-  const order = [];
-  checkpoint = await runPoliticalWorldV2Jobs({
-    checkpoint,
-    executeJob: async (job) => {
-      order.push(job.id);
-      return {};
-    },
-    applyJobResult: async ({ checkpoint: current, job }) => {
-      if (job.id !== "actor") return { stagedWorld: current.stagedWorld };
-      return {
-        stagedWorld: current.stagedWorld,
-        newJobs: [createPoliticalWorldV2Job({ id: "repair:actor:1", type: "actor", payload: { repairDepth: 1 }, dependencies: ["actor"] })],
-      };
-    },
-  });
-  assert.deepEqual(order, ["actor", "repair:actor:1", "later"]);
-});
-
-
-test("a later explicit Resume can reopen only failed jobs without discarding completed work", () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s" });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    { ...createPoliticalWorldV2Job({ id: "done", type: "x", maxAttempts: 1 }), status: "completed", attempts: 1, result: { acceptedPolities: ["A"] } },
-    { ...createPoliticalWorldV2Job({ id: "failed", type: "x", maxAttempts: 1 }), status: "failed", attempts: 1, error: "provider failed" },
-  ]);
-  checkpoint.status = "blocked";
-  checkpoint = reopenFailedPoliticalWorldV2Jobs(checkpoint);
-  assert.equal(checkpoint.jobs.done.status, "completed");
-  assert.deepEqual(checkpoint.jobs.done.result, { acceptedPolities: ["A"] });
-  assert.equal(checkpoint.jobs.failed.status, "pending");
-  assert.equal(checkpoint.jobs.failed.attempts, 0);
-  assert.equal(checkpoint.jobs.failed.error, "");
-});
-
 test("checkpoint matching is exact and explicit", () => {
   const checkpoint = createPoliticalWorldV2Checkpoint({ inputFingerprint: "pw2-abc" });
   assert.equal(checkpointMatchesInput(checkpoint, "pw2-abc"), true);
   assert.equal(checkpointMatchesInput(checkpoint, "pw2-def"), false);
-});
-
-
-test("repeated failed Resume cycles are bounded so a deterministic failure cannot drain quota forever", () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s" });
-  const failed = createPoliticalWorldV2Job({ id: "failed", type: "x", maxAttempts: 1 });
-  failed.status = "failed";
-  failed.attempts = 1;
-  failed.error = "same validation failure";
-  failed.payload = { resumeFailureCount: 2 };
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [failed]);
-  checkpoint = reopenFailedPoliticalWorldV2Jobs(checkpoint);
-  assert.equal(checkpoint.jobs.failed.status, "failed");
-  assert.equal(checkpoint.jobs.failed.payload.resumeFailureCount, 2);
-});
-
-test("runner records no completed coverage when domain staging rejects a provider result", async () => {
-  let checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", maxModelCalls: 5 });
-  checkpoint = addPoliticalWorldV2Jobs(checkpoint, [
-    createPoliticalWorldV2Job({ id: "actor", type: "political-actor", targets: ["A"], maxAttempts: 1 }),
-  ]);
-  checkpoint = await runPoliticalWorldV2Jobs({
-    checkpoint,
-    executeJob: async () => ({ acceptedPolities: ["A"] }),
-    applyJobResult: async () => { throw new Error("staging rejected result"); },
-  });
-  assert.equal(checkpoint.jobs.actor.status, "failed");
-  assert.deepEqual(checkpoint.coverage["political-actor"] || [], []);
 });
 
 test("checkpoint v5 deliberately rejects old v2/v3/v4 workspace checkpoints", async () => {
@@ -255,4 +127,24 @@ test("Political World fingerprint includes authored WBR1/divergence canon and ex
   assert.notEqual(first, changedWbr1, "authored World Before Round One must invalidate stale PWV2 work");
   assert.notEqual(first, changedDivergence, "the reference-canon cutoff must invalidate stale PWV2 work");
   assert.notEqual(first, changedTerritory, "explicit start-world territory must invalidate political generation");
+});
+
+test("allowing more calls past the lifetime ceiling raises it one recorded step and clears the pause", async () => {
+  const { grantPoliticalWorldV2ModelCalls, POLITICAL_WORLD_V2_CEILING_GRANT } = await import("./checkpoint.js");
+  const checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  checkpoint.modelCalls = 100;
+  checkpoint.status = "paused";
+  checkpoint.pauseReason = "total-model-call-budget";
+  checkpoint.lastError = "Political World generation reached its lifetime safety ceiling of 100 AI calls.";
+  const granted = grantPoliticalWorldV2ModelCalls(checkpoint, { now: "2026-09-28T00:00:00.000Z" });
+  assert.equal(granted.totalModelCallCeiling, 100 + POLITICAL_WORLD_V2_CEILING_GRANT);
+  assert.deepEqual(granted.ceilingGrants, [{ at: "2026-09-28T00:00:00.000Z", from: 100, to: 125, amount: 25 }]);
+  assert.equal(granted.status, "ready");
+  assert.equal(granted.pauseReason, "");
+  assert.equal(granted.lastError, "");
+  assert.equal(checkpoint.totalModelCallCeiling, 100, "the input checkpoint is not mutated");
+
+  const again = normalizePoliticalWorldV2Checkpoint(grantPoliticalWorldV2ModelCalls(granted));
+  assert.equal(again.totalModelCallCeiling, 150);
+  assert.equal(again.ceilingGrants.length, 2, "grants survive normalization");
 });

@@ -1,6 +1,6 @@
 /*! Open Historia — portions (per-scenario era city layer) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import React, { useEffect, useState } from "react";
-import { Source, Layer } from "react-map-gl/maplibre";
+import { Source, Layer, useMap } from "react-map-gl/maplibre";
 import {
     PMTILES_PROTOCOL_URLS,
     JSON_URLS,
@@ -8,55 +8,24 @@ import {
     readJson,
 } from "../../runtime/assets.js";
 import { ensurePmtilesProtocol } from "./mapLibreSetup.js";
+import { cityPopulationExpr, populationFilter, populationLabelFilter } from "./cityLayerExpressions.js";
 import { useWorldState } from "./useWorldState.js";
 import { withPopulationsForYear } from "../../runtime/cityPopulation.js";
 import { gameDateYear } from "../../runtime/gameDates.js";
 import { publishCustomCityIndex } from "../../runtime/placeSearch.js";
+import { DEFAULT_LANGUAGE, getStoredLanguage } from "../../runtime/i18n.js";
+import { lookupLabel } from "../../runtime/translator.js";
 import {
     EMPTY_CITY_FEATURE_COLLECTION,
+    addCityNameTranslations,
+    cityFeatureName,
+    cityLabelExpression,
     customCityFeatureCount,
     normalizeCustomCityFeatureCollection,
     resolveCityLayerSource,
 } from "../../runtime/cityFeatures.js";
 
 ensurePmtilesProtocol();
-
-const populationFilter = (pop) => [
-    "any",
-    ["==", ["get", "capital"], "primary"],
-    [
-        ">",
-        ["get", "population"],
-        [
-            "step", ["zoom"],
-            3000000,
-            5.25, 1500000,
-            6.25, 750000,
-            7.25, 350000,
-            8.25, 150000,
-        ],
-    ],
-];
-
-// City labels are intentionally stricter than markers. A regional map can carry
-// a useful constellation of settlements without asking the eye to read every
-// one of their names at once. Capitals always win; smaller labels arrive later.
-const populationLabelFilter = (pop) => [
-    "any",
-    ["==", ["get", "capital"], "primary"],
-    [
-        ">",
-        ["get", "population"],
-        [
-            "step", ["zoom"],
-            4000000,
-            5.5, 2000000,
-            6.5, 1000000,
-            7.5, 500000,
-            8.5, 250000,
-        ],
-    ],
-];
 
 // Custom (scenario-authored) cities are a curated era set, not the 70k-strong
 // modern database, and their historical populations are far below modern
@@ -102,6 +71,9 @@ const customSortKey = (pop) => [
 ];
 
 const isStockCapital = ["==", ["get", "capital"], "primary"];
+// The stock cities populationLabelFilter can ever label: the capitals, and the
+// rest above its lowest threshold.
+const stockLabelledCities = ["any", isStockCapital, [">", ["get", "population"], 250000]];
 const isCustomCapital = [
     "any",
     ["==", ["get", "_ohCapital"], true],
@@ -123,28 +95,8 @@ const customCircleSortKey = (pop) => [
 ];
 
 // Stock/custom city labels come from the immutable PMTiles/geojson "city" property.
-// AI renames (world.cityRenames) are applied as a client-side match override so a
-// renamed city shows its new name without touching the tiles.
-const cityPopulationExpr = (populations) => {
-    const baseName = ["downcase", ["coalesce", ["get", "city"], ["get", "name"], ""]];
-    const pairs = Object.entries(populations || {});
-    if (!pairs.length) return ["get", "population"];
-    const expr = ["match", baseName];
-    for (const [name, value] of pairs) expr.push(String(name).toLowerCase(), value);
-    expr.push(["get", "population"]);
-    return expr;
-};
-
-const cityLabelExpr = (renames) => {
-    const baseLabel = ["coalesce", ["get", "city"], ["get", "name"], ""];
-    const pairs = Object.entries(renames || {});
-    if (!pairs.length) return baseLabel;
-    const expr = ["match", ["downcase", baseLabel]];
-    for (const [from, to] of pairs) expr.push(from, to);
-    expr.push(baseLabel);
-    return expr;
-};
-
+// AI renames (world.cityRenames) and the language pack's names are applied as
+// client-side match overrides (cityLabelExpression) without touching the tiles.
 const StockCities = ({ label, pop }) => (
     <Source id="cities-source" type="vector" url={PMTILES_PROTOCOL_URLS.cities}>
     <Layer
@@ -423,18 +375,73 @@ const useGameYear = () => {
     return year;
 };
 
+// City names in the player's language, from the language pack. The lookup never
+// queues a name for the AI: every player of a language needs the same few
+// thousand names, so they ship in the packs (scripts/i18n/build-catalog.mjs).
+// Rebuilt when translations land.
+const useCityNameTranslations = (source, customData) => {
+    const { current: mapRef } = useMap();
+    const [labelEpoch, setLabelEpoch] = useState(0);
+    const [stockTranslations, setStockTranslations] = useState(null);
+    useEffect(() => {
+        const bump = () => setLabelEpoch((value) => value + 1);
+        window.addEventListener("i18n:updated", bump);
+        return () => window.removeEventListener("i18n:updated", bump);
+    }, []);
+
+    const customTranslations = React.useMemo(() => {
+        if (source !== "custom") return null;
+        const translations = new Map();
+        const names = (customData?.features ?? []).map((feature) => cityFeatureName(feature?.properties));
+        addCityNameTranslations(translations, names, lookupLabel);
+        return translations;
+        // labelEpoch rebuilds the names once translations land.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [customData, labelEpoch, source]);
+
+    // The stock names are in the tiles, so they are read as the tiles load.
+    useEffect(() => {
+        const map = mapRef?.getMap ? mapRef.getMap() : mapRef;
+        if (source !== "stock" || !map?.on || getStoredLanguage() === DEFAULT_LANGUAGE) {
+            setStockTranslations(null);
+            return undefined;
+        }
+        const translations = new Map();
+        const seen = new Set();
+        const collect = () => {
+            if (!map.style || !map.getSource?.("cities-source")) return;
+            const names = [];
+            const features = map.querySourceFeatures("cities-source", { sourceLayer: "cities", filter: stockLabelledCities });
+            for (const feature of features) {
+                const name = cityFeatureName(feature.properties);
+                if (!name || seen.has(name)) continue;
+                seen.add(name);
+                names.push(name);
+            }
+            if (addCityNameTranslations(translations, names, lookupLabel)) setStockTranslations(new Map(translations));
+        };
+        const onSourceData = (event) => {
+            if (event?.sourceId === "cities-source" && event.isSourceLoaded) collect();
+        };
+        map.on("sourcedata", onSourceData);
+        collect();
+        return () => map.off("sourcedata", onSourceData);
+    }, [mapRef, source, labelEpoch]);
+
+    return source === "custom" ? customTranslations : stockTranslations;
+};
+
 const Cities = () => {
     // world.customCities marks scenarios whose maps carry their own era-accurate
-    // city set (presets, editor maps). Consumed from the shared world-state hook
-    // so the map doesn't fire its own independent 5s poll.
+    // city set (presets, editor maps). Consumed from the shared world-state hook,
+    // which follows world writes, rather than a read of its own.
     const { customCities: customFlag, cityRenames, cityPopulations } = useWorldState();
     const [customData, setCustomData] = useState(null);
     // Whether the asset arrived, not whether it held any cities.
     const [customRead, setCustomRead] = useState(false);
     const [cityEditorEpoch, setCityEditorEpoch] = useState(0);
     const citiesGeojsonUrl = JSON_URLS.citiesGeojson;
-    const label = React.useMemo(() => cityLabelExpr(cityRenames), [cityRenames]);
-    const pop = React.useMemo(() => cityPopulationExpr(cityPopulations), [cityPopulations]);
+    const pop = React.useMemo(() => cityPopulationExpr(cityPopulations, cityRenames), [cityPopulations, cityRenames]);
     // Each city's population for the year, where the scenario gives it by year;
     // a population the AI set (cityPopulations, in `pop`) still wins.
     const gameYear = useGameYear();
@@ -506,6 +513,8 @@ const Cities = () => {
         collection: customData,
         readSucceeded: customRead,
     });
+    const translations = useCityNameTranslations(source, customData);
+    const label = React.useMemo(() => cityLabelExpression(cityRenames, translations), [cityRenames, translations]);
     if (source === "loading") return null;
     if (source === "custom") return <CustomCities data={datedData} label={label} pop={pop} />;
     return <StockCities label={label} pop={pop} />;

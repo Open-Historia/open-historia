@@ -14,6 +14,8 @@ dist-web
 # mobile/scripts/stage-map-assets.mjs downloads for it.
 dist-android
 mobile/map-cache
+# Which map files scripts/fetch-map-assets.mjs has hashed and passed (per install).
+.map-assets-verified.json
 # Assembled by scripts/assemble-site.mjs from dist-web + site/. Build output, and
 # big enough that a stray `git add -A` commits a whole copy of the website.
 dist-site

@@ -5,9 +5,12 @@
 
 // Region Type Manager — mirrors the official editor. Each region "type" carries
 // render settings (opacity, unowned opacity, z-index, stroke, override color,
-// zoom band) plus gameplay flags (pathfinding speed, interactable, passable,
-// show-to-default-prompt, included-in-labels). Editing a type live-restyles the
-// map (OlMap restyles on the types prop changing).
+// zoom band, included-in-labels) plus gameplay flags (pathfinding speed,
+// interactable, passable, show-to-default-prompt). Editing a type live-restyles
+// the map (OlMap restyles on the types prop changing). Only the Workshop map
+// reads any of it: the game gets a region's typeId but never looks the type
+// up, and has no pathfinding or passability for the four flags to feed, so
+// the panel says so rather than letting authors expect them to change play.
 
 import { useState } from "react";
 import Panel from "./Panel.jsx";
@@ -68,6 +71,9 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
           <Icon name="plus" size={14} /> Add
         </button>
       </div>
+      <div style={{ fontSize: 11, lineHeight: 1.45, color: "rgba(255,255,255,0.5)" }}>
+        Region types style this Workshop map only. The game draws every region in its owner's colour.
+      </div>
 
       {types.map((t) => {
         const open = expanded.has(t.id);
@@ -116,6 +122,9 @@ const TypeManager = ({ types, setTypes, usage = {}, onClose }) => {
                     {t.overrideColor && <ColorField value={t.overrideColor} onChange={(v) => update(t.id, { overrideColor: v })} />}
                   </span>
                 </Row>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginTop: 3 }}>
+                  The game does not use the next four settings yet. They are saved with the map.
+                </div>
                 <Row label="Pathfinding Speed">
                   <NumberField value={t.pathfindingSpeed} step={0.1} min={0} onChange={(v) => update(t.id, { pathfindingSpeed: v })} />
                 </Row>

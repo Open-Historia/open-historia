@@ -314,3 +314,12 @@ test("normalizeIntercepts preserves political assessment metadata and Beta docum
   assert.deepEqual(out.Germany.politicalAssessment, { cipher: "SEALED" });
   assert.equal(out.Germany.exchanges[0].eventId, "event-99");
 });
+
+test("foreign deployment odds read graded hostility, and the legacy boolean maps to 0.75", () => {
+  const base = foreignDeployChance(50);
+  assert.ok(Math.abs(foreignDeployChance(50, { hostility: 1 }) - (base + 0.2)) < 1e-9);
+  assert.ok(Math.abs(foreignDeployChance(50, { hostile: true }) - (base + 0.15)) < 1e-9);
+  assert.equal(foreignDeployChance(50, { hostile: true }), foreignDeployChance(50, { hostility: 0.75 }));
+  assert.equal(foreignDeployChance(50, { hostile: true, hostility: 0 }), base);
+  assert.equal(foreignDeployChance(100, { hostility: 1 }), 0.32);
+});

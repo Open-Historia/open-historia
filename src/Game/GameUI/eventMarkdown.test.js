@@ -1,15 +1,18 @@
 /*! Open Historia — the timeline renders an event body like every other model text © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/GameUI/eventMarkdown.test.js
 //
-// Runs without node_modules — it reads the source rather than rendering it.
+// Runs without node_modules — it reads the source rather than rendering it
+// (the renderer is JSX, which bare node cannot load).
 //
 // Event descriptions are written in paragraphs, with bold on the names and
 // numbers that matter. The timeline card called ReactMarkdown bare, which is
 // plain CommonMark: a lone newline is a SPACE there, so two paragraphs written
 // one line apart came out as one block, and a model that reached for <br> got
-// the literal tag. The advisor and the chat have had the fix since markdown.jsx
-// (remark-gfm + remark-breaks + normalizeMarkdown); this holds the timeline to
-// the same three, because the text comes from the same place.
+// the literal tag. The documents on a card, the country panel's Advisor Report
+// and the institutions' documents did the same, or printed the body raw. All of
+// them now go through markdown.jsx (remark-gfm + remark-breaks +
+// normalizeMarkdown + links that open in the system browser), because the text
+// comes from the same place.
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -17,19 +20,37 @@ import path from "node:path";
 import url from "node:url";
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
-const source = fs.readFileSync(path.join(here, "time.jsx"), "utf8");
+const read = (relative) => fs.readFileSync(path.join(here, relative), "utf8");
+const source = read("time.jsx");
+const renderer = read("markdown.jsx");
 
-test("the timeline event body is rendered with breaks, gfm and the repair pass", () => {
-    const render = source.match(/<ReactMarkdown[^>]*>\{[^}]*event\.description[^}]*\}<\/ReactMarkdown>/);
-    assert.ok(render, "the event description is still rendered by ReactMarkdown");
-    assert.match(render[0], /remarkPlugins=/, "with plugins, not bare CommonMark");
-    assert.match(render[0], /normalizeMarkdown\(/, "and through the <br>/<b> repair pass");
-    const list = source.match(/const EVENT_REMARK_PLUGINS = \[([^\]]*)\]/);
+test("the shared renderer has breaks, gfm, the repair pass and external links", () => {
+    const list = renderer.match(/const REMARK_PLUGINS = \[([^\]]*)\]/);
     assert.ok(list, "the plugin list is named");
     for (const plugin of ["remarkGfm", "remarkBreaks"]) {
-        assert.ok(source.includes(`import ${plugin} from`), `${plugin} is imported`);
+        assert.ok(renderer.includes(`import ${plugin} from`), `${plugin} is imported`);
         assert.ok(list[1].includes(plugin), `${plugin} is in the list`);
     }
+    assert.match(renderer, /normalizeMarkdown\(children\)/, "every body goes through the <br>/<b> repair pass");
+    assert.match(renderer, /components=\{COMPONENTS\}/);
+    assert.match(renderer, /const COMPONENTS = \{[^}]*a: ExternalLink/, "links open outside the app");
+});
+
+test("model text on the timeline, the country panel and the institutions goes through it", () => {
+    const users = {
+        "time.jsx": source,
+        "../Selection/CountryPanel.jsx": read("../Selection/CountryPanel.jsx"),
+        "InstitutionsWorkspace.jsx": read("InstitutionsWorkspace.jsx"),
+    };
+    for (const [file, text] of Object.entries(users)) {
+        assert.doesNotMatch(text, /from "react-markdown"/, `${file} does not call ReactMarkdown bare`);
+        assert.match(text, /import Markdown, \{ MarkdownStyleInjector \} from "\.\.?\/(?:GameUI\/)?markdown\.jsx"/, `${file} imports the shared renderer`);
+        assert.match(text, /<MarkdownStyleInjector \/>/, `${file} mounts the shared sheet, which styles tables`);
+    }
+    assert.match(source, /<Markdown bare className="timeline-markdown"[^>]*>\s*\{event\.description\}\s*<\/Markdown>/, "the event body");
+    assert.match(source, /<Markdown bare className="timeline-markdown"[^>]*>\s*\{report\.body\}\s*<\/Markdown>/, "a document on a card");
+    assert.match(users["../Selection/CountryPanel.jsx"], /<Markdown bare[^>]*>\s*\{String\(report\)\}\s*<\/Markdown>/, "the Advisor Report");
+    assert.match(users["InstitutionsWorkspace.jsx"], /<Markdown bare[^>]*>\{report\.body\}<\/Markdown>/, "an institution document, no longer raw pre-wrap text");
 });
 
 test("the card still styles the blocks that a paragraphed body produces", () => {

@@ -3,12 +3,13 @@
 // meta defaults, mirroring server/libraryStore.js. models.js re-exports all of
 // them, so callers keep importing from there.
 //
-// They live apart from models.js because this file imports nothing. models.js
-// imports ./generated/countryNames.js, which only exists once
-// scripts/seed-web-defaults.mjs has run, and CI runs the tests before any build.
-// A Node test that needs these values imports them from here; one that imported
-// models.js passed on any machine that had done a web build and failed on a
-// clean checkout. Keep it import-free (gameBundleParity.test.js checks).
+// They live apart from models.js because models.js once imported the web
+// build's gitignored country table (./generated/countryNames.js, written by
+// scripts/seed-web-defaults.mjs), so a Node test that imported it failed on a
+// clean checkout. models.js now reads the committed table instead and loads in
+// Node too, but tests and src/runtime/scenarioChanges.js import these from here,
+// and neither file may import anything under ./generated/
+// (gameBundleParity.test.js checks).
 
 export const DEFAULT_SCENARIO_ID = "default";
 export const DEFAULT_GAME_ID = "default";
@@ -74,7 +75,6 @@ export const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "difficulty",
   "language",
   "mapCredit",
-  "notes",
   "ownerCodes",
   "polityOverrides",
   "politicalActors",

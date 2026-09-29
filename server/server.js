@@ -1,5 +1,6 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import crypto from "crypto";
+import dns from "dns";
 import express from "express";
 import fs from "fs";
 import http from "http";
@@ -12,6 +13,7 @@ import {
   createScenario,
   deleteGame,
   deleteScenario,
+  emptyTrash,
   ensureGameStore,
   ensureScenarioStore,
   exportGameBundle,
@@ -23,6 +25,8 @@ import {
   getScenarioDetails,
   importGameBundle,
   importScenarioBundle,
+  listTrash,
+  restoreFromTrash,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
@@ -60,11 +64,24 @@ import {
 } from "./basemapStore.js";
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
+  clearHubCache,
+  hubCacheUsage,
+  pruneHubCache,
+  saveCappedBody,
+  sweepHubCache,
+  tooLargeError,
+  touchEntry,
+} from "./hubCache.js";
+import {
   allowedCorsOrigin,
+  allowedHostNames,
   crossOriginWriteAllowed,
+  isAllowedHostHeader,
   isAllowedHubUrl,
   isLoopbackAddress,
+  metadataGuardedLookup,
   parseByteRange,
+  RELAY_BLOCKED_CODE,
   relayTargetAllowed,
   sanitizeRelayHeaders,
 } from "./security.js";
@@ -108,16 +125,20 @@ const ALL_INTERFACES_HOST = "0.0.0.0";
 
 const isLanHost = (host) => host !== LOOPBACK_HOST && host !== "localhost" && host !== "::1";
 
+// lanAccess: the listener's binding. relayForLan: whether the AI relay answers
+// other devices too (see ALLOW_REMOTE_RELAY by the relay).
 const readNetworkSettings = () => {
   try {
     const parsed = JSON.parse(fs.readFileSync(NETWORK_SETTINGS_FILE, "utf8"));
-    return { lanAccess: parsed?.lanAccess === true };
+    return { lanAccess: parsed?.lanAccess === true, relayForLan: parsed?.relayForLan === true };
   } catch {
-    return { lanAccess: false };
+    return { lanAccess: false, relayForLan: false };
   }
 };
 
-const writeNetworkSettings = (settings) => {
+// Merged into what is saved, so changing one setting keeps the other.
+const writeNetworkSettings = (changes) => {
+  const settings = { ...readNetworkSettings(), ...changes };
   fs.mkdirSync(path.dirname(NETWORK_SETTINGS_FILE), { recursive: true });
   fs.writeFileSync(NETWORK_SETTINGS_FILE, `${JSON.stringify(settings, null, 2)}\n`);
 };
@@ -126,6 +147,12 @@ const writeNetworkSettings = (settings) => {
 const HOST_FROM_ENV = process.env.OH_HOST || "";
 let HOST = HOST_FROM_ENV || (readNetworkSettings().lanAccess ? ALL_INTERFACES_HOST : LOOPBACK_HOST);
 let LAN_ENABLED = isLanHost(HOST);
+// What the toggle last asked for. HOST only changes once a rebind has landed,
+// a moment after the reply, so a second flip compared against HOST saw the old
+// binding, matched it and did nothing: on-then-off left the switch showing Off
+// and network-settings.json saying on while the server went to 0.0.0.0.
+let requestedHost = HOST;
+let rebindTimer = null;
 
 // The addresses a phone or another computer would actually type in. Doing this
 // here is the difference between "enable LAN play" being a setting and being a
@@ -145,6 +172,27 @@ const lanAddresses = () =>
 const jsonParser = express.json({ limit: "64mb" });
 const largeJsonParser = express.json({ limit: "512mb" });
 const uploadParser = express.raw({ type: () => true, limit: "512mb" });
+
+// DNS rebinding: a web page that re-points its own name at 127.0.0.1 reaches
+// this server over loopback with an Origin and Host that match each other, so
+// every check below would wave it through. Refuse a Host this server does not
+// answer to before anything else runs (server/security.js isAllowedHostHeader).
+// IP addresses and localhost always work; a name someone types on the LAN
+// (this computer's own name, or one behind a proxy) goes in OH_ALLOWED_HOSTS.
+const ALLOWED_HOST_NAMES = allowedHostNames([
+  ...String(process.env.OH_ALLOWED_HOSTS || "").split(","),
+  HOST_FROM_ENV,
+  os.hostname(),
+  `${os.hostname()}.local`,
+]);
+app.use((req, res, next) => {
+  if (isAllowedHostHeader(req.headers.host, ALLOWED_HOST_NAMES)) return next();
+  return sendError(
+    res,
+    403,
+    new Error("This server only answers to localhost, its IP addresses and the names listed in OH_ALLOWED_HOSTS."),
+  );
+});
 
 // The Android app's connect screen lives on the WebView's own origin, so its
 // probe of this server is a cross-origin request — without these headers the
@@ -821,6 +869,42 @@ app.delete("/api/games/:gameId", (req, res) => {
   }
 });
 
+// What delete moved to .trash: listed, restored and emptied from this machine
+// only. The trash holds whole saves, and restoring or destroying them is for
+// the person at the computer, not for whoever else is on the network.
+const refuseRemoteTrash = (req, res) => {
+  if (isLoopbackAddress(req.socket?.remoteAddress)) return false;
+  sendError(res, 403, new Error("Only the machine running the server can use its trash."));
+  return true;
+};
+
+app.get("/api/trash", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json({ entries: listTrash() });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/trash/:entry/restore", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json(restoreFromTrash(req.params.entry));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/trash", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json(emptyTrash());
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
 app.delete("/api/games/:gameId/assets/:assetKey", (req, res) => {
   try {
     res.json(removeGameAsset(req.params.gameId, req.params.assetKey));
@@ -1003,15 +1087,27 @@ const setHubFileGuards = (res) => {
 // fenced in three other ways instead:
 //   1. LOOPBACK ONLY by default. A relay reachable from the network is an open
 //      proxy for everyone on it. The desktop app, Termux-on-the-same-phone and a
-//      browser on the host all come from loopback and are unaffected; a phone
-//      talking to a desktop needs OH_ALLOW_REMOTE_RELAY=1, which is a deliberate
-//      "yes, proxy for my LAN" and is stated as such.
-//   2. Cloud metadata endpoints refused (relayTargetAllowed) — never an AI
-//      endpoint, always credentials.
+//      browser on the host all come from loopback and are unaffected; a browser
+//      on another device needs the player to say "yes, proxy for my LAN":
+//      Settings → Network → "Let other devices send AI calls through this
+//      server" (relayForLan in network-settings.json, applied at once), or
+//      OH_ALLOW_REMOTE_RELAY=1, which wins and locks that switch. The Android
+//      app never needs it: it calls the model natively, with no relay.
+//   2. Cloud metadata endpoints refused (relayTargetAllowed on the URL, and
+//      relayLookup on where a name resolves) — never an AI endpoint, always
+//      credentials.
 //   3. Caller headers filtered, redirects not followed, response size and time
 //      bounded, so it cannot be aimed at an internal service and used to walk a
 //      redirect chain or stream something unbounded back.
 const ALLOW_REMOTE_RELAY = process.env.OH_ALLOW_REMOTE_RELAY === "1";
+let RELAY_FOR_LAN = readNetworkSettings().relayForLan;
+const relaySettingState = () => ({
+  relayForLan: ALLOW_REMOTE_RELAY || RELAY_FOR_LAN,
+  relayLockedByEnv: ALLOW_REMOTE_RELAY,
+});
+// Marks the relay's own refusal, so the page can tell it from an AI endpoint
+// that answered 403 itself (src/Game/AI/relayResponse.js isRelayRefusal).
+const RELAY_REFUSED_HEADER = "X-OH-Relay";
 const RELAY_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 
@@ -1032,6 +1128,8 @@ const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 // the browser now sees tokens as they arrive rather than one blob at the end,
 // so a local model notices a cancelled request on its next write.
 const relayTransport = (target) => (target.protocol === "https:" ? https : http);
+// Checks where a NAME resolves, which relayTargetAllowed cannot (security.js).
+const relayLookup = metadataGuardedLookup(dns.lookup);
 
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
@@ -1042,19 +1140,28 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   };
   req.once("aborted", abortUpstream);
   res.once("close", abortUpstream);
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    abortUpstream();
-  }, RELAY_TIMEOUT_MS);
+  // A deadline on SILENCE, restarted by every chunk: the first byte gets the
+  // whole window (prompt evaluation on a local model), and a model that is
+  // still streaming tokens is never cut off for being long.
+  let timeout = null;
+  const armTimeout = () => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+      timedOut = true;
+      abortUpstream();
+    }, RELAY_TIMEOUT_MS);
+  };
+  armTimeout();
 
   try {
-    if (!ALLOW_REMOTE_RELAY && !isLoopbackAddress(req.socket?.remoteAddress)) {
+    if (!ALLOW_REMOTE_RELAY && !RELAY_FOR_LAN && !isLoopbackAddress(req.socket?.remoteAddress)) {
+      res.setHeader(RELAY_REFUSED_HEADER, "refused");
       return sendError(
         res,
         403,
         new Error(
-          "The AI relay only answers this machine. Set OH_ALLOW_REMOTE_RELAY=1 to let other "
-            + "devices on your network relay AI calls through this server.",
+          "The AI relay only answers the computer running the server. To let this device use it, turn on "
+            + "Settings → Advanced → Network → \"Let other devices send AI calls through this server\" on that computer.",
         ),
       );
     }
@@ -1094,6 +1201,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         method: requestMethod,
         headers: upstreamHeaders,
         signal: controller.signal,
+        lookup: relayLookup,
       }, resolve);
       upstreamRequest.on("error", reject);
       upstreamRequest.end(body);
@@ -1113,6 +1221,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
     let received = 0;
     await new Promise((resolve, reject) => {
       upstream.on("data", (chunk) => {
+        armTimeout();
         received += chunk.length;
         if (received > RELAY_MAX_RESPONSE_BYTES) {
           upstream.destroy(new Error("The AI endpoint's response is too large to relay."));
@@ -1127,31 +1236,45 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       });
       upstream.on("end", resolve);
       upstream.on("error", reject);
+      // The endpoint's connection dropping mid-answer is not always an error
+      // on the response; without this the relay waited out its deadline.
+      upstream.on("close", () => {
+        if (!upstream.complete) reject(new Error("The AI endpoint closed the connection before its answer was complete."));
+      });
     });
 
     completed = true;
     res.end();
   } catch (error) {
+    // Headers are already out, so there is no status left to set. Ending the
+    // response here used to write a clean end of stream, and the game took a
+    // cut-off answer for a complete one: it failed to parse half a tool call,
+    // spent a second request that was cut the same way, and the advisor kept
+    // truncated replies as finished. Breaking the connection makes the
+    // browser's reader fail instead (src/Game/AI/relayResponse.js says why).
+    // A client that went away has destroyed it already.
+    const cutOff = (reason) => {
+      if (res.writableEnded || res.destroyed) return;
+      appendLog({ level: "warn", source: "server", event: "relay.cut", message: reason.message });
+      res.destroy(reason);
+    };
     // The relay's own deadline used to abort the upstream and then send
     // NOTHING: no status, no body, no res.end(), so the game sat on an open
     // socket forever instead of failing. Answer it.
     if (timedOut) {
-      if (!res.headersSent) {
-        sendError(res, 504, new Error(
-          `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
-            + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
-        ));
-      } else if (!res.writableEnded && !res.destroyed) {
-        res.end();
-      }
+      const late = new Error(
+        `The AI endpoint did not finish within ${Math.round(RELAY_TIMEOUT_MS / 1000)}s. `
+          + "Set OH_RELAY_TIMEOUT_MS to allow longer generations.",
+      );
+      if (!res.headersSent) sendError(res, 504, late);
+      else cutOff(late);
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, 502, error);
+      sendError(res, error?.code === RELAY_BLOCKED_CODE ? 400 : 502, error);
+    } else if (res.headersSent) {
+      cutOff(error instanceof Error ? error : new Error(String(error)));
     } else if (!res.writableEnded && !res.destroyed) {
-      // Headers are already out, so there is no status left to set — end the
-      // response rather than leaking the socket. (A client that went away has
-      // destroyed it already; there is nothing to answer.)
       res.end();
     }
   } finally {
@@ -1171,6 +1294,7 @@ app.get("/api/server/network", (req, res) => {
     port: Number(PORT),
     lockedByEnv: Boolean(HOST_FROM_ENV),
     addresses: local ? lanAddresses() : [],
+    ...relaySettingState(),
   });
 });
 
@@ -1184,6 +1308,31 @@ app.post("/api/server/network", jsonParser, (req, res) => {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) {
     return sendError(res, 403, new Error("Only the machine running the server can change this."));
   }
+  // The relay switch on its own ({ relayForLan }): applied at once, no rebind,
+  // and not OH_HOST's business, which only decides the binding.
+  if (typeof req.body?.relayForLan === "boolean" && !("lanEnabled" in req.body)) {
+    if (ALLOW_REMOTE_RELAY) {
+      return sendError(
+        res,
+        409,
+        new Error("OH_ALLOW_REMOTE_RELAY is set, so it decides who can use the AI relay. Unset it to use this switch."),
+      );
+    }
+    try {
+      writeNetworkSettings({ relayForLan: req.body.relayForLan });
+    } catch (error) {
+      return sendError(res, 500, error);
+    }
+    RELAY_FOR_LAN = req.body.relayForLan;
+    return res.json({
+      lanEnabled: isLanHost(requestedHost),
+      host: requestedHost,
+      port: Number(PORT),
+      lockedByEnv: Boolean(HOST_FROM_ENV),
+      addresses: lanAddresses(),
+      ...relaySettingState(),
+    });
+  }
   if (HOST_FROM_ENV) {
     return sendError(
       res,
@@ -1194,14 +1343,13 @@ app.post("/api/server/network", jsonParser, (req, res) => {
 
   const lanEnabled = req.body?.lanEnabled === true;
   const nextHost = lanEnabled ? ALL_INTERFACES_HOST : LOOPBACK_HOST;
-  if (nextHost === HOST) {
-    return res.json({ lanEnabled: LAN_ENABLED, host: HOST, port: Number(PORT), lockedByEnv: false, addresses: lanAddresses() });
-  }
-
-  try {
-    writeNetworkSettings({ lanAccess: lanEnabled });
-  } catch (error) {
-    return sendError(res, 500, error);
+  if (nextHost !== requestedHost) {
+    try {
+      writeNetworkSettings({ lanAccess: lanEnabled });
+    } catch (error) {
+      return sendError(res, 500, error);
+    }
+    requestedHost = nextHost;
   }
 
   // Answer BEFORE rebinding: the reply travels over a connection this is about
@@ -1214,9 +1362,26 @@ app.post("/api/server/network", jsonParser, (req, res) => {
     port: Number(PORT),
     lockedByEnv: false,
     addresses: lanEnabled ? lanAddresses() : [],
+    ...relaySettingState(),
   });
-  setTimeout(() => rebindListener(nextHost), 250);
+  scheduleRebind();
 });
+
+// Moves the listener to requestedHost a moment after the reply has gone. A
+// later flip restarts the wait, so a double click settles on its last answer,
+// and one that lands while a rebind is still in flight waits for it to finish
+// and then looks again.
+const scheduleRebind = () => {
+  clearTimeout(rebindTimer);
+  rebindTimer = setTimeout(() => {
+    rebindTimer = null;
+    if (rebinding) {
+      scheduleRebind();
+      return;
+    }
+    if (requestedHost !== HOST) rebindListener(requestedHost);
+  }, 250);
+};
 
 // Shut the server down from the UI (the ⏻ button in the top bar) — handy on
 // phones/Termux and headless installs where no terminal is in sight. Responds
@@ -1239,11 +1404,35 @@ app.post("/api/server/shutdown", (req, res) => {
 // Cache fetched bundles on disk so re-importing the same scenario doesn't keep
 // bumping its GitHub download count — the second import onward is served locally
 // and never touches GitHub. Bundle URLs are immutable (a new version gets a new
-// URL), so a cached copy can't go stale. Keyed on the requested URL.
+// URL), so a cached copy can't go stale. Keyed on the requested URL, and capped
+// by total size: the entries used longest ago go first (server/hubCache.js).
 const HUB_CACHE_DIR = path.join(DATA_DIR, "hub-cache");
 const hubCachePaths = (fileUrl) => {
   const hash = crypto.createHash("sha256").update(fileUrl).digest("hex");
   return { body: path.join(HUB_CACHE_DIR, `${hash}.body`), type: path.join(HUB_CACHE_DIR, `${hash}.type`) };
+};
+
+// Leftover downloads from a crash, and anything past the size cap, go at
+// startup (server/hubCache.js).
+sweepHubCache(HUB_CACHE_DIR);
+
+// Serves a downloaded file from disk, with the guards every hub file gets.
+// Sized before any header is set: a file cleared between the cache check and
+// here throws into the route's error reply, which must not go out under the
+// bundle's content type.
+const sendHubFile = (res, filePath, contentType, { removeAfter = false } = {}) => {
+  const { size } = fs.statSync(filePath);
+  res.setHeader("Cache-Control", "no-store");
+  setHubFileGuards(res);
+  // Pass the upstream content type through untouched. JSON bundles still parse
+  // via response.json() (which ignores the header), while binary bundles (.zip)
+  // and raw basemap images (.png/.jpg) arrive byte-for-byte.
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Content-Length", size);
+  const stream = fs.createReadStream(filePath);
+  stream.once("error", (error) => res.destroy(error));
+  if (removeAfter) stream.once("close", () => fs.rm(filePath, { force: true }, () => {}));
+  stream.pipe(res);
 };
 
 app.get("/api/hub/file", async (req, res) => {
@@ -1260,10 +1449,8 @@ app.get("/api/hub/file", async (req, res) => {
     if (fs.existsSync(cache.body)) {
       let cachedType = "application/octet-stream";
       try { cachedType = fs.readFileSync(cache.type, "utf8") || cachedType; } catch { /* default */ }
-      res.setHeader("Cache-Control", "no-store");
-      setHubFileGuards(res);
-      res.setHeader("Content-Type", cachedType);
-      return fs.createReadStream(cache.body).pipe(res);
+      touchEntry(cache.body);
+      return sendHubFile(res, cache.body, cachedType);
     }
 
     // Follow redirects manually so every hop is re-checked against the host
@@ -1289,33 +1476,45 @@ app.get("/api/hub/file", async (req, res) => {
       return sendError(res, 502, new Error(`Hub file fetch failed (HTTP ${upstream.status}).`));
     }
 
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    if (buffer.length > HUB_MAX_BUNDLE_BYTES) {
-      return sendError(res, 413, new Error("Scenario bundle is too large."));
+    // Refuse before reading a byte when the size is declared; saveCappedBody
+    // stops mid-body when it is not.
+    const declared = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > HUB_MAX_BUNDLE_BYTES) {
+      await upstream.body?.cancel().catch(() => {});
+      return sendError(res, 413, tooLargeError());
     }
 
     const contentType = upstream.headers.get("content-type") || "application/octet-stream";
-    // Cache for next time — best-effort; a cache write failure must not fail the
-    // import. Temp file + rename so a concurrent serve never sees a half-written body.
+    // Downloaded to a temp file of its own (two imports of the same file at
+    // once must not share one), then renamed into the cache so a concurrent
+    // serve never sees a half-written body. Failing to cache must not fail the
+    // import: the temp file is served and removed instead.
+    fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
+    const download = `${cache.body}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    await saveCappedBody(upstream.body, download, HUB_MAX_BUNDLE_BYTES);
     try {
-      fs.mkdirSync(HUB_CACHE_DIR, { recursive: true });
-      fs.writeFileSync(`${cache.body}.tmp`, buffer);
-      fs.renameSync(`${cache.body}.tmp`, cache.body);
       fs.writeFileSync(cache.type, contentType);
+      fs.renameSync(download, cache.body);
     } catch (cacheError) {
       console.warn("[hub] cache write failed:", cacheError.message);
+      return sendHubFile(res, download, contentType, { removeAfter: true });
     }
-
-    res.setHeader("Cache-Control", "no-store");
-    setHubFileGuards(res);
-    // Pass the upstream content type through untouched. JSON bundles still parse
-    // via response.json() (which ignores the header), while binary bundles (.zip)
-    // and raw basemap images (.png/.jpg) arrive byte-for-byte.
-    res.setHeader("Content-Type", contentType);
-    res.send(buffer);
+    sendHubFile(res, cache.body, contentType);
+    pruneHubCache(HUB_CACHE_DIR, undefined, { keep: cache.body });
   } catch (error) {
-    sendError(res, 502, error);
+    sendError(res, error?.status === 413 ? 413 : 502, error);
   }
+});
+
+// Settings → Storage: how much the download cache holds, and emptying it. A
+// cleared file downloads again (and counts on GitHub again) next time.
+app.get("/api/hub/cache", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json(hubCacheUsage(HUB_CACHE_DIR));
+});
+
+app.delete("/api/hub/cache", (_req, res) => {
+  res.json(clearHubCache(HUB_CACHE_DIR));
 });
 
 // Best-effort scenario-import telemetry. On a successful import the client pings
@@ -1481,10 +1680,12 @@ app.delete("/api/basemaps/:id", (req, res) => {
   }
 });
 
-// Vendored Fantasy Map Generator (Azgaar, MIT), built to ../fmg/dist by the
-// updater (scripts/fetch-fmg.mjs) and served same-origin so the map editor's
-// "Generate" console can run it in a hidden iframe and read its data. Present
-// only after it's been vendored — otherwise /fmg 404s and the editor says so.
+// Vendored Fantasy Map Generator (Azgaar, MIT), fetched to ../fmg/dist by
+// scripts/fetch-fmg.mjs — run by hand in a source checkout; no installer ships
+// it — and served same-origin so the map editor's "Generate" console can run
+// it in a hidden iframe and read its data. Present only after it's been
+// vendored; otherwise the editor's probe (fmgDriver.js checkFmgAvailable) sees
+// no generator and hides the Generate tab.
 // Mounted before the SPA fallback so /fmg/* isn't swallowed by index.html.
 const fmgDistDir = path.join(__dirname, "../fmg/dist");
 if (fs.existsSync(fmgDistDir)) app.use("/fmg", express.static(fmgDistDir));
@@ -1520,6 +1721,14 @@ const describeBinding = () => {
 export const httpServer = app.listen(PORT, HOST, () => {
   console.log(`Server running at http://localhost:${PORT}`);
   describeBinding();
+});
+
+// Every open connection, so a rebind can cut the network's and leave this
+// machine's requests running (rebindListener).
+const openSockets = new Set();
+httpServer.on("connection", (socket) => {
+  openSockets.add(socket);
+  socket.once("close", () => openSockets.delete(socket));
 });
 
 // Move the listener to a different interface in place, so the LAN toggle takes
@@ -1561,6 +1770,7 @@ const rebindListener = (nextHost) => {
     httpServer.removeListener("error", onError);
     HOST = previousHost;
     LAN_ENABLED = isLanHost(HOST);
+    requestedHost = HOST;
     try {
       writeNetworkSettings({ lanAccess: LAN_ENABLED });
     } catch { /* the binding is what matters; the file is a hint for next boot */ }
@@ -1573,10 +1783,24 @@ const rebindListener = (nextHost) => {
   };
 
   rebinding = true;
-  // Keep-alive connections would hold close() open indefinitely, and one of them
-  // is the page that just flipped the switch.
-  httpServer.closeAllConnections?.();
-  httpServer.close(() => {
+  // close() stops taking new connections at once and lets the open ones run to
+  // their end; idle keep-alive ones are closed now. This used to be
+  // closeAllConnections(), which also killed every request in flight — a local
+  // model's relayed generation minutes into a time skip, a turn being saved —
+  // whenever the switch was flipped. Turning sharing OFF still cuts the
+  // network's connections, busy or not: shutting those devices out is what
+  // the player asked for.
+  httpServer.closeIdleConnections?.();
+  if (!isLanHost(nextHost)) {
+    for (const socket of openSockets) {
+      if (!isLoopbackAddress(socket.remoteAddress)) socket.destroy();
+    }
+  }
+  // The new bind does not wait for close()'s callback, which only comes once
+  // the last of those requests has finished; one event-loop turn is enough for
+  // the old listening socket to let go of the port.
+  httpServer.close();
+  setImmediate(() => {
     httpServer.once("error", onError);
     httpServer.once("listening", onListening);
     httpServer.listen(PORT, nextHost);

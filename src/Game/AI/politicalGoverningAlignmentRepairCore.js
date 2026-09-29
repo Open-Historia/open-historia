@@ -5,6 +5,7 @@ import {
   POLITICAL_WORLD_GENERATION_SCHEMA_VERSION,
   validatePoliticalGenerationProposal,
 } from "../../runtime/politicalWorldGeneration.js";
+import { isCanonicalGameDate } from "../../runtime/gameDates.js";
 
 export const POLITICAL_GOVERNING_ALIGNMENT_BATCH_SIZE = 48;
 export const POLITICAL_GOVERNING_ALIGNMENT_MAX_ATTEMPTS = 2;
@@ -155,7 +156,7 @@ const candidateForRepair = (polityKey, actor, depth = "standard") => {
 
 const compactOfficeholder = (value) => clean(isPlainObject(value) ? value.name : value);
 
-const repairPromptBlock = (item, politicalActors, contextByPolity) => {
+const repairPromptBlock = (item, politicalActors, contextByPolity, previousErrors = {}) => {
   const actor = politicalActors?.byPolity?.[item.polityKey] ?? {};
   const government = isPlainObject(actor?.government) ? actor.government : {};
   const representation = clean(actor?.politicalSystem?.representation).toLocaleLowerCase() || "unknown";
@@ -176,6 +177,10 @@ const repairPromptBlock = (item, politicalActors, contextByPolity) => {
     clean(government.coalitionName) ? `coalitionName=${clean(government.coalitionName)}` : "",
   ].filter(Boolean);
   const localContext = contextByPolity?.[item.polityKey];
+  const errors = (Array.isArray(previousErrors?.[item.polityKey]) ? previousErrors[item.polityKey] : [])
+    .map(clean)
+    .filter(Boolean)
+    .slice(0, 8);
   return [
     `POLITY: ${item.polityKey}`,
     `REPRESENTATION: ${representation}`,
@@ -183,8 +188,11 @@ const repairPromptBlock = (item, politicalActors, contextByPolity) => {
     "EXISTING PARTY ROSTER — return ONLY these stable ids:",
     ...parties,
     ...(localContext ? [`SCENARIO-SPECIFIC CONTEXT: ${truncate(localContext, 700)}`] : []),
+    ...(errors.length ? ["PREVIOUS ATTEMPT VALIDATION ERRORS — correct these exactly:", ...errors.map((error) => `- ${error}`)] : []),
   ].join("\n");
 };
+
+const GENERIC_ALIGNMENT_FAILURE = "Governing alignment repair could not resolve a valid existing ruling-party reference after the bounded retry budget";
 
 export const POLITICAL_GOVERNING_ALIGNMENT_TOOL = Object.freeze({
   name: "submit_political_governing_alignment_repair",
@@ -222,6 +230,9 @@ export const buildPoliticalGoverningAlignmentRepairPrompt = ({
   politicalActors = null,
   scenarioContext = "",
   contextByPolity = {},
+  // polityKey -> validation errors from the previous attempt, so a retry is
+  // corrective instead of the same question again.
+  previousErrors = {},
 } = {}) => ({
   systemPrompt: `You perform ONLY a governing-party / coalition alignment repair for already-existing Political Actors.\n\n`
     + `${historyAuthorityPromptBlock(historyAuthority, scenarioDate)}\n`
@@ -238,7 +249,7 @@ export const buildPoliticalGoverningAlignmentRepairPrompt = ({
     scenarioContext ? truncate(scenarioContext, 4000) : "(none supplied)",
     "",
     "GOVERNING ALIGNMENTS TO REPAIR:",
-    ...items.map((item, index) => `\n=== ${index + 1} ===\n${repairPromptBlock(item, politicalActors, contextByPolity)}`),
+    ...items.map((item, index) => `\n=== ${index + 1} ===\n${repairPromptBlock(item, politicalActors, contextByPolity, previousErrors)}`),
   ].join("\n"),
 });
 
@@ -330,6 +341,9 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
   scenarioContext = "",
   contextByPolity = {},
   maxAttempts = POLITICAL_GOVERNING_ALIGNMENT_MAX_ATTEMPTS,
+  // Validation errors carried across external one-call attempts (Political
+  // World v2 retries at its checkpoint), keyed by polity.
+  retryErrorsByPolity = {},
   callModel,
   generatedAt = () => new Date().toISOString(),
   signal,
@@ -337,7 +351,7 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
 } = {}) => {
   if (typeof callModel !== "function") throw new Error("Governing alignment repair requires a callModel function");
   const date = clean(scenarioDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("Governing alignment repair requires the canonical scenario date");
+  if (!isCanonicalGameDate(date)) throw new Error("Governing alignment repair requires the canonical scenario date");
   const actors = politicalActors?.byPolity ?? {};
   const polityKeys = (Array.isArray(polities) ? polities : [])
     .map((entry) => clean(typeof entry === "string" ? entry : entry?.polityKey))
@@ -377,6 +391,10 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
     const skippedKeys = new Set();
     let attempt = 0;
     const batchDiagnostics = [];
+    let previousErrors = Object.fromEntries(batch
+      .map((item) => [item.polityKey, (Array.isArray(retryErrorsByPolity?.[item.polityKey]) ? retryErrorsByPolity[item.polityKey] : [])
+        .map(clean).filter(Boolean).slice(0, 8)])
+      .filter(([, errors]) => errors.length));
 
     while (unresolved.length && attempt < attemptsLimit) {
       if (signal?.aborted) throw signal.reason || new DOMException("Governing alignment repair cancelled.", "AbortError");
@@ -388,6 +406,7 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
         politicalActors,
         scenarioContext,
         contextByPolity,
+        previousErrors,
       });
       const response = await callModel(systemPrompt, [{ role: "user", parts: [{ text: userMessage }] }], {
         signal,
@@ -460,6 +479,9 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
         polities: polityDiagnostics,
       });
       unresolved = nextUnresolved;
+      previousErrors = Object.fromEntries(polityDiagnostics
+        .filter((entry) => entry.status === "failed" && entry.errors.length)
+        .map((entry) => [entry.polityKey, entry.errors.map(clean).filter(Boolean)]));
 
       if (typeof onBatch === "function") {
         const resolvedBefore = nativeResolved.length
@@ -488,7 +510,9 @@ export const generatePoliticalGoverningAlignmentRepairCore = async ({
         polityKey: item.polityKey,
         depth: item.depth,
         needs: [...item.needs],
-        errors: ["Governing alignment repair could not resolve a valid existing ruling-party reference after the bounded retry budget"],
+        // The last attempt's own errors when there are any, so a later retry
+        // (v2 carries them in its checkpoint) knows what to correct.
+        errors: previousErrors[item.polityKey]?.length ? [...previousErrors[item.polityKey]] : [GENERIC_ALIGNMENT_FAILURE],
       });
     }
     batches.push({

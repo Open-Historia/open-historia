@@ -1,4 +1,6 @@
-// The one markdown renderer the advisor and the diplomacy chat both use.
+// The one markdown renderer for model text: the advisor and the diplomacy chat,
+// the timeline's event bodies and documents, the country panel's Advisor Report
+// and the institutions' documents.
 //
 // Both panels used to call ReactMarkdown directly with a short stylesheet each,
 // which meant plain CommonMark: no tables, no strikethrough, no task lists — a
@@ -168,7 +170,9 @@ const markdownStyles = `
    still hard to read even when nothing is truncated. */
 .oh-md-table-wrap th:first-child, .oh-md-table-wrap td:first-child { min-width: 5.5rem; }
 .oh-md-table-wrap thead th {
-    background: color-mix(in srgb, var(--oh-md-accent) 16%, rgba(255,255,255,0.05));
+    /* The fallback is for a bare body (no .oh-md, so no accent set), where an
+       unset variable would drop the header's background altogether. */
+    background: color-mix(in srgb, var(--oh-md-accent, #3b82f6) 16%, rgba(255,255,255,0.05));
     color: rgba(255,255,255,0.95);
     font-weight: 700;
     letter-spacing: 0.02em;
@@ -193,11 +197,17 @@ export const MarkdownStyleInjector = () => {
 };
 
 // `className` picks the accent (advisor-markdown / chat-markdown); everything
-// else comes from the shared sheet above.
-const Markdown = ({ children, className }) => {
+// else comes from the shared sheet above. `bare` leaves the sheet's .oh-md
+// block styles off, for a card that sizes its own paragraphs (the timeline's
+// .timeline-markdown); the vocabulary, the repair pass, the table wrapper and
+// the links that open in the system browser are the same either way.
+// `written`: text the AI wrote in the player's language, which the interface
+// translator must leave alone.
+const Markdown = ({ children, className, bare = false, style, written = false }) => {
     const text = useMemo(() => normalizeMarkdown(children), [children]);
+    const classes = bare ? className : className ? `oh-md ${className}` : "oh-md";
     return (
-        <div className={className ? `oh-md ${className}` : "oh-md"}>
+        <div className={classes} style={style} data-no-translate={written ? "" : undefined}>
         <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>{text}</ReactMarkdown>
         </div>
     );

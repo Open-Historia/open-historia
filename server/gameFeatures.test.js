@@ -9,6 +9,7 @@ import {
   normalizeFeatureSettings,
   playerFocusOf,
   resolveFeatures,
+  withFeatureOverride,
   worldDirectionOf,
 } from "./gameFeatures.js";
 
@@ -17,6 +18,7 @@ import {
 const worldDirection = featureDefaults().worldDirection;
 const playerFocus = featureDefaults().playerFocus;
 const puppetStates = featureDefaults().puppetStates;
+const groups = featureDefaults().groups;
 
 test("the defaults switch every feature on with its settings at their defaults", () => {
   const defaults = featureDefaults();
@@ -39,6 +41,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 8 },
     puppetStates,
+    groups,
     worldDirection,
     playerFocus,
   });
@@ -47,6 +50,7 @@ test("a scenario's configuration is made complete, with malformed values replace
     espionage: { enabled: false },
     idleDiplomacy: { enabled: true, averageMinutes: 720 },
     puppetStates,
+    groups,
     worldDirection,
     playerFocus,
   });
@@ -82,6 +86,17 @@ test("isFeatureEnabled and the idle diplomacy chance read the resolved configura
   assert.equal(idleDiplomacyChancePerMinute(resolved), 0.25);
   assert.equal(idleDiplomacyChancePerMinute(resolveFeatures({ idleDiplomacy: false }, {})), 0);
   assert.equal(idleDiplomacyChancePerMinute(null), 0);
+});
+
+// Groups ship on; a scenario switches them off for every game made from it, and
+// a game may switch them back for itself.
+test("groups are a feature a scenario can switch off and a game can switch back on", () => {
+  assert.deepEqual(featureDefaults().groups, { enabled: true });
+  assert.equal(FEATURE_DEFINITIONS.find((definition) => definition.key === "groups")?.toggleable, undefined, "it has an on/off switch");
+  const scenario = { groups: false };
+  assert.equal(isFeatureEnabled(resolveFeatures(scenario, {}), "groups"), false);
+  assert.equal(isFeatureEnabled(resolveFeatures(scenario, { groups: { enabled: true } }), "groups"), true);
+  assert.deepEqual(normalizeFeatureOverrides({ groups: { enabled: false } }), { groups: { enabled: false } });
 });
 
 // ---- World direction: the director's settings ----
@@ -147,4 +162,18 @@ test("Player focus: the scenario sets the default level and a game chooses its o
   assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
   assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
   assert.equal(featureDefaults().playerFocus.enabled, true);
+});
+
+test("Changing one feature's override keeps the game's other overrides", () => {
+  const game = { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } };
+  assert.deepEqual(
+    withFeatureOverride(game, "playerFocus", { level: "spotlight" }),
+    { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 }, playerFocus: { level: "spotlight" } },
+  );
+  // Back to the scenario default: only Player focus goes.
+  const focused = { ...game, playerFocus: { level: "focused" } };
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", null), game);
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", { level: undefined }), game);
+  assert.deepEqual(withFeatureOverride(null, "playerFocus", { level: "balanced" }), { playerFocus: { level: "balanced" } });
+  assert.deepEqual(game, { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } }, "the input is not changed");
 });

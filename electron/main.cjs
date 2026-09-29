@@ -74,8 +74,9 @@ const BETA_UPDATE_MANIFEST =
 // testing the beta a way to quietly damage a real campaign.
 const USER_ROOT = app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
-// The world map is the exception, and it is the safe one to share: ~170MB of
-// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches,
+// The world map is the exception, and it is the safe one to share: ~35MB of
+// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches
+// (so a change to those pins has to reach every branch in the same release),
 // and written through a temp file and a rename. Pointing the beta at the stable
 // app's copy saves a tester that download; with no stable install the fetcher just
 // creates the folder, and a later stable install finds the map already there.
@@ -86,9 +87,12 @@ const ASSETS_DIR = IS_BETA && app.isPackaged
   : path.join(USER_ROOT, "public", "assets");
 
 // The map manifest lists paths relative to a project root ("public/assets/...",
-// "server/data/scenarios/..."), so pointing the fetcher's cwd at USER_ROOT lands
-// every file exactly where DATA_DIR and ASSETS_DIR already expect it — no
-// changes to the fetcher, and one place that decides the layout.
+// "server/data/stock/..."). The server reads them from these two folders, and
+// the fetcher inherits both variables and writes "public/assets/..." into
+// ASSETS_DIR and "server/data/..." into DATA_DIR (assetTarget() below is the
+// same rule, for the setup check). Resolving them against USER_ROOT instead
+// sent a packaged beta's download into its own folder while its server read
+// the stable app's, so the map never rendered however often it downloaded.
 process.env.OH_DATA_DIR = DATA_DIR;
 process.env.OH_ASSETS_DIR = ASSETS_DIR;
 
@@ -300,6 +304,16 @@ let setupWindow = null;
 
 // --- map data ---------------------------------------------------------------
 
+// Where a manifest path lives on disk: the rule scripts/fetch-map-assets.mjs
+// applies with the OH_ASSETS_DIR / OH_DATA_DIR set above, so the setup check
+// looks where the download writes and the server reads.
+const assetTarget = (assetPath) => {
+  const rel = String(assetPath).replace(/\\/g, "/");
+  if (rel.startsWith("public/assets/")) return path.join(ASSETS_DIR, rel.slice("public/assets/".length));
+  if (rel.startsWith("server/data/")) return path.join(DATA_DIR, rel.slice("server/data/".length));
+  return path.join(USER_ROOT, rel);
+};
+
 // Which manifest entries are still missing or the wrong size. Cheap (a stat per
 // file) and it is what decides whether the setup screen is shown at all, so a
 // second launch goes straight into the game.
@@ -320,7 +334,7 @@ const relocateLegacyStockMap = () => {
     const manifest = JSON.parse(fs.readFileSync(MANIFEST, "utf8"));
     const stock = (manifest.assets ?? []).find((asset) => asset.path === "server/data/stock/regions.geojson");
     if (!stock) return;
-    const target = path.join(USER_ROOT, stock.path);
+    const target = assetTarget(stock.path);
     const legacy = path.join(USER_ROOT, "server", "data", "scenarios", "default", "regions.geojson");
     if (fs.existsSync(target) || !fs.existsSync(legacy)) return;
     // A file of another size is a map the player put there, not ours to move.
@@ -341,10 +355,26 @@ const missingAssets = () => {
   }
   return (manifest.assets ?? []).filter((asset) => {
     try {
-      return fs.statSync(path.join(USER_ROOT, asset.path)).size !== asset.bytes;
+      return fs.statSync(assetTarget(asset.path)).size !== asset.bytes;
     } catch {
       return true;
     }
+  });
+};
+
+// The fetcher reports a file it could not get only on stderr ("[warn] could not
+// download ..."), and a packaged app shows no console, so each line goes to the
+// Desktop log a player sends with a report.
+const logFetcherStderr = (child, event) => {
+  let pending = "";
+  child.stderr.on("data", (chunk) => {
+    pending += chunk.toString();
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) logMain("warn", event, line.trim());
+  });
+  child.stderr.on("end", () => {
+    if (pending.trim()) logMain("warn", event, pending.trim());
   });
 };
 
@@ -358,6 +388,7 @@ const downloadMapData = (onProgress) =>
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    logFetcherStderr(child, "map.download");
     let buffer = "";
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -390,7 +421,7 @@ const verifyMapData = () => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  logFetcherStderr(child, "map.verify");
   child.on("error", () => {});
 };
 
@@ -399,7 +430,7 @@ const verifyMapData = () => {
 const createSetupWindow = () =>
   new BrowserWindow({
     width: 560,
-    height: 320,
+    height: 360,
     resizable: false,
     // No menu bar, no dev chrome — this is a setup dialog, not a browser.
     autoHideMenuBar: true,
@@ -407,6 +438,20 @@ const createSetupWindow = () =>
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
   });
+
+// After a download that left files missing, the setup window offers "Try
+// again" or "Continue without the map"; resolves with "retry" or "continue".
+// Closing the window instead quits the app, as it always has.
+const waitForSetupChoice = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:choice", (_event, choice) => resolve(choice === "retry" ? "retry" : "continue"));
+  });
+
+// The fetcher keeps printing progress after a player closes the setup window
+// (which quits the app), and a destroyed window throws on every send.
+const sendToSetup = (channel, payload) => {
+  if (setupWindow && !setupWindow.isDestroyed()) setupWindow.webContents.send(channel, payload);
+};
 
 // Electron builds NO context menu on its own — a right-click just does
 // nothing, in an editable field or not. Chrome's spellchecker (spellcheck:
@@ -631,11 +676,13 @@ const startServer = async () => {
 const boot = async () => {
   installAutoUpdater();
   relocateLegacyStockMap();
-  const pending = missingAssets();
-  if (pending.length) {
-    setupWindow = createSetupWindow();
-    await setupWindow.loadFile(path.join(__dirname, "setup.html"));
-    setupWindow.show();
+  let pending = missingAssets();
+  while (pending.length) {
+    if (!setupWindow) {
+      setupWindow = createSetupWindow();
+      await setupWindow.loadFile(path.join(__dirname, "setup.html"));
+      setupWindow.show();
+    }
     const totalBytes = pending.reduce((sum, asset) => sum + asset.bytes, 0);
     let doneBytes = 0;
     let currentAsset = "";
@@ -644,14 +691,29 @@ const boot = async () => {
         if (currentAsset) doneBytes += pending.find((a) => a.asset === currentAsset)?.bytes ?? 0;
         currentAsset = asset;
       }
-      setupWindow?.webContents.send("setup:progress", {
+      sendToSetup("setup:progress", {
         asset,
         received: doneBytes + received,
         total: totalBytes,
         assetTotal: total,
       });
     });
-    setupWindow?.webContents.send("setup:done");
+    // The fetcher always exits 0 (it must never block a launch or an update),
+    // so whether the download worked is read off the disk. A player who hit a
+    // network blip used to be sent into a blank world with no word about it.
+    pending = missingAssets();
+    if (!pending.length) {
+      sendToSetup("setup:done");
+      break;
+    }
+    logMain("warn", "map.incomplete", `${pending.length} map file(s) still missing after the download.`, {
+      assets: pending.map((asset) => asset.asset),
+    });
+    sendToSetup("setup:failed", { missing: pending.length });
+    if ((await waitForSetupChoice()) !== "retry") {
+      sendToSetup("setup:done");
+      break;
+    }
   }
 
   await startServer();

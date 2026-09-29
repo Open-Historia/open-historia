@@ -8,8 +8,11 @@
 // ES modules, where that state is module-scoped and no longer reachable.
 //
 // To move the pin forward, bump FMG_TAG and re-test the editor's Generate console.
-// Run by the updater so a missing/broken copy self-heals. Best-effort: any failure
-// prints a clear message and exits 0 so the game still launches.
+// Run it by hand in a source checkout (`node scripts/fetch-fmg.mjs`): no
+// installer, updater or release workflow runs it, so players' builds have no
+// /fmg/ and the Workshop hides its Generate tab (fmgDriver.js
+// checkFmgAvailable). Best-effort: any failure prints a clear message and
+// exits 0.
 
 import fs from "fs";
 import path from "path";

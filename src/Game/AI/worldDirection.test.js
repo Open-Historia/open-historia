@@ -1,7 +1,7 @@
 /*! Open Historia — world direction: tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/worldDirection.test.js
 //
-// Runs without node_modules: worldDirection.js imports nothing.
+// Runs without node_modules: worldDirection.js imports only runtime/gameDates.js.
 //
 // These are an author's settings, so the promise is to the author: the number
 // they set is the number the engine uses. And to the player: none of it may
@@ -15,10 +15,12 @@ import {
     PRIORITY_RULES_HEADING,
     applyTerritoryTempo,
     beatIsWritten,
+    buildPriorityRulesBlock,
     buildScriptedEventsInstruction,
     dateKey,
     ensureScriptedEvents,
     parseScriptedEvents,
+    reviewScriptedEvents,
     scriptedBeatsInSpan,
     territoryTempoAllowance,
     WORLD_SHARE_MIN_EVENTS,
@@ -147,7 +149,22 @@ test("a beat is a dated line in the author's words; the rest of the text is igno
 test("dates sort as numbers, years before AD 1 included", () => {
     assert.ok(dateKey("-0218-08-02") < dateKey("0001-01-01"));
     assert.ok(dateKey("1914-07-28") < dateKey("1914-08-01"));
+    assert.ok(dateKey("-0218-04-15") < dateKey("-0218-12-18"), "April comes before December inside a BC year");
+    assert.ok(dateKey("-0218-12-31") < dateKey("-0217-01-01"), "218 BC comes before 217 BC");
     assert.equal(dateKey("not a date"), null);
+});
+
+test("BC beats list in calendar order and land in the skip that covers them", () => {
+    const beats = parseScriptedEvents([
+        "-0218-12-18 Hannibal defeats the Romans at the Trebia.",
+        "-0218-04-15 Hannibal crosses the Rhone with his elephants.",
+        "-0217-06-21 Hannibal ambushes the Romans at Lake Trasimene.",
+    ].join("\n"));
+    assert.deepEqual(beats.map((beat) => beat.date), ["-0218-04-15", "-0218-12-18", "-0217-06-21"]);
+    const spring = scriptedBeatsInSpan(beats, { originDate: "-0218-03-01", targetDate: "-0218-06-30" });
+    assert.deepEqual(spring.map((beat) => beat.date), ["-0218-04-15"]);
+    const winter = scriptedBeatsInSpan(beats, { originDate: "-0218-06-30", targetDate: "-0218-12-31" });
+    assert.deepEqual(winter.map((beat) => beat.date), ["-0218-12-18"]);
 });
 
 test("a period covers the beats after its origin up to its target; the first skip covers its origin day too", () => {
@@ -156,6 +173,46 @@ test("a period covers the beats after its origin up to its target; the first ski
     assert.deepEqual(scriptedBeatsInSpan(beats, span).map((beat) => beat.text), ["B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { ...span, includeOrigin: true }).map((beat) => beat.text), ["A", "B", "C"]);
     assert.deepEqual(scriptedBeatsInSpan(beats, { originDate: "bad", targetDate: "2014-05-21" }), []);
+});
+
+test("the editor's check counts the beats and names every line the engine will not use", () => {
+    const text = [
+        "# a comment is not a problem",
+        "1914-06-28 Archduke Franz Ferdinand is assassinated in Sarajevo.",
+        "28/07/1914 Austria-Hungary declares war on Serbia",
+        "1914-08-01",
+        "  1914-8-3 Germany declares war on France",
+        "",
+        "1914-08-04 Britain declares war on Germany.",
+    ].join("\n");
+    const review = reviewScriptedEvents(text, { currentDate: "1914-01-01" });
+    assert.equal(review.count, 2);
+    assert.deepEqual(review.ignored, [
+        { line: "28/07/1914 Austria-Hungary declares war on Serbia", problem: "no-date" },
+        { line: "1914-08-01", problem: "no-text" },
+        { line: "1914-8-3 Germany declares war on France", problem: "no-date" },
+    ]);
+    // The same beats the engine parses.
+    assert.equal(parseScriptedEvents(text).length, review.count);
+    assert.deepEqual(reviewScriptedEvents("", { currentDate: "1914-01-01" }), { count: 0, ignored: [] });
+});
+
+test("a beat no skip will reach is flagged; the first skip still covers the day itself", () => {
+    const text = "1914-06-28 Sarajevo.\n1914-07-28 Vienna declares war.\n1914-08-01 Berlin declares war.";
+    const later = reviewScriptedEvents(text, { currentDate: "1914-07-28" });
+    assert.equal(later.count, 1);
+    assert.deepEqual(later.ignored.map((entry) => [entry.line, entry.problem]), [
+        ["1914-06-28 Sarajevo.", "passed"],
+        ["1914-07-28 Vienna declares war.", "passed"],
+    ]);
+    const first = reviewScriptedEvents(text, { currentDate: "1914-07-28", includeOrigin: true });
+    assert.equal(first.count, 2);
+    assert.deepEqual(first.ignored.map((entry) => entry.line), ["1914-06-28 Sarajevo."]);
+    // Years before AD 1 compare as the engine compares them (scriptedBeatsInSpan).
+    assert.equal(reviewScriptedEvents("-0216-08-02 Cannae.", { currentDate: "-0218-03-01" }).count, 1);
+    assert.equal(reviewScriptedEvents("-0219-12-01 Too early.", { currentDate: "-0218-03-01" }).ignored[0]?.problem, "passed");
+    // No usable date to measure against: nothing is called passed.
+    assert.equal(reviewScriptedEvents(text, { currentDate: "" }).count, 3);
 });
 
 test("a beat is written when an event near its date shares its particular words", () => {
@@ -232,4 +289,21 @@ test("the simulator is told the tempo as a number for the period", () => {
     assert.match(directive, /^\[The Map's Tempo — counted by the engine\]/);
     assert.match(directive, /no faster than 2 regions per thirty days: 3 this period/);
     assert.equal(buildWorldDirectionDirective({ worldShare: 0, priorityRules: "", territoryTempo: 0 }), "");
+});
+
+test("the priority rules alone: no share, no tempo, nothing without rules", () => {
+    const direction = { worldShare: 35, territoryTempo: 2, priorityRules: "No nuclear weapons before 1945." };
+    const block = buildPriorityRulesBlock(direction);
+    assert.ok(block.startsWith(PRIORITY_RULES_HEADING));
+    assert.match(block, /outrank everything else you have been told/);
+    assert.ok(block.endsWith("No nuclear weapons before 1945."));
+    assert.doesNotMatch(block, /World's Share|Map's Tempo/);
+    assert.equal(buildPriorityRulesBlock({ worldShare: 35, priorityRules: "  " }), "");
+    assert.equal(buildPriorityRulesBlock(null), "");
+});
+
+test("the time skip's directive carries the same rules block as every other task", () => {
+    const direction = { worldShare: 35, priorityRules: "The Tsar never abdicates." };
+    const directive = buildWorldDirectionDirective(direction, { playerPolity: "France" });
+    assert.ok(directive.endsWith(buildPriorityRulesBlock(direction)));
 });

@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  gameMasterRequestAsksForPuppet,
   requestExplicitlyInstallsPuppet,
   validateGameMasterRequestedPuppetCompleteness,
 } from "./gameMasterRequestCompleteness.js";
@@ -52,4 +53,43 @@ test("negated and descriptive mentions do not manufacture a canonical puppet req
     assert.equal(requestExplicitlyInstallsPuppet(request), false, request);
     assert.equal(validateGameMasterRequestedPuppetCompleteness({ puppetUpdates: [] }, { request }), "", request);
   }
+});
+
+// Each of these once demanded an install, so the Game Master's correct release
+// was re-asked until it installed the puppet the administrator wanted removed.
+test("requests to end or prevent a subordination never demand an install", () => {
+  for (const request of [
+    "Make Belarus no longer a puppet state of Russia.",
+    "Liberate Belarus, which has become a puppet state of Russia.",
+    "Make sure Poland doesn't become a puppet state of Germany.",
+    "Make Belarus cease to be a satellite state of Russia.",
+    "Release Belarus from being a client state of Russia.",
+    "Make Belarus independent of Russia and end its puppet status.",
+  ]) {
+    assert.equal(requestExplicitlyInstallsPuppet(request), false, request);
+    assert.equal(validateGameMasterRequestedPuppetCompleteness({ puppetUpdates: [] }, { request }), "", request);
+  }
+});
+
+test("a release in another sentence does not cancel an install", () => {
+  assert.equal(requestExplicitlyInstallsPuppet("Make Bosnia a puppet state of Serbia. Release all prisoners."), true);
+});
+
+// --- The request in any language: the answer says what it asked for ---
+
+test("the answer's requestedSubordination decides, in any language", () => {
+  const polish = "Uczyń Litwę państwem satelickim Łotwy.";
+  assert.equal(requestExplicitlyInstallsPuppet(polish), false, "the English patterns cannot read it");
+  assert.match(validateGameMasterRequestedPuppetCompleteness({ requestedSubordination: true, puppetUpdates: [] }, { request: polish }), /no install operation/i);
+  assert.equal(validateGameMasterRequestedPuppetCompleteness({ requestedSubordination: true, puppetUpdates: [install] }, { request: polish }), "");
+});
+
+test("the answer's requestedSubordination overrides an English false positive", () => {
+  const request = "Make Belarus a satellite state of Russia no more than a week after the treaty.";
+  assert.equal(gameMasterRequestAsksForPuppet({ requestedSubordination: false }, request), false);
+});
+
+test("without the field the English patterns still decide", () => {
+  assert.equal(gameMasterRequestAsksForPuppet({ puppetUpdates: [] }, liveRequest), true);
+  assert.equal(gameMasterRequestAsksForPuppet({}, "Do not make Lithuania a puppet state of Latvia."), false);
 });

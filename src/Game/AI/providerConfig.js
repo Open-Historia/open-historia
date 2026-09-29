@@ -193,9 +193,9 @@ export const AI_TASK_ROUTING = [
     { key: "jumpForward", label: "Time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     { key: "autoJumpForward", label: "Auto time skip", hint: "Strongest model — the main simulation call", group: "Simulation" },
     // While AI requests are being saved (requestBudget.js) this ONE task does the
-    // work of the curator, both directors, the projects pass and every spy
+    // work of the curator, the three directors, the projects pass and every spy
     // intercept below, and their own picks are not used.
-    { key: "turnReview", label: "After-skip checks", hint: "Strong mid-tier: units, territory, timeline, board and agents in one request", group: "Simulation" },
+    { key: "turnReview", label: "After-skip checks", hint: "Strong mid-tier: units, territory, structures, timeline, board and agents in one request", group: "Simulation" },
     { key: "worldMotionRepair", label: "World motion repair", hint: "Mid-tier: rewrites a static jump", group: "Simulation" },
     { key: "worldBreadthRepair", label: "World breadth repair", hint: "Mid-tier: widens a narrow jump", group: "Simulation" },
     { key: "timelineCurator", label: "Timeline curator", hint: "Small/mid-tier: event pruning", group: "Simulation" },
@@ -213,13 +213,29 @@ export const AI_TASK_ROUTING = [
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
+    { key: "countryBriefing", label: "Advisor Report", hint: "Mid-tier: a short briefing on one country", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
+    { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
+    { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },
+    { key: "translation", label: "Translation", hint: "Small/mid-tier: game text in your language", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
+    { key: "chatActions", label: "Group chat", hint: "Mid/high-tier: group chats and councils, on the Leader chat model unless set", group: "Chat" },
 ];
+
+// A task with no pick of its own that starts where a related task's pick does:
+// both halves of one authored Political World bootstrap on the same model, and
+// a group chat or council on the model the player chose for leaders.
+const INHERITED_TASK_PICKS = Object.freeze({
+    politicalWorldVerification: "politicalWorldGeneration",
+    chatActions: "diplomacy",
+    // The Advisor Report ran as the stat-sheet task until it had its own key;
+    // a player's stat-sheet pick still covers it until they give it one.
+    countryBriefing: "countryStatSheet",
+});
 
 // The host of an endpoint, for the diagnostics log: "localhost:11434" or
 // "openrouter.ai" says which server a report is about; the path, the query and
@@ -792,12 +808,26 @@ const CONNECTION_EDIT_LOG = {
     suggestedModel: (connection) => `suggested model set to ${connection.suggestedModel || "(none)"}`,
 };
 
+// A key belongs to the service that issued it. Switching a Connection's
+// provider changes where the key is sent — a Gemini key went to OpenRouter as
+// a Bearer token, unseen in its password field, and came back a 401 nobody
+// could explain — so the key is left behind. Except between the two
+// self-hosted kinds, whose key goes to the same endpoint as before. A patch
+// that brings its own key keeps it.
+const keyLeftBehind = (before, patch) => {
+    if (patch?.provider === undefined || "apiKey" in patch) return {};
+    const provider = normalizeProvider(patch.provider);
+    if (provider === before.provider) return {};
+    const sameServer = providerSetupRequirement(before.provider) === "endpoint" && providerSetupRequirement(provider) === "endpoint";
+    return sameServer ? {} : { apiKey: "" };
+};
+
 export function updateConnection(id, patch) {
     const connections = getConnections();
     const index = connections.findIndex((connection) => connection.id === id);
     if (index === -1) return false;
     const before = connections[index];
-    const next = normalizeConnection({ ...before, ...patch, id });
+    const next = normalizeConnection({ ...before, ...keyLeftBehind(before, patch), ...patch, id });
     connections[index] = next;
     saveConnections(connections);
     // A new key or address may well have a fresh allowance, so every mark on
@@ -935,10 +965,11 @@ export function setTaskPick(taskKey, entryId) {
 }
 
 // Resolve the effective starting entry for a task without mutating the player's
-// stored Fallback list. Political World verification inherits the generation
-// task's pick when it has no dedicated choice so both halves of one authored
-// bootstrap use the same model by default. A dedicated verification pick still
-// wins. All other tasks keep Beta's ordinary Fallback-list behavior.
+// stored Fallback list. A task in INHERITED_TASK_PICKS with no dedicated choice
+// starts at its related task's pick (Political World verification at
+// generation's, a group chat at Leader chat's, the Advisor Report at the stat
+// sheet's); a dedicated pick still wins.
+// All other tasks keep Beta's ordinary Fallback-list behavior.
 export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
     const key = String(taskKey ?? "").trim();
     const entries = Array.isArray(sourceEntries) ? [...sourceEntries] : getResolvedFallbackList();
@@ -949,10 +980,11 @@ export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
         return { entries, preferredEntryId: explicitPick, implicit: false };
     }
 
-    if (key === "politicalWorldVerification") {
-        const generationPick = getTaskPick("politicalWorldGeneration");
-        if (generationPick && entries.some((entry) => entry.id === generationPick)) {
-            return { entries, preferredEntryId: generationPick, implicit: true };
+    const inheritedFrom = Object.hasOwn(INHERITED_TASK_PICKS, key) ? INHERITED_TASK_PICKS[key] : "";
+    if (inheritedFrom) {
+        const inheritedPick = getTaskPick(inheritedFrom);
+        if (inheritedPick && entries.some((entry) => entry.id === inheritedPick)) {
+            return { entries, preferredEntryId: inheritedPick, implicit: true };
         }
     }
 

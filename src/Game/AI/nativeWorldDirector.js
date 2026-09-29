@@ -498,9 +498,10 @@ export const assessRecentWorldConsequenceLiveness = ({
 };
 
 // Fix 07 — an active high-pressure process may be quiet, but it may not vanish
-// from causal simulation for months at a time. 35 days forces a fresh endogenous
-// reappraisal; 70 days adds an objective anti-stasis backstop. Neither threshold
-// is an event quota or a demand for territorial movement.
+// from causal simulation for months at a time. STAGNATION_REAPPRAISAL_DAYS
+// forces a fresh endogenous reappraisal; STAGNATION_BACKSTOP_DAYS adds an
+// objective anti-stasis backstop. Neither threshold is an event quota or a
+// demand for territorial movement.
 const HIGH_PRESSURE_STAGNATION_THRESHOLD = 55;
 const STAGNATION_REAPPRAISAL_DAYS = 21;
 const STAGNATION_BACKSTOP_DAYS = 45;
@@ -811,8 +812,6 @@ const normalizeStorylineForDirector = (entry, index = 0) => {
     lastVisibleEventDate: normalizeString(entry.lastVisibleEventDate),
     nextReviewDate: status === "resolved" ? "" : normalizeString(entry.nextReviewDate),
     state: truncate(entry.state || entry.summary || entry.description, 520),
-    drivers: [...new Set(normalizeArray(entry.drivers).map(normalizeString).filter(Boolean))].slice(0, 8),
-    constraints: [...new Set(normalizeArray(entry.constraints).map(normalizeString).filter(Boolean))].slice(0, 8),
     sourceEventIds: [...new Set(normalizeArray(entry.sourceEventIds).map(normalizeString).filter(Boolean))].slice(0, 16),
     createdRound: Math.max(0, Math.trunc(Number(entry.createdRound) || 0)),
     updatedRound: Math.max(0, Math.trunc(Number(entry.updatedRound) || 0)),
@@ -941,30 +940,18 @@ const coalesceWorldStorylines = (worldLike) => {
     const startedDates = group
       .map((entry) => normalizeString(entry?.startedDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const lastVisibleDates = group
       .map((entry) => normalizeString(entry?.lastVisibleEventDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const sourceEventIds = [...new Set(
       group.flatMap((entry) => normalizeArray(entry?.sourceEventIds))
         .map(normalizeString)
         .filter(Boolean),
     )].slice(-16);
-
-    const drivers = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.drivers))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
-
-    const constraints = [...new Set(
-      group.flatMap((entry) => normalizeArray(entry?.constraints))
-        .map(normalizeString)
-        .filter(Boolean),
-    )].slice(0, 8);
 
     const createdRounds = group
       .map((entry) => Math.max(0, Math.trunc(Number(entry?.createdRound) || 0)))
@@ -980,8 +967,6 @@ const coalesceWorldStorylines = (worldLike) => {
       )],
       startedDate: startedDates[0] || freshest?.startedDate,
       lastVisibleEventDate: lastVisibleDates.at(-1) || "",
-      drivers,
-      constraints,
       sourceEventIds,
       createdRound: createdRounds.length
         ? Math.min(...createdRounds)
@@ -1098,8 +1083,8 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
   if (!nextReview) {
     score += storyline.status === "active" ? 12 : 3;
   } else if (parseIsoDate(nextReview) != null && parseIsoDate(targetDate) != null) {
-    if (nextReview <= originDate) score += 16;
-    else if (nextReview <= targetDate) score += 11;
+    if (parseIsoDate(originDate) != null && compareIso(nextReview, originDate) <= 0) score += 16;
+    else if (compareIso(nextReview, targetDate) <= 0) score += 11;
   }
 
   // Starvation bonus: a lower-ranked but still unresolved process gradually
@@ -1131,10 +1116,11 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
 const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
   if (!storyline || storyline.status === "resolved") return false;
 
-  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after ~35 days
-  // since its last semantic review regardless of numerical pressure. This is hidden
-  // simulation attention, not a demand for a battle/event. Non-war storylines keep
-  // the existing high-pressure visible-stagnation override.
+  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after
+  // STAGNATION_REAPPRAISAL_DAYS since its last semantic review regardless of
+  // numerical pressure. This is hidden simulation attention, not a demand for a
+  // battle/event. Non-war storylines keep the existing high-pressure
+  // visible-stagnation override.
   const stagnationAgeAtHorizon = storylineStagnationAgeDays(storyline, targetDate);
   const reviewAgeAtHorizon = storylineReviewAgeDays(storyline, targetDate);
   const activeWar = Boolean(activeCanonicalWarForStoryline(storyline, world));
@@ -1399,7 +1385,11 @@ const parseStorylineRecord = (line, index = 0) => {
   };
 };
 
-export const decodeWorldStorylineUpdates = (value) => {
+// The cap is per model answer. A merged turn (every segment's records, plus
+// motion repairs and engine seeds) passes { limit: Infinity }: each answer in
+// it was held to the cap already, and cutting the whole turn to one answer's
+// worth dropped every later segment's records.
+export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDATES_PER_JUMP } = {}) => {
   // Internal/back-compat callers may already provide object records.
   if (Array.isArray(value)) {
     return value
@@ -1415,14 +1405,14 @@ export const decodeWorldStorylineUpdates = (value) => {
         };
       })
       .filter(Boolean)
-      .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+      .slice(0, limit);
   }
 
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => parseStorylineRecord(line, index))
     .filter(Boolean)
-    .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+    .slice(0, limit);
 };
 
 const STORYLINE_LINK_STOPWORDS = new Set([
@@ -1913,9 +1903,10 @@ export const findWorldStorylineAntiStasisIssues = (
     originDate = "",
     stopDate = "",
     world = null,
+    limit,
   } = {},
 ) => {
-  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates, { limit });
   const updateById = new Map(
     updates
       .map((entry) => [normalizeString(entry?.id), entry])
@@ -2025,7 +2016,7 @@ export const findSkipStorylineMotionIssues = ({
 } = {}) => {
   const skipEvents = normalizeArray(events);
   const lastUpdateById = new Map();
-  for (const update of decodeWorldStorylineUpdates(storylineUpdates)) {
+  for (const update of decodeWorldStorylineUpdates(storylineUpdates, { limit: Infinity })) {
     const id = normalizeString(update?.id);
     if (id) lastUpdateById.set(id, update);
   }
@@ -2038,7 +2029,7 @@ export const findSkipStorylineMotionIssues = ({
   }));
   return findWorldStorylineAntiStasisIssues(
     { events: skipEvents, storylineUpdates: netUpdates },
-    { existingStorylines, selectedStorylines, originDate, stopDate, world },
+    { existingStorylines, selectedStorylines, originDate, stopDate, world, limit: Infinity },
   );
 };
 
@@ -2492,6 +2483,7 @@ export const applyWorldStorylineUpdates = ({
   events = [],
   stopDate = "",
   round = 0,
+  limit,
 } = {}) => {
   const coalescedExisting = coalesceWorldStorylines(world);
   const existing = coalescedExisting.storylines;
@@ -2511,7 +2503,7 @@ export const applyWorldStorylineUpdates = ({
     }
   }
 
-  const decodedUpdates = decodeWorldStorylineUpdates(updates);
+  const decodedUpdates = decodeWorldStorylineUpdates(updates, { limit });
   const appliedIds = [];
 
   for (let index = 0; index < decodedUpdates.length; index += 1) {
@@ -2533,7 +2525,7 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = related
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const earliestVisible = relatedDates[0] || "";
     const newestVisible = relatedDates.at(-1) || "";
 
@@ -2602,8 +2594,6 @@ export const applyWorldStorylineUpdates = ({
         activeWar,
       }),
       state: normalizeString(raw?.state) || prior?.state || title,
-      drivers: normalizeArray(prior?.drivers),
-      constraints: normalizeArray(prior?.constraints),
       sourceEventIds,
       createdRound: prior?.createdRound || Math.max(0, Math.trunc(Number(round) || 0)),
       updatedRound: Math.max(0, Math.trunc(Number(round) || 0)),
@@ -2628,13 +2618,13 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = normalizeArray(related)
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const newestVisible = relatedDates.at(-1) || "";
     if (!newestVisible) continue;
 
     const priorVisible = normalizeString(prior?.lastVisibleEventDate);
     const nextVisible =
-      parseIsoDate(priorVisible) == null || newestVisible > priorVisible
+      parseIsoDate(priorVisible) == null || compareIso(newestVisible, priorVisible) > 0
         ? newestVisible
         : priorVisible;
 
@@ -3586,8 +3576,6 @@ export const buildWorldInitiativeContext = (
     const detail = [
       storyline.participants.length ? `participants: ${storyline.participants.join(", ")}` : "",
       storyline.state ? `state: ${storyline.state}` : "",
-      storyline.drivers.length ? `drivers: ${storyline.drivers.join("; ")}` : "",
-      storyline.constraints.length ? `constraints: ${storyline.constraints.join("; ")}` : "",
       visibleAge == null ? "no visible event yet" : `last visible event ${visibleAge} day(s) before this jump`,
       atBackstop
         ? `MUST MOVE THIS PERIOD: ${stagnationAge} days with no visible development by the stop date; it must ${describeAntiStasisObjectiveRule()}.`
@@ -3635,6 +3623,11 @@ export const buildWorldInitiativeContext = (
     ...(crisisLines.length ? ["", "Instability the record says may be turning into a crisis:", ...crisisLines] : []),
     "",
     `Conflict risk in this world right now: ${conflictRiskPosture.label}. ${conflictRiskPosture.guidance}.`,
+    // The breadth repair is told this too, but it is its own request and is
+    // skipped while requests are saved; this line reaches every skip for free.
+    ...(consequenceSignal.level === "low"
+      ? [`Recent history is busy but thin on real outcomes: ${consequenceSignal.consequentialCount} of the last ${consequenceSignal.eventCount} events in about ${consequenceSignal.lookbackDays} days changed what anyone can do next. Check first whether a pressure already in the record has matured into a real outcome (a vote, a resignation or appointment, a strike settled, a capability completed, an escalation or a climb-down); where none has, write ordinary history and do not invent drama.`]
+      : []),
     "",
     "Economic baselines (a strained state can still borrow, tax or print, at a price):",
     economicAttention.length

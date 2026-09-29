@@ -54,7 +54,8 @@ export const AI_IDLE_TIMEOUT_MS = 300000;
 // backstop against hanging forever, not a performance limit.
 //
 // A relayed call (every local model behind /api/ai/relay) also has the relay's
-// own OH_RELAY_TIMEOUT_MS, 10 minutes by default, which reaches it first.
+// own OH_RELAY_TIMEOUT_MS, 10 minutes of silence by default, which reaches it
+// first.
 export const AI_FIRST_BYTE_TIMEOUT_MS = 900000;
 
 // The world repairs (motion and breadth) use the two windows above WHATEVER
@@ -124,4 +125,28 @@ export function createIdleDeadline({ idleMs, firstByteMs = idleMs }, onExpire) {
         },
         cancel,
     };
+}
+
+// One call under the two windows, for code that calls the model directly rather
+// than through runJsonTask. `call` receives { signal, deadline, onActivity } and
+// returns the provider's promise. The abort is on a local controller chained to
+// the caller's `signal`, so the caller's Cancel still cancels and a stall
+// rejects with `timeoutError` — an ordinary failure — rather than looking like a
+// cancel. Windows of 0 (the setting off) wait as long as the call takes.
+export async function runWithIdleDeadline(call, { idleMs, firstByteMs = idleMs, signal = null, timeoutError = new Error("The model stopped answering.") } = {}) {
+    const controller = new AbortController();
+    if (signal) {
+        if (signal.aborted) controller.abort(signal.reason);
+        else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
+    const idle = createIdleDeadline({ idleMs, firstByteMs }, () => controller.abort(timeoutError));
+    idle.start();
+    try {
+        return await call({ signal: controller.signal, deadline: idle.deadline, onActivity: idle.note });
+    } catch (error) {
+        // A provider may surface the abort as a generic AbortError; name the stall.
+        throw !signal?.aborted && controller.signal.reason === timeoutError ? timeoutError : error;
+    } finally {
+        idle.cancel();
+    }
 }

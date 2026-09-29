@@ -227,12 +227,116 @@ const ringDistanceKm = (ring, lng, lat) => {
   return best;
 };
 
+// ---------------------------------------------------------------------------
+// Which outlines: the geometry the map actually draws
+// ---------------------------------------------------------------------------
+// A hand-drawn world (the built-in Modern Day seed among them: 4,816 regions
+// keyed "0".."4815") renders its own regions GeoJSON, and its ownership overrides
+// are keyed by that file's ids. Measured against the stock GADM tile instead,
+// none of those ids matched, so units were placed against real-world countries
+// that happened to share a name, and no conquest ever showed.
+
+// A stock GADM region id ("UKR.5_1"); a hand-drawn region's id is anything else
+// (the same test promptContext.js filterToRenderedRegions uses).
+const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
+
+/**
+ * regionId -> {country, countryCode, rings} from a scenario's regions GeoJSON,
+ * keyed like assets.js primeCustomRegionCatalog. Only each polygon's outer ring:
+ * a hole is another region's land. The rings are the file's own arrays, not copies.
+ */
+export const outlinesFromGeojson = (geojson) => {
+  const outlines = new Map();
+  for (const feature of Array.isArray(geojson?.features) ? geojson.features : []) {
+    const props = feature?.properties ?? {};
+    const id = norm(props.id ?? props.GID_1 ?? props.gid_1 ?? props.HASC_1 ?? feature?.id);
+    const geometry = feature?.geometry;
+    if (!id || !geometry) continue;
+    const polygons = geometry.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry.type === "MultiPolygon" ? geometry.coordinates : [];
+    const rings = (Array.isArray(polygons) ? polygons : [])
+      .map((polygon) => (Array.isArray(polygon) ? polygon[0] : null))
+      .filter((ring) => Array.isArray(ring) && ring.length >= 3);
+    if (rings.length === 0) continue;
+    outlines.set(id, {
+      country: norm(props.country) || norm(props.owner),
+      countryCode: norm(props.gid0 ?? props.GID_0),
+      rings,
+    });
+  }
+  return outlines;
+};
+
+/**
+ * The outlines to index for this world. A hand-drawn world gets its own
+ * geometry, plus the stock outline of any stock region it lists by id (a hybrid
+ * map); when its geometry is unavailable the answer is null, and the digest
+ * drops its place clauses rather than measuring against borders the map does
+ * not have. A stock world gets the stock outlines, with any region the scenario
+ * file redraws taken from the file.
+ *
+ * @param scenarioOutlines outlinesFromGeojson(the world's regions GeoJSON)
+ * @param loadStockOutlines async () => the stock outlines (only called when needed)
+ */
+export const selectTerritoryOutlines = async ({ world, scenarioOutlines, loadStockOutlines }) => {
+  const scenario = scenarioOutlines instanceof Map ? scenarioOutlines : new Map();
+  const listedIds = Object.keys(world?.regionOwnershipOverrides ?? {});
+  const handDrawn = world?.customGeometry === true
+    || [...scenario.keys()].some((id) => !STOCK_REGION_ID.test(id))
+    || listedIds.some((id) => !STOCK_REGION_ID.test(id));
+  if (handDrawn) {
+    if (scenario.size === 0) return null;
+    const listedStock = listedIds.filter((id) => STOCK_REGION_ID.test(id) && !scenario.has(id));
+    if (listedStock.length === 0) return scenario;
+    const stock = await loadStockOutlines();
+    const merged = new Map(scenario);
+    for (const id of listedStock) if (stock?.has(id)) merged.set(id, stock.get(id));
+    return merged;
+  }
+  const stock = await loadStockOutlines();
+  if (scenario.size === 0) return stock;
+  const merged = new Map(stock ?? []);
+  for (const [id, outline] of scenario) merged.set(id, outline);
+  return merged;
+};
+
+const measureBounds = (rings) => {
+  let west = Infinity;
+  let south = Infinity;
+  let east = -Infinity;
+  let north = -Infinity;
+  for (const ring of rings) {
+    for (const [lng, lat] of ring) {
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
+  }
+  return { west, south, east, north };
+};
+
+// Outlines are cached by their loaders, so their boxes are worked out once.
+const boundsCache = new WeakMap();
+const boundsOf = (rings) => {
+  if (boundsCache.has(rings)) return boundsCache.get(rings);
+  const bounds = measureBounds(rings);
+  boundsCache.set(rings, bounds);
+  return bounds;
+};
+
 /**
  * Turn decoded region outlines into the locate() index buildForcePostureText uses.
  *
  * Ownership follows the LIVE map via regionVocab's regionOwnerName — an explicit
  * regionOwnershipOverrides entry wins, else the region's base country — so a
  * polity the campaign invented ("Free Ireland") is as locatable as a stock one.
+ *
+ * Whose territory a point is in is answered from EVERY region, not only the
+ * wanted owners': a Russian group in Syria is inside Syria whether or not Syria
+ * is one of the powers indexed, and "at sea" means no region holds the point.
+ * Only the border distances, the expensive part, are limited to wanted owners.
  *
  * @param outlines Map(regionId -> {country, countryCode, rings})
  */
@@ -243,16 +347,19 @@ export const createTerritoryIndex = (outlines, world, { owners = [] } = {}) => {
 
   const overrides = world?.regionOwnershipOverrides ?? {};
   const byOwner = new Map();
+  const land = [];
   for (const [id, outline] of outlines) {
     const owner = regionOwnerName(
       { id, country: outline.country, countryCode: outline.countryCode },
       overrides,
     );
-    if (!owner || !wanted.has(lower(owner))) continue;
+    if (!owner) continue;
+    land.push({ owner, rings: outline.rings, bounds: boundsOf(outline.rings) });
+    if (!wanted.has(lower(owner))) continue;
     if (!byOwner.has(owner)) byOwner.set(owner, []);
     byOwner.get(owner).push(...outline.rings);
   }
-  if (byOwner.size === 0) return null;
+  if (land.length === 0) return null;
 
   return {
     owners: [...byOwner.keys()],
@@ -265,7 +372,8 @@ export const createTerritoryIndex = (outlines, world, { owners = [] } = {}) => {
       if (!Number.isFinite(lng) || !Number.isFinite(lat)) return null;
 
       let inside = "";
-      for (const [owner, rings] of byOwner) {
+      for (const { owner, rings, bounds } of land) {
+        if (lng < bounds.west || lng > bounds.east || lat < bounds.south || lat > bounds.north) continue;
         if (rings.some((ring) => ringContains(ring, lng, lat))) {
           inside = owner;
           break;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContextCore.js";
+import { ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS, formatAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContextCore.js";
 
 const politicalContext = {
   text: [
@@ -122,4 +122,84 @@ test("Advisor context labels private, Council and lifecycle threads with exact i
   assert.match(built.diplomacyText, /INSTITUTION COUNCIL \[institution=nato \| thread=institution-channel-nato\]/);
   assert.match(built.diplomacyText, /INSTITUTION LIFECYCLE \[institution=nato \| cases=case-1 \| thread=institution-invite-nato-latvia\]/);
   assert.match(built.diplomacyText, /never rely on whichever chat happened to be opened most recently/i);
+});
+
+// A busy campaign: a dozen chatty threads and several institutions with long
+// charters. The brief used to be sliced to its cap after the lists, which cut
+// the authority rules off (P06#1).
+const bigInstitution = (n, over = {}) => ({
+  institution: {
+    id: `inst-${n}`,
+    name: `Institution Number ${n}`,
+    kind: "alliance",
+    members: Array.from({ length: 16 }, (_, m) => ({ polity: `Member State ${m}` })),
+    charter: { note: "Obligations ".repeat(40), decisionRule: "consensus", lifecycle: { purpose: ["Security", "Trade", "Culture"] } },
+  },
+  member: { status: "member" },
+  canParticipate: true,
+  playerPendingBallotCount: 0,
+  activeProposals: [],
+  ...over,
+});
+const chattyThread = (n) => ({
+  id: `thread-${n}`, type: "private-bilateral", participants: [`Country ${n}`],
+  latestSpeaker: `Country ${n}`, latestText: "A long message about the state of affairs. ".repeat(7),
+});
+
+test("the authority rules survive a busy campaign whole, and rows are cut whole", () => {
+  const built = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionViews: Array.from({ length: 4 }, (_, n) => bigInstitution(n)),
+    threadContexts: Array.from({ length: 12 }, (_, n) => chattyThread(n)),
+  });
+  const text = built.diplomacyText;
+  assert.match(text, /Advisor authority boundary:/);
+  assert.match(text, /may NOT silently cast the player's vote/);
+  assert.match(text, /identify any pending player decision clearly\./);
+  assert.ok(text.length <= ADVISOR_DIPLOMACY_OPTIONS_MAX_CHARS + 200, `brief grew to ${text.length}`);
+  // Every thread either appears whole, as its short line, or is counted.
+  const shown = (text.match(/^- PRIVATE BILATERAL \[thread=thread-\d+\]/gm) || []).length;
+  const counted = Number((/- (\d+) more diplomatic threads? omitted/.exec(text) || [0, 0])[1]);
+  assert.equal(shown + counted, 12);
+  assert.ok((text.match(/^ {2}latest /gm) || []).length < 12, "a dozen chatty threads do not all fit in full");
+  assert.ok((text.match(/^ {2}members: /gm) || []).length < 4, "nor do four long charters");
+  assert.match(text, /^- Institution Number 3 \[inst-3\] — member$/m, "an institution cut short keeps its short line");
+  // Nothing ends mid-row: the last line is a whole line of the brief.
+  assert.match(text.split("\n").at(-1), /omitted from this brief\.$|^ {2}latest|^- /);
+});
+
+// P06#5: past twelve institutions the brief said "use institution lookups",
+// which the advisor does not have.
+test("institutions past the twelfth are named on a short line each, with a pending vote", () => {
+  const built = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionViews: Array.from({ length: 14 }, (_, n) => ({
+      institution: { id: `i${n}`, name: `Body ${n}` },
+      member: { status: "member" },
+      playerPendingBallotCount: n === 13 ? 1 : 0,
+      activeProposals: [],
+    })),
+  });
+  assert.doesNotMatch(built.diplomacyText, /lookups/);
+  assert.match(built.diplomacyText, /^- Body 12 \[i12\] — member$/m);
+  assert.match(built.diplomacyText, /^- Body 13 \[i13\] — member \| vote pending$/m);
+});
+
+test("lifecycle cases and threads the caller left out are counted", () => {
+  const built = formatAdvisorPoliticalDiplomacyContext({
+    playerPolity: "Republic of Latvia",
+    politicalContext,
+    institutionLifecycleCases: [{
+      institution: { id: "baltic-union", name: "Baltic Union" },
+      case: { id: "case-1", kind: "founding-invitation", status: "pending" },
+    }],
+    institutionLifecycleCaseCount: 3,
+    threadContexts: [chattyThread(1)],
+    threadCount: 30,
+  });
+  assert.match(built.diplomacyText, /Baltic Union \[baltic-union\] — founding-invitation \/ pending/);
+  assert.match(built.diplomacyText, /- 2 more pending lifecycle cases omitted from this brief\./);
+  assert.match(built.diplomacyText, /- 29 more diplomatic threads omitted from this brief\./);
 });

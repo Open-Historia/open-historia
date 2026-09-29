@@ -851,6 +851,15 @@ function candidatesForPolity(world, key) {
     return [...new Set(out.filter(Boolean))];
 }
 
+// Every name the world knows as a polity of its own: a declared record key or a
+// map owner.
+function ownPolityNames(world) {
+    const names = new Set(Object.keys(world?.polityOverrides || {}).map(clean));
+    for (const owner of Object.values(world?.regionOwnershipOverrides || {})) names.add(clean(owner));
+    names.delete("");
+    return names;
+}
+
 export function getPoliticalProfile(world, polityKey) {
     const byPolity = world?.politicalActors?.byPolity;
     if (!byPolity) return null;
@@ -889,7 +898,16 @@ export function getPoliticalProfile(world, polityKey) {
 
     const stockCode = resolveStockCountryCode(polityKey);
     if (stockCode) {
+        // Polity names are exact keys. A name the world knows as a polity in its
+        // own right never borrows the actor of ANOTHER polity just because both
+        // names map to the same stock country ("Russia" founded next to the
+        // "Russian Federation" gets its own actor, not the Federation's).
+        const ownPolities = ownPolityNames(world);
+        const requested = clean(polityKey);
+        const isOtherPolity = (token) => clean(token) !== requested && ownPolities.has(clean(token));
+        const requestedIsOwnPolity = ownPolities.has(requested);
         for (const [actorKey, actor] of Object.entries(byPolity)) {
+            if (requestedIsOwnPolity && [actorKey, actor?.polityKey].some((token) => token && isOtherPolity(token))) continue;
             const actorTokens = [actorKey, actor?.polityKey, actor?.name].filter(Boolean);
             if (actorTokens.some((token) => resolveStockCountryCode(token) === stockCode)) return actor;
         }
@@ -920,37 +938,6 @@ export const ensurePoliticalProfile = (world, polityKey) => {
     normalized.byPolity[key] = normalizePoliticalActorRecord({ polityKey: key, government: {}, parties: [] }, key);
     return normalized.byPolity[key];
 };
-
-// Legacy migration/helper only. New event impacts MUST mutate political reality
-// through politicalActorOps (see politicalActorOps.js), never by guessing an office
-// from Stats metadata. Kept for explicit old-save/data migrations that already
-// encoded a single ambiguous `leader` field. Normal event application does not call
-// this seam.
-export function applyPoliticalActorMetadataPatch(world, polityKey, patch) {
-    if (!world || !patch || typeof patch !== "object" || Array.isArray(patch)) return null;
-    const actor = getPoliticalProfile(world, polityKey);
-    if (!actor || typeof actor !== "object") return null;
-
-    const leader = clean(patch.leader);
-    const government = clean(patch.government);
-
-    if (leader) {
-        actor.leader = leader;
-        actor.government = normalizePoliticalGovernment({
-            ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-            headOfState: leader,
-        }, actor.parties || []);
-    }
-
-    if (government) {
-        actor.government = normalizePoliticalGovernment({
-            ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-            form: government,
-        }, actor.parties || []);
-    }
-
-    return actor;
-}
 
 // One-way compatibility projection for legacy Stats consumers. Political Actors
 // remain the write authority; this helper merely exposes the canonical government

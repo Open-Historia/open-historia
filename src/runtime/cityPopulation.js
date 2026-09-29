@@ -115,6 +115,32 @@ export const populationForYear = (byYear, year) => (
 // (gameState.js applyEventImpactsToWorld, Cities.jsx cityPopulationExpr).
 export const cityPopulationKey = (name) => String(name ?? "").trim().toLowerCase();
 
+// world.cityPopulations keyed by the name a city's map feature carries. A
+// stock city renamed in play (world.cityRenames: old name -> new name) keeps
+// its old name on the tiles, while a figure set after the rename is kept under
+// the new one; this puts that figure under the old name as well. Unusable
+// figures are dropped, as effectiveCityPopulation ignores them.
+export const cityPopulationOverridesByTileName = (cityPopulations, cityRenames = null) => {
+  const out = {};
+  if (cityPopulations && typeof cityPopulations === "object") {
+    for (const [name, value] of Object.entries(cityPopulations)) {
+      const key = cityPopulationKey(name);
+      const set = Number(value);
+      if (key && Number.isFinite(set) && set >= 0) out[key] = Math.round(set);
+    }
+  }
+  if (cityRenames && typeof cityRenames === "object") {
+    for (const [from, to] of Object.entries(cityRenames)) {
+      const fromKey = cityPopulationKey(from);
+      const toKey = cityPopulationKey(to);
+      if (fromKey && toKey && fromKey !== toKey && Object.prototype.hasOwnProperty.call(out, toKey)) {
+        out[fromKey] = out[toKey];
+      }
+    }
+  }
+  return out;
+};
+
 // The population the game uses for a city on a date: a hand-set figure first,
 // then the city's series for the date, then the file's one number.
 export const effectiveCityPopulation = (properties, { date = "", cityPopulations = null, name = "" } = {}) => {

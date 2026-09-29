@@ -1270,6 +1270,7 @@ export const curateGeneratedEventsWithHidden = async ({
   mode = "",
   analyzeBatch = null,
   isSparedFromFiller = null,
+  signal = null,
 } = {}) => {
   const incoming = asArray(events);
 
@@ -1283,9 +1284,14 @@ export const curateGeneratedEventsWithHidden = async ({
   let analysisResult = null;
   let analysisError = "";
 
+  // The analyst is a request. When no candidate is one it could remove
+  // (candidatesWorthJudging: every event carries a transfer, a unit op or a
+  // war, or resembles nothing on record), every event is kept whatever it
+  // says, so it is not asked — the same rule the turn review applies.
   if (
     incoming.length &&
-    typeof analyzeBatch === "function"
+    typeof analyzeBatch === "function" &&
+    candidatesWorthJudging({ events: incoming, priorEvents, mode }).length > 0
   ) {
     try {
       analysisResult =
@@ -1293,6 +1299,8 @@ export const curateGeneratedEventsWithHidden = async ({
           buildCuratorInput({ events: incoming, priorEvents, mode }),
         );
     } catch (error) {
+      // The player's Cancel is not a failed analyst: it must reach the skip.
+      if (signal?.aborted) throw error;
       analysisError =
         normalizeString(
           error?.message || error,
@@ -1636,9 +1644,6 @@ droppedCount:
   // alright, no more training wheels.
   return { events: keptEvents, hidden, dropped };
 };
-
-export const getLastNativeCuratorAudit =
-  () => lastAudit;
 
 const runNativeCuratorSelfTests = () => {
   const make = (description) => ({

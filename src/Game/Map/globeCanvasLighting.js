@@ -26,11 +26,18 @@ const paintPixels = (canvas, pixels, width, height) => {
   context.putImageData(new ImageData(pixels, width, height), 0, 0);
 };
 
+// The worker's last answer comes back to it as the next frame's output, so a
+// globe left turning shades into the same buffer rather than allocating (and
+// collecting) a new one of up to 720 KB 15 times a second. Transferred, never
+// copied; a buffer of the wrong size is replaced by the worker.
 const dispatch = (state, payload) => {
   state.busy = true;
   state.pending = null;
   state.active = payload;
-  state.worker.postMessage(payload);
+  const outputBuffer = state.spareBuffer;
+  state.spareBuffer = null;
+  if (outputBuffer) state.worker.postMessage({ ...payload, outputBuffer }, [outputBuffer]);
+  else state.worker.postMessage(payload);
 };
 
 const createState = (canvas) => {
@@ -42,6 +49,7 @@ const createState = (canvas) => {
     failed: false,
     latestRequestId: 0,
     interactivePixels: null,
+    spareBuffer: null,
   };
   let workerUrl;
   try {
@@ -70,6 +78,8 @@ const createState = (canvas) => {
         data.height,
       );
     }
+    // putImageData copied the pixels, so the buffer is free to go back.
+    state.spareBuffer = data.pixels ?? null;
     if (state.pending) dispatch(state, state.pending);
   };
   state.worker.onerror = (error) => {
@@ -123,6 +133,7 @@ export const drawGlobeLighting = ({
   opacity,
   terrainRadii = 0,
   immediate = false,
+  interactive = false,
 }) => {
   if (!canvas || !matrix || !cameraPosition || !sunDirection || opacity <= 0 || width <= 0 || height <= 0) {
     releaseGlobeLighting(canvas);
@@ -134,15 +145,20 @@ export const drawGlobeLighting = ({
     state = createState(canvas);
     CANVAS_STATES.set(canvas, state);
   }
+  // A frame of a globe in motion is gone in a fifteenth of a second, so it is
+  // shaded at the interactive size whoever draws it; only a still globe earns
+  // the refined one.
   const { pixelWidth, pixelHeight } = getRenderSize(
     width,
     height,
-    immediate ? INTERACTIVE_RENDER_PIXELS : REFINED_RENDER_PIXELS,
+    immediate || interactive ? INTERACTIVE_RENDER_PIXELS : REFINED_RENDER_PIXELS,
   );
 
-// Worker round-trip latency causes lag during camera movement. 
-// Run interactive frames inline on the main thread for same-frame renders, 
-// and reserve the worker for the settled/idle state (REFINED_RENDER_PIXELS).
+  // Worker round-trip latency lags a camera the player is moving, so those
+  // frames (immediate) are shaded inline on the main thread for same-frame
+  // renders. Everything else goes to the worker: the still globe, and the idle
+  // auto-rotation (interactive), which is the globe's default state and too
+  // slow for a frame of latency to show.
   if (immediate) {
     state.latestRequestId += 1;
     state.pending = null;

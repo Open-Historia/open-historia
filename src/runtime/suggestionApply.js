@@ -12,7 +12,7 @@
 
 import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
-import { buildScenarioSnapshot, politicsEntries, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, isDetailFieldPath, politicsEntries, POLITICS_FIELDS, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -109,6 +109,93 @@ const applyPoliticsChange = (current, change) => {
   return map;
 };
 
+// A change that puts back `before` (detailValueIn before accepting; for a
+// cover, the author's { hash, contentType, base64 } or null) where `change`
+// went: what Undo applies. A Politics entry is applied by its op, so the
+// inverse's op follows `before`: an entry that was not there is taken out
+// again, and one the change took out goes back in.
+export const inverseOf = (change, before) => {
+  const inverse = { ...change, from: change.to, to: before };
+  if (change.kind === "politics" && change.container !== "value" && change.entry) {
+    inverse.op = before === null || before === undefined ? "remove" : change.op === "remove" ? "add" : "change";
+    inverse.to = before ?? null;
+  }
+  return inverse;
+};
+
+// Brings a snapshot (buildScenarioSnapshot) up to date with a change just
+// saved, an accepted one or its Undo, so the statuses measured against it
+// stay true without exporting the scenario again.
+export const applyToSnapshot = (snapshot, change) => {
+  if (!snapshot) return;
+  const value = suggestedValueOf(change);
+  if (change.kind === "field") {
+    const [area, ...rest] = change.path;
+    if (area === "meta" || area === "game" || area === "world") snapshot[area] = { ...(snapshot[area] ?? {}), [rest[0]]: value };
+    else if (area === "features") snapshot.features = { ...(snapshot.features ?? {}), [rest[0]]: { ...(snapshot.features?.[rest[0]] ?? {}), [rest[1]]: value } };
+    else if (area === "prompts") snapshot.prompts = { ...(snapshot.prompts ?? {}), [rest.join(".")]: value };
+  } else if (change.kind === "politics") {
+    snapshot.politics = { ...(snapshot.politics ?? {}), [change.field]: applyPoliticsChange(snapshot.politics?.[change.field], change) };
+  } else if (change.kind === "stats") snapshot.stats = value ?? null;
+  else if (change.kind === "institutionLogos") snapshot.institutionLogos = value ?? null;
+  else if (change.kind === "cover") snapshot.cover = value ? { hash: value } : null;
+};
+
+// Word by word, like tracked changes: what was taken out and what was put in.
+const tokens = (text) => String(text ?? "").split(/(\s+)/).filter((part) => part !== "");
+export const diffWords = (before, after) => {
+  const a = tokens(before);
+  const b = tokens(after);
+  if (a.length * b.length > 2_500_000) {
+    return [...(a.length ? [{ type: "del", text: a.join("") }] : []), ...(b.length ? [{ type: "add", text: b.join("") }] : [])];
+  }
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const table = new Uint32Array(rows * cols);
+  for (let i = a.length - 1; i >= 0; i -= 1) {
+    for (let j = b.length - 1; j >= 0; j -= 1) {
+      table[i * cols + j] = a[i] === b[j] ? table[(i + 1) * cols + j + 1] + 1 : Math.max(table[(i + 1) * cols + j], table[i * cols + j + 1]);
+    }
+  }
+  const parts = [];
+  const push = (type, text) => {
+    const last = parts[parts.length - 1];
+    if (last?.type === type) last.text += text;
+    else parts.push({ type, text });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { push("same", a[i]); i += 1; j += 1; }
+    else if (table[(i + 1) * cols + j] >= table[i * cols + j + 1]) { push("del", a[i]); i += 1; }
+    else { push("add", b[j]); j += 1; }
+  }
+  while (i < a.length) { push("del", a[i]); i += 1; }
+  while (j < b.length) { push("add", b[j]); j += 1; }
+  // A replaced phrase reads as one: the words taken out together, then the
+  // words put in, rather than alternating word by word. The spaces between
+  // changed words belong to both sides.
+  const grouped = [];
+  let removed = "";
+  let added = "";
+  const flush = () => {
+    if (removed) grouped.push({ type: "del", text: removed });
+    if (added) grouped.push({ type: "add", text: added });
+    removed = "";
+    added = "";
+  };
+  parts.forEach((part, index) => {
+    const between = part.type === "same" && !part.text.trim()
+      && parts[index - 1] && parts[index - 1].type !== "same" && parts[index + 1] && parts[index + 1].type !== "same";
+    if (part.type === "del") removed += part.text;
+    else if (part.type === "add") added += part.text;
+    else if (between) { removed += part.text; added += part.text; }
+    else { flush(); grouped.push(part); }
+  });
+  flush();
+  return grouped;
+};
+
 // The save that applies `accepted` (details changes) to the scenario described
 // by `details` (loadScenarioDetails): { patch, uploads, clears }. `patch` goes
 // to saveScenario; each upload is { key, json } or { key, base64, contentType };
@@ -126,6 +213,10 @@ export const buildDetailSave = (accepted, details) => {
 
   for (const change of Array.isArray(accepted) ? accepted : []) {
     if (change.area !== "details") continue;
+    // Reading a file already drops these (normalizeSuggestion); checked again
+    // here because each part becomes a key of the author's scenario.
+    if (change.kind === "field" && !isDetailFieldPath(change.path)) continue;
+    if (change.kind === "politics" && !POLITICS_FIELDS.includes(change.field)) continue;
     if (change.kind === "field") {
       const [area, key, setting] = change.path;
       if (area === "meta") patch[key] = change.to ?? "";

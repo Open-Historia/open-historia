@@ -475,7 +475,6 @@ export const resolveCountryDisplayName = (name, code) => countryNameResolver(nam
 setRuntimeAssetEndpoints();
 
 const PERF_WARN_MS = 50;
-const PERF_STALL_MS = 120;
 
 // Performance telemetry stays active, but routine console noise is opt-in.
 // Temporary diagnostics can be re-enabled at runtime with:
@@ -497,15 +496,6 @@ export const reportPerfOperation = (
 ) => {
   const numeric = Number(elapsed);
   if (!Number.isFinite(numeric)) return numeric;
-  if (typeof window !== "undefined") {
-    window.__OH_LAST_PERF_OPERATION__ = {
-      operation: String(operation || "unknown"),
-      elapsed: numeric,
-      at: perfNow(),
-      wallTime: Date.now(),
-      extra: String(extra || ""),
-    };
-  }
   if (numeric >= warnAt && isPerfConsoleVerbose()) {
     console.warn(
       `[OH PERF] ${operation} took ${numeric.toFixed(1)}ms${extra ? ` · ${extra}` : ""}`,
@@ -520,91 +510,6 @@ const warnSlowJson = (operation, url, startedAt, extra = "") =>
     perfNow() - startedAt,
     { extra },
   );
-
-// Temporary stabilization watchdog. Named timers cannot see GC, browser layout,
-// React commits, MapLibre rendering, compositor stalls, etc. This catches any
-// visible frame gap and correlates it with recent input/map motion/named OH work.
-export const installPerformanceWatchdog = () => {
-  if (typeof window === "undefined" || typeof document === "undefined") return () => {};
-  if (window.__OH_PERF_WATCHDOG_INSTALLED__) return () => {};
-  window.__OH_PERF_WATCHDOG_INSTALLED__ = true;
-
-  let rafId = 0;
-  let lastFrame = perfNow();
-  let mapMoving = Boolean(window.__OH_MAP_MOVING__);
-  let lastInput = { type: "none", at: 0 };
-  let longTaskObserver = null;
-
-  const noteInput = (event) => {
-    lastInput = { type: event?.type || "input", at: perfNow() };
-  };
-  const onMapMotion = (event) => {
-    mapMoving = Boolean(event?.detail?.active);
-    window.__OH_MAP_MOVING__ = mapMoving;
-  };
-
-  const inputEvents = ["pointerdown", "pointermove", "wheel", "keydown", "click"];
-  for (const type of inputEvents) {
-    window.addEventListener(type, noteInput, { capture: true, passive: true });
-  }
-  window.addEventListener("oh:map-motion", onMapMotion);
-
-  try {
-    if (typeof PerformanceObserver !== "undefined") {
-      longTaskObserver = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.duration < PERF_STALL_MS) continue;
-          const last = window.__OH_LAST_PERF_OPERATION__;
-          const recentNamed = last && Math.abs(perfNow() - Number(last.at || 0)) < 1800;
-          if (isPerfConsoleVerbose()) {
-            console.warn(
-              `[OH PERF LONG TASK] ${entry.duration.toFixed(1)}ms` +
-              `${mapMoving ? " · map moving" : ""}` +
-              `${recentNamed ? ` · last OH: ${last.operation} ${Number(last.elapsed || 0).toFixed(1)}ms` : " · no recent named OH operation"}`,
-            );
-          }
-        }
-      });
-      longTaskObserver.observe({ entryTypes: ["longtask"] });
-    }
-  } catch {
-    longTaskObserver = null;
-  }
-
-  const frame = (now) => {
-    const gap = now - lastFrame;
-    if (gap >= PERF_STALL_MS && document.visibilityState === "visible") {
-      const inputAge = now - Number(lastInput.at || 0);
-      const last = window.__OH_LAST_PERF_OPERATION__;
-      const opAge = last ? now - Number(last.at || 0) : Infinity;
-      if (isPerfConsoleVerbose()) {
-        console.warn(
-          `[OH PERF STALL] frame gap ${gap.toFixed(1)}ms` +
-          ` · map moving: ${mapMoving ? "yes" : "no"}` +
-          ` · recent input: ${inputAge < 2000 ? `${lastInput.type} ${Math.max(0, inputAge).toFixed(0)}ms ago` : "none"}` +
-          ` · last OH operation: ${opAge < 2000 ? `${last.operation} (${Number(last.elapsed || 0).toFixed(1)}ms, ${Math.max(0, opAge).toFixed(0)}ms ago)` : "none"}`,
-        );
-      }
-    }
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  };
-
-  rafId = window.requestAnimationFrame((now) => {
-    lastFrame = now;
-    rafId = window.requestAnimationFrame(frame);
-  });
-
-  return () => {
-    if (rafId) window.cancelAnimationFrame(rafId);
-    longTaskObserver?.disconnect?.();
-    for (const type of inputEvents) {
-      window.removeEventListener(type, noteInput, true);
-    }
-    window.removeEventListener("oh:map-motion", onMapMotion);
-    window.__OH_PERF_WATCHDOG_INSTALLED__ = false;
-  };
-};
 
 const cloneJson = (value) => {
   if (value == null) return value;
@@ -690,7 +595,11 @@ const fetchWithPersistence = async (
     signal,
   });
   if (!response.ok) {
-    throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    // The status rides on the error: a 404 is a document that does not exist
+    // yet, which some readers take as empty, where anything else is a failure.
+    const error = new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
   if (!bypassPersistentCache) {
@@ -881,13 +790,30 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
 
   // Even with force: true, batch concurrent requests to the same URL so
   // multiple independent 5s pollers (Nations, Cities, background, units)
-  // don't each fire their own network fetch.
-  if (jsonRequestCache.has(url)) {
-    const pending = await jsonRequestCache.get(url);
-    return clone ? cloneJsonFor(url, pending) : pending;
+  // don't each fire their own network fetch. The shared request carries no
+  // default: each caller falls back to its OWN below, so one that asked for
+  // none is never handed another caller's empty default for a failed read.
+  let request = jsonRequestCache.get(url);
+  if (!request) {
+    request = startJsonRequest(url, { signal, store });
+    jsonRequestCache.set(url, request);
   }
 
-  const request = (async () => {
+  let value;
+  try {
+    value = await request;
+  } catch (error) {
+    if (defaultValue !== undefined) {
+      // Serve the fallback but do NOT cache it — a transient failure must not
+      // pin the default for the rest of the session; the next read retries.
+      return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
+    }
+    throw error;
+  }
+  return clone ? cloneJsonFor(url, value) : value;
+};
+
+const startJsonRequest = (url, { signal, store }) => (async () => {
     const fetchStartedAt = perfNow();
     const { response } = await fetchWithPersistence(url, {
       bypassPersistentCache: isMutableRuntimeJsonUrl(url),
@@ -912,33 +838,18 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
     const parseStartedAt = perfNow();
     const data = text ? JSON.parse(text) : null;
     warnSlowJson("JSON.parse", url, parseStartedAt, `${Math.round(text.length / 1024)} KiB`);
-    // Recorded INSIDE the try, before the catch below: a failed read must leave
+    // Recorded only once the document has parsed: a failed read must leave
     // this false so loadRegionCatalog retries instead of pinning a stock-only
-    // catalog. "Did we get a value?" is not a usable substitute — an originator
-    // carrying a defaultValue resolves the SHARED batched promise to that
-    // default on failure, so every awaiter sees a value either way.
+    // catalog. "Did we get a value?" is not a usable substitute — a caller
+    // carrying a defaultValue gets that default on failure.
     jsonLoadedUrls.add(url);
     jsonByteLengths.set(url, text.length);
     if (store) jsonValueCache.set(url, data);
     return data;
   })()
-    .catch((error) => {
-      if (defaultValue !== undefined) {
-        // Serve the fallback but do NOT cache it — a transient failure must not
-        // pin the default for the rest of the session; the next read retries.
-        return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
-      }
-
-      throw error;
-    })
-    .finally(() => {
-      jsonRequestCache.delete(url);
-    });
-
-  jsonRequestCache.set(url, request);
-  const value = await request;
-  return clone ? cloneJsonFor(url, value) : value;
-};
+  .finally(() => {
+    jsonRequestCache.delete(url);
+  });
 
 // Did the document come back, or is this a defaultValue served after a failed read?
 export const jsonReadSucceeded = (url) => jsonLoadedUrls.has(url);
@@ -999,7 +910,7 @@ export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
     if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
 
     for (const entry of list) {
-      const { url, value } = entry;
+      const { url, value, normalized = false } = entry;
       if (url === JSON_URLS.world) {
         window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
       }
@@ -1008,7 +919,7 @@ export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
       }
       if (isMutableRuntimeJsonUrl(url)) {
         window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-          detail: { key: runtimeAssetLabel(url), url, value },
+          detail: { key: runtimeAssetLabel(url), url, value, normalized: Boolean(normalized) },
         }));
       }
     }
@@ -1033,6 +944,10 @@ export const writeJson = async (
     // worth reading back. Asks for none (Prefer: return=minimal) and caches what
     // was sent; a store that answers with the record anyway is not parsed.
     echo = true,
+    // The caller normalized `data` before writing it (gameState.js
+    // writeWorldState). Carried on oh:runtime-json-updated so the runtime store
+    // does not normalize the whole document a second time.
+    normalized = false,
   } = {},
 ) => {
   const stringifyStartedAt = perfNow();
@@ -1115,7 +1030,7 @@ export const writeJson = async (
   }
   if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
     window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-      detail: { key: runtimeAssetLabel(url), url, value: saved },
+      detail: { key: runtimeAssetLabel(url), url, value: saved, normalized: Boolean(normalized) },
     }));
   }
 
@@ -1180,6 +1095,30 @@ export const writeRuntimeJson = async (
   );
 
   return clone ? cloneJson(data) : data;
+};
+
+// Drop every persisted runtime payload whose key starts with `prefix`: a cache
+// family nothing reads any more. Best-effort like the writes above; resolves to
+// how many entries went.
+export const deleteRuntimeJsonByPrefix = async (prefix) => {
+  const key = String(prefix ?? "");
+  if (!key) return 0;
+  for (const cachedKey of [...runtimeJsonValueCache.keys()]) {
+    if (String(cachedKey).startsWith(key)) runtimeJsonValueCache.delete(cachedKey);
+  }
+  const cache = await getPersistentCache();
+  if (!cache) return 0;
+  const marker = buildRuntimeCacheUrl(key).replace(/\.json$/, "");
+  let removed = 0;
+  try {
+    for (const request of await cache.keys()) {
+      if (!String(request?.url ?? "").startsWith(marker)) continue;
+      if (await cache.delete(request)) removed += 1;
+    }
+  } catch {
+    // A cache that cannot be listed keeps its entries; nothing reads them.
+  }
+  return removed;
 };
 
 export const buildTileUrl = (template, { x, y, z }) =>
@@ -1736,8 +1675,6 @@ export const loadRollbackSnapshotIndex = async () => {
   }).catch(() => null);
   return Array.isArray(data?.entries) ? data.entries : [];
 };
-
-export const loadRollbackSnapshotCount = async () => (await loadRollbackSnapshotIndex()).length;
 
 export const loadRegionCatalog = async ({ force = false } = {}) => {
   // Keyed on BOTH sources: switching games/scenarios (new runtime token) must

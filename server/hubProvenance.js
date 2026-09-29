@@ -26,7 +26,7 @@
 //   { [suggestionId]: { status, accepted[], rejected[], updatedAt } }
 
 const MAX_POST_IDS = 10;
-const MAX_SUGGESTIONS = 50;
+export const MAX_HUB_SUGGESTIONS = 50;
 const MAX_REVIEWS = 60;
 const MAX_DECISIONS = 5000;
 
@@ -96,6 +96,42 @@ export const fetchableHubOrigin = (origin) => {
   return { bundleUrl: normalized.bundleUrl, postId: normalized.postId, syncedAt: normalized.syncedAt };
 };
 
+// This library's copy of one hub file: a scenario downloaded from the same post,
+// at the same file (bundleUrl changes with every re-upload), and not edited
+// since. The scenario named `preferredId` wins a tie. Null when there is none,
+// so a game played on that file is never pointed at an older or edited copy.
+export const scenarioCopyOfHubFile = (origin, scenarios, preferredId = "") => {
+  const wanted = normalizeHubOrigin(origin);
+  if (!wanted) return null;
+  const copies = (Array.isArray(scenarios) ? scenarios : []).filter((entry) => {
+    const have = normalizeHubOrigin(entry?.hubOrigin);
+    return Boolean(have) && !have.editedAt && have.postId === wanted.postId && have.bundleUrl === wanted.bundleUrl;
+  });
+  return copies.find((entry) => entry.id === preferredId) ?? copies[0] ?? null;
+};
+
+// The scenario an imported game names, when its sender said the map is a hub
+// file (scenarioRef.hubOrigin). The sender's id alone says nothing: ids come
+// from names, so this library's own "New Scenario" can hold the id of an
+// unrelated map, and the game would open on it. The game names this library's
+// copy of that file; with none, it names an id nothing here holds, so the
+// library shows the map as missing and offers to fetch it. A built-in map, or
+// one that is no hub file, keeps the sender's id.
+export const importedGameScenarioId = (ref, scenarios) => {
+  const requested = String(ref?.scenarioId ?? "").trim();
+  const origin = ref?.builtIn ? null : normalizeHubOrigin(ref?.hubOrigin);
+  if (!origin || !requested) return requested;
+  const list = Array.isArray(scenarios) ? scenarios : [];
+  const copy = scenarioCopyOfHubFile(origin, list, requested);
+  if (copy) return copy.id;
+  const taken = new Set(list.map((entry) => entry?.id));
+  if (!taken.has(requested)) return requested;
+  const base = `${requested}-hub-${origin.postId}`;
+  let id = base;
+  for (let suffix = 2; taken.has(id); suffix += 1) id = `${base}-${suffix}`;
+  return id;
+};
+
 export const normalizeHubSuggestionRef = (raw) => {
   if (!raw || typeof raw !== "object") return null;
   const id = text(raw.id, 80);
@@ -161,8 +197,9 @@ export const normalizeHubPublished = (raw) => {
     if (!ref || seen.has(ref.id) || isBlockedContributor({ blocked }, ref.author)) continue;
     seen.add(ref.id);
     suggestions.push(ref);
-    if (suggestions.length >= MAX_SUGGESTIONS) break;
   }
+  // The newest are kept: a check adds what it finds after what was there.
+  suggestions.splice(0, Math.max(0, suggestions.length - MAX_HUB_SUGGESTIONS));
   const commentCounts = {};
   if (raw.commentCounts && typeof raw.commentCounts === "object") {
     for (const [postId, count] of Object.entries(raw.commentCounts)) {

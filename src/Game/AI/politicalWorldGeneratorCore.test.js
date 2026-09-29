@@ -2752,6 +2752,46 @@ test("future scenarios skip real-history verification even when production verif
   assert.match(result.historicalVerification.skippedReason, /future scenario date/);
 });
 
+test("a universe with no reference authority spends no requests on timeline verification", async () => {
+  const historyAuthority = { referenceAllowed: false, referenceAuthority: "none", cutoffDate: "" };
+  const proposal = {
+    polityKey: "Crown of Aster",
+    actorPatchJson: JSON.stringify({
+      politicalSystem: { type: "absolute_monarchy", representation: "none" },
+      government: { form: "Absolute monarchy", headOfState: "Queen Ilse" },
+    }),
+  };
+  const calls = [];
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "1900-01-01",
+    historyAuthority,
+    polities: ["Crown of Aster"],
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: true,
+    callModel: async (_system, _history, opts) => {
+      calls.push(opts.taskKey);
+      return { toolInput: { proposals: [proposal] } };
+    },
+  });
+  assert.deepEqual(calls, ["politicalWorldGeneration"]);
+  assert.equal(result.generatedPolities, 1);
+  assert.equal(result.historicalVerification.enabled, false);
+  assert.match(result.historicalVerification.skippedReason, /no reference authority/);
+
+  const rechecked = await reverifyPoliticalWorldProposalsCore({
+    result,
+    scenarioDate: "1900-01-01",
+    historyAuthority,
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    callModel: async () => { throw new Error("no verification call expected"); },
+  });
+  assert.equal(rechecked.historicalVerification.enabled, false);
+  assert.match(rechecked.historicalVerification.skippedReason, /no reference authority/);
+});
+
 
 test("historical roster corrections preserve existing response profiles for retained entity ids", async () => {
   const result = await generatePoliticalWorldProposalsCore({
@@ -4175,4 +4215,25 @@ test("electoral party influenceEstimate is recovered as generated support instea
     { percent: 35, basis: "generated-estimate" },
   ]);
   assert.ok(parties.every((party) => party.influence === undefined));
+});
+
+test("a political-system lock from an earlier one-call attempt is honoured and handed back while unresolved", async () => {
+  let promptText = "";
+  const lock = { type: "presidential_republic", representation: "electoral" };
+  const result = await generatePoliticalWorldProposalsCore({
+    scenarioDate: "2014-03-22",
+    polities: ["Republic X"],
+    politicalActors: { byPolity: {} },
+    generatedAt: fixedNow,
+    maxAttempts: 1,
+    verifyHistoricalIdentity: false,
+    politicalSystemLocksByPolity: { "Republic X": lock, "Not Requested": lock },
+    callModel: async (_system, history) => {
+      promptText = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      return { toolInput: { proposals: [] } };
+    },
+  });
+  assert.match(promptText, /CORRECTIVE RETRY POLITICAL SYSTEM LOCK \(FIELD LEVEL\): type=presidential_republic; representation=electoral/);
+  assert.equal(result.failedPolities, 1);
+  assert.deepEqual(result.politicalSystemLocksByPolity, { "Republic X": lock });
 });

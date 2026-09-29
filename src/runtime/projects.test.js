@@ -354,6 +354,22 @@ test("a commitment missed for years catches up past the clock", () => {
   assert.ok(advanceRecurringDate("2020-06-01", "annual", "2033-09-20").endsWith("-06-01"));
 });
 
+test("a weekly checkpoint marked done weeks late rolls past the clock on its weekday", () => {
+  // 2033-01-03 is a Monday; marked done a month and a half later.
+  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2033-02-20"), "2033-02-21");
+  // Exactly on a later occurrence: the next one, strictly after.
+  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2033-02-21"), "2033-02-28");
+  // Across a month end and a year end.
+  assert.equal(advanceRecurringDate("2032-12-29", "weekly", "2033-01-10"), "2033-01-12");
+  // Missed for more than a decade still lands ahead of the clock.
+  // 2000-01-03 and 2033-09-19 are both Mondays.
+  assert.equal(advanceRecurringDate("2000-01-03", "weekly", "2033-09-20"), "2033-09-26");
+  // A floor before the date still rolls one week.
+  assert.equal(advanceRecurringDate("2033-01-03", "weekly", "2032-12-01"), "2033-01-10");
+  // BC dates step the same way.
+  assert.equal(advanceRecurringDate("-0044-03-01", "weekly", "-0044-03-15"), "-0044-03-22");
+});
+
 test("advanceRecurringDate refuses what it cannot compute", () => {
   assert.equal(advanceRecurringDate("2033-06-01", ""), "", "not recurring");
   assert.equal(advanceRecurringDate("1200 BCE", "annual"), "", "non-Gregorian");
@@ -609,6 +625,22 @@ test("doubt is cast once, so the model's verdict is never overwritten", () => {
 test("an agent that is merely live casts no doubt", () => {
   const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
   assert.deepEqual(spyIntelDoubtOps([spy()], [linkedForeign], { playerPolity: "France" }), []);
+});
+
+test("a turned agent nobody suspects yet casts no doubt, so the board does not give it away", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const turned = spy({ status: "turned", turnedAt: "1741-05-01" });
+  assert.deepEqual(spyIntelDoubtOps([turned], [linkedForeign], { playerPolity: "France" }), []);
+  // Once the analysts suspect it, the doubt follows.
+  assert.equal(spyIntelDoubtOps([{ ...turned, suspected: true }], [linkedForeign], { playerPolity: "France" })[0]?.verification, "doubted");
+});
+
+test("an agent exposed after having been turned casts doubt; one exposed while loyal does not", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const burned = spy({ status: "exposed", turnedAt: "1741-05-01", exposedAt: "1741-06-01" });
+  assert.equal(spyIntelDoubtOps([burned], [linkedForeign], { playerPolity: "France" })[0]?.verification, "doubted");
+  const loyal = spy({ status: "exposed", exposedAt: "1741-06-01" });
+  assert.deepEqual(spyIntelDoubtOps([loyal], [linkedForeign], { playerPolity: "France" }), []);
 });
 
 // What the agent in Prussia has most recently filed. gatherIntelligence replaces

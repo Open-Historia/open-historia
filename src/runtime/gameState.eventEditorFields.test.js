@@ -50,6 +50,23 @@ test("junk is dropped: a quote with no text, a switch that is not true, a field 
   assert.deepEqual(normalizeEventEntry({ ...base, npcReaction: { enabled: false, result: "  " } }).npcReaction, { enabled: false });
 });
 
+test("a reaction given up keeps how many attempts it made and the last error", () => {
+  const base = { id: "e", date: "2014-03-02", title: "T", description: "D" };
+  const failed = normalizeEventEntry({
+    ...base,
+    npcReaction: { enabled: true, evaluatedAt: "2026-09-25T10:14:00.000Z", result: "failed", attempts: "4", lastError: "  429 quota exceeded " },
+  });
+  assert.deepEqual(failed.npcReaction, {
+    enabled: true,
+    evaluatedAt: "2026-09-25T10:14:00.000Z",
+    result: "failed",
+    attempts: 4,
+    lastError: "429 quota exceeded",
+  });
+  // A reaction that never failed carries neither.
+  assert.deepEqual(normalizeEventEntry({ ...base, npcReaction: { enabled: true, attempts: 0, lastError: "" } }).npcReaction, { enabled: true });
+});
+
 test("an event without them saves exactly as before: neither key appears", () => {
   const event = normalizeEventEntry({ id: "e", date: "2014-03-02", title: "T", description: "D" });
   assert.equal("quote" in event, false);

@@ -43,23 +43,24 @@ import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import MarkerPopup from "./MarkerPopup.jsx";
 import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
+import { removeRowStep } from "./documentUndo.js";
 import SearchBar from "./SearchBar.jsx";
 import BasemapPicker from "./BasemapPicker.jsx";
 import FlagPicker from "./FlagPicker.jsx";
-import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
+import { useMapDocument, createDocument, newId, openStoredDocument } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
-import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
+import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
+import { OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
-import { buildGameSeed } from "./exportPreset.js";
+import { buildGameSeed, gameCityToFeature } from "./exportPreset.js";
 import { normalizeGroups } from "../runtime/groups.js";
-import { populationByYearField } from "../runtime/cityPopulation.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
-import { generateFmgWorld } from "./fmg/fmgDriver.js";
+import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
 const hexToRgb = (value) => {
@@ -142,6 +143,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
+  // Whether this build serves the generator (fmgDriver.js checkFmgAvailable):
+  // null until asked once, and the GENERATE tab shows only on true.
+  const [fmgAvailable, setFmgAvailable] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    checkFmgAvailable().then((ok) => { if (!cancelled) setFmgAvailable(ok); });
+    return () => { cancelled = true; };
+  }, []);
 
   // ---- reviewing a suggestion's map changes (SuggestionReviewPanel.jsx) -----
   // A suggested basemap goes on the map the way the Basemap picker puts one
@@ -182,10 +191,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
   const pasteClipboard = () => {
     if (!api || !clipboard) return false;
-    // The document's side first (countries, colours, flags, tags, types this
-    // map lacks), then the map's: OlMap carves and adds, one undo step.
-    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types });
+    // The document's side first (countries, colours, flags, tags, types and
+    // groups this map lacks), then the map's: OlMap carves and adds, one undo step.
+    const plan = planClipboardMerge(clipboard, { polities: d.polities, colors: d.colors, flags: d.flags, tags: d.tags, types: d.types, groups: d.groups });
     if (plan.types.length) d.setTypes((list) => [...list, ...plan.types]);
+    if (Object.keys(plan.groups).length) d.setGroups((registry) => ({ ...plan.groups, ...registry }));
     for (const [key, record] of Object.entries(plan.upserts)) d.upsertPolity(key, record);
     for (const [key, rgb] of Object.entries(plan.colorOverrides)) d.setColorOverride(key, rgb);
     for (const [key, flag] of Object.entries(plan.flags)) d.setFlag(key, flag);
@@ -250,22 +260,29 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
 
   // Upload a new basemap: apply it now AND save it to the library for reuse.
+  // Answers what the picker then tells the author, both of which used to go
+  // unsaid: { sessionOnly: true } for a GeoTIFF or PMTiles background, which is
+  // on the map for this session only (not saved with the map, not added to the
+  // library, not shown by the game), and { libraryError } when the library
+  // would not take it — it is on the map either way.
   const uploadBasemap = async (file) => {
-    if (!file) return;
+    if (!file) return null;
     const bg = await loadBackgroundFile(file);
     setCustomBg(bg); // applies immediately (image / vector / raster)
     const normalized = normalizeBackground(bg);
     if (!normalized) {
       setCustomBgId(null); // raster (GeoTIFF/PMTiles) is session-only reference, not saved
-      return;
+      return { sessionOnly: true };
     }
     const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
     try {
       const meta = await addBackgroundToLibrary(normalized, name, { author: d.author || "" });
       setCustomBgId(meta?.id || null);
+      return { saved: true };
     } catch (e) {
       console.warn("[editor] save basemap to library failed:", e);
       setCustomBgId(null);
+      return { libraryError: e?.message || String(e) };
     }
   };
 
@@ -327,7 +344,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // doc field look like it works until the first reload.
   // This list is a whitelist and it drops anything not named here, silently. A
   // field left off does not fail to save — it fails to EXIST, and only when someone
-  // reopens the document.
+  // reopens the document. A field added here goes in DOCUMENT_FIELDS
+  // (server/mapEditorFields.js) too, the list both stores create a document from.
   const buildDocumentFields = () => ({
     name: d.name,
     metadata: d.metadata,
@@ -402,7 +420,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         api.serializeRegions() || { type: "FeatureCollection", features: [] },
         d.colors,
       );
-      await onApplyToScenario(seed, { play });
+      // The renames made since the last save, so the scenario's player country
+      // and its name-keyed world records follow them (useMapDocument renamePolity).
+      const renames = d.polityRenames;
+      await onApplyToScenario(seed, { play, renames });
+      d.settlePolityRenames(renames.length);
       // What the author decided about a suggestion's map changes is kept with
       // the scenario only now that the map it decided about is saved into it.
       if (reviewSource) {
@@ -433,29 +455,66 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the map, or a document whose geometry it does not have — says so, and the
   // save is made again with the whole map. The record of what was last written is
   // committed only once the save has landed, so a failure is retried in full.
-  const saveNow = async () => {
-    if (!api) return;
+  //
+  // Saves take turns (documentSaving.js createSaveRunner): one asked for while
+  // another is running waits for it and then writes whatever is still unsaved,
+  // so two never write at once — with no document id yet, both used to create a
+  // document. The id a create returns goes into docIdRef at once, where the
+  // save queued behind it reads it; the docId state only redraws the menu.
+  const docIdRef = useRef(null);
+  const adoptDocId = (id) => {
+    docIdRef.current = id;
+    setDocId(id);
+  };
+  // d.editCount() when the document last matched what is stored.
+  const savedEditsRef = useRef(0);
+  // Why the last save failed (the store's own words), for the "Save failed"
+  // chip, and how many times it has been retried on its own since.
+  const [saveError, setSaveError] = useState("");
+  const autoRetriesRef = useRef(0);
+  // Resolves true when the document is saved with no edit left over. An edit
+  // made while the write was in flight is not in it: the status stays "dirty"
+  // (it used to be overwritten with "saved", which also cancelled the autosave
+  // the edit had armed) and the next save writes it.
+  const attemptSave = async () => {
+    if (!api) return false;
+    const id = docIdRef.current;
+    const edits = d.editCount();
+    // Queued behind a save that has already written everything.
+    if (id && edits === savedEditsRef.current) return true;
     try {
       d.setSaveStatus("saving");
       const changes = api.serializeRegionChanges?.() ?? null;
-      const creating = !docId;
+      const creating = !id;
       const payload = !changes || creating || changes.full
         ? buildPayload(changes?.full ?? null)
         : { ...buildDocumentFields(), regionsDelta: { changed: changes.changed, count: changes.count, removed: changes.removed } };
-      let saved = await saveDocument(docId, payload);
+      let saved = await saveDocument(id, payload);
       if (saved?.needsFullRegions) {
         console.warn("[editor] the store could not apply the map difference; writing the whole map:", saved.needsFullRegions);
         api.forgetSavedRegions?.();
-        saved = await saveDocument(saved.id ?? docId, buildPayload());
+        saved = await saveDocument(saved.id ?? id, buildPayload());
       }
-      if (!docId) setDocId(saved.id);
+      if (!id) adoptDocId(saved.id);
       changes?.commit?.();
+      if (d.editCount() !== edits) return false;
+      savedEditsRef.current = edits;
+      autoRetriesRef.current = 0;
+      setSaveError("");
       d.setSaveStatus("saved");
+      return true;
     } catch (e) {
       console.warn("[editor] save failed:", e);
+      setSaveError(e?.message || String(e));
       d.setSaveStatus("error");
+      return false;
     }
   };
+  const attemptSaveRef = useRef(attemptSave);
+  attemptSaveRef.current = attemptSave;
+  const runSaveRef = useRef(null);
+  if (!runSaveRef.current) runSaveRef.current = createSaveRunner(() => attemptSaveRef.current());
+  const saveNow = () => runSaveRef.current();
 
   // The unload/visibility listeners below are registered once, so a closure would
   // freeze whatever the document was at that moment and flush THAT on the way out
@@ -477,17 +536,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       if (!ok) return false;
     }
     // Closing with edits still in the debounce window would drop them
-    // silently — the button looks like "go back", not "discard". Try
-    // to save first, and only ask if that fails or is still pending,
-    // so the common case closes with no prompt and no loss.
-    if (d.saveStatus === "dirty") {
-      await saveNow();
-      if (dRef.current.saveStatus === "saved") { onClose(); return true; }
-    }
-    if (d.saveStatus === "saved") { onClose(); return true; }
-    const ok = window.confirm(
-      "This map has changes that could not be saved. Close it and lose them?",
-    );
+    // silently — the button looks like "go back", not "discard". Save first
+    // and ask only if that save does not land. The answer is what saveNow
+    // returns: React state read after the await still said "saving" (the
+    // re-render had not happened yet), so a save that worked asked anyway.
+    const ok = await settleUnsavedWork({
+      status: dRef.current.saveStatus,
+      save: saveNow,
+      confirm: (question) => window.confirm(question),
+      question: "This map has changes that could not be saved. Close it and lose them?",
+    });
     if (ok) onClose();
     return ok;
   };
@@ -495,52 +553,89 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // A side panel open in it (types, regions, layers…) closes first.
   useBackToClose(Boolean(openPanel), () => setOpenPanel(null));
 
-  const newDoc = (kind) => {
-    d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
-    setDocId(null);
-    if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
-    else api?.reseedWorld();
-    setCustomBg(null);
-    setCustomBgId(null);
+  // A document just opened or started is what is stored (or has nothing to
+  // store yet): the saves write to its id, and edits made before it no longer
+  // count.
+  const markLoaded = (id) => {
+    adoptDocId(id);
+    savedEditsRef.current = d.editCount();
+    autoRetriesRef.current = 0;
+    setSaveError("");
     d.setSaveStatus("saved");
   };
 
+  // New and Open replace the map on screen, and used to do it with no save and
+  // no question: edits in the autosave's two seconds were dropped, and after a
+  // failed save every unsaved change went with no prompt. They now settle the
+  // open map the way Close does, then wait for any save still writing it.
+  const settleBeforeReplacing = async (question) => {
+    const ok = await settleUnsavedWork({
+      status: dRef.current.saveStatus,
+      save: saveNow,
+      confirm: (text) => window.confirm(text),
+      question,
+    });
+    if (ok) await runSaveRef.current.idle();
+    return ok;
+  };
+
+  // Loading the stock world is not an edit, but an edit made while it was still
+  // downloading was saved with the map as it stood then: once the world is on
+  // the map, it is written again.
+  const writeAgainOnceLoaded = (loading) => {
+    const editsAtStart = d.editCount();
+    return Promise.resolve(loading).then((applied) => {
+      if (applied && d.editCount() !== editsAtStart) d.setSaveStatus("dirty");
+      return applied;
+    });
+  };
+
+  const newDoc = async (kind) => {
+    if (!(await settleBeforeReplacing("This map has changes that could not be saved. Start a new map and lose them?"))) return;
+    d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
+    if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
+    else writeAgainOnceLoaded(api?.reseedWorld());
+    setCustomBg(null);
+    setCustomBgId(null);
+    markLoaded(null);
+  };
+
+  // Everything that can fail is done before anything on screen changes: the
+  // document is fetched, migrated and built, and OlMap.loadRegions reads the
+  // whole map before it clears the old one. A failed open used to leave the new
+  // document's fields over an emptied map while the saves still wrote to the
+  // old id, and said nothing.
+  //
+  // The open map is settled before the fetch: re-opening the map that is open
+  // (its row in Saved maps) would otherwise read the stored copy from before
+  // the flush and put it on screen over the edits just saved. An edit made
+  // while the fetch runs is settled again before the swap.
   const openDoc = async (id) => {
+    const question = "This map has changes that could not be saved. Open the other map and lose them?";
+    if (!(await settleBeforeReplacing(question))) return;
+    const editsSettled = d.editCount();
+    let opened;
+    let background;
     try {
-      const stored = await loadDocument(id);
-      // Bring a pre-rename document forward before anything reads it. A document
-      // saved when owners were codes renders in hash colours (every palette lookup
-      // misses) and forks a country in two on the first edit. It is also the one
-      // path where legacy owners can reach a scenario already wearing an
-      // ownerSchema marker, past the store's migration. No-op once migrated.
-      const doc = migrateDocumentOwners(stored);
-      const base = createDocument();
-      d.setDoc({
-        id: doc.id,
-        version: doc.version || 1,
-        ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
-        metadata: { ...base.metadata, ...(doc.metadata || {}), name: doc.name || doc.metadata?.name || "Map" },
-        types: doc.types?.length ? doc.types : base.types,
-        features: doc.features || [],
-        // Default to {} rather than leaving them undefined: a map saved before these
-        // existed has neither key, and setColorOverride/setFlag spread the current
-        // value.
-        colorOverrides: doc.colorOverrides || {},
-        flags: doc.flags || {},
-        tags: doc.tags || {},
-        polities: doc.polities || {},
-        units: Array.isArray(doc.units) ? doc.units : [],
-        groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
-        puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
-      });
-      api?.loadRegions(doc.regions);
-      setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
-      setCustomBgId(null);
-      setDocId(doc.id);
-      d.setSaveStatus("saved");
+      opened = openStoredDocument(await loadDocument(id));
+      background = rebuildPersistedBackground(opened.doc.metadata.customBackground);
     } catch (e) {
       console.warn("[editor] open failed:", e);
+      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      return;
     }
+    if (d.editCount() !== editsSettled && !(await settleBeforeReplacing(question))) return;
+    try {
+      api?.loadRegions(opened.regions);
+    } catch (e) {
+      console.warn("[editor] open failed:", e);
+      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      return;
+    }
+    d.setDoc(opened.doc);
+    setCustomBg(background);
+    setCustomBgId(null);
+    markLoaded(opened.doc.id);
   };
 
   // Debounced autosave whenever the document is dirty.
@@ -556,9 +651,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // behind the way a field list does.
   useEffect(() => {
     if (!api || d.saveStatus !== "dirty") return;
-    const t = setTimeout(() => saveNow(), 2000);
+    const t = setTimeout(() => {
+      autoRetriesRef.current = 0;
+      saveNow();
+    }, 2000);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.doc]);
 
 
@@ -579,10 +676,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // The browser shows its own generic wording and ignores ours; assigning
   // returnValue is what actually triggers the prompt (Chrome needs it even with
   // preventDefault). "saving" counts as unsaved: the write is in flight and has
-  // not landed in IndexedDB yet.
+  // not landed in IndexedDB yet, and so does "error": the work is still only in
+  // memory, and on the website the IndexedDB copy is the only copy.
   useEffect(() => {
-    const unsaved = d.saveStatus === "dirty" || d.saveStatus === "saving";
-    if (!unsaved) return;
+    if (!isUnsavedStatus(d.saveStatus)) return;
     const onBeforeUnload = (e) => {
       e.preventDefault();
       e.returnValue = "";
@@ -599,7 +696,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   useEffect(() => {
     if (!api) return;
     const flush = () => {
-      if (dRef.current.saveStatus === "dirty") saveNowRef.current();
+      const status = dRef.current.saveStatus;
+      if (status === "dirty" || status === "error") saveNowRef.current();
     };
     const onVisibility = () => { if (document.hidden) flush(); };
     document.addEventListener("visibilitychange", onVisibility);
@@ -609,6 +707,21 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       window.removeEventListener("pagehide", flush);
     };
   }, [api]);
+
+  // A failed save used to stay failed: the autosave and the hide flush ran only
+  // on "dirty". It is tried again on its own after 5 s, 15 s and 60 s, then left
+  // to the chip's Retry and the next edit. A retry of a map difference is safe:
+  // the record of what was written is committed only after a save lands.
+  useEffect(() => {
+    if (!api || d.saveStatus !== "error") return undefined;
+    const delay = saveRetryDelay(autoRetriesRef.current);
+    if (delay == null) return undefined;
+    const t = setTimeout(() => {
+      autoRetriesRef.current += 1;
+      saveNow();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [api, d.saveStatus]);
 
   // Hydrate the editor with the scenario's CURRENT map: its regions + owners
   // (custom geometry when it has one, else the stock world with the scenario's
@@ -641,24 +754,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     if (initialMap.tags) base.tags = normalizePolityKeyedMap(initialMap.tags, base.polities);
     // Keeps the city set the map's own even if the author empties it here.
     if (initialMap.customCities) base.metadata.citiesAuthored = true;
+    // Each city with its size, population by year, tags, symbol and country
+    // (exportPreset.js gameCityToFeature).
     base.features = (initialMap.cities?.features || [])
-      .map((f) => ({
-        id: newId("feat"),
-        name: f.properties?.city ? String(f.properties.city) : "",
-        type: "Coordinate",
-        symbol: "square",
-        coord: Array.isArray(f.geometry?.coordinates) ? f.geometry.coordinates.slice(0, 2) : null,
-        country: "",
-        owner: null,
-        regionId: null,
-        population: f.properties?.population || 0,
-        tags: f.properties?.capital === "primary" ? ["city", "capital"] : ["city"],
-        // Its size and its population by year come back too: a round trip
-        // lost the tier, and would lose the series.
-        ...(Number(f.properties?.tier) >= 1 && Number(f.properties?.tier) <= 3 ? { tier: Math.round(Number(f.properties.tier)) } : {}),
-        ...populationByYearField(f.properties),
-      }))
-      .filter((f) => Array.isArray(f.coord));
+      .map((f) => gameCityToFeature(f, newId("feat")))
+      .filter(Boolean);
     // The scenario's structures (world.markers) come back as map features, each
     // keeping its id and whatever the Workshop does not edit (mapFeatures.js).
     base.features.push(...(Array.isArray(initialMap.markers) ? initialMap.markers : [])
@@ -691,16 +791,23 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       d.mergeColors(polityColors);
     }
-    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
-    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
+    // A scenario with no regions file of its own opens on the stock world, which
+    // arrives seconds later: Save and Apply wait for it (hydrated, below).
+    const mapLoaded = initialMap.regions
+      ? api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null)
+      : writeAgainOnceLoaded(api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null));
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
     setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
     setCustomBgId(null);
-    d.setSaveStatus("saved");
+    markLoaded(null);
     setScenarioDirty(false);
-    setHydrated(true);
+    Promise.resolve(mapLoaded).then(
+      () => setHydrated(true),
+      // Save stays disabled: writing a half-loaded map would replace the scenario's.
+      (e) => console.warn("[editor] the scenario's map did not load:", e),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, initialMap]);
 
@@ -734,11 +841,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.polities, d.regionCount, regionEpoch]);
 
-  // Each group's tint colour, for the map (OlMap/olStyle.js).
-  const groupColors = useMemo(
-    () => Object.fromEntries(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
+  // Each group's tint colour, for the map (OlMap/olStyle.js). Memoised on the
+  // colours themselves, not on d.groups: that changes with every keystroke in a
+  // group's description, and each new object restyled the whole region layer
+  // and rebuilt every group's outline.
+  const groupColorsKey = useMemo(
+    () => JSON.stringify(Object.entries(normalizeGroups(d.groups)).map(([name, group]) => [name, group.color])),
     [d.groups],
   );
+  const groupColors = useMemo(() => Object.fromEntries(JSON.parse(groupColorsKey)), [groupColorsKey]);
   const groupCount = useMemo(
     () => new Set([...Object.keys(d.groups || {}), ...Object.keys(api?.listGroupUsage?.() || {})]).size,
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -784,9 +895,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         features={d.features}
         onSelectionChange={d.setSelection}
         onRegionCount={d.setRegionCount}
-        onRegionsChanged={(count) => {
+        onRegionsChanged={(count, { loaded = false } = {}) => {
           d.setRegionCount(count);
-          d.setSaveStatus("dirty");
+          // A map being opened is not an edit (OlMap notifyRegions).
+          if (!loaded) d.setSaveStatus("dirty");
           setRegionEpoch((n) => n + 1);
         }}
         onFeatureCreate={({ pixel, mapFeature = false, ...partial }) => {
@@ -816,9 +928,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         onFeatureEdit={({ id, pixel }) => setCityPopup({ id, x: pixel[0], y: pixel[1], isNew: false })}
         onFeatureRemove={(id) => {
-          d.setFeatures((list) => list.filter((f) => f.id !== id));
+          const step = removeRowStep(d.features, d.setFeatures, id);
           d.setSaveStatus("dirty");
           setCityPopup((p) => (p?.id === id ? null : p));
+          return step;
         }}
         onUnitCreate={({ pixel, ...partial }) => {
           const id = newId("unit");
@@ -827,8 +940,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         onUnitEdit={({ id, pixel }) => setUnitPopup({ id, x: pixel[0], y: pixel[1], isNew: false })}
         onUnitRemove={(id) => {
-          d.setUnits((list) => list.filter((u) => u.id !== id));
+          const step = removeRowStep(d.units, d.setUnits, id);
           setUnitPopup((p) => (p?.id === id ? null : p));
+          return step;
         }}
         onHistory={setHistory}
         onReady={setApi}
@@ -841,6 +955,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
       <DocumentsMenu
         docName={d.name}
+        onNameChange={d.setName}
         currentId={docId}
         author={d.author}
         onAuthorChange={d.setAuthor}
@@ -1031,11 +1146,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             padding: "7px 11px",
             maxWidth: "min(760px, calc(100vw - 24px))",
             fontSize: 11.5,
-            color: "rgba(255,255,255,0.78)",
+            color: d.selection.length ? "rgba(255,255,255,0.78)" : "#fbbf24",
             textAlign: "center",
           }}
         >
-          <b>Manual vertex override:</b> {d.selection.length ? `${d.selection.length} selected region${d.selection.length === 1 ? "" : "s"}` : "no selection — editing all regions"} · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo
+          <b>Manual vertex override:</b>{" "}
+          {d.selection.length === 0
+            ? "select the regions to edit first"
+            : d.selection.length === 1
+              ? "1 selected region · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo"
+              : `${d.selection.length} selected regions · drag a vertex · drag an edge to insert · Alt-click a vertex to remove · snap magnet enabled · Ctrl/Cmd+Z undo`}
         </div>
       )}
 
@@ -1066,7 +1186,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         <TypeManager types={d.types} setTypes={d.setTypes} usage={typeUsage} onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "regions" && (
-        <RegionsPanel api={api} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
+        <RegionsPanel api={api} polities={d.polities} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "polities" && (
         <PolitiesPanel
@@ -1081,19 +1201,24 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           upsertPolity={d.upsertPolity}
           // Renaming re-keys the polity on the map (regions, claims) and in the
           // document (record, colour, flag, tags, cities) in one go.
+          // Answers whether the rename happened, so the panel follows only an
+          // accepted one. A clash is with a registered polity or an owner or
+          // claimant already on the map.
           renamePolity={(key, nextName) => {
             const from = String(key || "").trim();
             const to = String(nextName || "").trim();
-            if (!from || !to || from === to) return;
-            const clash = Object.keys(d.polities || {}).find((other) => samePolityName(other, to) && !samePolityName(other, from));
+            if (!from || !to || from === to) return false;
+            const names = [...Object.keys(d.polities || {}), ...(api?.listPolityUsage?.() || []).map((row) => row.key)];
+            const clash = names.find((other) => samePolityName(other, to) && !samePolityName(other, from));
             if (clash) {
               window.alert(`“${to}” is already the name of another polity (“${clash}”). A rename cannot merge two countries.`);
-              return;
+              return false;
             }
             api?.renameOwner?.(from, to);
             d.renamePolity(from, to);
             if (paintOwner === from) setPaintOwner(to);
             if (paintOnlyOwner === from) setPaintOnlyOwner(to);
+            return true;
           }}
           removePolity={d.removePolity}
           removePolities={d.removePolities}
@@ -1302,13 +1427,21 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
+        saveError={saveError}
+        onRetrySave={() => {
+          autoRetriesRef.current = 0;
+          void saveNow();
+        }}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}
+        isMobile={isMobile}
         search={
           <SearchBar
             api={api}
             features={d.features}
+            polities={d.polities}
+            setSelection={d.setSelection}
             onAddCity={(c) => {
               const id = newId("feat");
               d.setFeatures((list) => [
@@ -1354,13 +1487,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />
       <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
-      <FmgPanel
-        open={fmgOpen}
-        onToggle={() => setFmgOpen((o) => !o)}
-        busy={fmgBusy}
-        log={fmgLog}
-        onGenerate={generateFromFmg}
-      />
+      {fmgAvailable && (
+        <FmgPanel
+          open={fmgOpen}
+          onToggle={() => setFmgOpen((o) => !o)}
+          busy={fmgBusy}
+          log={fmgLog}
+          onGenerate={generateFromFmg}
+        />
+      )}
     </div>
   );
 };

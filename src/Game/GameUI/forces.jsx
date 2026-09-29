@@ -8,12 +8,16 @@ import {
   getInteractionMode,
   setInteractionMode,
   clearInteractionMode,
+  updateUnitAdmin,
+  UNIT_NOT_SAVED,
 } from "../Map/unitsController.js";
-import { UNIT_TYPES } from "../../runtime/gameState.js";
-import { ensurePolityNames, polityDisplayName } from "../../runtime/polityNames.js";
+import { UNIT_STATUSES, UNIT_TYPES } from "../../runtime/gameState.js";
+import { ensurePolityNames, polityDisplayName, subscribePolityNames } from "../../runtime/polityNames.js";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { TURN_RUNNING_NOTE } from "../AI/simulationStatus.js";
+import { useTurnRunning } from "./useTurnRunning.js";
 
 const TYPE_LABEL = {
   infantry: "Infantry",
@@ -53,10 +57,20 @@ export const POSTURE_LABEL = {
 
 const MODE_HINT = {
   deploy: "Click the map to place your unit",
+  "admin-place": "Click the map to move this unit",
 };
 // The same instruction where there is no mouse to click with.
 const TOUCH_MODE_HINT = {
   deploy: "Tap the map to place your unit",
+  "admin-place": "Tap the map to move this unit",
+};
+
+const STATUS_LABEL = {
+  idle: "Idle",
+  moving: "Moving",
+  engaged: "Engaged",
+  defeated: "Defeated",
+  pending: "Pending",
 };
 
 const surface = {
@@ -86,12 +100,12 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
       display: "flex",
       alignItems: "center",
       gap: "8px",
-      width: "100%",
+      flex: 1,
+      minWidth: 0,
       background: "rgba(255,255,255,0.04)",
       border: "1px solid rgba(255,255,255,0.08)",
       borderRadius: "8px",
       padding: "6px 8px",
-      marginBottom: "5px",
       cursor: "pointer",
       color: "white",
       textAlign: "left",
@@ -112,6 +126,100 @@ const UnitRow = ({ unit, dimmed, onClick }) => (
     </span>
   </button>
 );
+
+const fieldStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  background: "rgba(0,0,0,0.3)",
+  color: "white",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: "6px",
+  padding: "4px",
+  fontSize: "12px",
+};
+const smallButtonStyle = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: "6px",
+  color: "white",
+  cursor: "pointer",
+  fontSize: "11px",
+  padding: "4px 8px",
+};
+
+// The Force Manager's repair form (Cheats → Force Manager opens this panel):
+// what a unit is called, what it is, how strong, its status and its note,
+// written straight to the unit (updateUnitAdmin) — no order, no AI step — and
+// a hand placement anywhere on the map (the admin-place mode Nations.jsx
+// handles with placeUnitAdmin).
+const UnitEditor = ({ unit, onPlace, onClose }) => {
+  const [name, setName] = useState(unit.name);
+  const [type, setType] = useState(unit.type);
+  const [strength, setStrength] = useState(unit.strength);
+  const [status, setStatus] = useState(unit.status);
+  const [note, setNote] = useState(unit.note || "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    let saved = null;
+    try {
+      saved = await updateUnitAdmin(unit.id, {
+        name: name.trim() || unit.name,
+        type,
+        strength: Math.max(1, Math.min(100, Number(strength) || unit.strength)),
+        status,
+        note: note.trim(),
+      });
+    } catch (failure) {
+      console.error("Failed to edit unit:", failure);
+    }
+    setSaving(false);
+    if (saved) onClose();
+    else setError(UNIT_NOT_SAVED);
+  };
+
+  return (
+    <div style={{ background: "rgba(255,255,255,0.05)", borderRadius: "8px", padding: "8px", margin: "-2px 0 7px", display: "flex", flexDirection: "column", gap: "5px" }}>
+      <input className="oh-tap-row" type="text" value={name} aria-label="Unit name" onChange={(e) => setName(e.target.value)} style={fieldStyle} />
+      <div style={{ display: "flex", gap: "5px" }}>
+        <select className="oh-tap-row" value={type} aria-label="Unit type" onChange={(e) => setType(e.target.value)} style={{ ...fieldStyle, flex: 1 }}>
+          {UNIT_TYPES.map((entry) => (
+            <option key={entry} value={entry} style={{ color: "black" }}>{TYPE_LABEL[entry] ?? entry}</option>
+          ))}
+        </select>
+        <input
+          className="oh-tap-row"
+          type="number"
+          min={1}
+          max={100}
+          value={strength}
+          aria-label="Strength"
+          title="Strength, as a percentage of the formation's established strength"
+          onChange={(e) => setStrength(e.target.value)}
+          style={{ ...fieldStyle, width: "4rem" }}
+        />
+      </div>
+      <select className="oh-tap-row" value={status} aria-label="Unit status" onChange={(e) => setStatus(e.target.value)} style={fieldStyle}>
+        {UNIT_STATUSES.map((entry) => (
+          <option key={entry} value={entry} style={{ color: "black" }}>{STATUS_LABEL[entry] ?? entry}</option>
+        ))}
+      </select>
+      <input className="oh-tap-row" type="text" value={note} placeholder="Note (optional)" aria-label="Note" onChange={(e) => setNote(e.target.value)} style={fieldStyle} />
+      {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "11px" }}>{error}</div>}
+      <div style={{ display: "flex", gap: "5px" }}>
+        <button className="oh-tap-row" onClick={save} disabled={saving} style={{ ...smallButtonStyle, flex: 1, background: "rgba(59,130,246,0.35)", fontWeight: 600 }}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+        <button className="oh-tap-row" onClick={onPlace} style={{ ...smallButtonStyle, flex: 1 }}>Move on map</button>
+        <button className="oh-tap-row" onClick={onClose} style={smallButtonStyle}>Cancel</button>
+      </div>
+    </div>
+  );
+};
 
 // Controlled panel: the launcher button lives in the bottom toolbar (chat.jsx
 // Toolbar) alongside Chat and Actions; main.jsx owns the open state.
@@ -134,6 +242,9 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   // landscape screen had no room left for the list, and the form spilled out
   // of the panel.
   const scrollAsOne = isMobile || isTouch;
+  // A unit placed while a turn runs would be gone when it lands
+  // (unitsController.js), so placing waits for it.
+  const turnRunning = useTurnRunning(open);
 
   useEffect(() => {
     const unsubscribe = subscribeUnits(() => {
@@ -148,11 +259,15 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   // Back cancels it, as the banner's Cancel does.
   useBackToClose(mode.kind !== "idle", clearInteractionMode);
 
-  // Owner codes render as full names; re-render once the lookup is warm.
+  // Owner codes render as full names; re-render once the lookup is warm and
+  // whenever a world write changes them.
   const [, setNamesEpoch] = useState(0);
   useEffect(() => {
-    ensurePolityNames().then(() => setNamesEpoch((epoch) => epoch + 1)).catch(() => {});
-  }, [units.length]);
+    const bump = () => setNamesEpoch((epoch) => epoch + 1);
+    const unsubscribe = subscribePolityNames(bump);
+    ensurePolityNames().then(bump).catch(() => {});
+    return unsubscribe;
+  }, []);
 
   // The scenario may restrict deployable troop types (e.g. no air in 1200).
   const availableTypes =
@@ -179,6 +294,7 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
   );
 
   const startDeploy = () => {
+    if (turnRunning) return;
     const name = deployName.trim() || `${TYPE_LABEL[deployType]} ${myUnits.length + 1}`;
     setInteractionMode({
       kind: "deploy",
@@ -192,6 +308,38 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
     });
     setOpen(false);
   };
+
+  // Each row flies to its unit; the pencil opens the Force Manager's repair
+  // form under it (UnitEditor).
+  const [editingId, setEditingId] = useState("");
+  const renderUnit = (u, dimmed) => (
+    <div key={u.id}>
+      <div style={{ display: "flex", gap: "5px", marginBottom: "5px" }}>
+        <UnitRow unit={u} dimmed={dimmed} onClick={() => flyTo(u)} />
+        <button
+          className="oh-tap"
+          aria-label="Edit this unit"
+          title="Edit this unit"
+          aria-expanded={editingId === u.id}
+          onClick={() => setEditingId((current) => (current === u.id ? "" : u.id))}
+          style={{ ...smallButtonStyle, flexShrink: 0, width: "2rem", padding: 0 }}
+        >
+          ✎
+        </button>
+      </div>
+      {editingId === u.id && (
+        <UnitEditor
+          unit={u}
+          onClose={() => setEditingId("")}
+          onPlace={() => {
+            setInteractionMode({ kind: "admin-place", unitId: u.id });
+            setEditingId("");
+            setOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -218,7 +366,10 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               : null),
           }}
         >
-          <span>{(isTouch ? TOUCH_MODE_HINT : MODE_HINT)[mode.kind] ?? "Select a target"}</span>
+          {/* A placement that could not be saved stays armed and says why. */}
+          <span role={mode.error ? "alert" : undefined} style={mode.error ? { color: "#fca5a5" } : undefined}>
+            {mode.error || ((isTouch ? TOUCH_MODE_HINT : MODE_HINT)[mode.kind] ?? "Select a target")}
+          </span>
           <button
             className="oh-tap-row"
             onClick={() => clearInteractionMode()}
@@ -318,10 +469,16 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
             <button
               className="oh-tap-row"
               onClick={startDeploy}
-              style={{ width: "100%", background: "rgba(59,130,246,0.35)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", color: "white", cursor: "pointer", fontSize: "12px", fontWeight: 600, padding: "6px 0" }}
+              disabled={turnRunning}
+              style={{ width: "100%", background: "rgba(59,130,246,0.35)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "6px", color: turnRunning ? "rgba(255,255,255,0.4)" : "white", cursor: turnRunning ? "not-allowed" : "pointer", fontSize: "12px", fontWeight: 600, padding: "6px 0" }}
             >
               Place on map →
             </button>
+            {turnRunning && (
+              <div style={{ fontSize: "10px", color: "rgba(255,255,255,0.45)", marginTop: "5px" }}>
+                {TURN_RUNNING_NOTE}
+              </div>
+            )}
           </div>
 
           <div style={scrollAsOne ? undefined : { overflowY: "auto", flex: 1 }}>
@@ -333,18 +490,14 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
                 None yet — deploy a unit above, or jump time to let the war unfold.
               </div>
             )}
-            {myUnits.map((u) => (
-              <UnitRow key={u.id} unit={u} onClick={() => flyTo(u)} />
-            ))}
+            {myUnits.map((u) => renderUnit(u, false))}
 
             {otherUnits.length > 0 && (
               <>
                 <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.6)", margin: "8px 0 5px" }}>
                   Other forces ({otherUnits.length})
                 </div>
-                {otherUnits.map((u) => (
-                  <UnitRow key={u.id} unit={u} dimmed onClick={() => flyTo(u)} />
-                ))}
+                {otherUnits.map((u) => renderUnit(u, true))}
               </>
             )}
           </div>

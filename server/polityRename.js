@@ -242,7 +242,12 @@ export const renamePolityInWorld = (world, fromName, toName) => {
 // The stores the world does not hold. Each returns its input untouched when
 // nothing matched.
 export const renamePolityInColors = (colors, from, to) => mapKeys(colors, from, to);
-export const renamePolityInFlags = (flags, from, to) => mapKeys(flags, from, to);
+// Flags are the exception to the leftover rule above: flags.json holds only
+// authored flags, never a stock palette, so a flag under the new name while the
+// old name has none is this country's own, moved there by the same rename run
+// before (an undo or Intervene applying the turn again). It stays.
+export const renamePolityInFlags = (flags, from, to) => (
+  isRecord(flags) && !Object.keys(flags).some((key) => samePolityName(key, from)) ? flags : mapKeys(flags, from, to));
 export const renamePolityInGame = (game, from, to) =>
   (isRecord(game) && samePolityName(game.country, from) ? { ...game, country: to } : game);
 export const renamePolityInChats = (chats, from, to) =>

@@ -1,9 +1,12 @@
+import { DEMAND_CHECK_OUTCOMES } from "../../runtime/demandCheck.js";
 import { EVENT_TAG_ENUM, MAX_EVENT_TAGS } from "../../runtime/eventTags.js";
 import {
   TERRITORY_BASIS_DESCRIPTION,
   TERRITORY_BASIS_DESCRIPTION_SHORT,
   TERRITORY_BASIS_ENUM,
 } from "../../runtime/territoryBasis.js";
+import { INSTITUTION_LIFECYCLE_DECISIONS } from "../../runtime/institutions.js";
+import { INSTITUTION_CHAT_ACTION_KINDS } from "./institutionChatActions.js";
 import { extractJsonArray } from "./jsonSalvage.js";
 const textSchema = (description) => ({
   type: "string",
@@ -825,7 +828,7 @@ const institutionLifecycleImpactOpSchema = {
     targetPolity: textSchema("invite/expel/suspend/reinstate: exact target polity name."),
     caseId: textSchema("respond: exact pending lifecycle case id supplied by canonical context."),
     requestedStatus: textSchema("invite/apply: requested status such as member or observer."),
-    decision: { type: "string", enum: ["accept", "reject", "seek-observer", "request-terms", "delay"] },
+    decision: { type: "string", enum: [...INSTITUTION_LIFECYCLE_DECISIONS] },
     reason: textSchema("Concise political/strategic reason grounded in current relations, PWv2 context and institution fit."),
     terms: textSchema("Counterconditions or accession terms when relevant."),
     name: textSchema("found: institution name."),
@@ -1001,12 +1004,15 @@ const impactsSchema = {
 // This compaction is jump-only: the authoritative/internal schemas (including
 // Game Master) retain their full descriptions. Validation is unchanged because
 // descriptions are annotations, not constraints.
+// Only a string annotation goes: a field that is itself called "description"
+// (groupOps has one) is a schema object inside `properties` and must survive,
+// or additionalProperties false turns every op that fills it into a failed turn.
 const stripNestedSchemaDescriptions = (schema) => {
   if (Array.isArray(schema)) return schema.map(stripNestedSchemaDescriptions);
   if (!schema || typeof schema !== "object") return schema;
   return Object.fromEntries(
     Object.entries(schema)
-      .filter(([key]) => key !== "description")
+      .filter(([key, value]) => !(key === "description" && typeof value === "string"))
       .map(([key, value]) => [key, stripNestedSchemaDescriptions(value)]),
   );
 };
@@ -1589,7 +1595,7 @@ export const DEMAND_CHECK_SCHEMA = {
   properties: {
     outcome: {
       type: "string",
-      enum: ["none", "demand", "accepts_alternative", "accepted", "refused", "alternative"],
+      enum: [...DEMAND_CHECK_OUTCOMES],
       description: "Exactly one of the outcomes the request lists for this reply.",
     },
     summary: textSchema("One line: what is demanded (for demand) or what is offered instead (for alternative). Empty for any other outcome."),
@@ -1624,8 +1630,8 @@ const chatActionSchema = {
       description:
         "send_message = speak. add_reaction = react to a message instead of speaking. rename_chat = the conversation has become about something else. "
         + "add_member / remove_member = bring a polity in, or put one out. create_poll = call a conversational binding poll. add_poll_option / poll_vote operate on that poll. "
-        + "institution_lodge_proposal / institution_submit_proposal / institution_amendment / institution_resolve_amendment / institution_vote are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.",
-      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", "institution_lodge_proposal", "institution_submit_proposal", "institution_amendment", "institution_resolve_amendment", "institution_vote"],
+        + `${INSTITUTION_CHAT_ACTION_KINDS.join(" / ")} are ONLY for a formal institutional channel and are the only chat actions that can alter its legal governance state. Live institution invitation/application decisions use the top-level lifecycleResponsesJson field instead of the chat action union so Gemini receives a smaller function declaration; native lifecycle law still decides what changes canonically.`,
+      enum: ["send_message", "add_reaction", "rename_chat", "add_member", "remove_member", "create_poll", "add_poll_option", "poll_vote", ...INSTITUTION_CHAT_ACTION_KINDS],
     },
     actorName: nonEmptyTextSchema("The AI participant acting, by exact display name. NEVER a human-controlled one."),
     content: textSchema("send_message: spoken message only, in its leader's voice. Match the length and tone of what it answers. actorName already identifies the speaker; never prefix content with the polity name plus a colon or dash."),
@@ -1678,7 +1684,7 @@ export const CHAT_ACTIONS_SCHEMA = {
       items: chatActionSchema,
     },
     memorySummary: textSchema("The thread's rolling memory, rewritten: what has been agreed, threatened, offered and left unresolved. Two or three sentences."),
-    lifecycleResponsesJson: textSchema("Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is accept, reject, seek-observer, request-terms, or delay. Use [] when this is not a lifecycle negotiation."),
+    lifecycleResponsesJson: textSchema(`Institution invitation/application decisions as JSON array text. Each object: {actorName, caseId, decision, reason?, terms?}. decision is ${INSTITUTION_LIFECYCLE_DECISIONS.slice(0, -1).join(", ")}, or ${INSTITUTION_LIFECYCLE_DECISIONS.at(-1)}. Use [] when this is not a lifecycle negotiation.`),
   },
   required: ["actions"],
   additionalProperties: false,
@@ -1712,6 +1718,14 @@ export const INTERACTIVE_EXECUTOR_SCHEMA = {
       maxItems: 5,
       items: nonEmptyTextSchema("One player choice."),
     },
+    // The record of a scene that ends on this move, written with the move
+    // itself: without it, the scene cost a second request (interactiveSummary)
+    // just to condense what this answer had already concluded. Optional; a
+    // resolved answer without them falls back to that request (gameplay.js
+    // resolveInteractiveScene).
+    recordTitle: textSchema("Only when resolved is true: a concise headline for the whole finished interactive event as one campaign timeline event. Empty otherwise."),
+    recordDescription: textSchema("Only when resolved is true: a complete but concise account of the whole interactive event's outcome, as one campaign timeline event. Empty otherwise."),
+    recordImportance: textSchema("Only when resolved is true: the event's importance, normally major. Empty otherwise."),
   },
   required: ["summary", "resolved", "nextChoices"],
   additionalProperties: false,
@@ -2035,6 +2049,23 @@ export const GAME_MASTER_SCHEMA = {
       maxItems: 3,
       items: createdChatSchema,
     },
+    // What the administrator's request itself asks for, read by the model that
+    // reads the request, in whatever language it was written. The request
+    // checks (gameMasterRequestCompleteness.js, gameplay.js) trust these and
+    // fall back to their English patterns only when an answer lacks them. Not
+    // in `required`: a preview saved before they existed must still validate.
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: {
+      type: "string",
+      description: "The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC); blank when it names none or several.",
+    },
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
@@ -2075,6 +2106,15 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     agreementUpdatesJson: textSchema("JSON array text for structured world.agreements lifecycle operations. Use [] when none."),
     puppetUpdatesJson: textSchema("JSON array text for structured world.puppets subordination changes — making a country a puppet (protectorate, satellite or client), changing one, or ending one. Use [] when none."),
     diplomaticOutreachJson: textSchema("JSON array text for direct NPC-to-player diplomatic outreach. Use [] when none."),
+    requestedSubordination: {
+      type: "boolean",
+      description: "True when the administrator's request asks for one country to become another's puppet, satellite, protectorate or client state; false otherwise, including a request to end or prevent one.",
+    },
+    requestedDate: textSchema("The one exact date the administrator's request names for the event, as YYYY-MM-DD (a negative year for BC). Empty string when it names none or several."),
+    requestedOngoingProcess: {
+      type: "boolean",
+      description: "True when the administrator's request describes an unresolved or changing multi-turn process (a crisis, uprising, standoff, escalation) rather than a finished change.",
+    },
   },
   required: [
     "mode",
@@ -2088,6 +2128,9 @@ export const GAME_MASTER_TRANSPORT_SCHEMA = {
     "agreementUpdatesJson",
     "puppetUpdatesJson",
     "diplomaticOutreachJson",
+    "requestedSubordination",
+    "requestedDate",
+    "requestedOngoingProcess",
   ],
   additionalProperties: false,
 };
@@ -2166,6 +2209,10 @@ export const decodeGameMasterTransportPayload = (value) => {
     for (const [field, key] of GAME_MASTER_TRANSPORT_FIELDS) {
       payload[key] = parseGameMasterTransportArray(value[field], field);
     }
+    // Carried only when the answer has them, so an older answer decodes as it did.
+    if (typeof value.requestedSubordination === "boolean") payload.requestedSubordination = value.requestedSubordination;
+    if (typeof value.requestedDate === "string") payload.requestedDate = value.requestedDate.trim();
+    if (typeof value.requestedOngoingProcess === "boolean") payload.requestedOngoingProcess = value.requestedOngoingProcess;
     return { payload: normalizeGameMasterChats(payload), error: "" };
   } catch (error) {
     return { payload: null, error: String(error?.message || error || "Invalid GM transport payload.") };
@@ -2652,7 +2699,7 @@ export const COUNTRY_STAT_GENERATION_SCHEMA = {
       properties: {
         gdpGrowth: statNumberSchema("Annual real GDP growth estimate in percent.", { minimum: -100, maximum: 100 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
-        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        inflation: statNumberSchema("Annual inflation estimate in percent; negative is deflation.", { minimum: -100, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
         publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
         budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
@@ -2799,7 +2846,7 @@ export const COUNTRY_STAT_SHEET_SCHEMA = {
         coreGdpPerCapita: statNumberSchema("Derived core/integrated NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
         otherGdpPerCapita: statNumberSchema("Derived overseas/dependent NOMINAL GDP per capita in constant 2026-EUR accounting terms.", { minimum: 1 }),
         currency: nonEmptyTextSchema("Current domestic currency or dominant medium of exchange."),
-        inflation: statNumberSchema("Annual inflation estimate in percent.", { minimum: 0, maximum: 1000 }),
+        inflation: statNumberSchema("Annual inflation estimate in percent; negative is deflation.", { minimum: -1000, maximum: 1000 }),
         unemployment: statNumberSchema("Unemployment estimate in percent.", { minimum: 0, maximum: 100 }),
         publicDebt: statNumberSchema("Public debt as percent of GDP.", { minimum: 0, maximum: 1000 }),
         budgetBalance: statNumberSchema("Budget balance as percent of GDP; negative is deficit, positive is surplus.", { minimum: -1000, maximum: 1000 }),
@@ -2924,6 +2971,33 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   },
   required: ["intelligence", "rationale"],
   additionalProperties: false,
+};
+
+// A first reading of a polity with neither a stat sheet nor a rated service asks
+// for both in ONE request (gameplay.js ensureCountryAssessed): the stat-sheet
+// tool, standard or scenario-defined, with the intelligence assessment's own
+// fields added LAST, so the rating is written after the numbers it rests on.
+// Only the tool shown to the model changes: the field is a transport field,
+// taken off the answer before the sheet is validated, and no other request
+// carries it.
+export const INTELLIGENCE_RATING_FIELD = "intelligenceService";
+export const withIntelligenceRating = (tool) => {
+  if (!tool?.schema?.properties) return tool;
+  return {
+    ...tool,
+    description: `${tool.description} Also rate the polity's intelligence service in ${INTELLIGENCE_RATING_FIELD}.`,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        [INTELLIGENCE_RATING_FIELD]: {
+          ...INTELLIGENCE_ASSESSMENT_SCHEMA,
+          description: "The polity's intelligence service as it stands on the current date: how well it reads other governments and keeps its own secrets. Written after the sheet's values.",
+        },
+      },
+      required: [...(Array.isArray(tool.schema.required) ? tool.schema.required : []), INTELLIGENCE_RATING_FIELD],
+    },
+  };
 };
 
 export const GAMEPLAY_SCHEMAS = Object.freeze({

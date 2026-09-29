@@ -3,7 +3,7 @@
  * Copyright (c) 2026 Nicholas Krol - AGPL-3.0-or-later (see LICENSE).
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 // Small form-field building blocks + color helpers for the editor panels.
 
@@ -126,7 +126,9 @@ export const SelectField = ({ value, onChange, options, width }) => (
 export const TagField = ({ value, onChange, suggestions = [], placeholder = "add a tag…" }) => {
   const [draft, setDraft] = useState("");
   const tags = Array.isArray(value) ? value : [];
-  const listId = "oh-tag-suggestions";
+  // One datalist per field: a shared id resolved every field on the page to
+  // the first list, so the Tags box offered the Disputed-by polity names.
+  const listId = useId();
   const wrapRef = useRef(null);
   const inputRef = useRef(null);
 

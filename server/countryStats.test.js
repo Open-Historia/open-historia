@@ -5,15 +5,19 @@ import { validateGameplayPayload } from "../src/Game/AI/gameplaySchemas.js";
 
 import {
   aggregateTerritorialEconomy,
+  appendCountryStatHistorySample,
+  buildEconomicConditionSummary,
   captureCountryStatsHistory,
   countryStatsTrackingMonthsElapsed,
   finalizeCountryStatSheet,
   guardCountryStatContinuity,
   isCompleteCountryStatSheet,
   mergeCountryStatPatch,
+  mergeCountryStatsHistory,
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
   parseStatNumber,
+  withCurrentCountryStatSample,
 } from "../src/runtime/countryStats.js";
 
 const ledger = () => [
@@ -30,6 +34,36 @@ test("parseStatNumber accepts the number forms old saves and prompts produce", (
   assert.equal(parseStatNumber(""), null);
   assert.equal(parseStatNumber("abc"), null);
   assert.equal(parseStatNumber(Number.NaN), null);
+});
+
+test("parseStatNumber scales a number only by the word written right after it", () => {
+  assert.equal(parseStatNumber("€3.1tn"), 3.1e12);
+  assert.equal(parseStatNumber("48.5bn"), 48.5e9);
+  assert.equal(parseStatNumber("850mn"), 850e6);
+  assert.equal(parseStatNumber("12k"), 12e3);
+  assert.equal(parseStatNumber("2.5 thousand"), 2500);
+  assert.equal(parseStatNumber("€520 billion (about $0.6 trillion)"), 520e9);
+  assert.equal(parseStatNumber("12 months"), 12);
+  assert.equal(parseStatNumber("3 tonnes of grain, 2 million people"), 3);
+});
+
+test("an event's stats patch cannot rescale a GDP ledger by more than the limit", () => {
+  const base = { territorialComponents: ledger() };
+  const before = mergeCountryStatPatch(base, {});
+  assert.equal(before.economy.gdp, 52000);
+
+  const misread = mergeCountryStatPatch(base, { economy: { gdp: "3.1" } }, { maxAggregateRescale: 10 });
+  assert.equal(misread.economy.gdp, 52000, "a thousandfold collapse is ignored");
+  assert.deepEqual(misread.territorialComponents.map((component) => component.gdpPerCapita), [50, 20]);
+
+  const inflated = mergeCountryStatPatch(base, { economy: { gdpPerCapita: 5.2e14 } }, { maxAggregateRescale: 10 });
+  assert.equal(inflated.economy.gdp, 52000);
+
+  const war = mergeCountryStatPatch(base, { economy: { gdp: 26000 } }, { maxAggregateRescale: 10 });
+  assert.equal(war.economy.gdp, 26000, "a halving is within the limit");
+
+  const gm = mergeCountryStatPatch(base, { economy: { gdp: 5000 } });
+  assert.ok(Math.abs(gm.economy.gdp - 5000) < 10, "an exact correction with no limit still applies");
 });
 
 test("territorial aggregation splits core and overseas rows and drops unusable rows", () => {
@@ -158,6 +192,35 @@ test("an explicit non-territorial stat sheet can be complete without fabricated 
   assert.equal(distributedEconomy.economy.gdp, 100000000);
   assert.equal(distributedEconomy.economy.gdpPerCapita, 40000);
   assert.equal(isCompleteCountryStatSheet(distributedEconomy), true);
+});
+
+test("deflation survives normalization and validation while public debt stays non-negative", () => {
+  const base = {
+    territorialScope: "nonterritorial",
+    capital: "Nowhere",
+    continent: "Transnational",
+    government: "Council",
+    leader: "Test Leader",
+    stability: 50,
+    indices: {
+      sovereignty: 40,
+      foodAutonomy: 0,
+      energyAutonomy: 0,
+      economicIndependence: 35,
+      internalSecurity: 55,
+      internationalReputation: 20,
+    },
+    territorialComponents: [],
+    economy: { gdpGrowth: 0, currency: "EUR", inflation: 2, unemployment: 0, publicDebt: 0, budgetBalance: 0 },
+    gdpBreakdown: { agriculture: 0, industry: 0, services: 100 },
+  };
+  const deflating = mergeCountryStatPatch(base, { economy: { inflation: -2.5, publicDebt: -5 } });
+  assert.equal(deflating.economy.inflation, -2.5);
+  assert.equal(deflating.economy.publicDebt, 0);
+  assert.equal(isCompleteCountryStatSheet(deflating), true);
+  assert.deepEqual(validateGameplayPayload("countryStatSheet", deflating), { valid: true, error: "" });
+  assert.equal(finalizeCountryStatSheet({ economy: { inflation: "-4000%" } }).economy.inflation, -1000);
+  assert.match(buildEconomicConditionSummary(deflating), /, deflation\./);
 });
 
 test("an empty territorial ledger is still invalid unless native code marks the polity non-territorial", () => {
@@ -389,6 +452,67 @@ test("history capture samples every existing sheet once per date without generat
 
   assert.equal(captureCountryStatsHistory(world, { date: "not a date" }).countryStatsHistory.Alpha.length, 1);
   assert.equal(captureCountryStatsHistory(null), null);
+});
+
+test("history capture records a sheet only when its readings changed", () => {
+  const world = {
+    countryStats: {
+      Alpha: { territorialComponents: ledger(), stability: 55 },
+      Beta: { stability: 40 },
+    },
+    countryStatsHistory: {},
+  };
+  const first = captureCountryStatsHistory(world, { date: "2014-01-01", round: 1 });
+  const unchanged = captureCountryStatsHistory(first, { date: "2014-02-01", round: 2 });
+  assert.equal(unchanged.countryStatsHistory.Alpha.length, 1, "an unreassessed sheet adds no copy");
+  assert.equal(unchanged.countryStatsHistory.Beta.length, 1);
+
+  const moved = captureCountryStatsHistory(
+    { ...unchanged, countryStats: { ...unchanged.countryStats, Beta: { stability: 35 } } },
+    { date: "2014-03-01", round: 3 },
+  );
+  assert.equal(moved.countryStatsHistory.Alpha.length, 1);
+  assert.deepEqual(moved.countryStatsHistory.Beta.map((sample) => [sample.date, sample.stability]), [
+    ["2014-01-01", 40],
+    ["2014-03-01", 35],
+  ]);
+
+  const backToFirst = appendCountryStatHistorySample(moved.countryStatsHistory, "Beta", { stability: 40 }, { date: "2014-04-01" });
+  assert.equal(backToFirst.Beta.length, 3, "a change back is a new reading");
+  const earlier = appendCountryStatHistorySample(moved.countryStatsHistory, "Beta", { stability: 40 }, { date: "2014-02-01" });
+  assert.equal(earlier.Beta.length, 2, "a sample like the one before it is skipped even out of order");
+});
+
+test("the drawn series runs to the current date without storing the extra point", () => {
+  const stored = [{ date: "2014-01-01", round: 1, stability: 40 }];
+  const drawn = withCurrentCountryStatSample(stored, { stability: 40 }, { date: "2016-01-01", round: 9 });
+  assert.deepEqual(drawn.map((sample) => sample.date), ["2014-01-01", "2016-01-01"]);
+  assert.equal(stored.length, 1);
+  assert.equal(withCurrentCountryStatSample(stored, { stability: 40 }, { date: "2014-01-01" }).length, 1);
+  assert.equal(withCurrentCountryStatSample(stored, null, { date: "2016-01-01" }).length, 1);
+});
+
+test("samples recovered from rollback snapshots do not put unchanged copies back", () => {
+  const stored = {
+    Beta: [
+      { date: "2014-01-01", round: 1, stability: 40 },
+      { date: "2014-04-01", round: 4, stability: 35 },
+    ],
+  };
+  // One snapshot per turn: February and March read like January.
+  const recovered = {
+    Beta: [
+      { date: "2014-02-01", round: 2, stability: 40 },
+      { date: "2014-03-01", round: 3, stability: 40 },
+      { date: "2014-05-01", round: 5, stability: 30 },
+    ],
+  };
+  const merged = mergeCountryStatsHistory(stored, recovered);
+  assert.deepEqual(merged.Beta.map((sample) => [sample.date, sample.stability]), [
+    ["2014-01-01", 40],
+    ["2014-04-01", 35],
+    ["2014-05-01", 30],
+  ]);
 });
 
 test("tracking settings are bounded and the player joins the tracked list only with an interval", () => {

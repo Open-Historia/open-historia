@@ -79,6 +79,20 @@ export const planHistoryConsolidation = (bundle, { force = false } = {}) => {
   };
 };
 
+// Whether a pass that comes back later (a batch job) still has something to
+// fold in the campaign as it stands now. A pass that folded the same events —
+// or, for a chats-only pass, the same closed chats — in the meantime
+// supersedes it: two summaries of the same weeks would double the campaign's
+// memory of them.
+export const deferredConsolidationStillDue = ({ throughEvent = null, closedChats = [] } = {}, currentBundle) => {
+  const world = normalizeWorldState(currentBundle?.world);
+  if (throughEvent) {
+    return getUnconsolidatedEvents(currentBundle?.events, world).some((event) => event.id === throughEvent.id);
+  }
+  const foldedChatIds = new Set(world.consolidatedHistory.flatMap((entry) => entry.chatIds));
+  return (Array.isArray(closedChats) ? closedChats : []).some((chat) => !foldedChatIds.has(chat?.id));
+};
+
 // The document as the consolidator should see it before a pass: the live one,
 // or — for a campaign consolidated before the document existed — its ledger
 // of pass summaries, which the first document pass rewrites into one text.

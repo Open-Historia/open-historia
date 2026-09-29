@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { DATA_DIR } from "./dataDir.js";
+import { validateFlagDataUrl } from "./flagValidation.js";
 
 const FLAGS_PATH = path.join(DATA_DIR, "flags-library.json");
 
@@ -37,32 +38,16 @@ const hashOf = (dataUrl) => crypto.createHash("sha256").update(String(dataUrl)).
 const slug = (raw, fallback = "flag") =>
   String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
 
+// A polity name is an exact key: kept as given, never cut short. One too long
+// to be a name is dropped rather than truncated into a different one.
+const exactPolity = (value) => (typeof value === "string" && value.length <= 200 ? value : "");
+
 export const listFlags = () => readAll();
-
-// A flag is a 256px PNG — tens of kilobytes. The only check used to be that the
-// string starts with "data:image/", which let anything up to the 64 MB body
-// limit into a file that is read and rewritten IN FULL on every flag operation,
-// so a few oversized entries slow down every request that touches the library.
-// Pin the shape instead: a known image type, real base64, and a sane ceiling.
-const FLAG_IMAGE_TYPES = new Set(["png", "jpeg", "jpg", "webp", "gif", "svg+xml"]);
-const MAX_FLAG_BYTES = 2 * 1024 * 1024;
-const DATA_URL_PATTERN = /^data:image\/([a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i;
-
-const validateFlagDataUrl = (dataUrl) => {
-  const match = DATA_URL_PATTERN.exec(dataUrl);
-  if (!match) throw new Error("A flag must be a base64 image data URL.");
-  if (!FLAG_IMAGE_TYPES.has(match[1].toLowerCase())) {
-    throw new Error(`Unsupported flag image type: ${match[1]}`);
-  }
-  // base64 is 4 chars per 3 bytes; compare decoded size against the cap.
-  const bytes = Math.floor((match[2].length * 3) / 4);
-  if (bytes > MAX_FLAG_BYTES) {
-    throw new Error(`That flag is too large (${Math.round(bytes / 1024)} KB; the limit is ${MAX_FLAG_BYTES / 1024} KB).`);
-  }
-};
 
 export const createFlag = (body = {}) => {
   const dataUrl = String(body.dataUrl || "");
+  // A known image type, real base64, at most 2 MB (flagValidation.js), the same
+  // rule as the website's and the app's library.
   validateFlagDataUrl(dataUrl);
   const flags = readAll();
   const contentHash = hashOf(dataUrl);
@@ -78,6 +63,9 @@ export const createFlag = (body = {}) => {
     id,
     name: String(body.name || body.code || "Flag").slice(0, 80),
     code: String(body.code || "").toUpperCase().slice(0, 12),
+    // The polity the flag is for, exactly as the map names it: `code` above is
+    // only an upper-cased 12-character hint, which sharing must not send on.
+    polity: exactPolity(body.polity),
     author: String(body.author || "").slice(0, 80),
     dataUrl,
     contentHash,

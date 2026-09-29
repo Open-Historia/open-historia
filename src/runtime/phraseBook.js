@@ -94,6 +94,13 @@ const fill = (template, slots, values) => {
   });
 };
 
+// A template's slots filled by name from `params` ("We accept: {{summary}}."
+// with { summary }), for text the game writes itself. A slot `params` lacks is
+// dropped rather than shown in braces.
+export const fillSlots = (template, params = {}) => String(template ?? "").replace(SLOT, (_whole, name) => (
+  params && Object.hasOwn(params, name) && params[name] != null ? String(params[name]) : ""
+));
+
 const acceptsValues = (pattern, values) => {
   if (pattern.strength < STRONG_LETTERS) {
     const words = values.reduce((total, value) => total + wordCount(value), 0);
@@ -231,7 +238,18 @@ export const createPhraseBook = ({ localizeValue = null } = {}) => {
     return result;
   };
 
+  // The entry for a key the game knows in English, exact or a `{{slot}}`
+  // pattern, with its slots filled from `params`: no matching, since the
+  // template is known. null when the book has no entry for it.
+  const format = (key, params = {}) => {
+    if (typeof key !== "string") return null;
+    const trimmed = key.trim();
+    const template = isPatternKey(trimmed) ? patternEntries.get(trimmed) : get(trimmed);
+    return template == null ? null : fillSlots(template, params);
+  };
+
   return {
+    format,
     get,
     has: (text) => get(text) !== undefined,
     patternCount: () => patternEntries.size,

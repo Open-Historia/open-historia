@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Open Historia is a turn-based, AI-driven grand-strategy game that renders the whole Earth as an interactive map. The frontend is a single React 19 SPA (Vite build) that draws the world with MapLibre GL + PMTiles vector tiles and hosts an OpenLayers-based map editor behind a URL flag; the same client bundle runs against **three interchangeable `/api` backends** selected at compile time — a local Express server (desktop download), an in-browser IndexedDB fetch-interceptor (hosted website), and an embedded nodejs-mobile server (Android app). Everything the client needs it asks for through the same `/api/*` calls, so the three variants differ only in what answers those calls.
+Open Historia is a turn-based, AI-driven grand-strategy game that renders the whole Earth as an interactive map. The frontend is a single React 19 SPA (Vite build) that draws the world with MapLibre GL + PMTiles vector tiles and hosts an OpenLayers-based map editor behind a URL flag; the same client bundle runs against **two interchangeable `/api` backends** selected at compile time — a local Express server (the desktop app, or a self-hosted server) and an in-browser IndexedDB fetch-interceptor (the hosted website, and the Android app, which hosts the web build in a WebView; see [mobile.md](mobile.md)). Everything the client needs it asks for through the same `/api/*` calls, so the variants differ only in what answers those calls.
 
 This page is the map of the codebase. Each subsystem has its own page; follow the cross-links.
 
@@ -10,19 +10,19 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 
 | Concern | Choice | Where |
 |---|---|---|
-| UI framework | React 19 (+ `babel-plugin-react-compiler`) | `package.json`, `vite.config.ts:77` |
+| UI framework | React 19 (+ `babel-plugin-react-compiler`) | `package.json`, `vite.config.ts` |
 | Bundler / dev server | Vite 7 | `vite.config.ts`, `package.json` scripts |
-| Map renderer | MapLibre GL 5 via `react-map-gl/maplibre` | `src/Game/Map/World.jsx:3` |
+| Map renderer | MapLibre GL 5 via `react-map-gl/maplibre` | `src/Game/Map/World.jsx` |
 | Vector tiles | PMTiles 4 (`pmtiles`, `ol-pmtiles`) — regions / countries / cities archives | `src/runtime/assets.js`, `src/runtime/preload.js` |
-| Map editor renderer | OpenLayers 10 (`ol`) — lazy-loaded, editor route only | `src/App.jsx:7`, `src/Editor/OlMap.jsx` |
+| Map editor renderer | OpenLayers 10 (`ol`) — lazy-loaded, editor route only | `src/App.jsx`, `src/Editor/OlMap.jsx` |
 | Geometry / GIS | `@turf/*`, `d3-geo`, `polygon-clipping`, `shpjs`, `geotiff` | `package.json` deps |
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
-| Desktop/mobile server | Express 5 | `server/server.js`, `mobile/nodejs-project/` |
+| Desktop / local server | Express 5 | `server/server.js` (inside Electron for the desktop app) |
 | Signing / trust | `@noble/ed25519` (content manifests, node directory) | `trust/`, `src/runtime/web/contentTrust.js` |
-| Bundled tools | Azgaar Fantasy Map Generator (vendored) | `fmg/`, `scripts/fetch-fmg.mjs` |
-| Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js:82` |
+| Optional tools (source checkouts only) | Azgaar Fantasy Map Generator (vendored by hand; no build ships it, and the Workshop hides its Generate tab without it) | `fmg/`, `scripts/fetch-fmg.mjs` |
+| Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js` |
 
-The heavy map binaries (`regions.pmtiles` ~101 MB, `countries.pmtiles`, `cities.pmtiles`, plus editor seed geojson) are **never bundled** — see [Map assets & PMTiles](assets-and-data.md). They live in `public/assets/`, are gitignored, and are fetched from a GitHub "map-data" Release on first launch. A Vite plugin (`dropMapBinaries`, `vite.config.ts:43`) deletes them from every build output so Cloudflare Pages' 25 MiB/file limit is never hit.
+The heavy map binaries (`regions.pmtiles`, ~21 MB as the z8 trim the desktop downloads, `countries.pmtiles`, `cities.pmtiles`, plus editor seed geojson) are **never bundled** — see [Map assets & PMTiles](assets-and-data.md). They live in `public/assets/`, are gitignored, and are fetched from a GitHub "map-data" Release on first launch. A Vite plugin (`dropMapBinaries`, `vite.config.ts`) deletes them from every build output so Cloudflare Pages' 25 MiB/file limit is never hit.
 
 ---
 
@@ -32,7 +32,7 @@ All three run the identical `src/` client. What changes is (a) the `VITE_OH_WEB`
 
 | Variant | Build command | `/api` backend | Asset storage | Distribution |
 |---|---|---|---|---|
-| **Desktop download** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/` | Local Express server `server/server.js` on `localhost:3000` | Files under `server/data/` (JSON manifests + binary assets) | Zip + launcher scripts (`Launch Open Historia.*`) |
+| **Desktop app** ("Download for Windows/Mac/Linux") | `npm run build` → `dist/`, packaged with `server/` by electron-builder | Express server `server/server.js`, run inside the Electron process on `localhost:3000` | Files under the data directory (`server/data/` from a clone; the app's user-data folder in the installed app, via `OH_DATA_DIR`) | Installers on the `desktop-stable` release (`desktop-installer.yml`); see [delivery](delivery-and-deploy.md) §4.1 |
 | **Web build** (the hosted website `openhistoria.com/play/`) | `npm run build:web` / `build:site` → `dist-web/` | **No server** — a `fetch()` interceptor answers `/api/*` from IndexedDB | IndexedDB in the browser; map tiles from the registry Worker / content nodes | Cloudflare Pages |
 | **Android app** | client from `dist-android/` (`npm run build:android`) inside the APK, with the world map under `www/assets` | None — the web backend (`src/runtime/web/*`) answers `/api/*` in the page | IndexedDB `open-historia-web`; map data read from the APK by HTTP Range | Capacitor APK (`mobile/`) — see [mobile.md](mobile.md) |
 
@@ -41,25 +41,25 @@ All three run the identical `src/` client. What changes is (a) the `VITE_OH_WEB`
 The whole web branch hinges on one boolean literal, injected by Vite's `define`:
 
 ```
-'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web')   // vite.config.ts:75
+'import.meta.env.VITE_OH_WEB': JSON.stringify(mode === 'web')   // vite.config.ts
 ```
 
-- `vite build` (any mode ≠ `web`) → `VITE_OH_WEB` is `false`. Rollup dead-code-eliminates every `if (import.meta.env.VITE_OH_WEB)` branch **and the dynamically-imported web backend** (`src/runtime/web/*`), so the desktop/Android bundle never pulls in IndexedDB stores, accounts, or the web-only generated seed files. This is why a fresh desktop extract (which has never run a web build) still builds and boots.
-- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_PMTILES_URL`, `VITE_OH_HUB_URL`, `VITE_OH_ACCOUNT_URL`, `VITE_OH_DIRECTORY_URL`, `VITE_OH_GOOGLE_CLIENT_ID`). See [Web build & accounts](web-build.md).
+- `vite build` (any mode ≠ `web`) → `VITE_OH_WEB` is `false`. Rollup dead-code-eliminates every `if (import.meta.env.VITE_OH_WEB)` branch **and the dynamically-imported web backend** (`src/runtime/web/*`), so the desktop bundle never pulls in IndexedDB stores or the web-only generated seed files. This is why a fresh desktop extract (which has never run a web build) still builds and boots.
+- `vite build --mode web` → `VITE_OH_WEB` is `true`, and Vite additionally loads `.env.web` (`VITE_OH_PMTILES_URL`, `VITE_OH_HUB_URL`, `VITE_OH_DIRECTORY_URL`). See [Web build](web-build.md).
 
-The one place the flag is read at boot is `src/main.jsx:28` (below). Because the web backend is behind a **dynamic `import()`**, the desktop build never even references the module.
+The one place the flag is read at boot is `src/main.jsx` (below). Because the web backend is behind a **dynamic `import()`**, the desktop build never even references the module.
 
 **Relevant `package.json` scripts:**
 
 | Script | Effect |
 |---|---|
-| `dev` | `vite` — desktop client on `:5173`, proxying `/api` → `http://localhost:3000` (`vite.config.ts:87`) |
+| `dev` | `vite` — desktop client on `:5173`, proxying `/api` → `http://localhost:3000` (`vite.config.ts`) |
 | `dev:web` | seeds web defaults, then `vite --mode web` |
 | `build` | desktop client → `dist/` |
 | `build:web` | seeds, then `vite build --mode web --outDir dist-web` |
 | `build:site` | `build:web` with `--base /play/` + `scripts/assemble-site.mjs` (bolts the marketing `site/` around `/play/`) |
 | `build:android` | `seed-web-defaults.mjs` + `vite build --mode android` → `dist-android/` (the Android app's bundle; `mobile/scripts/stage-www.mjs` adds the map data) |
-| `test` | `node --test server/**/*.test.js` (server unit tests only) |
+| `test` | `node --test "server/**/*.test.js" "src/**/*.test.js"` — server and client tests, each beside its module; a tested module and its imports must load under plain Node (see [conventions](conventions.md) §7) |
 
 ---
 
@@ -69,9 +69,9 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 
 `index.html` loads exactly one module, `/src/main.jsx`. It:
 
-1. `configureMapRuntime()` — sizes MapLibre worker count + parallel image requests from `navigator.hardwareConcurrency` (`src/runtime/assets.js:398`).
-2. Renders `<App/>` into `#root`, then `startTranslator()` (live UI translation when a non-English language is set — see [i18n & translation](i18n.md)) and registers the service worker (`public/sw.js`, production only).
-3. **The fork** (`src/main.jsx:28`):
+1. `configureMapRuntime()` — sizes MapLibre worker count + parallel image requests from `navigator.hardwareConcurrency` (`src/runtime/assets.js`).
+2. Renders `<App/>` into `#root`, then `startTranslator()` (live UI translation when a non-English language is set — see [i18n & translation](i18n.md)) and registers the service worker (`public/sw.js`, production only, and not in the Android app, whose APK leaves `sw.js` out).
+3. **The fork** (`src/main.jsx`):
    - If `VITE_OH_WEB`: `import("./runtime/web/index.js").then(installWebBackend)` installs the IndexedDB `/api` interceptor **before** `mount()`, so no request escapes uninstalled.
    - Else: `mount()` directly.
 
@@ -81,25 +81,25 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 
 | URL | Renders | Notes |
 |---|---|---|
-| `?editor=1` | `<MapEditor/>` (lazy, `src/App.jsx:7`) | OpenLayers only fetched here; wrapped in `<Suspense>`. See [Map editor](map-editor.md) |
-| anything else | `<ErrorBoundary><GameApp/></ErrorBoundary>` | `ErrorBoundary` (`src/runtime/ErrorBoundary.jsx`) shows a recoverable Reload screen on a render throw instead of a blank page |
+| `?editor=1` | `<MapEditor/>` (lazy, `src/App.jsx`) | OpenLayers only fetched here; wrapped in `<Suspense>`. See [Map editor](map-editor.md) |
+| anything else | `<ErrorBoundary><GameApp/></ErrorBoundary>` | `ErrorBoundary` (`src/runtime/ErrorBoundary.jsx`) shows a recoverable Reload screen on a render throw instead of a blank page, with a Save logging file button that attaches the crash's full stacks |
 
 ### 3c. `GameApp` — startup preload & first render
 
-`GameApp` (`src/App.jsx:36`) always mounts `<Map>` immediately (behind a black `WorldShell`), and swaps a `<StartupScreen>` overlay for the `<UI>` once ready. Readiness is a race between a time budget and two async signals:
+`GameApp` (`src/App.jsx`) always mounts `<Map>` immediately (behind a black `WorldShell`), and swaps a `<StartupScreen>` overlay for the `<UI>` once ready. Readiness is a race between a time budget and two async signals:
 
 | State / ref | Meaning | Set by |
 |---|---|---|
 | `startupState` | progress %, current stage, per-task steps | `runStartupPreload` progress callback (`src/runtime/preload.js`) |
 | `preloadFinishedRef` | the 8 preload tasks finished/timed out | preload `.finally` |
-| `worldIdleRef` / `hasFirstWorldIdle` | MapLibre fired its **first** `onIdle` (first world frame settled) | `<Map onInitialIdle={handleFirstWorldIdle}>` → `World.jsx:226` |
+| `worldIdleRef` / `hasFirstWorldIdle` | MapLibre fired its **first** `onIdle` (first world frame settled) | `<Map onInitialIdle={handleFirstWorldIdle}>` → `World.jsx` |
 | `isReady` | show `<UI>`, hide `<StartupScreen>` | true when **(preload done AND first world idle)**, OR when `STARTUP_TIME_BUDGET_MS` (30 s) elapses |
 
-A `requestAnimationFrame` loop (`src/App.jsx:67`) ticks `elapsedMs` and flips `isReady` when either condition is met. The overlay's last 3% ("Finalizing first world render") is gated on `hasFirstWorldIdle` so the bar never sits at 100% while the map is still blank.
+A `requestAnimationFrame` loop (`src/App.jsx`) ticks `elapsedMs` and flips `isReady` when either condition is met. The overlay's last 3% ("Finalizing first world render") is gated on `hasFirstWorldIdle` so the bar never sits at 100% while the map is still blank.
 
-Before the preload even starts, `ensureLibraryCatalog()` (`src/runtime/library.js:187`) loads the games/scenarios catalog so the active game's cache token is known. The **8 preload tasks** (`src/runtime/preload.js:82`) warm: runtime JSON state, ESRI + terrain textures, `countries.pmtiles`, the country index, country labels, `cities.pmtiles`, and `regions.pmtiles`. See [Startup preload](assets-and-data.md).
+Before the preload even starts, `ensureLibraryCatalog()` (`src/runtime/library.js`) loads the games/scenarios catalog so the active game's cache token is known. The **8 preload tasks** (`src/runtime/preload.js`) warm: runtime JSON state, ESRI + terrain textures, `countries.pmtiles`, the country index, country labels, `cities.pmtiles`, and `regions.pmtiles`. See [Startup preload](assets-and-data.md).
 
-Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a scenario "Apply & Play" — which writes many assets and bumps the token repeatedly — remounts the map exactly **once** (`src/App.jsx:57`, `:169`).
+Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a scenario "Apply & Play" — which writes many assets and bumps the token repeatedly — remounts the map exactly **once** (`src/App.jsx`).
 
 ---
 
@@ -110,12 +110,12 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | Path | What lives there |
 |---|---|
 | `src/` | The React client (all three variants share this) |
-| `server/` | Express server + on-disk stores (desktop + embedded mobile backend) |
+| `server/` | Express server + on-disk stores (the desktop app and a self-hosted local server) |
 | `scripts/` | Build/seed/signing/asset tooling (`.mjs`) — see below |
 | `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, signed `content-manifest.json` / `node-directory.json`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
-| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) + `nodejs-project/` embedded server |
-| `node-content/` + `server/node.js` | Content-node server (hash-addressed, read-only) — see [Content nodes](assets-and-data.md) |
+| `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) around the web build, plus the map-staging scripts (`scripts/`, `map-assets.android.json`); no server of its own — see [mobile.md](mobile.md) |
+| `node-content/` + `server/node.js` | A minimal **development stub** of a content node (hash-addressed, read-only content only). The node hosts run is the separate [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) repository; the stub lacks the `/oh/v1/status`, `/ping`, `/leave` and `/hub` endpoints the web client uses, so `selectBestNode` never picks it — see [Content nodes](assets-and-data.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
 | `tools/import-counter/` | Cloudflare Worker: self-hosted scenario-import counter |
@@ -129,12 +129,12 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 |---|---|---|
 | `src/main.jsx` | Entry: runtime config, mount, web/desktop fork | §3a |
 | `src/App.jsx` | Route split (game vs editor), startup race | §3b/3c |
-| `src/Game/Map/` | MapLibre map + layers: `World.jsx` (map shell + style), `Nations.jsx` (region fills/borders/labels), `Cities.jsx`, `Units.jsx` + `unitsController.js`/`unitCombat.js`, `MarkersLayer.jsx`, `GlobeEffects.jsx` + globe sun/star canvases, `useWorldState.js`, `useCustomBackground.js` | [Map rendering](game-map.md) |
-| `src/Game/GameUI/` | The HUD: `main.jsx` (shell), `libraryBar.jsx` (top bar + main menu), `time.jsx` (date/turn), `chat.jsx` (toolbar/inbox), `advisor.jsx`, `forces.jsx`, `settings.jsx`, `search.jsx`, `stats.jsx`, `scenarios.jsx`, `communityHub.jsx`, `actions.jsx`, `cheats.jsx`, `FactionCreator.jsx`, `CountryPickerMap.jsx`, `other.jsx` | [Game UI](game-ui.md) |
+| `src/Game/Map/` | MapLibre map + layers: `World.jsx` (map shell + style), `Nations.jsx` (region fills/borders/labels), `Cities.jsx`, `Units.jsx` + `unitsController.js`, `MarkersLayer.jsx`, `GlobeEffects.jsx` + globe sun/star canvases, `useWorldState.js`, `useCustomBackground.js` | [Map rendering](game-map.md) |
+| `src/Game/GameUI/` | The HUD: `main.jsx` (shell), `libraryBar.jsx` (top bar + main menu), `time.jsx` (date/turn), `chat.jsx` (toolbar/inbox), `advisor.jsx`, `forces.jsx`, `settings.jsx`, `search.jsx`, `stats.jsx`, `communityHub.jsx`, `actions.jsx`, `cheats.jsx`, `FactionCreator.jsx`, `CountryPickerMap.jsx`, `other.jsx` | [Game UI](game-ui.md) |
 | `src/Game/Selection/` | Click-target popups: `Regions.jsx`, `CountryPanel.jsx`, `Units.jsx`, `Features.jsx` | [Selection & popups](game-ui.md) |
 | `src/Game/AI/` | AI turn engine: `main.jsx` (provider chat), `gameplay.js`, `gameplayPrompts.js`, `gameplaySchemas.js`, `promptContext.js`, `providerConfig.js`, `defaultPrompts.json` | [AI system](ai-overview.md) |
 | `src/runtime/` | Client "kernel": asset/endpoint layer, game/world state, library catalog, preload, i18n, startup UI | below |
-| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, accounts, sync, nodes, home page | [Web build & accounts](web-build.md) |
+| `src/runtime/web/` | **Web-only** backend (dead-code-stripped from desktop): `index.js`, `router.js`, IndexedDB stores, nodes, home page | [Web build](web-build.md) |
 | `src/Editor/` | OpenLayers map editor (author custom maps) | [Map editor](map-editor.md) |
 
 ### `src/runtime/` (the client kernel)
@@ -146,9 +146,9 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `gameState.js` | `GAME_DEFAULTS` + `WORLD_DEFAULTS`; read/write of the per-game `game.json` and `world.json` runtime state | [World state](world-state.md) |
 | `preload.js` | The 8 startup warm tasks + progress model. §3c |
 | `StartupScreen.jsx` / `ErrorBoundary.jsx` | Loading overlay; render-error recovery |
-| `countryLabels.js`, `countryFlags.js`, `countryTags.js`, `countryNames`/`polityNames.js` | Country label/flag/tag/name resolution from `countries.pmtiles` + overrides |
+| `countryLabels.js`, `countryFlags.js`, `countryTags.js`, `countryNames`/`polityNames.js` | Country flag/tag/name resolution from `countries.pmtiles` + overrides; the picker's coarse region shapes |
 | `communityBasemaps.js`, `communityFlags.js`, `basemapLibrary.js`, `flagLibrary.js` | Community/basemap/flag catalogs |
-| `mapSettings.js`, `difficulty.js`, `scenarios.js` | Map display settings, difficulty directives, scenario helpers |
+| `mapSettings.js`, `difficulty.js` | Map display settings, difficulty directives |
 | `translator.js`, `i18n.js` | Live UI translation + language directives |
 | `generated/` | Build-time generated tables (country names, etc.) |
 
@@ -177,15 +177,15 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 
 ## 5. Data flow: frontend ↔ `/api` ↔ stored assets
 
-The client **never** talks to storage directly. Every state read/write is a same-origin `/api/*` call built in `src/runtime/`. A backend answers it. This indirection is exactly what lets the same client run on Express, IndexedDB, or nodejs-mobile.
+The client **never** talks to storage directly. Every state read/write is a same-origin `/api/*` call built in `src/runtime/`. A backend answers it. This indirection is exactly what lets the same client run on Express or on IndexedDB.
 
 ### The runtime asset endpoints
 
-`setRuntimeAssetEndpoints({ token })` (`src/runtime/assets.js:204`) rebuilds every URL whenever the active library token changes, stamping `?v=<token>` for cache-busting and **sweeping the previous generation's caches** (a ~190 MB-per-switch GeoJSON leak fix — see [World state](world-state.md) and the RAM audit notes). The two endpoint families:
+`setRuntimeAssetEndpoints({ token })` (`src/runtime/assets.js`) rebuilds every URL whenever the active library token changes, stamping `?v=<token>` for cache-busting and **sweeping the previous generation's caches** (a ~190 MB-per-switch GeoJSON leak fix — see [World state](world-state.md) and the RAM audit notes). The two endpoint families:
 
 | Family | URL | Backed by | Payload |
 |---|---|---|---|
-| Runtime **JSON** state | `/api/runtime/json/:key` (GET/PUT) | `readRuntimeJsonAsset`/`writeRuntimeJsonAsset` in `libraryStore.js` | Per-game/scenario state: `game`, `world`, `events`, `chat`, `advisor`, `actions`, `colors`, `flags`, `tags`, `prompts`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData` (`assets.js:260`) |
+| Runtime **JSON** state | `/api/runtime/json/:key` (GET/PUT) | `readRuntimeJsonAsset`/`writeRuntimeJsonAsset` in `libraryStore.js` | Per-game/scenario state: `game`, `world`, `events`, `chat`, `advisor`, `actions`, `colors`, `flags`, `tags`, `prompts`, `snapshots`, `regionsGeojson`, `citiesGeojson`, `backgroundData` (`assets.js`) |
 | Runtime **binary** tiles | `/api/runtime/pmtiles/:key` (GET/HEAD, range) | `resolveRuntimeBinaryAsset` → `streamBinaryFile` | `regions` / `countries` / `cities` PMTiles archives (or a scenario override) |
 
 `game` vs `world`: `game.json` holds the player-facing scenario meta (`GAME_DEFAULTS` — country, difficulty, dates, round), `world.json` holds the mutable simulation (`WORLD_DEFAULTS` — units, markers, interactive events, reputation, region ownership/claimants, tags, label styling, history). Both are `gameState.js`.
@@ -203,28 +203,27 @@ The client **never** talks to storage directly. Every state read/write is a same
 | `/api/ui-settings`, `/api/lang/:code` | GET/PUT | shared UI language + accumulated translation packs |
 | `/api/ai/relay` | POST | Server-to-server relay to the player's OpenAI-compatible AI endpoint (defeats CORS) |
 | `/api/hub/file`, `/api/hub/import-log`, `/api/hub/import-counts` | GET/POST | Community hub GitHub proxy (SSRF-guarded to GitHub hosts) + self-hosted import counter |
-| `/api/server/shutdown` | POST | Exits the process (no button in the beta UI any more; scripts and the launcher) |
+| `/api/server/shutdown` | POST | Exits the process (no button in the UI any more; for scripts) |
 | `/fmg/*`, `*splat` | GET | Vendored FMG static + SPA fallback (`index.html`) |
 
-**Security middleware** (`server/server.js:73`, `:112`): blanket permissive CORS (so the Android WebView's cross-origin *probe* works) but state-changing writes are blocked unless same-origin or loopback (`crossOriginWriteAllowed` in `security.js`); override with `OH_ALLOW_CROSS_ORIGIN=1`. See [Server & security](server.md).
+**Security middleware** (`server/server.js`): CORS only for the page's own origin and the app shells (`allowedCorsOrigin`: the Android app's WebView origins, so an Android app pointed at this server on the LAN can reach it) but state-changing writes are blocked unless same-origin or loopback (`crossOriginWriteAllowed` in `security.js`); override with `OH_ALLOW_CROSS_ORIGIN=1`. See [Server & security](server.md).
 
-### The three backends, one contract
+### The two backends, one contract
 
 | Backend | Entry | How it answers `/api/*` |
 |---|---|---|
-| Express (desktop / mobile) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`) |
-| Web (browser) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. |
-| Embedded mobile | `mobile/nodejs-project/main.js` | Picks a writable `OH_DATA_DIR`, first-run-seeds from a bundled `seed/` snapshot, best-effort downloads map binaries, then `import("./server/server.js")` bound to `127.0.0.1`; the WebView loads it same-origin |
+| Express (desktop app, self-hosted server) | `server/server.js` | Real HTTP routes; assets on disk under `DATA_DIR` (`server/dataDir.js`; the desktop app points `OH_DATA_DIR` at its user-data folder) |
+| Web (browser, and the Android app) | `src/runtime/web/index.js` → `router.js` | Monkey-patches `window.fetch`: same-origin `/api/*` is routed to IndexedDB store handlers (`libraryStore.js`, `basemapStore.js`, `flagStore.js`, `editorStore.js`, `settingsStore.js`); PMTiles resolve to `VITE_OH_PMTILES_URL` or a connected content node; `/api/hub/*` forwards to the registry Worker. Everything non-`/api` passes through to the real `fetch`. The Android app is a host of this backend: the same code in a Capacitor WebView, with the map read from the APK (see [mobile.md](mobile.md)). |
 
-Because the web router keys on `url.origin === location.origin && pathname.startsWith("/api/")` (`router.js:153`), the client code (`library.js`, `assets.js`, editor IO, basemap library) is **byte-identical** across variants — it just calls `fetch("/api/…")`.
+Because the web router keys on `url.origin === location.origin && pathname.startsWith("/api/")` (`router.js`), the client code (`library.js`, `assets.js`, editor IO, basemap library) is **byte-identical** across variants — it just calls `fetch("/api/…")`.
 
 ### Map render path (read side)
 
-`World.jsx` builds a MapLibre style from three inputs — the ESRI basemap (via the `ohbase://` protocol that swaps ESRI's "not yet available" placeholder tiles for upscaled ancestors, `assets.js:418`), the terrarium DEM terrain/hillshade, or a **custom uploaded background** (image or vector) that replaces ESRI entirely (`useCustomBackground.js`). On top, child layers render game data pulled from the runtime JSON + PMTiles: `<Nations>` (region fills/borders/labels), `<Cities>`, `<Units>`, `<MarkersLayer>`, plus the `<Selection>` popups. Globe vs mercator, terrain on/off, and fullscreen are React state in `GameApp`, persisted to `localStorage` and passed down to both `<Map>` and `<UI>`. See [Map rendering](game-map.md).
+`World.jsx` builds a MapLibre style from three inputs — the ESRI basemap (via the `ohbase://` protocol that swaps ESRI's "not yet available" placeholder tiles for upscaled ancestors, `assets.js`), the terrarium DEM terrain/hillshade, or a **custom uploaded background** (image or vector) that replaces ESRI entirely (`useCustomBackground.js`). On top, child layers render game data pulled from the runtime JSON + PMTiles: `<Nations>` (region fills/borders/labels), `<Cities>`, `<Units>`, `<MarkersLayer>`, plus the `<Selection>` popups. Globe vs mercator, terrain on/off, and fullscreen are React state in `GameApp`, persisted to `localStorage` and passed down to both `<Map>` and `<UI>`. See [Map rendering](game-map.md).
 
 ### Write side (mutations)
 
-Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write → PUT `/api/runtime/json/{world|game|events|…}` → store persists → library token bumps → `assets.js` sweeps stale caches → affected layers re-read**. Library mutations (create/select/save game or scenario, asset upload) go through `src/runtime/library.js`, which force-refreshes the catalog and re-syncs the runtime token. See [World state](world-state.md) and [AI system](ai-overview.md).
+Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write → PUT `/api/runtime/json/{world|game|events|…}` → store persists → library token bumps → `assets.js` sweeps stale caches → affected layers re-read**. Library mutations (create/select/save game or scenario, asset upload) go through `src/runtime/library.js`, which force-refreshes the catalog and re-syncs the runtime token (once per batch for a multi-write save, `withSingleLibraryRefresh`). See [World state](world-state.md) and [AI system](ai-overview.md).
 
 ---
 
@@ -234,8 +233,8 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | `server/node.js` — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest | [Content nodes](assets-and-data.md) |
-| **Web accounts + sync** | Google sign-in + E2E-encrypted game/scenario sync against the registry Worker (web build only) | [Web build & accounts](web-build.md) |
+| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest. `server/node.js` here is only a development stub that serves content by hash | [Content nodes](assets-and-data.md) |
+| **Web saves** | No accounts and no sync: games and scenarios stay in this browser (IndexedDB) and move with game export/import (web build only) | [Web build](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
 ---

@@ -11,32 +11,31 @@
 // Kept free of React/OpenLayers deps so the editor and the game can both use it.
 
 import { unzipBundle, looksLikeZip } from "./bundleZip.js";
+import { bytesToBase64, restoreBundleFiles } from "./bundleFiles.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues, firstHubImage } from "./hubIssues.js";
+import { saveBlobToDisk } from "./saveFile.js";
 
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 // `labels=flag` is a contract with .github/ISSUE_TEMPLATE/flag.yml. The label must
 // EXIST in the repo — GitHub silently drops a label an issue form tries to apply if
 // it hasn't been created, and the post then never appears here.
-const HUB_API_FLAGS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=flag&per_page=100`;
 // Scenario posts are scanned too: one whose publish stamped a Flags-Count tag
 // carries custom flags in its bundle, and surfaces here as an installable flag
 // pack — the same trick communityBasemaps.js uses for scenario-carried basemaps.
-const HUB_API_SCENARIOS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
-
-const CACHE_TTL_MS = 5 * 60 * 1000;
-let cache = { at: 0, posts: null };
+// Both lists are hubIssues.js's, cached and shared with the other hub screens.
 
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
 // GitHub renders a dragged-in png/jpg inline as markdown, but attaches an .svg as a
 // file link — so a flag can arrive either way.
 const IMAGE_EXT_PATTERN = /\.(png|jpe?g|webp|gif|svg)(\?|#|$)/i;
-const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["']([^"']+)["']/i;
 const FILE_LINK_PATTERN =
   /https:\/\/(?:github\.com\/[^\s)<>"']+\/files\/[^\s)<>"']+|github\.com\/user-attachments\/files\/[^\s)<>"']+|raw\.githubusercontent\.com\/[^\s)<>"']+)/i;
 // Optional, and only a hint: which country the author drew this for.
 const CODE_PATTERN = /Flag-Code:\s*([A-Za-z0-9_-]{2,12})/i;
+const CODE_TOKEN = /^[A-Za-z0-9_-]{2,12}$/;
+// The polity's name exactly as the author's map has it ("Holy Roman Empire"),
+// which Flag-Code cannot carry: it is upper-cased and cut to one short token.
+const POLITY_PATTERN = /^[ \t]*Flag-Polity:[ \t]*(.+?)[ \t]*$/im;
 // Stamped into a scenario post by the publish flow when its bundle carries
 // custom flags. The tag is the browse-time signal — without it, knowing whether
 // a scenario has flags would mean downloading every bundle.
@@ -51,7 +50,8 @@ const firstMatch = (body, pattern) => {
 
 const parseFlagPost = (issue) => {
   const body = issue.body || "";
-  const cover = firstMatch(body, COVER_IMAGE_PATTERN);
+  // Only an image GitHub hosts (hubIssues.js firstHubImage).
+  const cover = firstHubImage(body);
   const fileLink = firstMatch(body, FILE_LINK_PATTERN);
   // An .svg (or any image GitHub attached rather than rendered) is the flag itself,
   // not a side file.
@@ -66,6 +66,7 @@ const parseFlagPost = (issue) => {
     official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
     upvotes: issue.reactions?.["+1"] ?? 0,
     code: (firstMatch(body, CODE_PATTERN) || "").toUpperCase() || null,
+    polity: firstMatch(body, POLITY_PATTERN) || null,
     imageUrl,
   };
 };
@@ -95,7 +96,7 @@ const parseScenarioAsFlagPack = (issue) => {
     official: OFFICIAL_ASSOCIATIONS.has(issue.author_association),
     upvotes: issue.reactions?.["+1"] ?? 0,
     code: null,
-    imageUrl: firstMatch(body, COVER_IMAGE_PATTERN),
+    imageUrl: firstHubImage(body),
     fromScenario: true,
     flagCount,
     packUrl,
@@ -108,40 +109,23 @@ export const flagPostInstallable = (post) =>
   Boolean(post?.fromScenario ? post?.packUrl : post?.imageUrl);
 
 export const fetchCommunityFlags = async ({ force = false } = {}) => {
-  if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
-
   // Dedicated flag posts, plus scenario posts (scanned so flags shared inside
   // scenarios show up here too). The scenarios call is best-effort — a failure
   // just hides the packs, exactly like the basemap browser.
-  const headers = { Accept: "application/vnd.github+json" };
-  const [res, scRes] = await Promise.all([
-    fetch(HUB_API_FLAGS, { headers }),
-    fetch(HUB_API_SCENARIOS, { headers }).catch(() => null),
+  const [issues, scIssues] = await Promise.all([
+    fetchHubIssues("flag", { force }).catch((error) => {
+      if (error?.status === undefined) throw error;
+      throw new Error(
+        error.status === 403
+          ? "GitHub rate limit reached — try again in a few minutes."
+          : `Could not reach the flag hub (HTTP ${error.status}).`,
+      );
+    }),
+    fetchHubScenarioIssues({ force }).catch(() => []),
   ]);
-  if (!res.ok) {
-    throw new Error(
-      res.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the flag hub (HTTP ${res.status}).`,
-    );
-  }
-  const issues = await res.json();
-  const dedicated = (Array.isArray(issues) ? issues : [])
-    .filter((i) => !i.pull_request) // the issues endpoint returns PRs too
-    .map(parseFlagPost)
-    .filter(flagPostInstallable);
-  let packs = [];
-  if (scRes && scRes.ok) {
-    const scIssues = await scRes.json().catch(() => []);
-    packs = (Array.isArray(scIssues) ? scIssues : [])
-      .filter((i) => !i.pull_request)
-      .map(parseScenarioAsFlagPack)
-      .filter(Boolean);
-  }
-  const posts = [...dedicated, ...packs];
-
-  cache = { at: Date.now(), posts };
-  return posts;
+  const dedicated = issues.map(parseFlagPost).filter(flagPostInstallable);
+  const packs = scIssues.map(parseScenarioAsFlagPack).filter(Boolean);
+  return [...dedicated, ...packs];
 };
 
 // GitHub attachments send no CORS headers, so the bytes have to come through the
@@ -156,13 +140,7 @@ export const loadCommunityFlagDataUrl = async (post) => {
   const buf = await r.arrayBuffer();
   const ctype = (r.headers.get("content-type") || "").split(";")[0].trim();
   const mime = ctype.startsWith("image/") ? ctype : "image/png";
-  let binary = "";
-  const view = new Uint8Array(buf);
-  const chunk = 0x8000; // chunked: String.fromCharCode(...huge) overflows the stack
-  for (let i = 0; i < view.length; i += chunk) {
-    binary += String.fromCharCode(...view.subarray(i, i + chunk));
-  }
-  return `data:${mime};base64,${btoa(binary)}`;
+  return `data:${mime};base64,${bytesToBase64(new Uint8Array(buf))}`;
 };
 
 // Resolve a scenario flag pack to its flags: download the bundle through the
@@ -182,7 +160,12 @@ export const loadCommunityFlagPack = async (post) => {
     const zip = await unzipBundle(buffer);
     const text = await zip.text("scenario.json");
     if (!text) throw new Error("That .zip is missing scenario.json.");
-    bundle = JSON.parse(text);
+    // A scenario with many custom flags carries them as a zip entry of their
+    // own (bundleFiles.js lifts any asset over 64 KB). Put back only that one:
+    // the rest of the bundle — geometry, tile archives — is not needed here.
+    const parsed = JSON.parse(text);
+    const restored = await restoreBundleFiles({ assets: { flags: parsed?.assets?.flags } }, zip);
+    bundle = { ...parsed, assets: { ...(parsed?.assets ?? {}), flags: restored.assets.flags } };
   } else {
     bundle = JSON.parse(new TextDecoder().decode(buffer));
   }
@@ -205,17 +188,64 @@ export const loadCommunityFlagPack = async (post) => {
 export const communityFlagsHubUrl = () =>
   `${HUB_URL}/issues?q=${encodeURIComponent("is:issue is:open label:flag")}`;
 
-// Open the prefilled issue form. Unlike publishBasemap there is nothing to download
-// first: the author is sharing a flag they already have as a file, so they drag it
-// straight into the form. GitHub issue forms cannot take a file via URL — that is
-// why the image box is left for the user rather than prefilled.
-export const openFlagPublishForm = ({ name = "", author = "", code = "" } = {}) => {
-  const query = [
+// The prefilled issue form's query. `polity` is the name the flag is for: it goes
+// in exactly, as Flag-Polity, and as the Flag-Code hint only when it already is a
+// short code-like token ("DEU", "Kuizltan") — a longer name used to arrive cut
+// down to its first word ("HOLY"). `code` is only for a flag that has no polity
+// name, just an old code hint (a My flags entry saved before the library kept
+// the name): it goes in as Flag-Code when it is a code-like token, never as
+// Flag-Polity.
+export const flagPublishQuery = ({ name = "", author = "", polity = "", code = "" } = {}) => {
+  const exact = String(polity || "").replace(/[\r\n]+/g, " ").trim();
+  const hint = exact || String(code || "").trim();
+  const technical = [
+    CODE_TOKEN.test(hint) ? `Flag-Code: ${hint.toUpperCase()}` : "",
+    exact ? `Flag-Polity: ${exact}` : "",
+  ].filter(Boolean).join("\n");
+  return [
     "template=flag.yml",
     `title=${encodeURIComponent(`[Flag] ${name || "Untitled flag"}`)}`,
     `name=${encodeURIComponent(name)}`,
     `author=${encodeURIComponent(author)}`,
-    `technical=${encodeURIComponent(`Flag-Code: ${String(code || "").toUpperCase()}`)}`,
+    `technical=${encodeURIComponent(technical)}`,
   ].join("&");
-  window.open(`${HUB_URL}/issues/new?${query}`, "_blank", "noopener");
+};
+
+// Open the prefilled issue form, for a flag the author already has as a file:
+// they drag it straight into the form. GitHub issue forms cannot take a file via
+// URL — that is why the image box is left for the user rather than prefilled.
+export const openFlagPublishForm = (fields = {}) => {
+  window.open(`${HUB_URL}/issues/new?${flagPublishQuery(fields)}`, "_blank", "noopener");
+};
+
+const FLAG_FILE_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg" };
+const dataUrlMime = (dataUrl) => /^data:([^;,]+)/.exec(String(dataUrl || ""))?.[1]?.toLowerCase() || "image/png";
+
+// The file a shared flag is saved as: the flag's name, made file-safe, with the
+// extension of its image type.
+export const flagFileName = (name, dataUrl) => {
+  const safe = String(name || "").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "flag";
+  return `${safe}.${FLAG_FILE_EXT[dataUrlMime(dataUrl)] || "png"}`;
+};
+
+// A base64 flag data URL as a file-ready Blob.
+export const flagDataUrlToBlob = (dataUrl) => {
+  const text = String(dataUrl || "");
+  if (!/^data:[^,]*;base64,/.test(text)) throw new Error("This flag has no image to share.");
+  const binary = atob(text.slice(text.indexOf(",") + 1));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: dataUrlMime(text) });
+};
+
+// Share a flag that exists only inside the app (a data URL on the map or in My
+// flags): save it as a file first, the way publishBasemap does, so the author has
+// something to drag into the form, then open the form. Returns the file's name
+// for the "drag it in" note.
+export const publishFlag = async ({ name = "", author = "", polity = "", code = "", dataUrl } = {}) => {
+  const blob = flagDataUrlToBlob(dataUrl);
+  const fileName = flagFileName(name || polity, dataUrl);
+  await saveBlobToDisk(blob, fileName);
+  openFlagPublishForm({ name, author, polity, code });
+  return { fileName };
 };

@@ -58,6 +58,16 @@ export const findGroupKey = (groups, name) => {
     ?? "";
 };
 
+// May the group keyed `key` take `newName`? Only when no OTHER group answers to
+// it: the group's own former name is its to take back (an event reverting the
+// Northern Resistance to the Righteous Armies), and findGroupKey matches former
+// names, so a plain "is it taken?" test refused exactly that.
+export const canRenameGroup = (groups, key, newName) => {
+  if (!newName || newName === key) return false;
+  const holder = findGroupKey(groups, newName);
+  return !holder || holder === key;
+};
+
 const normalizeGroup = (key, value) => {
   const name = normalizeGroupName(key || value?.name);
   if (!name) return null;
@@ -158,7 +168,10 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
 
     if (!key) {
       if (op.op === "release") continue;
-      if (Object.keys(nextGroups).length >= MAX_GROUPS) continue;
+      if (Object.keys(nextGroups).length >= MAX_GROUPS) {
+        changes.push({ op: "refused", name: op.name, reason: "limit" });
+        continue;
+      }
       key = op.name;
       nextGroups[key] = {
         name: key,
@@ -175,7 +188,7 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
       changes.push({ op: "update", name: key });
     }
 
-    if (op.newName && !findGroupKey(nextGroups, op.newName)) {
+    if (canRenameGroup(nextGroups, key, op.newName)) {
       const record = nextGroups[key];
       delete nextGroups[key];
       const formerNames = [...new Set([...(record.formerNames ?? []), key])].filter((former) => fold(former) !== fold(op.newName)).slice(-12);
@@ -238,6 +251,31 @@ export const playerGroupKey = (world, playerName) => {
   const wanted = fold(playerName);
   if (!wanted) return "";
   return Object.keys(normalizeGroups(world?.groups)).find((key) => fold(key) === wanted) ?? "";
+};
+
+// The groups holding ground in a polity's regions, for its Politics view: each
+// group's record with the regions of that polity it controls, most first.
+// `ownerOf(regionId)` is the region's current owner. A polity that is itself a
+// group (the player leading one, playerGroupKey) owns no land, so its own group
+// comes first with its whole area, `own: true`, even while that area is empty.
+// A region counts only when its owner is the polity's exact name: owner names
+// are identities, never folded.
+export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) => {
+  const wanted = clean(polity);
+  if (!wanted) return [];
+  const groups = normalizeGroups(world?.groups);
+  const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
+  const own = playerGroupKey(world, polity);
+  const rows = Object.keys(groups).map((name) => ({
+    ...groups[name],
+    own: name === own,
+    regionIds: name === own
+      ? areas[name] ?? []
+      : (areas[name] ?? []).filter((regionId) => clean(ownerOf(regionId)) === wanted),
+  }));
+  return rows
+    .filter((row) => row.own || row.regionIds.length)
+    .sort((a, b) => Number(b.own) - Number(a.own) || b.regionIds.length - a.regionIds.length || a.name.localeCompare(b.name));
 };
 
 // What every task that concerns the player is told when the player leads a group.

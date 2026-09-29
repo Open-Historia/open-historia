@@ -11,8 +11,6 @@ import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
 
-export const WAR_LEDGER_VERSION = "0.1.4-adversarial-war-start";
-
 const WAR_UPDATE_SEPARATOR = "~";
 const MAX_WAR_UPDATES_PER_PASS = 16;
 const MAX_WARS = 64;
@@ -54,6 +52,19 @@ const deriveWarTitle = (war) => {
   const b = uniquePolities(war?.sideB, 2);
   if (a.length && b.length) return `${a[0]}–${b[0]} War`;
   return normalizeString(war?.id) || "Unnamed conflict";
+};
+
+// A start's note may open with the war's own name — "Title: The Winter War;
+// Soviet demands on the Karelian isthmus" — and the rest is its cause. Without
+// it every war the model opened was called "A–B War" and the model's own name
+// for it was lost.
+const WAR_TITLE_NOTE_RE = /^title\s*:\s*([^;]+?)\s*(?:;\s*([\s\S]*))?$/i;
+export const splitWarStartNote = (note) => {
+  const text = normalizeString(note);
+  const match = text.match(WAR_TITLE_NOTE_RE);
+  return match
+    ? { title: normalizeString(match[1]), cause: normalizeString(match[2]) }
+    : { title: "", cause: text };
 };
 
 const normalizeWar = (entry, index = 0) => {
@@ -141,7 +152,7 @@ const parseWarUpdateRecord = (line, index = 0) => {
   };
 };
 
-export const decodeWarUpdates = (value) => {
+export const decodeWarUpdates = (value, { limit = MAX_WAR_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value
       .map((entry, index) => {
@@ -161,19 +172,19 @@ export const decodeWarUpdates = (value) => {
         };
       })
       .filter(Boolean)
-      .slice(0, MAX_WAR_UPDATES_PER_PASS);
+      .slice(0, limit);
   }
 
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => parseWarUpdateRecord(line, index))
     .filter(Boolean)
-    .slice(0, MAX_WAR_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
-export const bindWarUpdatesToEvents = (updates, events) => {
+export const bindWarUpdatesToEvents = (updates, events, { limit } = {}) => {
   const normalizedEvents = normalizeEvents(events);
-  return decodeWarUpdates(updates).map((update) => {
+  return decodeWarUpdates(updates, { limit }).map((update) => {
     const stableIds = [...new Set(
       normalizeArray(update.eventIds).map(normalizeString).filter(Boolean),
     )].slice(0, 24);
@@ -233,7 +244,7 @@ const firstLinkedDate = (update, events) =>
   linkedEventsForUpdate(update, events)
     .map((event) => normalizeString(event.date))
     .filter((date) => parseIsoDate(date))
-    .sort()[0] || "";
+    .sort(compareGameDates)[0] || "";
 
 const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents = [] }) => {
   const id = normalizeString(update?.id);
@@ -244,12 +255,13 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
   const eventDate = sortDate(date);
   const eventIds = linkedEvents.map((event) => normalizeString(event?.id)).filter(Boolean);
   const storylineIds = linkedEvents.flatMap((event) => normalizeArray(event?.storylineIds)).map(normalizeString).filter(Boolean);
+  const startNote = op === "start" ? splitWarStartNote(update.note) : null;
 
   const save = (war) => {
     const normalized = normalizeWar({
       ...war,
       id,
-      note: normalizeString(update.note) || normalizeString(war.note),
+      note: (startNote ? startNote.cause : normalizeString(update.note)) || normalizeString(war.note),
       sourceEventIds: [...new Set([...normalizeArray(war.sourceEventIds), ...eventIds])],
       storylineIds: [...new Set([...normalizeArray(war.storylineIds), ...storylineIds])],
       lastUpdatedDate: eventDate || war.lastUpdatedDate,
@@ -270,12 +282,13 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
     if (!sideA.length || !sideB.length) return { error: `War ${id} start requires non-empty opposing actors and opponents.` };
     return save({
       id,
+      title: startNote.title,
       status: "active",
       sideA,
       sideB,
       startedDate: eventDate,
       endedDate: "",
-      cause: normalizeString(update.note),
+      cause: startNote.cause,
       createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
     });
   }
@@ -475,41 +488,6 @@ const eventSupportsNewWarStart = (event) => {
   );
 };
 
-const eventHasHardCombat = (event) => {
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  if (normalizeArray(impacts.unitOps).some((op) => normalizeString(op?.op).toLowerCase() === "attack")) return true;
-  return eventNarratesHardCombat(event);
-};
-
-// Integration guard for Native Unit Director and other post-processors.
-// Remove only unsupported attack ops. Other unit mutations are left alone.
-export const stripUnsupportedUnitAttackOps = (events = []) => {
-  const dropped = [];
-
-  normalizeArray(events).forEach((event, eventIndex) => {
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : null;
-    if (!impacts || !Array.isArray(impacts.unitOps) || eventNarratesHardCombat(event)) return;
-
-    const kept = [];
-    impacts.unitOps.forEach((op, opIndex) => {
-      if (normalizeString(op?.op).toLowerCase() !== "attack") {
-        kept.push(op);
-        return;
-      }
-      dropped.push({
-        eventIndex,
-        opIndex,
-        title: normalizeString(event?.title),
-        unitId: normalizeString(op?.unitId),
-        targetUnitId: normalizeString(op?.targetUnitId),
-      });
-    });
-    impacts.unitOps = kept;
-  });
-
-  return dropped;
-};
-
 const eventTransitionExpectation = (event) => {
   const title = normalizeString(event?.title);
   if (WAR_START_RE.test(title)) return new Set(["start", "join-a", "join-b", "resume"]);
@@ -633,7 +611,7 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       return `Event "${normalizeString(event.title)}" references warId ${warId}, but no such canonical war exists at that point in the timeline.`;
     }
 
-    if (eventHasHardCombat(event)) {
+    if (eventNarratesHardCombat(event)) {
       if (!warId) {
         return `Combat event "${normalizeString(event.title)}" has no event.warId. Battles, invasions, offensives, bombardments, active fronts and unit attacks require an active canonical war.`;
       }
@@ -752,11 +730,30 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
   let sanitized = 0;
   const unresolved = [];
 
+  // Renewed hard combat between a ceasefire war's own sides resumes it: the
+  // event is bound to the war and a resume record is added for it.
+  const resumeCeasefireWar = (war, event, index) => {
+    event.warId = war.id;
+    const note = compactWarField(
+      `Hostilities resumed in ${normalizeString(event.title)}`,
+    );
+    appendCompactWarUpdate(
+      candidate,
+      `${compactWarField(war.id)}~resume~~~${index + 1}~${note}`,
+    );
+    updates = decodeWarUpdates(candidate.warUpdates);
+    resumed += 1;
+    console.warn(
+      `[OH war ledger bootstrap] materialized resume ${war.id} from renewed hard combat ` +
+      `"${normalizeString(event.title)}".`,
+    );
+  };
+
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
 
-    const hardCombat = eventHasHardCombat(event);
+    const hardCombat = eventNarratesHardCombat(event);
     if (!hardCombat) {
       const explicitWarId = normalizeString(event.warId);
       const matchingUpdate = explicitWarId
@@ -803,6 +800,18 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
     if (explicitWarId) {
       const known = wars.find((war) => war.id === explicitWarId);
       const matchingUpdate = updates.find((update) => normalizeString(update?.id) === explicitWarId);
+      // The prompt tells the model to tag fighting with the war's id, and a
+      // ceasefire war's id is one it is shown. Without a record of its own for
+      // the war this used to fail the segment ("ceasefire, not active") where
+      // the same event untagged resumed the war.
+      if (
+        known?.status === "ceasefire"
+        && !matchingUpdate
+        && matchingWarForCombatants([known], combatants, new Set(["ceasefire"])).length === 1
+      ) {
+        resumeCeasefireWar(known, event, index);
+        continue;
+      }
       if (known || matchingUpdate) continue;
 
       // A model-supplied id + two names is NOT enough to create belligerency.
@@ -890,21 +899,7 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
       new Set(["ceasefire"]),
     );
     if (ceasefireMatches.length === 1) {
-      const war = ceasefireMatches[0];
-      event.warId = war.id;
-      const note = compactWarField(
-        `Hostilities resumed in ${normalizeString(event.title)}`,
-      );
-      appendCompactWarUpdate(
-        candidate,
-        `${compactWarField(war.id)}~resume~~~${index + 1}~${note}`,
-      );
-      updates = decodeWarUpdates(candidate.warUpdates);
-      resumed += 1;
-      console.warn(
-        `[OH war ledger bootstrap] materialized resume ${war.id} from renewed hard combat ` +
-        `"${normalizeString(event.title)}".`,
-      );
+      resumeCeasefireWar(ceasefireMatches[0], event, index);
       continue;
     }
     if (ceasefireMatches.length > 1) {
@@ -979,10 +974,10 @@ export const validateWarLedgerPayload = (candidate, { world = {}, startsInForce 
   return validateBoundWarBatch({ events, updates, world, requireUpdateLinks: true, startsInForce });
 };
 
-export const validateCanonicalWarEvents = ({ events, updates, world, startsInForce = false } = {}) =>
+export const validateCanonicalWarEvents = ({ events, updates, world, startsInForce = false, limit } = {}) =>
   validateBoundWarBatch({
     events,
-    updates: bindWarUpdatesToEvents(updates, events),
+    updates: bindWarUpdatesToEvents(updates, events, { limit }),
     world,
     requireUpdateLinks: false,
     startsInForce,
@@ -1186,10 +1181,12 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
   return result;
 };
 
-export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0 } = {}) => {
+// `limit` as in the decoder: a merged turn passes Infinity, because the cap is
+// per model answer and each segment's answer was held to it already.
+export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = warMapFromWorld(nextWorld);
-  const decoded = bindWarUpdatesToEvents(updates, events);
+  const decoded = bindWarUpdatesToEvents(updates, events, { limit });
   const appliedIds = [];
 
   for (const update of decoded) {

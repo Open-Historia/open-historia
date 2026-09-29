@@ -8,10 +8,12 @@ import {
   CLIPBOARD_VERSION,
   buildClipboardPayload,
   describeClipboard,
+  formatCopiedDay,
   isRegionClipboard,
   planClipboardMerge,
   resolvePastedIds,
 } from "./regionClipboard.js";
+import { createDateLocalizer } from "../runtime/localDates.js";
 
 const region = (id, owner, extra = {}) => ({
   type: "Feature",
@@ -96,18 +98,51 @@ test("on paste the target keeps what it has and takes only what it lacks", () =>
   assert.deepEqual(plan.flags, { Gondor: "data:image/png;base64,AAAA" }, "a flag the target lacks arrives even for a known country");
   assert.deepEqual(plan.tags, { Gondor: ["monarchy"] }, "tags arrive only where the target has none");
   assert.deepEqual(plan.types.map((t) => t.id), ["steppe"]);
-  assert.deepEqual(planClipboardMerge(null, {}), { upserts: {}, colorOverrides: {}, flags: {}, tags: {}, types: [] });
+  assert.deepEqual(planClipboardMerge(null, {}), { upserts: {}, colorOverrides: {}, flags: {}, tags: {}, types: [], groups: {} });
+});
+
+test("a copy carries the records of the groups its regions are in, and the target's own group wins on paste", () => {
+  const doc = {
+    ...sourceDoc,
+    groups: {
+      Cartel: { name: "Cartel", description: "Drug traffickers", color: "#aa3300" },
+      Militia: { name: "Militia", description: "A local militia", color: "#336699" },
+      Unused: { name: "Unused", description: "Not in the copy", color: "#000000" },
+    },
+  };
+  const grouped = {
+    type: "FeatureCollection",
+    features: [
+      region("c1", "Gondor", { group: "Cartel" }),
+      region("c2", "Gondor", { group: "cartel" }),
+      region("m1", "Rohan", { group: "Militia" }),
+      region("x1", "Rohan", { group: "Unregistered" }),
+    ],
+  };
+  const payload = buildClipboardPayload({ regions: grouped, doc, colors: sourceColors });
+  assert.deepEqual(Object.keys(payload.groups).sort(), ["Cartel", "Militia"], "each group once, by its registry key; a group with no record carries none");
+  assert.deepEqual(payload.groups.Cartel, { name: "Cartel", description: "Drug traffickers", color: "#aa3300" });
+  payload.groups.Cartel.color = "#ffffff";
+  assert.equal(doc.groups.Cartel.color, "#aa3300", "the copy is detached from the source");
+
+  const plan = planClipboardMerge(payload, { groups: { militia: { name: "militia", description: "Mine", color: "#00ff00" } } });
+  assert.deepEqual(plan.groups, { Cartel: { name: "Cartel", description: "Drug traffickers", color: "#ffffff" } }, "the target's militia, in any case, stays the target's");
+  assert.deepEqual(planClipboardMerge({ groups: { Cartel: null } }, {}).groups, {});
 });
 
 test("a pasted region keeps a free id and gets a fresh one for a taken id", () => {
   let n = 0;
   const mint = () => `reg_new${(n += 1)}`;
   const ids = resolvePastedIds(["FRA.1_1", "FRA.2_1", null, "reg_new1"], new Set(["FRA.2_1", "reg_new1"]), mint);
-  assert.equal(ids.get("FRA.1_1"), "FRA.1_1");
-  assert.equal(ids.get("FRA.2_1"), "reg_new2", "taken, and reg_new1 was taken too");
-  assert.equal(ids.get(null), "reg_new3");
-  assert.equal(ids.get("reg_new1"), "reg_new4");
-  assert.equal(new Set(ids.values()).size, 4, "all distinct");
+  assert.deepEqual(ids, ["FRA.1_1", "reg_new2", "reg_new3", "reg_new4"], "reg_new1 was taken too");
+});
+
+test("pasted regions sharing an id, or with none, each get their own", () => {
+  let n = 0;
+  const mint = () => `reg_${(n += 1)}`;
+  const ids = resolvePastedIds(["ITA.1_1", "ITA.1_1", null, undefined, 7], ["reg_1"], mint);
+  assert.deepEqual(ids, ["ITA.1_1", "reg_2", "reg_3", "reg_4", "7"], "the first keeps the id, numbers become strings");
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 test("the panel summary counts regions per owner", () => {
@@ -121,4 +156,14 @@ test("the panel summary counts regions per owner", () => {
     { key: "Rohan", name: "Rohan", count: 1 },
   ]);
   assert.equal(describeClipboard(null), null);
+});
+
+test("the day a clipboard was copied is written so the translator reads it as that day", () => {
+  // 8 January, whatever the browser's locale: a day-first "8/1/2026" was read
+  // month first by the translator and shown as 1 August.
+  const day = formatCopiedDay(new Date(2026, 0, 8, 12).getTime());
+  assert.equal(day, "Jan 8, 2026");
+  assert.equal(createDateLocalizer("fr")(day), "8 janv. 2026");
+  assert.equal(createDateLocalizer("fr")(formatCopiedDay(new Date(2026, 0, 25, 12).getTime())), "25 janv. 2026", "a day above 12 is not dropped");
+  assert.equal(formatCopiedDay(Number.NaN), "");
 });

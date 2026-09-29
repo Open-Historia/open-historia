@@ -380,9 +380,18 @@ export const describeReplyProblems = (message) => {
   const problems = [];
   const chart = String(message.chartProblem ?? "").trim();
   if (chart) problems.push(`your chart was not drawn: ${chart}`);
-  for (const line of Array.isArray(message.actionsProblems) ? message.actionsProblems : []) {
-    const text = String(line ?? "").trim();
-    if (text) problems.push(`in your actions block, ${text}`);
+  // One list per block the panel turns into buttons or queue edits: a button
+  // that was never drawn is an offer the advisor must not build on.
+  for (const [field, block] of [
+    ["actionsProblems", "actions"],
+    ["draftProblems", "senddraft"],
+    ["institutionDraftProblems", "institutiondraft"],
+    ["deployProblems", "deploy"],
+  ]) {
+    for (const line of Array.isArray(message[field]) ? message[field] : []) {
+      const text = String(line ?? "").trim();
+      if (text) problems.push(`in your ${block} block, ${text}`);
+    }
   }
   const detail = String(message.projectsDetail ?? "").trim();
   switch (String(message.projectsProblem ?? "")) {
@@ -393,4 +402,139 @@ export const describeReplyProblems = (message) => {
     default: break;
   }
   return problems;
+};
+
+// ── The actions block and the deploy block ────────────────────────────────────
+
+// What the advisor's ```actions proposal does to the queue, worked out without
+// touching it: advisor.jsx reads the queue, calls this, reverts `reverts` and
+// writes `next`. `normalize` is gameState.js normalizeActionEntry, passed in so
+// this file stays import-free.
+//
+// Returns { next, items, problems, reverts }:
+//   - items: what the confirmation card shows ("added", "updated", "removed");
+//   - problems: what the advisor asked for and did not get, in sentences — its
+//     receipt, told to it before the next question;
+//   - reverts: the unitRevert of every planned troop order removed, which the
+//     caller undoes on the map as the Actions panel's delete does (#368). A
+//     placed deployment whose order left the queue otherwise stayed on the map
+//     for good, and the simulation was never told about it.
+export const planAdvisorActionEdits = (current, proposal, normalize) => {
+  let next = Array.isArray(current) ? [...current] : [];
+  const items = [];
+  const problems = [];
+  const reverts = [];
+  if (!Array.isArray(proposal)) return { next, items, problems, reverts };
+
+  for (const raw of proposal) {
+    if (!raw || typeof raw !== "object") {
+      problems.push("an entry was not an object and was ignored");
+      continue;
+    }
+    const id = String(raw.id ?? "").trim();
+
+    if (raw.remove) {
+      if (!id) {
+        problems.push("a removal named no id, so nothing was removed");
+        continue;
+      }
+      const removed = next.filter((action) => action.id === id);
+      if (removed.length === 0) {
+        problems.push(`the removal of ${id} matched no queued action, so nothing was removed`);
+        continue;
+      }
+      next = next.filter((action) => action.id !== id);
+      for (const action of removed) {
+        // Only a planned order still has something to undo: one a skip already
+        // resolved keeps its outcome (actions.jsx handleDelete).
+        if (action.unitRevert && (action.status ?? "planned") === "planned") reverts.push(action.unitRevert);
+      }
+      items.push({ change: "removed", title: raw.title || removed[0].title || id });
+      continue;
+    }
+
+    const existingIndex = id ? next.findIndex((action) => action.id === id) : -1;
+    if (existingIndex !== -1) {
+      const existing = next[existingIndex];
+      const updated = {
+        ...existing,
+        ...(raw.title ? { title: String(raw.title) } : {}),
+        ...(raw.text ? { text: String(raw.text) } : {}),
+        ...(raw.kind === "chat" || raw.kind === "action" ? { kind: raw.kind } : {}),
+      };
+      next[existingIndex] = updated;
+      items.push({ change: "updated", title: updated.title });
+      continue;
+    }
+
+    // No id, or an id that doesn't match anything current — either a genuinely
+    // new proposal, or the model referencing a stale/already-resolved id. Both
+    // land as a fresh queued action rather than being silently dropped — and
+    // the second is said, because the advisor believes it edited something.
+    const created = normalize({
+      title: raw.title,
+      text: raw.text,
+      kind: raw.kind === "chat" ? "chat" : "action",
+      source: "advisor",
+      status: "planned",
+    });
+    if (!created) {
+      problems.push(id
+        ? `the edit of ${id} matched no queued action and had no title or text, so nothing was queued`
+        : "an entry had no title or text, so nothing was queued");
+      continue;
+    }
+    if (id) problems.push(`the edit of ${id} matched no queued action, so it was queued as a new one`);
+    next.push(created);
+    items.push({ change: "added", title: created.title });
+  }
+
+  return { next, items, problems, reverts };
+};
+
+// Every type deployUnit can place. The scenario may allow fewer
+// (world.allowedUnitTypes, the Forces panel's list).
+export const DEPLOYABLE_UNIT_TYPES = Object.freeze(["infantry", "armor", "air", "naval", "artillery", "garrison"]);
+
+// The ```deploy entries that become "Place" buttons, each with `index`: its
+// place among the well-formed entries, which is what a message's
+// placedDeployments records. It does not move when the scenario's allowed
+// types change, so a button already placed stays marked as placed.
+//
+// Filtered hard: a button that places a unit somewhere unusable is worse than
+// no button, so anything missing a real type, a name or real coordinates goes,
+// and so does a type the scenario does not allow. Each drop is said in
+// `problems`, so the advisor learns which of its buttons were never drawn.
+export const filterAdvisorDeployments = (raw, allowedTypes = null, problems = []) => {
+  if (!Array.isArray(raw)) return [];
+  const allowed = Array.isArray(allowedTypes) && allowedTypes.length
+    ? allowedTypes.map((type) => String(type ?? "").trim().toLowerCase()).filter(Boolean)
+    : null;
+  const wellFormed = [];
+  raw.forEach((entry, position) => {
+    const label = String(entry?.name ?? "").trim() ? `"${String(entry.name).trim()}"` : `entry ${position + 1}`;
+    if (!entry || typeof entry !== "object") {
+      problems.push(`entry ${position + 1} was not an object, so no button was drawn for it`);
+      return;
+    }
+    const type = String(entry.type ?? "").trim().toLowerCase();
+    const lng = Number(entry.lng);
+    const lat = Number(entry.lat);
+    if (!DEPLOYABLE_UNIT_TYPES.includes(type)) {
+      problems.push(`${label} had the type "${String(entry.type ?? "")}", which is not one of ${DEPLOYABLE_UNIT_TYPES.join(", ")}, so no button was drawn for it`);
+    } else if (!String(entry.name ?? "").trim()) {
+      problems.push(`${label} had no name, so no button was drawn for it`);
+    } else if (!Number.isFinite(lng) || !Number.isFinite(lat) || (lng === 0 && lat === 0)) {
+      problems.push(`${label} had no real lng/lat, so no button was drawn for it`);
+    } else {
+      wellFormed.push(entry);
+    }
+  });
+  return wellFormed
+    .map((entry, index) => ({ ...entry, index }))
+    .filter((entry) => {
+      if (!allowed || allowed.includes(String(entry.type).trim().toLowerCase())) return true;
+      problems.push(`"${String(entry.name).trim()}" is ${String(entry.type).trim().toLowerCase()}, which this scenario does not allow (only ${allowed.join(", ")}), so no button was drawn for it`);
+      return false;
+    });
 };

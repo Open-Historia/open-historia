@@ -66,10 +66,27 @@ const hasTerritorialContent = (event) => {
   return (
     normalizeArray(impacts.regionTransfers).length > 0 ||
     normalizeArray(impacts.regionControlOps).length > 0 ||
-    normalizeArray(impacts.unitOps).some((op) => op?.op === "attack") ||
     TERRITORIAL_EVENT_PATTERN.test(eventText(event))
   );
 };
+
+// Whether sanitizeDirectorOrders could keep ANY op the director wrote for this
+// event. Each kind it accepts needs its own wording in the event: a control flip
+// a capture (not negated), a contest a fight or dispute, a clear_contest a
+// ceasefire, withdrawal or peace. A territorial event with none of those — a
+// treaty that cedes a province, a speech about sovereignty — is already fully
+// described by its own regionTransfers, and asking about it could only come
+// back with ops the rules drop: a request (or review tokens) for nothing.
+const couldAcceptDirectorOps = (event) => {
+  const text = eventText(event);
+  return (
+    (WARTIME_CONTROL_PATTERN.test(text) && !NEGATED_CONTROL_CHANGE_PATTERN.test(text)) ||
+    CONTEST_PATTERN.test(text) ||
+    CLEAR_CONTEST_PATTERN.test(text)
+  );
+};
+
+const isTerritoryCandidate = (event) => hasTerritorialContent(event) && couldAcceptDirectorOps(event);
 
 // Old prompts treated every wartime capture as a sovereign transfer. Salvage that
 // output here before it reaches world state: a battlefield occupation is control;
@@ -423,9 +440,11 @@ export const summarizeTerritorialState = (world, candidates = [], { placesNamed 
 // ask, and ask it as one job among several, with exactly this input.
 // `findPlaces(text)` is the caller's place-name reader; without one the state
 // goes out as it always did.
-const territoryCandidateRows = (sourceEvents) => sourceEvents
+const territoryCandidates = (sourceEvents) => sourceEvents
   .map((event, index) => ({ event, index }))
-  .filter(({ event }) => hasTerritorialContent(event))
+  .filter(({ event }) => isTerritoryCandidate(event));
+
+const territoryCandidateRows = (sourceEvents) => territoryCandidates(sourceEvents)
   .map(({ event, index }) => ({
     eventIndex: index,
     date: normalizeString(event?.date),
@@ -461,17 +480,16 @@ export const directGeneratedTerritoryOps = async ({
   world = {},
   analyzeBatch,
   findPlaces = null,
+  signal = null,
 } = {}) => {
   const converted = convertLegacyWartimeTransfers(events);
   const sourceEvents = converted.events;
 
-  const candidates = sourceEvents
-    .map((event, index) => ({ event, index }))
-    .filter(({ event }) => hasTerritorialContent(event));
+  const candidates = territoryCandidates(sourceEvents);
 
   if (candidates.length === 0 || typeof analyzeBatch !== "function") {
     const skippedReason = candidates.length === 0
-      ? "no territorial/front event candidates matched"
+      ? "no event describes a capture, a fight or a ceasefire the director could act on"
       : "no analyzer supplied";
     publishDiagnostics({
       candidates,
@@ -489,6 +507,9 @@ export const directGeneratedTerritoryOps = async ({
   try {
     analysis = await analyzeBatch(await territoryAnalyzerInput(territoryCandidateRows(sourceEvents), world, findPlaces));
   } catch (error) {
+    // The player's Cancel is not a failed analysis: it must reach the skip, or
+    // the cancelled turn goes on to be written.
+    if (signal?.aborted) throw error;
     console.warn("[territory director] analysis failed; preserving existing territory state changes.", error);
     return sourceEvents;
   }

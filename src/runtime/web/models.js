@@ -3,7 +3,9 @@
 // server/libraryStore.js (meta defaults/readers, country canonicalization, seed
 // builders, snapshot detection, asset-key sets). Web build only.
 
-import COUNTRY_NAME_REGISTRY from "./generated/countryNames.js";
+// The committed client copy of server/country-names.json (scripts/
+// generate-country-tables.mjs), the same table the map editor reads.
+import COUNTRY_NAME_REGISTRY from "../generated/countryNames.js";
 import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../server/gameFeatures.js";
 import {
   fetchableHubOrigin,
@@ -23,8 +25,7 @@ import {
 } from "./storeConstants.js";
 import { cloneJson } from "./util.js";
 
-// The constants themselves live in storeConstants.js, which imports nothing, so
-// Node tests can load them without a web build; see there.
+// The constants themselves live in storeConstants.js; see there.
 export * from "./storeConstants.js";
 
 // --- Country reference resolution (mirrors server/libraryStore.js) ---
@@ -250,6 +251,10 @@ export const readGameMeta = (gameId, raw = {}) => {
   const description = String(raw?.description ?? "").trim() || subtitle || DEFAULT_GAME_META.description;
   return {
     accentColor: accentOrDefault(raw?.accentColor, DEFAULT_GAME_META.accentColor),
+    // Server twin: hidden from the library, intact in storage. Read here or the
+    // catalog never shows it, and every later meta write (which starts from
+    // this) would unarchive the game.
+    archived: raw?.archived === true,
     coverImageContentType: readStoredImageContentType(raw?.coverImageContentType),
     createdAt: raw?.createdAt ?? nowIso(),
     description,

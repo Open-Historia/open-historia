@@ -16,12 +16,12 @@ import assert from "node:assert/strict";
 import {
   SIMULATION_AUDIENCE,
   audienceAmong,
-  audienceIdentity,
   audienceIncludes,
   audiencePolities,
   audienceSeesChat,
+  audienceSeesReport,
   audienceSeesScoped,
-  filterChatsForAudience,
+  audienceStoleReport,
   isSimulationAudience,
   normalizeAudience,
   polityMatches,
@@ -61,13 +61,6 @@ test("an object that is not an audience is never promoted to the narrator", () =
   }
 });
 
-test("identity is stable under order and case, and differs between audiences", () => {
-  assert.equal(audienceIdentity(SIMULATION_AUDIENCE), "simulation");
-  assert.equal(audienceIdentity(viewerAudience(["Nigeria", "Angola"])), audienceIdentity(viewerAudience(["angola", "NIGERIA"])));
-  assert.notEqual(audienceIdentity(angola), audienceIdentity(viewerAudience(["Nigeria"])));
-  assert.notEqual(audienceIdentity(viewerAudience([])), "simulation");
-});
-
 test("a participant matches by name or by code, and a blank never matches a blank", () => {
   assert.equal(polityMatches({ code: "AGO", name: "Angola" }, "angola"), true);
   assert.equal(polityMatches({ code: "AGO", name: "Angola" }, "AGO"), true);
@@ -81,8 +74,8 @@ test("a participant matches by name or by code, and a blank never matches a blan
 
 test("the narrator reads every chat; a polity reads only the rooms it was in", () => {
   const chats = [chat("Angola"), chat("Nigeria"), chat("Angola", "Nigeria"), { countries: [] }, {}];
-  assert.equal(filterChatsForAudience(chats, SIMULATION_AUDIENCE).length, 5);
-  assert.deepEqual(filterChatsForAudience(chats, angola), [chats[0], chats[2]]);
+  assert.equal(chats.filter((entry) => audienceSeesChat(SIMULATION_AUDIENCE, entry)).length, 5);
+  assert.deepEqual(chats.filter((entry) => audienceSeesChat(angola, entry)), [chats[0], chats[2]]);
   // A chat with no recorded participants is hidden from every polity.
   assert.equal(audienceSeesChat(angola, { countries: [] }), false);
   assert.equal(audienceSeesChat(angola, null), false);
@@ -111,6 +104,21 @@ test("a distribution list: absent is public, empty is nobody, malformed is hidde
   assert.equal(audienceSeesScoped(angola, [{ name: "Portugal" }]), false);
   assert.equal(audienceSeesScoped(angola, "Angola"), false, "a list that is not a list is malformed");
   assert.equal(audienceSeesScoped(SIMULATION_AUDIENCE, []), true);
+});
+
+test("a document is read by its holders, the public, and a government whose agents stole it", () => {
+  const pact = { visibleTo: ["Portugal", "Brazil"], interceptedBy: ["Angola"] };
+  assert.equal(audienceSeesReport(angola, pact), true, "its own agents took a copy");
+  assert.equal(audienceStoleReport(angola, pact), true);
+  assert.equal(audienceSeesReport(viewerAudience(["Portugal"]), pact), true);
+  assert.equal(audienceStoleReport(viewerAudience(["Portugal"]), pact), false, "a holder did not steal it");
+  assert.equal(audienceSeesReport(viewerAudience(["Nigeria"]), pact), false, "another service's theft is not ours");
+  assert.equal(audienceSeesReport(angola, { visibleTo: null }), true);
+  assert.equal(audienceStoleReport(angola, { visibleTo: null, interceptedBy: ["Angola"] }), false, "nothing to steal in a published text");
+  assert.equal(audienceSeesReport(angola, { visibleTo: ["Angola"], interceptedBy: ["Angola"] }), true);
+  assert.equal(audienceStoleReport(angola, { visibleTo: ["Angola"], interceptedBy: ["Angola"] }), false, "held openly wins");
+  assert.equal(audienceSeesReport(SIMULATION_AUDIENCE, { visibleTo: [] }), true);
+  assert.equal(audienceStoleReport(SIMULATION_AUDIENCE, pact), false, "the narrator holds everything openly");
 });
 
 test("a service knows its own agents, but not that one has been turned", () => {

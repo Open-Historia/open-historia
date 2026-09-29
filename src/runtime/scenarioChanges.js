@@ -293,6 +293,27 @@ const GUIDANCE_PATHS = [
   ...["advisor", "leader"].flatMap((section) => (PROMPT_GUIDANCE[section] ?? []).map((seg) => `${section}.${seg.id}`)),
   ...Object.entries(PROMPT_GUIDANCE.tasks ?? {}).flatMap(([task, segments]) => segments.map((seg) => `tasks.${task}.${seg.id}`)),
 ];
+const GUIDANCE_PATH_SET = new Set(GUIDANCE_PATHS);
+
+// Whether a details field's path is one the diff below makes. A suggestion
+// file names its fields, and accepting one writes them as keys of the
+// author's scenario, so a file may name only these (normalizeSuggestion,
+// buildDetailSave): never the world whole, its storage or its provenance.
+export const isDetailFieldPath = (path) => {
+  if (!Array.isArray(path) || !path.every((part) => typeof part === "string")) return false;
+  const [area, key, setting] = path;
+  if (area === "meta") return path.length === 2 && META_FIELDS.includes(key);
+  if (area === "game") return path.length === 2 && GAME_FIELDS.includes(key);
+  if (area === "world") return path.length === 2 && WORLD_DETAIL_FIELDS.includes(key);
+  if (area === "features") {
+    const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === key);
+    return path.length === 3 && Boolean(definition) && (setting === "enabled" || definition.settings.some((entry) => entry.key === setting));
+  }
+  // One part per step, as the diff splits them: ["prompts", "advisor.role"]
+  // joins to a listed passage too, but would be written as a section of its own.
+  if (area === "prompts") return path.slice(1).every((part) => part && !part.includes(".")) && GUIDANCE_PATH_SET.has(path.slice(1).join("."));
+  return false;
+};
 
 const regionIdOf = (feature) => {
   const props = feature?.properties ?? {};
@@ -1153,6 +1174,7 @@ export const summarizeChangesForComment = (changes, { maxLines = 14 } = {}) => {
   const politics = list.filter((change) => change.kind === "politics").length;
   if (politics) lines.push(`${plural(politics, "Politics entry", "Politics entries")} changed`);
   if (byKind.stats) lines.push("Stats sheet changed");
+  if (byKind.institutionLogos) lines.push("Institution logos changed");
   if (byKind.cover) lines.push("New cover image");
   if (byKind["region-owner"]) lines.push(`${plural(byKind["region-owner"], "region changes", "regions change")} owner`);
   if (byKind.borders) lines.push(`${plural(byKind.borders, "border change", "border changes")}`);

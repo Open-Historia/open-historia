@@ -5,8 +5,6 @@ import { readScenarioCanon } from "./scenarioCanon.js";
 
 const clean = (value) => String(value ?? "").trim();
 
-export const isValidScenarioDate = (value) => isGameDate(value);
-
 export const compareScenarioDates = (left, right) => {
   if (!isGameDate(left) || !isGameDate(right)) return null;
   return compareGameDates(left, right);

@@ -7,14 +7,16 @@ const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 test("Advisor formal institution actions are typed drafts with an explicit player-click authority boundary", () => {
   const ai = read("../AI/main.jsx");
   const ui = read("./advisor.jsx");
+  const reply = read("./advisorReply.js");
 
   assert.match(ai, /ADVISOR_INSTITUTION_DRAFT_DIRECTIVE/);
   assert.match(ai, /institutiondraft/);
   assert.match(ai, /DRAFT ONLY/);
   assert.match(ai, /follow the charter's lifecycle/);
 
-  assert.match(ui, /extractFencedJson\(afterDrafts, "institutiondraft"\)/);
-  assert.match(ui, /buildInstitutionDrafts\(institutionDraftsRaw\)/);
+  assert.match(reply, /extractFencedJson\(afterDrafts, "institutiondraft"\)/);
+  assert.match(reply, /buildInstitutionDrafts\(institutionDraftsRaw, institutionDraftProblems\)/);
+  assert.match(ui, /parseAdvisorReply\(msg\.text/);
   assert.match(ui, /AdvisorInstitutionDraftAction/);
   assert.match(ui, /onExecute=\{\(\) => onExecuteInstitutionDraft\(msgIndex, draftIndex, draft\)\}/);
   assert.match(ui, /handleExecuteInstitutionDraft = React\.useCallback/);

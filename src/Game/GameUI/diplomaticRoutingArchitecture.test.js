@@ -20,7 +20,8 @@ test("standalone nextSpeaker AI routing is fully retired from executable diploma
 
 test("group diplomacy has one canonical action-batch path with no sequential fallback", () => {
   const chat = read("./chat.jsx");
-  assert.match(chat, /if \(isGroup \|\| \(chat\.lifecycleCaseIds\?\.length && chat\.lifecycleInstitutionId\)\) \{[\s\S]*?await runGroupTurn\(text, nextMessages\);[\s\S]*?return;/);
+  // An institution's Council takes it too, even with a single AI member.
+  assert.match(chat, /if \(isGroup \|\| isInstitutional \|\| isLifecycleConversation\) \{[\s\S]*?await runGroupTurn\(text, nextMessages\);[\s\S]*?return;/);
   assert.match(chat, /no legacy sequential fallback exists/);
   assert.doesNotMatch(chat, /falling back to the rotation|MAX_GROUP_NPC_RESPONSES_PER_PLAYER_MESSAGE|Let .* speak/);
 });

@@ -723,3 +723,32 @@ test("generated estimates may upgrade native fallback landscape metrics without 
   });
   assert.ok(merged.appliedPaths.some((path) => path.includes("parties[fallback].support")));
 });
+
+test("a BC scenario date is a valid generation date, in its canonical form only", () => {
+  const plan = buildPoliticalGenerationPlan({ scenarioDate: "-0218-03-01", polities: ["Carthage"] });
+  assert.equal(plan.scenarioDate, "-0218-03-01");
+  assert.throws(() => buildPoliticalGenerationPlan({ scenarioDate: "218-03-01 BC", polities: ["Carthage"] }), /scenarioDate/);
+});
+
+test("a BC proposal keeps to its scenario-date boundary by the calendar", () => {
+  const validate = (referenceDates) => validatePoliticalGenerationProposal({
+    schemaVersion: 1,
+    polityKey: "Carthage",
+    scenarioDate: "-0218-03-01",
+    depth: "standard",
+    provenance: { source: "generated", confidence: "moderate" },
+    referenceDates,
+    actorPatch: {
+      politicalSystem: { type: "oligarchic_republic", representation: "court_factions" },
+      government: { form: "Oligarchic republic" },
+    },
+  }, {
+    polityKey: "Carthage",
+    scenarioDate: "-0218-03-01",
+    depth: "standard",
+  });
+  const before = validate(["-0219-11-01"]);
+  assert.ok(!before.errors.some((error) => /scenario start date|scenarioDate|boundary/.test(error)), before.errors.join("\n"));
+  const after = validate(["-0217-06-21"]);
+  assert.ok(after.errors.some((error) => error.includes("reference date -0217-06-21 crosses the scenario-date boundary")));
+});

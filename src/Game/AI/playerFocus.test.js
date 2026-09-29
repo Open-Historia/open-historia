@@ -242,6 +242,10 @@ test("the share the jump is told is capped by what the player actually has going
   ];
   const text = buildPlayerFocusDirective({ focus: "spotlight", worldShare: 35, material: thin, playerName: PLAYER });
   assert.match(text, /never more than the 2/, "a Spotlight player with two threads is not asked for three quarters of the month");
+  // "At least" and then "a ceiling" told the model two opposite things; the
+  // share is one minimum, bounded by what is listed.
+  assert.match(text, /a minimum only as far as the items below allow, not a quota to fill/);
+  assert.doesNotMatch(text, /ceiling/);
   const plentyText = buildPlayerFocusDirective({
     focus: "spotlight",
     material: Array.from({ length: 9 }, (_, index) => ({ kind: "storyline", id: `s${index}`, label: "x", required: false })),

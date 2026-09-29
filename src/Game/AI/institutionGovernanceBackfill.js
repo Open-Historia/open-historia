@@ -1,11 +1,14 @@
 /*! Open Historia Continuum — lazy governance migration for pre-governance saves.
  *
  * Fresh/resumed PWv2 owns normal institution-governance materialization. This
- * compatibility seam exists only for campaigns created before that PWv2 stage
- * existed. On first formal ballot attempt, if the exact proposal still has no
- * canonical voting rule, run the same ONE global governance resolver against
- * the scenario-start authority boundary, then atomically merge only missing
- * charter law into the live generation. Authored/current charter law always wins.
+ * compatibility seam exists for campaigns created before that PWv2 stage
+ * existed, and for an institution a scenario authored without a charter rule.
+ * On first formal ballot attempt (institutionGovernanceRetry.js), if the exact
+ * proposal still has no canonical voting rule, run the same ONE global
+ * governance resolver against the scenario-start authority boundary, or the
+ * current date for an institution founded since, then atomically merge only
+ * missing charter law into the live generation. Authored/current charter law
+ * always wins.
  */
 
 import { JSON_URLS, readJson } from "../../runtime/assets.js";
@@ -19,12 +22,15 @@ import {
   institutionVotingRuleForProposal,
 } from "../../runtime/institutionalGovernance.js";
 import { resolveInstitutionRecord } from "../../runtime/institutions.js";
+import { isCanonicalGameDate } from "../../runtime/gameDates.js";
 import { buildRoundZeroCanonContextText } from "../../runtime/roundZeroCanonContext.js";
 import { resolveScenarioHistoryAuthority } from "../../runtime/scenarioHistoryAuthority.js";
 import {
   applyGeopoliticalInstitutionGovernanceBaseline,
   generateGeopoliticalInstitutionGovernanceJob,
 } from "./geopoliticalWorldGenerator.js";
+import { geopoliticalInstitutionGovernanceTargets } from "./geopoliticalInstitutionGovernance.js";
+import { GOVERNANCE_BACKFILL_STALE, votingRuleMissingError } from "./institutionGovernanceRetry.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -71,10 +77,19 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
     return { migrated: false, skippedModelCall: true, world, institution: initial.institution, proposal: initial.proposal, rule: initial.rule };
   }
 
-  const scenarioDate = clean(game?.startDate || game?.gameDate);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(scenarioDate)) {
+  const startDate = clean(game?.startDate || game?.gameDate);
+  if (!isCanonicalGameDate(startDate)) {
     throw new Error("Cannot resolve institutional voting law because this campaign has no canonical scenario start date.");
   }
+  // The resolver judges institutions as they stood on one date. An institution
+  // founded after the scenario began did not exist at its start, so its law is
+  // resolved as of today instead. One the resolver would not be asked about on
+  // either date (not active, or no usable founding date) costs no request.
+  const currentDate = isCanonicalGameDate(clean(game?.gameDate)) ? clean(game.gameDate) : startDate;
+  const heldAt = (date) => geopoliticalInstitutionGovernanceTargets({ world, scenarioDate: date })
+    .some((entry) => entry.id === initial.institution.id);
+  const scenarioDate = heldAt(startDate) ? startDate : heldAt(currentDate) ? currentDate : "";
+  if (!scenarioDate) throw votingRuleMissingError(initial.institution.name || targetInstitutionId);
   const capturedGameDate = clean(game?.gameDate);
   const capturedRound = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
   const activeGameId = clean(expectedGameId || getLibraryState()?.activeGameId);
@@ -92,7 +107,7 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
   let appliedInfo = null;
   const committed = await mutateCanonicalTurnState(({ world: liveWorld, game: liveGame }) => {
     if (clean(liveGame?.gameDate) !== capturedGameDate || Number(liveGame?.round || 0) !== capturedRound) {
-      throw new Error("Campaign advanced while institutional voting rules were being resolved. Please submit the ballot again.");
+      throw Object.assign(new Error("Campaign advanced while institutional voting rules were being resolved. Please submit the ballot again."), { code: GOVERNANCE_BACKFILL_STALE });
     }
 
     const live = effectiveRule(liveWorld, targetInstitutionId, targetProposalId);
@@ -105,8 +120,9 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
     const applied = applyGeopoliticalInstitutionGovernanceBaseline({
       world: liveWorld,
       governance: generated.governance,
-      // This is Round-Zero constitutional baseline being backfilled into an old
-      // save, so provenance belongs to the scenario start rather than today.
+      // Constitutional baseline backfilled into an old save: provenance belongs
+      // to the date the law was resolved for (the scenario start, unless the
+      // institution was founded since).
       date: scenarioDate,
     });
     appliedInfo = { migrated: applied.appliedInstitutionIds.length > 0, warnings: applied.warnings };
@@ -116,10 +132,10 @@ export const ensureLegacyInstitutionGovernanceForBallot = async ({
   const finalWorld = committed?.world || world;
   const final = effectiveRule(finalWorld, targetInstitutionId, targetProposalId);
   if (!final.rule || final.rule.type === "unspecified") {
-    const warningText = Array.isArray(generated?.warnings) && generated.warnings.length
-      ? ` ${generated.warnings.slice(0, 2).join(" ")}`
-      : "";
-    throw new Error(`No canonical voting rule could be established for ${final.institution?.name || targetInstitutionId}. Configure its charter in the Political/Institution editor or rerun Political World v2.${warningText}`);
+    if (Array.isArray(generated?.warnings) && generated.warnings.length) {
+      console.warn("[institution governance] no voting rule could be established.", generated.warnings);
+    }
+    throw votingRuleMissingError(final.institution?.name || targetInstitutionId);
   }
 
   return {

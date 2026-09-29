@@ -9,10 +9,12 @@
 // in progress (gameplay.js refuses a skip).
 //
 // Costs, said beside the buttons that spend them: playing an offer out is one
-// AI request, each move one more, and ending the scene one more. Letting an
-// offer pass, taking a move back and setting a scene aside cost nothing.
-import React, { useState } from "react";
-import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
+// AI request and each move one more. Ending the scene yourself is one more; a
+// scene that reaches its own end is usually written up by its last move at no
+// extra cost (gameplay.js resolveInteractiveScene). Letting an offer pass,
+// taking a move back and setting a scene aside cost nothing.
+import React, { useEffect, useState } from "react";
+import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { offeredEvent } from "../../runtime/interactiveOffer.js";
 import { formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
@@ -107,6 +109,17 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
     const [busy, setBusy] = useState("");
     const [error, setError] = useState("");
     const [finished, setFinished] = useState(null); // { title } of a scene just written into the record
+    // Setting a scene aside throws away every move played in it, and each was a
+    // request, so once there is a move it takes two presses (as deleting a chat
+    // or abandoning a project does). The blur that disarms it with a mouse never
+    // comes on a phone, so there the question lapses after four seconds.
+    const [confirmingAside, setConfirmingAside] = useState(false);
+    const touch = useTouchPrimary();
+    useEffect(() => {
+        if (!confirmingAside || !touch) return undefined;
+        const timer = setTimeout(() => setConfirmingAside(false), 4000);
+        return () => clearTimeout(timer);
+    }, [confirmingAside, touch]);
 
     const choices = interactiveChoiceTexts(scene?.choices);
     const beats = Array.isArray(scene?.history) ? scene.history : [];
@@ -156,7 +169,14 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
         const result = await endActiveInteractive();
         if (result?.resolved) setFinished({ title: result.events?.at?.(-1)?.title || title });
     });
-    const setAside = () => run("Setting the scene aside…", () => setAsideActiveInteractive());
+    const setAside = () => {
+        if (beats.length > 0 && !confirmingAside) {
+            setConfirmingAside(true);
+            return null;
+        }
+        setConfirmingAside(false);
+        return run("Setting the scene aside…", () => setAsideActiveInteractive());
+    };
 
     if (!open) return null;
     const idle = !busy;
@@ -235,7 +255,23 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
 
                             <div style={{ alignItems: "center", borderTop: "1px solid rgba(255,255,255,0.07)", display: "flex", flexWrap: "wrap", gap: "0.6rem", paddingTop: "0.8rem" }}>
                                 <button type="button" className="oh-tap-row" onClick={end} disabled={!idle || !beats.length} title={beats.length ? "Write what has happened into the record — one request" : "Play a move first; with none played there is nothing to record"} style={quietButton(!idle || !beats.length)}>End the scene</button>
-                                <button type="button" className="oh-tap-row" onClick={setAside} disabled={!idle} title="Close the scene without writing anything — free" style={quietButton(!idle)}>Set aside</button>
+                                <button
+                                    type="button"
+                                    className="oh-tap-row"
+                                    onClick={setAside}
+                                    onBlur={() => setConfirmingAside(false)}
+                                    disabled={!idle}
+                                    title={confirmingAside ? "Press again to set the scene aside: the moves played in it are not kept" : "Close the scene without writing anything — free"}
+                                    style={confirmingAside
+                                        ? { ...quietButton(!idle), background: "rgba(239,68,68,0.2)", border: "1px solid rgba(239,68,68,0.6)", color: "#fca5a5" }
+                                        : quietButton(!idle)}
+                                >
+                                    {!confirmingAside
+                                        ? "Set aside"
+                                        : beats.length === 1
+                                            ? "You've played 1 move — set it aside anyway?"
+                                            : `You've played ${beats.length} moves — set it aside anyway?`}
+                                </button>
                                 <span style={caption}>Ending writes the scene into the record (one request). Setting it aside keeps nothing.</span>
                             </div>
                         </>
@@ -263,7 +299,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                             <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                                 <button type="button" className="oh-tap-row" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
                                 <button type="button" className="oh-tap-row" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
-                                <span style={caption}>Playing it out is one AI request; each move is one more, and ending it one more. Letting it pass costs nothing.</span>
+                                <span style={caption}>Playing it out is one AI request, and each move is one more. Ending it yourself is one more; a scene that reaches its own end is usually written up with its last move. Letting it pass costs nothing.</span>
                             </div>
                         </>
                     ) : !finished && (

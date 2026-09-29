@@ -13,7 +13,7 @@
 //     files/background.json a suggested basemap, when there is one
 
 import { zipBundle, unzipBundle, looksLikeZip } from "./bundleZip.js";
-import { countChanges, summarizeChangesForComment } from "./scenarioChanges.js";
+import { countChanges, isDetailFieldPath, POLITICS_FIELDS, summarizeChangesForComment } from "./scenarioChanges.js";
 import { SUGGESTION_MARKER } from "./hubPosts.js";
 
 export const SUGGESTION_SCHEMA = "open-historia-scenario-suggestion/1";
@@ -40,7 +40,7 @@ export const suggestionFileName = (scenarioName) => `${slug(scenarioName)}-sugge
 // The change kinds a suggestion may carry (scenarioChanges.js). Anything else
 // in a file is dropped on reading, so a file from a newer or a broken build
 // shows what this build can apply and nothing it would misread.
-const KNOWN_KINDS = new Set([
+export const KNOWN_KINDS = new Set([
   "field", "politics", "stats", "institutionLogos", "cover",
   "region-owner", "region-name", "region-type", "region-claims", "region-group", "borders",
   "polity-add", "polity-remove", "polity-change", "polity-rename",
@@ -57,13 +57,16 @@ const isRecord = (value) => Boolean(value) && typeof value === "object" && !Arra
 // and never a key that would reach an object's prototype.
 const POLITICS_LEDGERS = new Set(["byPolity", "byId"]);
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-const validPoliticsChange = (change) => (change.within === undefined || POLITICS_LEDGERS.has(change.within))
+// Its field, like a field change's path, becomes a key of the author's world:
+// only a Politics part this build writes.
+const validPoliticsChange = (change) => POLITICS_FIELDS.includes(change.field)
+  && (change.within === undefined || POLITICS_LEDGERS.has(change.within))
   && (change.entry === undefined || change.entry === null || (typeof change.entry === "string" && !UNSAFE_KEYS.has(change.entry)));
 const validChange = (change) => isRecord(change)
   && typeof change.id === "string" && change.id
   && KNOWN_KINDS.has(change.kind)
   && (change.area === "details" || change.area === "map")
-  && (change.kind !== "field" || (Array.isArray(change.path) && change.path.every((part) => typeof part === "string")))
+  && (change.kind !== "field" || isDetailFieldPath(change.path))
   && (change.kind !== "politics" || validPoliticsChange(change))
   && (change.kind !== "borders" || Array.isArray(change.regions));
 

@@ -156,13 +156,17 @@ const CityPopup = ({ feature, x, y, isNew, onChange, onDelete, onClose }) => {
         <span style={{ fontSize: 10.5, fontWeight: 700 }}>Population by year</span>
         <textarea
           value={seriesDraft ?? seriesToText(feature.populationByYear)}
-          onChange={(e) => setSeriesDraft(e.target.value)}
-          onBlur={() => {
-            if (seriesDraft === null) return;
-            const byYear = textToSeries(seriesDraft);
+          // Written to the city on every keystroke, like every other field: the
+          // popup closes on a pan, a zoom, Escape or a click on another city,
+          // none of which blurs the box, so a series kept until blur was lost.
+          // The typed text stays as typed until the box is left.
+          onChange={(e) => {
+            const text = e.target.value;
+            setSeriesDraft(text);
+            const byYear = textToSeries(text);
             onChange({ populationByYear: Object.keys(byYear).length ? byYear : undefined });
-            setSeriesDraft(null);
           }}
+          onBlur={() => setSeriesDraft(null)}
           rows={3}
           placeholder={"1950: 1200000\n2000: 3400000"}
           style={{ ...inputStyle, padding: "5px 7px", resize: "vertical", fontFamily: "inherit", fontSize: 12 }}

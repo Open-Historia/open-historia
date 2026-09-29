@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildEventHistoryText, selectRankedEvents } from "../src/Game/AI/promptContext.js";
+import { buildChatSummaryText, buildEventHistoryText, selectRankedEvents } from "../src/Game/AI/promptContext.js";
 import { normalizeEvents } from "../src/runtime/gameState.js";
 
 const event = (date, title, extra = {}) => ({ date, title, description: "", ...extra });
@@ -54,4 +54,35 @@ test("a transfer between polities not on the map ranks below one that involves t
   ]);
   const selected = selectRankedEvents(events, { limit: 1, world, currentDate: "2014-03-02" });
   assert.deepEqual(selected.map((entry) => entry.title), ["France takes a province"]);
+});
+
+test("the chat summary leads with the newest thread by the calendar, BC years included, and undated threads last", () => {
+  const chat = (id, a, b, time, text) => ({ id, countries: [{ name: a, code: a }, { name: b, code: b }], messages: [{ role: "leader", speaker: a, text, time }] });
+  const text = buildChatSummaryText([
+    chat("c1", "Rome", "Massalia", "-0218-12-10", "An old promise"),
+    chat("c2", "Rome", "Syracuse", "", "An undated note"),
+    chat("c3", "Carthage", "Rome", "-0217-01-20", "This turn's ultimatum"),
+  ], { limit: 2 });
+  assert.ok(text.indexOf("This turn's ultimatum") >= 0 && text.indexOf("This turn's ultimatum") < text.indexOf("An old promise"));
+  assert.ok(!text.includes("An undated note"));
+});
+
+test("in a BC campaign this year's events are the recent ones", () => {
+  const events = normalizeEvents([
+    event("-0219-03-01", "Saguntum besieged", { importance: "major" }),
+    event("-0219-11-01", "Saguntum falls", { importance: "major" }),
+    event("-0218-03-01", "Rome declares war", { importance: "major" }),
+    event("-0218-04-15", "Hannibal crosses the Rhone", { importance: "major" }),
+  ]);
+  const selected = selectRankedEvents(events, { limit: 2, currentDate: "-0218-05-01" });
+  assert.deepEqual(selected.map((entry) => entry.title), ["Rome declares war", "Hannibal crosses the Rhone"]);
+});
+
+test("an event with an unreadable date has an unknown age, not a brand-new one", () => {
+  const events = normalizeEvents([
+    event("2014-04-20", "Yesterday's vote", { importance: "minor" }),
+    event("sometime", "Undated rumour", { importance: "minor" }),
+  ]);
+  const selected = selectRankedEvents(events, { limit: 1, currentDate: "2014-04-21" });
+  assert.deepEqual(selected.map((entry) => entry.title), ["Yesterday's vote"]);
 });

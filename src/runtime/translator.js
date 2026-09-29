@@ -16,14 +16,20 @@
 //    events, custom stats, region names, country names the pack lacks,
 //    Community posts), is translated by the configured AI model, in as few
 //    requests as possible, and saved to the server's language pack so each
-//    string is paid for once.
+//    string is paid for once. Nobody pressed a button for these: they are
+//    background requests, sent only while Background AI allows
+//    (AI/requestBudget.js). Region names go only once they are shown.
 // 3. What the AI writes during play (events, chats, the advisor) arrives in
 //    the player's language already (languageDirective) and is left alone.
 //
 // A language without a shipped pack still works the old way: there the
 // interface goes through the AI as well, a batch at a time, and is saved to
 // the server's pack like content.
+//
+// What is sent, and what of the answer is kept, is decided in
+// translationRules.js, which the tests call directly.
 
+import { BACKGROUND_REQUEST, backgroundAiAllowance } from "../Game/AI/requestBudget.js";
 import {
   DEFAULT_LANGUAGE,
   LANGUAGES,
@@ -34,8 +40,19 @@ import {
   syncLanguageFromServer,
 } from "./i18n.js";
 import { createDateLocalizer } from "./localDates.js";
-import { createPhraseBook } from "./phraseBook.js";
+import { createPhraseBook, fillSlots } from "./phraseBook.js";
 import { loadPromptTranslations } from "./promptTranslations.js";
+import {
+  BATCH_MAX_STRINGS,
+  BATCH_MIN_STRINGS,
+  authoredEventText,
+  chooseTranslationBatch,
+  collectContentText,
+  isNumericDate,
+  isTranslatable,
+  readTranslationReply,
+  routeUnknownText,
+} from "./translationRules.js";
 
 // v2: the shipped packs replaced the AI's translations of the interface, so
 // the old per-language caches (which were mostly those) are dropped on boot.
@@ -44,23 +61,15 @@ const CACHE_PREFIX = "i18n_v2_";
 const LEGACY_CACHE_PREFIX = "i18n_cache_";
 const CACHE_LIMIT = 8000;
 const MISSING_LIMIT = 3000;
-// How many strings ride in one request. This used to be 60 strings × 3 requests
-// at a time, which made a first pass over a new language dozens of requests
-// nobody pressed a button for — on a free key, where a few hundred a day is the
-// whole allowance (AI/requestBudget.js), and where three concurrent requests is
-// also the surest way to trip the per-MINUTE limit. One bigger request instead:
-// same strings, a quarter of the requests, and nothing in flight beside it.
-//
-// Bounded by characters as well as count, because 240 strings of prose is a very
-// different answer from 240 button labels, and the reply must not be truncated.
-export const BATCH_MAX_STRINGS = 240;
-export const BATCH_MAX_CHARS = 6000;
-// What it falls back to when a batch fails: the model could not hold that many
-// (a truncated answer, a token ceiling). Halved per failure, restored on the
-// next success, so a language that cannot take big batches still finishes.
-export const BATCH_MIN_STRINGS = 30;
 const SCAN_DEBOUNCE_MS = 350;
 const MAX_CONSECUTIVE_FAILURES = 3;
+// A run of failures pauses translation for a minute; the second run in a
+// session stops it until the game is reloaded, and the pill says so. Before,
+// the next DOM change restarted the cycle with the same strings, for as long
+// as the game was open.
+const MAX_COOLDOWNS = 2;
+const COOLDOWN_MS = 60000;
+const NOTICE_MS = 12000;
 const TRANSLATED_ATTRIBUTES = ["placeholder", "title", "aria-label", "aria-description", "alt"];
 
 // Elements whose text is user-authored, machine-formatted, or must stay
@@ -72,7 +81,10 @@ const SKIP_SELECTOR = "script, style, noscript, input, textarea, [contenteditabl
 const ATTRIBUTE_SKIP_SELECTOR = "script, style, noscript, [contenteditable], [data-no-translate]";
 
 // The progress pill's text: a pattern in the packs like any other string.
-const PROGRESS_TEXT = { label: "Translating to {{language}}…" };
+const PROGRESS_TEXT = {
+  label: "Translating to {{language}}…",
+  paused: "Translation paused — check your AI model in Settings → AI",
+};
 
 let language = DEFAULT_LANGUAGE;
 // A shipped pack covers the interface: only content goes to the AI.
@@ -84,11 +96,27 @@ let book = createPhraseBook();
 // Translations the AI made on this device, kept until the server has them.
 let learned = new Map();
 let pending = new Set();
+// The queued strings that are content only (queueContent): sent as background
+// requests while Background AI allows. Anything else in `pending` is the
+// interface of a language without a pack.
+const contentQueued = new Set();
+// The map's region names, not queued up front (a few thousand of them on the
+// built-in map): one goes to the AI once it is shown (routeUnknownText).
+let regionNames = new Set();
+// Strings the model answered with an empty or non-text entry: not kept, and
+// not asked about again this session.
+const unusable = new Set();
 const missing = new Set();
 let inFlight = false;
 let stopped = false;
 let cooldownUntil = 0;
 let failureCount = 0;
+let cooldownCount = 0;
+// Set by repeated failures (MAX_COOLDOWNS): nothing more is sent this session.
+let halted = false;
+// Content is waiting on Background AI: the pill is not shown for it.
+let heldBack = false;
+let noticeTimer = null;
 let observer = null;
 let scanTimer = null;
 let persistTimer = null;
@@ -196,8 +224,8 @@ const showProgress = () => {
 };
 
 const updateProgress = () => {
-  if (!progressEl) return;
-  if (pending.size === 0) {
+  if (!progressEl || halted) return;
+  if (pending.size === 0 || heldBack) {
     progressEl.remove();
     progressEl = null;
     return;
@@ -207,22 +235,34 @@ const updateProgress = () => {
   progressEl.textContent = book.translate(english) ?? english;
 };
 
-// ---- lookups ----
-
-// Only strings with real words need translating; glyphs, numbers, dates-only
-// fragments and emoji stay as-is. The authored language is English, so
-// requiring two Latin letters is a safe "has words" test.
-const isTranslatable = (text) => {
-  const trimmed = text.trim();
-  return trimmed.length > 1 && trimmed.length < 3000 && /[A-Za-z]{2}/.test(trimmed);
+// One line in the pill for a while: why the rest stays in English.
+const showNotice = (english) => {
+  showProgress();
+  if (!progressEl) return;
+  progressEl.textContent = book.translate(english) ?? english;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => {
+    progressEl?.remove();
+    progressEl = null;
+  }, NOTICE_MS);
 };
 
-// A rendered string the book has nothing for. With a shipped pack it stays
-// English and is listed for the next pack; without one it goes to the AI.
+// ---- lookups ----
+
+// A rendered string the book has nothing for (translationRules.js
+// routeUnknownText). With a shipped pack the interface stays English and is
+// listed for the next pack; without one it goes to the AI. A region name is
+// content either way.
 const noteUnknown = (trimmed) => {
-  if (packed) {
+  if (unusable.has(trimmed)) return;
+  const route = routeUnknownText(trimmed, { packed, isContent: (text) => regionNames.has(text) });
+  if (route === "content") {
+    queueContent(trimmed);
+  } else if (route === "missing") {
     if (missing.size < MISSING_LIMIT) missing.add(trimmed);
   } else {
+    // Needed by the interface now, whatever queued it first.
+    contentQueued.delete(trimmed);
     pending.add(trimmed);
   }
 };
@@ -231,9 +271,7 @@ const noteUnknown = (trimmed) => {
 // null when there is none.
 const translateValue = (value, { note = true } = {}) => {
   const trimmed = value.trim();
-  // A numeric date ("1/8/2016", "2016-01-08") has no words, but is written
-  // differently in most languages (localDates.js).
-  const numericDate = /^\d{1,2}\/\d{1,2}\/\d{4}$|^-?\d{4,6}-\d{2}-\d{2}$/.test(trimmed);
+  const numericDate = isNumericDate(trimmed);
   if (!numericDate && !isTranslatable(trimmed)) return null;
   const translated = book.translate(trimmed);
   if (translated == null) {
@@ -411,23 +449,10 @@ const handleMutations = (mutations) => {
 
 // ---- translation calls ----
 
-const extractJsonArray = (raw) => {
-  const text = String(raw ?? "").replace(/```(?:json)?/gi, "");
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-};
-
-const translateBatch = async (strings) => {
+// `kind` (translationRules.js chooseTranslationBatch): "interface" or
+// "content". Either way nobody pressed a button for it, so it is counted as a
+// background request.
+const translateBatch = async (strings, kind) => {
   // Late import: translator boots at app start, before the AI module's
   // dependency chain (prompt packs, provider config) needs to exist.
   const { callAI } = await import("../Game/AI/main.jsx");
@@ -449,84 +474,112 @@ const translateBatch = async (strings) => {
   // Named, so the request count (AI/requestBudget.js) can say what these were:
   // a first pass over a new language is requests nobody pressed a button for,
   // and "Used today, by task" is where a player finds that out.
-  const raw = await callAI(systemPrompt, [
+  return callAI(systemPrompt, [
     { role: "user", parts: [{ text: JSON.stringify(strings) }] },
-  ], { languageMode: "none", logLabel: packed ? "content translation" : "interface translation", taskKey: "translation" });
-  const translations = extractJsonArray(raw);
-
-  if (!translations) {
-    throw new Error("translation response was not a JSON array");
-  }
-
-  return translations;
-};
-
-// The next request's worth of strings: as many as fit under both ceilings, and
-// always at least one however long that one string is. Pure, so the sizing can
-// be tested without a DOM or a provider.
-export const planTranslationBatch = (strings, { maxStrings = BATCH_MAX_STRINGS, maxChars = BATCH_MAX_CHARS } = {}) => {
-  const all = Array.isArray(strings) ? strings : [...(strings ?? [])];
-  const limit = Math.max(1, Math.trunc(Number(maxStrings) || 1));
-  const room = Math.max(1, Math.trunc(Number(maxChars) || 1));
-  const batch = [];
-  let chars = 0;
-  for (const source of all) {
-    const text = String(source ?? "");
-    if (batch.length >= limit) break;
-    if (batch.length && chars + text.length > room) break;
-    batch.push(source);
-    chars += text.length;
-  }
-  return batch;
+  ], {
+    languageMode: "none",
+    logLabel: kind === "content" ? "content translation" : "interface translation",
+    taskKey: "translation",
+    requestKind: BACKGROUND_REQUEST,
+  });
 };
 
 // Shrinks on failure, recovers on success (see BATCH_MIN_STRINGS).
 let batchStrings = BATCH_MAX_STRINGS;
 
+// Background AI's say (the switch, its daily cap, the reserve), asked before
+// each batch of content. The interface of a language without a pack is not
+// held back by it: without it that language cannot be read at all.
+const contentAllowed = () => {
+  try {
+    return backgroundAiAllowance().allowed;
+  } catch {
+    return false;
+  }
+};
+
+// Done with: translated, or given up on for this session.
+const settle = (source) => {
+  pending.delete(source);
+  contentQueued.delete(source);
+};
+
+// A run of failures pauses for a minute; the MAX_COOLDOWNS-th run stops
+// translation for the session and says so in the pill.
+const noteFailure = (error) => {
+  failureCount += 1;
+  if (failureCount < MAX_CONSECUTIVE_FAILURES) return;
+  failureCount = 0;
+  cooldownCount += 1;
+  if (cooldownCount >= MAX_COOLDOWNS) {
+    halted = true;
+    console.warn(
+      `[i18n] translation stopped for this session after repeated failures (${error?.message || "unknown"}). ` +
+      `Untranslated text stays in English; check the AI provider settings and reload to try again.`,
+    );
+    showNotice(PROGRESS_TEXT.paused);
+    return;
+  }
+  cooldownUntil = Date.now() + COOLDOWN_MS;
+  console.warn(
+    `[i18n] translation paused for 60s after repeated failures (${error?.message || "unknown"}). ` +
+    `Check the AI provider settings; untranslated text stays in English meanwhile.`,
+  );
+  if (progressEl) {
+    progressEl.remove();
+    progressEl = null;
+  }
+};
+
 const processQueue = async () => {
-  if (inFlight || stopped || pending.size === 0 || Date.now() < cooldownUntil) {
+  if (inFlight || stopped || halted || pending.size === 0 || Date.now() < cooldownUntil) {
     return;
   }
 
   inFlight = true;
   try {
-    while (pending.size > 0 && !stopped && Date.now() >= cooldownUntil) {
+    while (pending.size > 0 && !stopped && !halted && Date.now() >= cooldownUntil) {
       // ONE request at a time: a big batch in flight on its own, rather than
       // three racing each other into a per-minute rate limit.
-      const batch = planTranslationBatch(pending, { maxStrings: batchStrings });
-      const result = await translateBatch(batch)
-        .then((translations) => ({ translations }))
+      const next = chooseTranslationBatch(pending, {
+        isContent: (text) => contentQueued.has(text),
+        contentAllowed,
+        maxStrings: batchStrings,
+      });
+      // Only content is left and Background AI says no: it waits, in English.
+      heldBack = !next;
+      if (!next) break;
+      const batch = next.strings;
+      const result = await translateBatch(batch, next.kind)
+        .then((raw) => ({ reply: readTranslationReply(raw, batch) }))
         .catch((error) => ({ error }));
       if (result.error) {
-        batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
-        failureCount += 1;
-        if (failureCount >= MAX_CONSECUTIVE_FAILURES) {
-          // Back off instead of giving up for the session: a provider hiccup
-          // shouldn't leave the rest untranslated forever.
-          failureCount = 0;
-          cooldownUntil = Date.now() + 60000;
-          console.warn(
-            `[i18n] translation paused for 60s after repeated failures (${result.error?.message || "unknown"}). ` +
-            `Check the AI provider settings; untranslated text stays in English meanwhile.`,
-          );
-          if (progressEl) {
-            progressEl.remove();
-            progressEl = null;
+        if (result.error.misaligned) {
+          // Paired by position, so none of it is kept. Asked again in halves;
+          // a single string the model cannot answer as one is given up on.
+          if (batch.length === 1) {
+            unusable.add(batch[0]);
+            settle(batch[0]);
           }
+          batchStrings = Math.max(1, Math.floor(Math.min(batchStrings, batch.length) / 2));
+        } else {
+          batchStrings = Math.max(BATCH_MIN_STRINGS, Math.floor(batchStrings / 2));
         }
+        noteFailure(result.error);
       } else {
         if (batchStrings < BATCH_MAX_STRINGS) batchStrings = BATCH_MAX_STRINGS;
         failureCount = 0;
-        batch.forEach((source, index) => {
-          const translated = typeof result.translations[index] === "string"
-            ? result.translations[index].trim()
-            : "";
-          const value = translated || source;
+        for (const [source, value] of result.reply.pairs) {
           book.set(source, value);
           learned.set(source, value);
           unsyncedEntries[source] = value;
-          pending.delete(source);
-        });
+          settle(source);
+        }
+        // Never saved as their own translation: left in English, not asked again.
+        for (const source of result.reply.unusable) {
+          unusable.add(source);
+          settle(source);
+        }
       }
 
       updateProgress();
@@ -548,14 +601,11 @@ const processQueue = async () => {
 const queueContent = (value) => {
   if (typeof value !== "string") return false;
   const trimmed = value.trim();
-  if (!trimmed || !isTranslatable(trimmed) || book.has(trimmed) || pending.has(trimmed)) return false;
+  if (!trimmed || !isTranslatable(trimmed) || book.has(trimmed) || pending.has(trimmed) || unusable.has(trimmed)) return false;
   pending.add(trimmed);
+  contentQueued.add(trimmed);
   return true;
 };
-
-// A scenario's own events are its author's words; the ones the AI writes during
-// play are already in the player's language (their source says which).
-const isAuthoredEvent = (event) => !event?.source || event.source === "scenario";
 
 // Everything a scenario or a player made that the game can show, gathered up
 // front so it translates once instead of drip-translating panels as they open.
@@ -588,12 +638,7 @@ const collectContentStrings = async () => {
       for (const key of ["name", "role", "note", "mapLabel", "mapDistinctLabel"]) add(polity?.[key]);
       (polity?.aliases ?? []).forEach(add);
     }
-    const events = await readJson(JSON_URLS.events, { defaultValue: [] });
-    for (const event of Array.isArray(events) ? events : []) {
-      if (!isAuthoredEvent(event)) continue;
-      add(event?.title);
-      add(event?.description);
-    }
+    authoredEventText(await readJson(JSON_URLS.events, { defaultValue: [] })).forEach(add);
   } catch {
     // Runtime assets unavailable (editor-only page etc.) — skip.
   }
@@ -619,23 +664,24 @@ const collectContentStrings = async () => {
     }
   } catch { /* hub unreachable — translated when the tab fetches them */ }
 
-  // Region names — the big set (tags, owned-region pills, event impacts).
-  // Queued last so everything above translates first. Only the map in use: a
-  // scenario with its own map shows its own regions (the stock ones are not
-  // drawn over it, or share its ids and take its names), so the stock world's
-  // few thousand names would be requests spent on text nobody sees.
+  // Region names — the big set (tags, owned-region pills, event impacts):
+  // 4,848 on the built-in map, twenty-odd requests if all were sent up front,
+  // most of them for names the player never looks at. So they are only
+  // remembered here, and each goes to the AI once it is shown (noteUnknown).
+  // Only the map in use: a scenario with its own map shows its own regions
+  // (the stock ones are not drawn over it, or share its ids and take its names).
   try {
     const { loadRegionCatalog, loadScenarioRegionCatalog } = await import("./assets.js");
     const own = await loadScenarioRegionCatalog().catch(() => []);
     const regions = own?.length ? own : await loadRegionCatalog().catch(() => []);
-    regions.forEach((region) => add(region?.name));
+    regionNames = new Set(regions.map((region) => (typeof region?.name === "string" ? region.name.trim() : "")).filter(Boolean));
   } catch { /* optional */ }
 };
 
 const collectAndTranslate = async () => {
   await collectContentStrings();
   if (stopped) return;
-  if (pending.size > 10) {
+  if (pending.size > 10 && !halted) {
     showProgress();
     updateProgress();
   }
@@ -661,6 +707,36 @@ export const translateLabel = (text) => {
   return text;
 };
 
+// The loading screen's own text (StartupScreen.jsx), looked up in what the
+// book already holds and nothing more. The DOM translator waits for that screen
+// to go, so it translates itself through this: never queued, never a request,
+// never a wait. Until the pack arrives, and in English, the text is returned
+// as it is.
+export const translateNow = (text) => {
+  if (language === DEFAULT_LANGUAGE || typeof text !== "string" || !text) {
+    return text;
+  }
+  return book.translate(text) ?? text;
+};
+
+// The language pack's translation of a name drawn outside the DOM, or null.
+// Unlike translateLabel it never queues: for names every player of a language
+// needs alike (the map's cities), which ship in the packs rather than cost
+// each player requests.
+export const lookupLabel = (text) => {
+  if (!translatorActive || typeof text !== "string") return null;
+  return book.get(text) ?? null;
+};
+
+// The interface's own words for a sentence the DOM translator never reaches:
+// one the game puts in a composer for the player to edit or send as theirs
+// (textareas are skipped, and the player's bubbles are data-no-translate).
+// `text` is the English as the packs key it, a `{{slot}}` pattern included,
+// and `params` fill its slots. Synchronous, from the shipped pack and what
+// the server's pack has learned; never sent to the AI: without an entry it
+// is the English.
+export const uiString = (text, params = {}) => book.format(text, params) ?? fillSlots(text, params);
+
 // Proactively queue content that exists as data but may not be rendered yet
 // (e.g. freshly fetched Community-hub posts). Only unknown strings cost a call.
 export const enqueueStrings = (strings) => {
@@ -674,47 +750,20 @@ export const enqueueStrings = (strings) => {
   }
 };
 
-// Human-readable fields inside written game content. When the author edits a
-// description (or the AI founds a polity), these are pulled out and
-// translated right away — and land in the server pack — instead of waiting to
-// be rendered somewhere first.
-const CONTENT_TEXT_KEYS = new Set([
-  "name", "title", "subtitle", "description", "eyebrow", "heroTitle",
-  "heroSubtitle", "summary", "blurb", "note", "label", "role", "mapLabel",
-  "mapDistinctLabel", "sectionLabel", "prefix", "suffix",
-]);
-
+// Human-readable fields inside written content (translationRules.js
+// collectContentText). When an author saves a scenario or a game, these are
+// pulled out and translated right away — and land in the server pack —
+// instead of waiting to be rendered somewhere first.
 export const enqueueContentStrings = (payload) => {
   if (!translatorActive || !payload) return;
-  const found = [];
-  const walk = (value, depth) => {
-    if (depth > 6 || value == null) return;
-    if (Array.isArray(value)) {
-      if (value.length <= 500) value.forEach((entry) => walk(entry, depth + 1));
-      return;
-    }
-    if (typeof value !== "object") return;
-    for (const [key, entry] of Object.entries(value)) {
-      // Geometry payloads can be enormous and contain no text to show.
-      if (key === "features" || key === "geometry" || key === "coordinates") continue;
-      if (typeof entry === "string") {
-        if (CONTENT_TEXT_KEYS.has(key)) found.push(entry);
-      } else if (key === "aliases" && Array.isArray(entry)) {
-        entry.forEach((alias) => typeof alias === "string" && found.push(alias));
-      } else {
-        walk(entry, depth + 1);
-      }
-    }
-  };
-  walk(payload, 0);
-  enqueueStrings(found);
+  enqueueStrings(collectContentText(payload));
 };
 
 // An event log as it is written: only the scenario's own events are content
 // (isAuthoredEvent); the AI's arrive in the player's language.
 export const enqueueEventStrings = (events) => {
   if (!translatorActive || !Array.isArray(events)) return;
-  enqueueStrings(events.filter(isAuthoredEvent).flatMap((event) => [event?.title, event?.description]));
+  enqueueStrings(authoredEventText(events));
 };
 
 // ---- lifecycle ----
@@ -770,10 +819,18 @@ export const startTranslator = () => {
   void syncLanguageFromServer().then((changed) => {
     if (changed) {
       window.location.reload();
+    } else if (language === DEFAULT_LANGUAGE && getStoredLanguage() !== DEFAULT_LANGUAGE) {
+      // This device could not store the choice (i18n.js holds it for the
+      // page), so a reload would come back in English: start in it now.
+      startInLanguage(getStoredLanguage());
     }
   });
 
-  language = getStoredLanguage();
+  startInLanguage(getStoredLanguage());
+};
+
+const startInLanguage = (code) => {
+  language = code;
   if (language === DEFAULT_LANGUAGE) {
     return;
   }
@@ -783,7 +840,7 @@ export const startTranslator = () => {
   if (packed) void loadPromptTranslations(language);
   // For bug reports and tests: what is queued for the AI, what the pack lacks,
   // and a way to walk the page again.
-  window.__ohI18n = { language, packed, pending, missing, rescan: () => scan() };
+  window.__ohI18n = { language, packed, pending, missing, unusable, rescan: () => scan() };
 
   document.documentElement.lang = language;
   if (isRtlLanguage(language)) {
@@ -827,6 +884,7 @@ export const stopTranslator = () => {
   translatorActive = false;
   observer?.disconnect();
   clearTimeout(scanTimer);
+  clearTimeout(noticeTimer);
   progressEl?.remove();
   progressEl = null;
 };

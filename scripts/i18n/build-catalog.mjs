@@ -3,8 +3,9 @@
 //
 //   public/lang/catalog-en.json          every fixed interface string, read out
 //                                        of the source (extractStrings.mjs),
-//                                        plus every stock country name and the
-//                                        preset scenarios' card text;
+//                                        plus every stock country name, the
+//                                        names of the cities the map labels and
+//                                        the preset scenarios' card text;
 //   public/lang/prompts/catalog-en.json  every guidance passage of the default
 //                                        prompts (promptGuidance.js), which the
 //                                        packs carry translated too.
@@ -25,7 +26,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { extractTree } from "./extractStrings.mjs";
+import { catalogText, extractTree } from "./extractStrings.mjs";
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../..");
 const LANG_DIR = path.join(ROOT, "public", "lang");
@@ -77,6 +78,45 @@ const seedPolityNames = (root) => {
   return out;
 };
 
+// The names of the cities the map labels (Cities.jsx), which it looks up in the
+// pack without ever asking the AI: every city of the built-in scenarios
+// (server/seed/<id>/cities.geojson; at close zoom every tier is labelled), and
+// of the stock cities (public/assets/cities-seed.json, from cities.pmtiles) the
+// capitals and the rest above the label filter's lowest threshold. The names
+// are exact: a translation is the city's usual name in that language (Munich,
+// Moscow), and a city without one keeps the name it has.
+const STOCK_CITY_LABEL_MIN_POPULATION = 250000;
+const cityNames = (root) => {
+  const out = [];
+  const seedDir = path.join(root, "server", "seed");
+  if (fs.existsSync(seedDir)) {
+    for (const seed of fs.readdirSync(seedDir)) {
+      const file = path.join(seedDir, seed, "cities.geojson");
+      if (!fs.existsSync(file)) continue;
+      try {
+        for (const feature of JSON.parse(fs.readFileSync(file, "utf8"))?.features ?? []) {
+          const name = feature?.properties?.city ?? feature?.properties?.name;
+          if (typeof name === "string" && name.trim()) out.push(name.trim());
+        }
+      } catch {
+        // An unreadable seed adds no names.
+      }
+    }
+  }
+  const stockFile = path.join(root, "public", "assets", "cities-seed.json");
+  if (fs.existsSync(stockFile)) {
+    try {
+      for (const city of JSON.parse(fs.readFileSync(stockFile, "utf8"))) {
+        if (!city?.capital && !(Number(city?.population) > STOCK_CITY_LABEL_MIN_POPULATION)) continue;
+        if (typeof city?.name === "string" && city.name.trim()) out.push(city.name.trim());
+      }
+    } catch {
+      // Without the map assets the previous catalog's names are kept (below).
+    }
+  }
+  return out;
+};
+
 // Every stock country's name, from the shipped countries archive.
 const countryNames = async () => {
   try {
@@ -115,6 +155,7 @@ const main = async () => {
     patternCount += patterns.size;
     specStrings(root).forEach((text) => strings.add(text));
     seedPolityNames(root).forEach((text) => strings.add(text));
+    cityNames(root).forEach((text) => strings.add(text));
     console.log(`  ${path.relative(ROOT, root) || "."}: ${exact.size} strings, ${patterns.size} patterns`);
   }
 
@@ -129,7 +170,7 @@ const main = async () => {
     } catch { /* first run */ }
   }
 
-  const catalog = [...strings].map((s) => s.trim()).filter((s) => s.length > 1 && /[A-Za-z]{2}/.test(s)).sort();
+  const catalog = [...strings].map(catalogText).filter(Boolean).sort();
   fs.mkdirSync(LANG_DIR, { recursive: true });
   fs.writeFileSync(path.join(LANG_DIR, "catalog-en.json"), `${JSON.stringify([...new Set(catalog)], null, 1)}\n`);
   const patterns = catalog.filter((s) => s.includes("{{")).length;

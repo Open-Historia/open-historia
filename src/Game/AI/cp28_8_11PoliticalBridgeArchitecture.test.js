@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { EVENT_IMPACT_KEYS } from "../../runtime/eventImpactKeys.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "../../..");
@@ -60,11 +61,13 @@ test("Political Actor mutations are treated as canonical consequences across cur
   const gameplay = read("src/Game/AI/gameplay.js");
   const gmPrompt = read("src/Game/AI/gameplayPrompts.js");
   const receipt = read("src/runtime/applicationReceipt.js");
-  assert.match(gameplay, /OWN_CONSEQUENCE_IMPACTS[\s\S]*?"politicalActorOps"/);
-  assert.match(gameplay, /gameMasterEventHasCanonicalEffects[\s\S]*?"politicalActorOps"/);
+  // Curation, the GM chronology check and the receipt all read the shared list.
+  assert.ok(EVENT_IMPACT_KEYS.includes("politicalActorOps"));
+  assert.match(gameplay, /const OWN_CONSEQUENCE_IMPACTS = EVENT_IMPACT_KEYS\.filter/);
+  assert.match(read("src/Game/AI/gameMasterValidation.js"), /gameMasterEventHasCanonicalEffects[\s\S]*?EVENT_IMPACT_KEYS/);
   assert.match(gameplay, /\["politicalActorOps", "political-actor"\]/);
   assert.match(gmPrompt, /impacts\.politicalActorOps = canonical political-state mutations/);
   assert.match(gmPrompt, /do NOT write leader or government through polityChanges\.stats or countryStatPatches/);
-  assert.match(receipt, /"politicalActorOps"/);
+  assert.match(receipt, /\.\.\.EVENT_IMPACT_KEYS\.filter/);
   assert.match(receipt, /politicalActorOps: \["political actor operation", "political actor operations"\]/);
 });

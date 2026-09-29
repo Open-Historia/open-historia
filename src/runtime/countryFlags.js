@@ -8,7 +8,7 @@
 // returns flag data.
 //
 // nameToAlpha2 is generated from server/country-names.json by
-// scripts/generate-name-to-alpha2.mjs, and is committed — see that script for why
+// scripts/generate-country-tables.mjs, and is committed — see that script for why
 // it derives the table from the real lookup below rather than restating it.
 import NAME_TO_ALPHA2 from "./generated/nameToAlpha2.js";
 

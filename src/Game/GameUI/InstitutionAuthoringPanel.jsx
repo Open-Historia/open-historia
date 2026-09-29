@@ -8,8 +8,13 @@ import {
 import {
   institutionAuthoringDraft,
   institutionAuthoringRows,
+  institutionMemberNames,
+  institutionMemberRoster,
+  removeScenarioInstitution,
+  unmatchedInstitutionMembers,
   upsertScenarioInstitution,
 } from "../../runtime/institutionAuthoring.js";
+import { PolityMultiPicker } from "./InstitutionsWorkspace.jsx";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import {
   BUILTIN_INSTITUTION_LOGOS,
@@ -98,7 +103,7 @@ const InstitutionLogoPreview = ({ draft, previewUrl = "" }) => {
 const EMPTY_DRAFT = institutionAuthoringDraft(null);
 
 export default function InstitutionAuthoringPanel({ details, onDetailsChange }) {
-  const world = details?.data?.world || {};
+  const world = useMemo(() => details?.data?.world || {}, [details?.data?.world]);
   const rows = useMemo(() => institutionAuthoringRows(world), [world]);
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState(EMPTY_DRAFT);
@@ -106,7 +111,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [pendingLogoDataUrl, setPendingLogoDataUrl] = useState("");
-  const [memberEntry, setMemberEntry] = useState("");
   const fileRef = useRef(null);
 
   useEffect(() => {
@@ -127,7 +131,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId(institution?.id || "");
     setDraft(institutionAuthoringDraft(institution));
     setPendingLogoDataUrl("");
-    setMemberEntry("");
     setDirty(false);
     setMessage("");
   };
@@ -137,7 +140,6 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     setSelectedId("");
     setDraft(institutionAuthoringDraft(null));
     setPendingLogoDataUrl("");
-    setMemberEntry("");
     setDirty(true);
     setMessage("");
   };
@@ -182,6 +184,44 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     }
   };
 
+  const selectedInstitution = rows.find((entry) => entry.id === selectedId) || null;
+
+  const deleteInstitution = async () => {
+    if (!details?.scenario?.id || busy || !selectedInstitution) return;
+    const label = selectedInstitution.name || selectedInstitution.id;
+    if (!window.confirm(`Delete ${label} from this scenario? Its members, history and logo go with it.`)) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = removeScenarioInstitution(world, selectedInstitution.id);
+      if (result.error) throw new Error(result.error);
+
+      const storedLogos = await downloadScenarioJsonAsset(details.scenario.id, "institutionLogos") || {};
+      if (storedLogos && typeof storedLogos === "object" && !Array.isArray(storedLogos) && Object.hasOwn(storedLogos, selectedInstitution.id)) {
+        const nextStoredLogos = { ...storedLogos };
+        delete nextStoredLogos[selectedInstitution.id];
+        await uploadScenarioAsset(
+          details.scenario.id,
+          "institutionLogos",
+          new Blob([JSON.stringify(nextStoredLogos)], { type: "application/json" }),
+        );
+      }
+
+      const nextDetails = await saveScenario(details.scenario.id, {
+        worldPatch: { institutions: result.world.institutions },
+      });
+      onDetailsChange?.(nextDetails);
+      setSelectedId("");
+      setPendingLogoDataUrl("");
+      setDirty(false);
+      setMessage(`${label} deleted from the scenario.`);
+    } catch (error) {
+      setMessage(error?.message || "Could not delete the institution.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const uploadLogo = async (event) => {
     const [file] = Array.from(event.target.files || []);
     event.target.value = "";
@@ -202,28 +242,25 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     : "";
   const previewUrl = pendingLogoDataUrl || storedLogoPreview;
 
-  const memberNames = useMemo(() => {
-    const seen = new Set();
-    return String(draft.membersText || "")
-      .split(/[\n,;]+/g)
-      .map((entry) => entry.trim())
-      .filter((entry) => {
-        const key = entry.toLocaleLowerCase();
-        if (!entry || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [draft.membersText]);
+  const memberNames = useMemo(() => institutionMemberNames(draft.membersText), [draft.membersText]);
 
   const setMemberNames = (names) => edit("membersText", names.join("\n"));
 
-  const addMember = () => {
-    const next = memberEntry.trim();
+  const addMember = (name) => {
+    const next = String(name ?? "").trim();
     if (!next) return;
     const exists = memberNames.some((entry) => entry.toLocaleLowerCase() === next.toLocaleLowerCase());
     if (!exists) setMemberNames([...memberNames, next]);
-    setMemberEntry("");
   };
+
+  // The scenario's polities to pick from, and the members that name none of
+  // them, which are kept but flagged before Save.
+  const roster = useMemo(() => institutionMemberRoster(world), [world]);
+  const pickable = useMemo(() => {
+    const taken = new Set(memberNames.map((entry) => entry.toLocaleLowerCase()));
+    return roster.filter((polity) => !taken.has(polity.toLocaleLowerCase()));
+  }, [roster, memberNames]);
+  const unmatched = useMemo(() => new Set(unmatchedInstitutionMembers(memberNames, world)), [memberNames, world]);
 
   const removeMember = (name) => {
     setMemberNames(memberNames.filter((entry) => entry.toLocaleLowerCase() !== name.toLocaleLowerCase()));
@@ -318,24 +355,14 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.62rem" }}>{memberNames.length} added</div>
             </div>
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.25rem" }}>Add the polities that belong to this institution at scenario start. Existing roles and statuses are preserved when you edit an institution.</div>
-            <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.55rem" }}>
-              <input
-                onChange={(event) => setMemberEntry(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter") return;
-                  event.preventDefault();
-                  addMember();
-                }}
-                placeholder="Type a polity name"
-                style={{ ...inputStyle, flex: 1 }}
-                value={memberEntry}
-              />
-              <button disabled={!memberEntry.trim()} onClick={addMember} style={{ ...actionButtonStyle, opacity: memberEntry.trim() ? 1 : 0.45 }} type="button">Add</button>
+            <div style={{ marginTop: "0.55rem" }}>
+              <PolityMultiPicker allowUnlisted label="Type a polity name" multiple={false} onChange={addMember} polities={pickable} value="" />
             </div>
             {memberNames.length > 0 ? (
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", marginTop: "0.55rem" }}>
                 {memberNames.map((name) => (
-                  <span key={name.toLocaleLowerCase()} style={{ alignItems: "center", background: "rgba(255,255,255,0.055)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: "999px", display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
+                  <span key={name.toLocaleLowerCase()} title={unmatched.has(name) ? "Not a polity in this scenario" : undefined} style={{ alignItems: "center", background: unmatched.has(name) ? "rgba(245,158,11,0.1)" : "rgba(255,255,255,0.055)", border: `1px solid ${unmatched.has(name) ? "rgba(245,158,11,0.38)" : "rgba(255,255,255,0.09)"}`, borderRadius: "999px", color: unmatched.has(name) ? "#fde68a" : undefined, display: "inline-flex", fontSize: "0.66rem", gap: "0.35rem", padding: "0.3rem 0.35rem 0.3rem 0.55rem" }}>
+                    {unmatched.has(name) && <span aria-hidden="true">⚠</span>}
                     {name}
                     <button aria-label={`Remove ${name}`} onClick={() => removeMember(name)} style={{ background: "transparent", border: 0, color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.8rem", lineHeight: 1, padding: "0 0.15rem" }} type="button">×</button>
                   </span>
@@ -348,6 +375,13 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
               <summary style={{ color: "rgba(255,255,255,0.48)", cursor: "pointer", fontSize: "0.64rem" }}>Bulk edit member list</summary>
               <textarea onChange={(event) => edit("membersText", event.target.value)} placeholder="One polity name per line" style={{ ...inputStyle, minHeight: "5rem", marginTop: "0.4rem", resize: "vertical" }} value={draft.membersText} />
             </details>
+            {unmatched.size > 0 && (
+              <div data-institution-unmatched-members="true" style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.24)", borderRadius: 10, color: "#fde68a", fontSize: "0.64rem", lineHeight: 1.45, marginTop: "0.55rem", padding: "0.5rem 0.6rem" }}>
+                {unmatched.size === 1
+                  ? `${[...unmatched][0]} is not a polity in this scenario. Check the spelling: it is kept as written, and it will vote and count toward quorum as a member.`
+                  : `${unmatched.size} members, marked ⚠, are not polities in this scenario. Check the spelling: they are kept as written, and they will vote and count toward quorum as members.`}
+              </div>
+            )}
           </section>
 
           <section style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, marginTop: "0.65rem", padding: "0.72rem" }}>
@@ -400,12 +434,17 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
           </details>
 
           {message && (
-            <div style={{ background: /saved/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.65rem", padding: "0.55rem 0.65rem" }}>
+            <div style={{ background: /saved|deleted from/i.test(message) ? "rgba(34,197,94,0.08)" : "rgba(248,113,113,0.08)", border: `1px solid ${/saved|deleted from/i.test(message) ? "rgba(34,197,94,0.2)" : "rgba(248,113,113,0.22)"}`, borderRadius: "10px", color: /saved|deleted from/i.test(message) ? "#bbf7d0" : "#fecaca", fontSize: "0.68rem", lineHeight: 1.45, marginTop: "0.65rem", padding: "0.55rem 0.65rem" }}>
               {message}
             </div>
           )}
 
           <div style={{ display: "flex", gap: "0.45rem", justifyContent: "flex-end", marginTop: "0.75rem" }}>
+            {selectedInstitution && (
+              <button disabled={busy} onClick={deleteInstitution} style={{ ...actionButtonStyle, background: "rgba(248,113,113,0.08)", borderColor: "rgba(248,113,113,0.3)", color: "#fecaca", marginRight: "auto" }} type="button">
+                Delete institution
+              </button>
+            )}
             <button disabled={!dirty || busy} onClick={save} style={{ ...actionButtonStyle, background: dirty ? "rgba(124,58,237,0.3)" : "rgba(255,255,255,0.035)", borderColor: dirty ? "rgba(139,92,246,0.45)" : "rgba(255,255,255,0.07)", color: dirty ? "#fff" : "rgba(255,255,255,0.35)" }} type="button">
               {busy ? "Saving..." : "Save institution"}
             </button>

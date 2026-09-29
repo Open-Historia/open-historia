@@ -256,18 +256,15 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 
 // --- One time skip ---
 //
-// Who may spend, in order, while requests are being saved. The skip itself
-// always runs. Everything after it asks first, and a "no" is never an error:
-// the checks fail open, the agents report next turn, the history is folded on
-// a later skip.
-export const JUMP_SPENDERS = Object.freeze([
-    "jump",          // the time skip itself
-    "jumpRetry",     // asked again, only when the first answer could not be used at all
-    "review",        // units, territory, timeline, board and agents, in one request
-    "history",       // folding old events into the history document, when due
-    "repair",        // a second search when the skip came back thin
-    "institutionBallots", // unresolved NPC formal ballots after the new turn is canonical
-]);
+// Who may spend, in order, while requests are being saved: "jump" (the time
+// skip itself), "jumpRetry" (asked again, only when the first answer could not
+// be used at all), "review" (units, territory, structures, timeline, board and
+// agents, in one request), "history" (folding old events into the history document, when
+// due), "repair" (a second search when the skip came back thin) and
+// "institutionBallots" (unresolved NPC formal ballots after the new turn is
+// canonical). The skip itself always runs. Everything after it asks first, and
+// a "no" is never an error: the checks fail open, the agents report next turn,
+// the history is folded on a later skip.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.
@@ -343,6 +340,24 @@ export const describeDay = ({ settings, ledger }) => {
         byTask: { ...day.byTask },
         lastJump: day.lastJump ? { ...day.lastJump } : null,
     };
+};
+
+// Today's requests by task, most first, for Settings → AI. `labels` names the
+// task keys the caller knows ({ jumpForward: "Time skip" }); a key it does not
+// is shown as it was counted, with `named: false`. Keys under one name (two
+// spellings of "other") make one row.
+export const requestsByTask = (byTask, labels = {}) => {
+    const rows = new Map();
+    for (const [key, total] of Object.entries(byTask ?? {})) {
+        const count = wholeNumber(total, { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 });
+        if (!count) continue;
+        const named = Object.prototype.hasOwnProperty.call(labels, key) && Boolean(labels[key]);
+        const label = named ? labels[key] : key;
+        const row = rows.get(label) ?? { label, named, count: 0 };
+        row.count += count;
+        rows.set(label, row);
+    }
+    return [...rows.values()].sort((a, b) => b.count - a.count || Number(b.named) - Number(a.named) || a.label.localeCompare(b.label));
 };
 
 // --- The game's own ---

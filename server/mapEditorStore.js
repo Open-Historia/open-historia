@@ -13,6 +13,7 @@ import path from "path";
 import url from "url";
 import { resolveChildPath } from "./security.js";
 import { applyRegionDelta, isRegionDelta } from "./regionDelta.js";
+import { documentFieldsFromBody } from "./mapEditorFields.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 import { DATA_DIR } from "./dataDir.js";
@@ -146,21 +147,9 @@ export const createMapEditorDocument = (body = {}) => {
     name,
     version: 1,
     metadata: { ...(body.metadata || {}), name },
-    types: body.types || [],
-    regions: body.regions || { type: "FeatureCollection", features: [] },
-    features: body.features || [],
-    // The map-maker's own palette and flags. Listed explicitly because this record
-    // is built field by field — anything not named here is dropped on create, with
-    // no error, and only shows up as "my colours vanished when I reopened the map".
-    colorOverrides: body.colorOverrides || {},
-    flags: body.flags || {},
-    // The rest of what the Workshop saves, as the website's store keeps it
-    // (src/runtime/web/editorStore.js); the first save of a map creates it.
-    ownerSchema: Number(body.ownerSchema || 1),
-    tags: body.tags || {},
-    polities: body.polities || {},
-    units: Array.isArray(body.units) ? body.units : [],
-    groups: body.groups && typeof body.groups === "object" ? body.groups : {},
+    // Everything else the Workshop saves, from the list the website's store
+    // shares (server/mapEditorFields.js); the first save of a map creates it.
+    ...documentFieldsFromBody(body),
     createdAt: now,
     updatedAt: now,
   };

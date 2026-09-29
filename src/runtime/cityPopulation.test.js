@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 
 import {
   cityPopulationKey,
+  cityPopulationOverridesByTileName,
   effectiveCityPopulation,
   gameDateFractionalYear,
   latestPopulation,
@@ -71,4 +72,14 @@ test("the map's cities take the year's figure, and a map without series is hande
   assert.equal(out.features[1].properties.population, 200);
   assert.equal(dated.features[1].properties.population, 1, "the loaded collection is not mutated");
   assert.equal(withPopulationsForYear(dated, null), dated);
+});
+
+test("a figure set under a renamed city reaches the name on its map feature", () => {
+  const overrides = cityPopulationOverridesByTileName(
+    { Stalingrad: 900000, paris: "2100000", ghost: -5, blank: "x" },
+    { tsaritsyn: "Stalingrad", lutetia: "Paris", rome: "Roma" },
+  );
+  assert.deepEqual(overrides, { stalingrad: 900000, paris: 2100000, tsaritsyn: 900000, lutetia: 2100000 });
+  assert.equal(effectiveCityPopulation({ city: "Tsaritsyn", population: 60000 }, { cityPopulations: overrides }), 900000);
+  assert.deepEqual(cityPopulationOverridesByTileName(null, null), {});
 });

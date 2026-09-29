@@ -81,6 +81,22 @@ test("a rename of the player's group renames the polity with it, so the game's p
   assert.deepEqual(result.renamedPolities.map(({ from, to }) => [from, to]), [[PLAYER, "Los Norteños"]]);
 });
 
+test("the player's group can be renamed back to its former name", () => {
+  const renamed = applyEventImpactsToWorld({
+    world: world(),
+    events: [event([{ op: "update", name: PLAYER, newName: "Los Norteños" }])],
+  }).world;
+  const reverted = applyEventImpactsToWorld({
+    world: renamed,
+    events: [event([{ op: "update", name: "Los Norteños", newName: PLAYER }])],
+  });
+  assert.ok(reverted.world.polityOverrides[PLAYER], "the polity took its old name back");
+  assert.equal(reverted.world.polityOverrides["Los Norteños"], undefined);
+  assert.deepEqual(Object.keys(reverted.world.groups).sort(), [PLAYER, "Horde"]);
+  assert.deepEqual(reverted.world.groups[PLAYER].formerNames, ["Los Norteños"]);
+  assert.deepEqual(reverted.renamedPolities.map(({ from, to }) => [from, to]), [["Los Norteños", PLAYER]]);
+});
+
 test("the advisor reads that the player owns nothing and leads a group", async () => {
   const text = await buildPlayerPolityRegionsText({ game: { country: PLAYER }, world: world() }, [{ id: "r1", name: "Sonora" }]);
   assert.match(text, /^None — Cartel del Norte is a group, not a country\./);

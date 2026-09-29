@@ -8,7 +8,11 @@ const worker = fs.readFileSync(new URL("./polityBoundariesWorker.js", import.met
 const displayMesh = fs.readFileSync(new URL("./regionDisplayMesh.js", import.meta.url), "utf8");
 const displayMeshPolicy = fs.readFileSync(new URL("./regionDisplayMeshPolicy.js", import.meta.url), "utf8");
 const renderRepair = fs.readFileSync(new URL("./regionRenderRepair.js", import.meta.url), "utf8");
-const polityTextLayer = fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8");
+// The React component and the record sync it drives (polityTextSync.js).
+const polityTextLayer = [
+  fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../labels/polityTextSync.js", import.meta.url), "utf8"),
+].join("\n");
 const polityTextCustomLayer = fs.readFileSync(new URL("../labels/polityTextCustomLayer.js", import.meta.url), "utf8");
 const polityTextPlacement = fs.readFileSync(new URL("../labels/polityTextPlacement.js", import.meta.url), "utf8");
 const polityTextRecords = fs.readFileSync(new URL("../labels/polityTextRecords.js", import.meta.url), "utf8");
@@ -19,6 +23,7 @@ const world = fs.readFileSync(new URL("../World.jsx", import.meta.url), "utf8");
 const natGeoDarkStyle = fs.readFileSync(new URL("../natGeoDarkStyle.js", import.meta.url), "utf8");
 const mapLayerOrder = fs.readFileSync(new URL("../mapLayerOrder.js", import.meta.url), "utf8");
 const runtimeAssets = fs.readFileSync(new URL("../../../runtime/assets.js", import.meta.url), "utf8");
+const preload = fs.readFileSync(new URL("../../../runtime/preload.js", import.meta.url), "utf8");
 const editorBasemaps = fs.readFileSync(new URL("../../../Editor/basemaps.js", import.meta.url), "utf8");
 
 // These are intentionally source-level architecture guards. They catch accidental
@@ -41,7 +46,8 @@ test("Pipeline v2 discards obsolete worker revisions rather than publishing them
   assert.match(nations, /scheduler\.complete\(result\?\.requestId\)/);
   assert.match(
     nations,
-    /if \(!completion\.accepted\) \{[\s\S]*?cartographyDiscarded = true[\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
+    // What a discard does is ownershipPresentationHolds.test.js's to check.
+    /if \(!completion\.accepted\) \{[\s\S]*?ownershipPresentation\.discardCartography\([\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
   );
   assert.match(nations, /const request = completion\.request/);
 });
@@ -65,7 +71,7 @@ test("catalog metadata stays early while scenario readiness waits for safe geome
   assert.match(worker, /if \(type === "initialize"\) \{[\s\S]*scheduleRegionRenderRepair/);
   assert.match(nations, /ptrBlocksInitialReadiness/);
   assert.match(nations, /!ptrPolityTextStatus\.mounted[\s\S]*!ptrPolityTextStatus\.failed/);
-  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl\)/);
+  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl, \{ failed: bordersFailedRef\.current \}\)/);
   // The source and the worker fetch through the worker-fetchable URL (a blob:
   // copy on the website); the runtime URL stays the identity above.
   assert.match(nations, /useWorkerFetchableUrl\(regionsGeojsonUrl\)/);
@@ -130,15 +136,10 @@ test("PTR GPU resources are uploaded lazily in bounded batches", () => {
 });
 
 test("WebGL context loss remains instrumented for freeze diagnostics", () => {
-  assert.match(world, /webglcontextlost/);
-  assert.match(world, /webglcontextrestored/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-lost"/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-released"/);
-  assert.match(world, /mapInstance\?\._removed \|\| !canvas\.isConnected/);
-  assert.match(world, /setTimeout\(\(\) => \{/);
-  assert.match(world, /recordMapTrace\("gpu:webgl-restored"/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextlost", onLost\)/);
-  assert.match(world, /canvas\.addEventListener\("webglcontextrestored", onRestored\)/);
+  // The listeners themselves are covered by mapInstrumentation.test.js; World
+  // attaches them to every map instance it mounts.
+  assert.match(world, /attachMapInstrumentation\(\{/);
+  assert.match(world, /\}, \[handleBasemapTileLoading, handleSourceLoaded, mapInstanceKey, mapRef, stopLoadingToast\]\);/);
 });
 
 test("country fills are written again when MapLibre rebuilds the sources holding their feature-state", () => {
@@ -283,12 +284,15 @@ test("legal ownership animation keeps canonical ownership separate from bounded 
   assert.match(nations, /ownership-transition-sweep-source/);
   assert.match(nations, /ownership-transition-sweep-fill/);
   assert.match(nations, /ownershipTransitionHidden/);
-  assert.match(nations, /ownershipTransitionQueueRef\.current\.push/);
+  // The hold and queue bookkeeping lives in ownershipPresentationHolds.js.
+  assert.match(nations, /ownershipPresentation\.addTransition\(/);
+  assert.match(nations, /ownershipPresentation\.nextTransition\(\)/);
+  assert.match(nations, /ownershipPresentation\.finishTransition\(queued\) === "publish"/);
   assert.match(
     nations,
     /new Worker\(new URL\("\.\/vnext\/ownershipTransitionWorker\.js"/,
   );
-  assert.match(nations, /prefers-reduced-motion/);
+  assert.match(nations, /if \(reduceMotionEnabled\(\)\) \{/);
   assert.match(ownershipTransitionWorker, /transitionT/);
 
   // Animation stays presentation-only; canonical political colour is not rewritten as an effect.
@@ -310,15 +314,20 @@ test("mid-campaign PTR updates publish immediately, cancel stale solves, and ref
   assert.match(polityTextLayer, /onWorker\(worker, cancel\)/);
   assert.match(
     polityTextLayer,
-    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional\)/,
+    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional, changedKeys\)/,
   );
   assert.match(polityTextLayer, /placementTimeoutMs: initialMount \? 30000 : 4000/);
   assert.match(polityTextContinuity, /previousFingerprints\.get\(key\) !== fingerprint/);
   assert.doesNotMatch(polityTextLayer, /\[debugBaseline, enabled, fontFamilies, haloColor, map, mode, onStatusChange, records, textColor\]/);
 });
 
-test("custom political maps do not build an unused stock-country label atlas", () => {
-  assert.match(nations, /if \(customFlag\) \{[\s\S]*setPointLabelData\(EMPTY_FEATURE_COLLECTION\)[\s\S]*setCurvedLabelData\(EMPTY_FEATURE_COLLECTION\)/);
+test("no map builds the stock-country label atlas no served world draws", () => {
+  // Every served world is a custom one; the stock label layers stay only as
+  // empty anchors, and startup no longer builds their atlas.
+  assert.doesNotMatch(nations, /loadCountryLabelCollections|setPointLabelData|setCurvedLabelData/);
+  assert.match(nations, /id="country-curved-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.match(nations, /id="country-point-label-source" type="geojson" data=\{EMPTY_FEATURE_COLLECTION\}/);
+  assert.doesNotMatch(preload, /warmCountryLabelCollections|id: "country-labels"/);
 });
 
 test("dirty boundary filtering is owner-list based rather than capped to four overlapping owners", () => {

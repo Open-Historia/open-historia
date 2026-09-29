@@ -330,3 +330,16 @@ test("with the region lists behind lookups, the vocabulary is powers and counts 
   assert.match(text, /- France — \d+ regions?/);
   assert.equal(/Bourgogne/.test(text), false, "no region names");
 });
+
+test("a conversation gets names without ids under its own headers", () => {
+  const text = buildRegionOwnershipText(CATALOG, {}, {
+    focusCodes: ["France"],
+    regionIds: false,
+    focusIntro: "Regions held by the powers in this conversation:",
+    rosterIntro: "Every other power, with how many regions it holds:",
+  });
+  assert.match(text, /^Regions held by the powers in this conversation:\n- France \[2 regions\]: Bourgogne, Bretagne$/m);
+  assert.match(text, /Every other power, with how many regions it holds:\n- Germany — 3 regions/);
+  assert.equal(text.includes("FRA.1_1"), false, "no ids");
+  assert.equal(text.includes(FOCUS_INTRO) || text.includes(ROSTER_INTRO), false, "no jump instructions");
+});

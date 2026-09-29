@@ -14,8 +14,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parsePost, parseSuggestionComment, refreshPublishedRecord } from "./hubPosts.js";
+import { parsePost, parseSuggestionComment, postIdFromInput, refreshPublishedRecord } from "./hubPosts.js";
 import {
+  KNOWN_KINDS,
   SUGGESTION_SCHEMA,
   buildSuggestion,
   buildSuggestionComment,
@@ -25,7 +26,7 @@ import {
   readSuggestionFile,
   suggestionFileName,
 } from "./scenarioSuggestion.js";
-import { buildScenarioSnapshot } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, summarizeChangesForComment } from "./scenarioChanges.js";
 import { buildDetailSave, detailChangeStatus } from "./suggestionApply.js";
 
 const ZIP = "https://github.com/user-attachments/files/123/old-world-suggestion.zip";
@@ -94,6 +95,30 @@ test("the author's own posts are found by key, and comments read only when the c
   const blocked = { ...first.published, blocked: ["spam-bot"], commentCounts: {} };
   const guarded = await refreshPublishedRecord(blocked, [{ ...posts[0], comments: 32 }], { fetchComments: async () => [...flood, { id: 2, user: { login: "bob" }, body: `[old-world-suggestion.zip](${ZIP})` }] });
   assert.deepEqual(guarded.published.suggestions.map((ref) => ref.author), ["bob"]);
+});
+
+test("a post with more than fifty suggestions keeps the new ones, leaving out reviewed ones first", async () => {
+  const key = newPublishKey();
+  const comment = (id, login = "bob") => ({
+    id,
+    user: { login },
+    created_at: new Date(Date.UTC(2026, 8, 1, 0, id)).toISOString(),
+    body: `[s${id}-suggestion.zip](https://github.com/user-attachments/files/${id}/s${id}-suggestion.zip)`,
+  });
+  const oldComments = Array.from({ length: 50 }, (_, index) => comment(index + 1));
+  const post = { id: 12, title: "Old World", author: "ann", scenarioKey: key, comments: 50 };
+  const first = await refreshPublishedRecord({ key, publishedAt: "2026-09-01T00:00:00Z" }, [post], { fetchComments: async () => oldComments });
+  assert.equal(first.published.suggestions.length, 50);
+
+  // Two of the old ones were reviewed; five new comments arrive.
+  const reviews = { c3: { status: "done" }, c40: { status: "dismissed" } };
+  const all = [...oldComments, ...Array.from({ length: 5 }, (_, index) => comment(51 + index, "carl"))];
+  const later = await refreshPublishedRecord(first.published, [{ ...post, comments: 55 }], { fetchComments: async () => all, reviews });
+  const ids = later.published.suggestions.map((ref) => ref.id);
+  assert.equal(ids.length, 50);
+  for (const id of ["c51", "c52", "c53", "c54", "c55"]) assert.ok(ids.includes(id), `${id} is kept`);
+  for (const id of ["c3", "c40", "c1", "c2", "c4"]) assert.ok(!ids.includes(id), `${id} makes room`);
+  assert.equal(later.published.commentCounts[12], 55);
 });
 
 const bundle = () => ({
@@ -177,4 +202,30 @@ test("accepting builds one save: meta, game, world, features, prompts, Politics 
   assert.deepEqual(patch.worldPatch.institutions, [{ id: "league", name: "The Grand League", members: ["Alpha", "Beta"] }]);
   assert.deepEqual(uploads, [{ key: "stats", json: { version: 2, sections: [] } }]);
   assert.deepEqual(clears, ["cover"]);
+});
+
+test("every kind of change has a line in the comment", () => {
+  for (const kind of KNOWN_KINDS) {
+    const change = kind === "field"
+      ? { id: kind, area: "details", kind, path: ["meta", "name"] }
+      : { id: kind, area: "details", kind };
+    assert.ok(summarizeChangesForComment([change]).length > 0, `a suggestion of one ${kind} change says what it is`);
+  }
+  const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
+  assert.match(comment, /^- Institution logos changed$/m);
+});
+
+test("Link my post reads the post's number from its address, however it was copied", () => {
+  const post = "https://github.com/Open-Historia/Open-historia-scenarios/issues/412";
+  assert.equal(postIdFromInput(post), 412);
+  assert.equal(postIdFromInput(`${post}#issuecomment-2345678901`), 412, "a comment's anchor is not the post's number");
+  assert.equal(postIdFromInput(`${post}/`), 412);
+  assert.equal(postIdFromInput(`${post}?utm_source=x`), 412);
+  assert.equal(postIdFromInput(`  ${post}  `), 412);
+  assert.equal(postIdFromInput("412"), 412);
+  assert.equal(postIdFromInput("#412"), 412);
+  assert.equal(postIdFromInput(""), null);
+  assert.equal(postIdFromInput("my post"), null);
+  assert.equal(postIdFromInput("0"), null);
+  assert.equal(postIdFromInput(`${post}abc`), null);
 });

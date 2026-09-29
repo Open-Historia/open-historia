@@ -13,7 +13,6 @@ import { handleFlags } from "./flagStore.js";
 import { handleLibrary, handleScenarios, handleGames, handleRuntimeJson, handleRuntimeTurnCommit, handleScenarioInstitutionLogo, handleRuntimeInstitutionLogo, getScenarioPmtilesOverride } from "./libraryStore.js";
 import { handleLang, handleUiSettings } from "./settingsStore.js";
 import { getConnected } from "./nodeConnect.js";
-import { getSession } from "./account.js";
 
 let installed = false;
 
@@ -92,7 +91,7 @@ const route = async (request, url) => {
     }));
   }
 
-  const ctx = { method, url, segments, query: url.searchParams, rangeHeader, ...(await readBody(request, isAssetUpload(domain, segments, method))) };
+  const ctx = { method, url, segments, query: url.searchParams, rangeHeader, prefer: request.headers.get("Prefer"), ...(await readBody(request, isAssetUpload(domain, segments, method))) };
 
   if (domain === "mapeditor") {
     const response = await handleMapEditor(ctx);
@@ -188,12 +187,8 @@ const route = async (request, url) => {
     if (!base) return errorResponse("Community hub proxy is not configured.", 502);
     const target = `${base}/hub/${segments.join("/")}${url.search}`;
     if (method !== "POST") return fetch(target, { method });
-    // Attach the account session (when signed in) so the import counter can dedup a
-    // signed-in user's import by their account — stable across devices/IPs — instead
-    // of by IP. Anonymous users still fall back to IP dedup on the Worker.
-    const headers = { "Content-Type": "application/json" };
-    try { const s = await getSession(); if (s) headers.Authorization = `Bearer ${s}`; } catch { /* not signed in */ }
-    return fetch(target, { method, headers, body: JSON.stringify(ctx.body ?? {}) });
+    // Import counters are anonymous: the Worker dedups them by IP.
+    return fetch(target, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(ctx.body ?? {}) });
   }
 
   return errorResponse(`Unknown web-mode endpoint: ${url.pathname}`, 404);

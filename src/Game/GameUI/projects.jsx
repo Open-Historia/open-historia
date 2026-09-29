@@ -61,6 +61,7 @@ import {
   sortProjects,
 } from "../../runtime/projects.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { uiString } from "../../runtime/translator.js";
 
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
@@ -73,45 +74,41 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 // board stays empty and the player gets a wall of text. Ten at a time, one
 // sentence each, and only the milestones still ahead keeps a reply inside its
 // budget; the retry button asks for the next batch.
-export const PROJECTS_BACKFILL_PROMPT =
-  "Put my current projects and operations on the board — the sustained efforts, "
-  + "mine and any belonging to other powers that we know about. Start with the TEN "
-  + "most significant and stop there; I will ask for the next batch after. Keep each "
-  + "summary to one sentence, and give each only the milestones still ahead of it "
-  + "plus the single most recent one already achieved. Only include efforts that genuinely "
-  + "appear in our history — never invent one to round out the list — and say plainly if "
-  + "you are unsure about any of them.";
+//
+// One string, so the string catalog reads it whole; handed over in the
+// interface's language (uiString).
+export const PROJECTS_BACKFILL_PROMPT = "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.";
 
-const buildBriefPrompt = (project) => {
-  const label = project.kind === "operation" ? "operation" : "project";
-  return `Brief me in full on the ${label} "${project.name}". Where does it actually stand `
-    + "right now, what has moved since the last round, what does the next milestone need from "
-    + "me, and what is most likely to go wrong? Be specific and tell me if the board is "
-    + "out of date.";
-};
+// The card seeds below are whole sentences, one per variant, handed over in the
+// interface's language (uiString) like the backfill prompt: a kind or an owner
+// glued in as a word would stay English inside a translated sentence.
+const buildBriefPrompt = (project) => (project.kind === "operation"
+  ? uiString("Brief me in full on the operation \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name })
+  : uiString("Brief me in full on the project \"{{name}}\". Where does it actually stand right now, what has moved since the last round, what does the next milestone need from me, and what is most likely to go wrong? Be specific and tell me if the board is out of date.", { name: project.name }));
 
 // The same button on a foreign card, asking the questions that are actually
 // answerable about somebody else's programme. "What does the next milestone need
 // from me" is nonsense here — nothing about a rival's shipyard needs anything from
 // the player — and asking it invites the model to answer as though they ran it.
 const buildForeignBriefPrompt = (project, owner) => {
-  const label = project.kind === "operation" ? "operation" : "programme";
-  const whose = owner ? `${owner}'s ` : "the foreign ";
-  return `Brief me on ${whose}${label} "${project.name}". What do we actually know, how good `
-    + "is the sourcing, what has changed since we last looked, and what does it mean for us if "
-    + "it succeeds? Be honest about how much of this is inference rather than intelligence.";
+  const params = { name: project.name, owner };
+  if (project.kind === "operation") {
+    return owner
+      ? uiString("Brief me on {{owner}}'s operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params)
+      : uiString("Brief me on the foreign operation \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params);
+  }
+  return owner
+    ? uiString("Brief me on {{owner}}'s programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params)
+    : uiString("Brief me on the foreign programme \"{{name}}\". What do we actually know, how good is the sourcing, what has changed since we last looked, and what does it mean for us if it succeeds? Be honest about how much of this is inference rather than intelligence.", params);
 };
 
 // The seed behind a foreign card's second button. Deliberately asks a QUESTION
 // rather than issuing an order: the player cannot cancel another government's
 // programme, but they can decide to do something about it, and that something is a
 // project of their own the advisor may legitimately open.
-const buildCounterPrompt = (project, owner) => {
-  const whose = owner ? `${owner}'s` : "this";
-  return `What can we actually do about ${whose} "${project.name}"? Lay out the realistic `
-    + "options — diplomatic, economic, covert, or simply outpacing them — with what each would "
-    + "cost us and how it could go wrong. If we settle on one, open it as our own effort.";
-};
+const buildCounterPrompt = (project, owner) => (owner
+  ? uiString("What can we actually do about {{owner}}'s \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name, owner })
+  : uiString("What can we actually do about this \"{{name}}\"? Lay out the realistic options — diplomatic, economic, covert, or simply outpacing them — with what each would cost us and how it could go wrong. If we settle on one, open it as our own effort.", { name: project.name }));
 
 // ---- styling ---------------------------------------------------------------
 // Inline objects and per-file constants, the house convention: there is no shared
@@ -1223,7 +1220,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             <button
               type="button"
               className="oh-tap-row"
-              onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+              onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
               style={{
                 background: "rgba(255,255,255,0.06)",
                 border: "1px solid rgba(255,255,255,0.25)",
@@ -1310,7 +1307,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
           <button
             type="button"
             className="oh-tap-row"
-            onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+            onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
             style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
