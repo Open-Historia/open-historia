@@ -213,6 +213,7 @@ export const AI_TASK_ROUTING = [
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
+    { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Small/mid-tier: intelligence-service rating", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },

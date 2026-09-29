@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 
 import {
     CHAT_EVENTS_LIMIT,
+    createPlayerPollEvent,
     eventsFromLegacyChat,
     membersAtEvent,
     normalizeChatEvent,
@@ -199,4 +200,39 @@ test("a message the log already has, by id or by speaker and words, is not added
     ]);
     assert.deepEqual(same, normalizeChatEvents(log));
     assert.deepEqual(withUnloggedMessages([], [{ speaker: "France", text: "hi" }]), [], "no log, nothing to fold into");
+});
+
+
+test("player-created conversational polls use the canonical chat event log", () => {
+    let seq = 0;
+    const event = createPlayerPollEvent({
+        player: "Latvia",
+        question: "Adopt the joint LNG coordination framework?",
+        options: ["Yes", "No", "Abstain"],
+        time: "2026-04-16",
+        idFor: (prefix) => `${prefix}-test-${++seq}`,
+    });
+    assert.ok(event);
+    assert.equal(event.kind, "poll_created");
+    assert.equal(event.by, "Latvia");
+    assert.equal(event.options.length, 3);
+
+    const projected = projectChatThread([
+        { id: "created", kind: "chat_created", time: "2026-04-16", by: "", title: "Sweden & Finland" },
+        { id: "join-lv", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Latvia" } },
+        { id: "join-se", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Sweden" } },
+        { id: "join-fi", kind: "member_joined", time: "2026-04-16", by: "", member: { name: "Finland" } },
+        event,
+    ]);
+    assert.equal(projected.polls.length, 1);
+    assert.equal(projected.polls[0].question, "Adopt the joint LNG coordination framework?");
+    assert.deepEqual(projected.polls[0].options.map((option) => option.label), ["Yes", "No", "Abstain"]);
+});
+
+test("player-created poll validation is fail-closed and de-duplicates option labels", () => {
+    const idFor = (prefix) => `${prefix}-1`;
+    assert.equal(createPlayerPollEvent({ player: "Latvia", question: "Vote?", options: ["Yes"], idFor }), null);
+    assert.equal(createPlayerPollEvent({ player: "", question: "Vote?", options: ["Yes", "No"], idFor }), null);
+    const event = createPlayerPollEvent({ player: "Latvia", question: "Vote?", options: ["Yes", " yes ", "No"], idFor });
+    assert.deepEqual(event.options.map((option) => option.label), ["Yes", "No"]);
 });

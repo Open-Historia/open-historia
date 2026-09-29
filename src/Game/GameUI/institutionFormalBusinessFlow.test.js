@@ -87,3 +87,15 @@ test("gameplay separates opening debate from interactive native ballots and targ
   assert.match(source, /interactiveInstitutionBallotDirective\(autonomousBallotWork\)/);
   assert.match(source, /do NOT lodge a duplicate and do NOT submit it for voting yet/);
 });
+
+test("unresolved amendments explain why voting is blocked and let a member ask the sponsor to decide", () => {
+  const source = read("./InstitutionsWorkspace.jsx");
+  const chat = read("./chat.jsx");
+  assert.match(source, /data-institution-vote-blocked-amendments="true"/);
+  assert.match(source, /Vote is waiting on \{proposal\.unresolvedAmendments\} unresolved amendment/);
+  assert.match(source, /data-institution-request-amendment-decision="true"/);
+  assert.match(source, />Ask sponsor to decide<\/button>/);
+  assert.match(source, /kind: "amendment", playerComment: comment, source: "resolve-amendment"/);
+  assert.match(chat, /kind === "amendment" \? "amendment" : "debate"/);
+  assert.match(chat, /playerMessage: mode === "amendment" \? comment : ""/);
+});

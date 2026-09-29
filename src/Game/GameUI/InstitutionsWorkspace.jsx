@@ -163,7 +163,7 @@ const DecisionCard = ({ proposal }) => {
   </div>;
 };
 
-const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResolveAmendment }) => {
+const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResolveAmendment, onRequestAmendmentDecision }) => {
   const [amendText, setAmendText] = useState("");
   const [voteComment, setVoteComment] = useState("");
   const needsVote = proposal.status === "voting" && proposal.playerEligible && !proposal.playerBallot;
@@ -183,12 +183,16 @@ const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResol
     {proposal.playerCanSubmitForVote && view?.canParticipate && <div data-institution-call-vote="true" style={{ marginTop: ".58rem", display: "flex", gap: ".4rem", alignItems: "stretch", flexWrap: "wrap" }}>
       <input value={voteComment} onChange={(e) => setVoteComment(e.target.value)} placeholder="Closing comment before the vote (optional)" maxLength={1200} style={{ ...fieldStyle, flex: "1 1 18rem", minWidth: "12rem" }} />
       <button className="oh-tap-row" disabled={busy} onClick={async () => { const ok = await onSubmit(proposal.id, voteComment.trim()); if (ok) setVoteComment(""); }} style={{ border: "1px solid rgba(245,158,11,.28)", borderRadius: 8, background: "rgba(245,158,11,.1)", color: "#fde68a", cursor: busy ? "wait" : "pointer", padding: ".4rem .62rem", fontSize: ".64rem", fontWeight: 780 }}>Call vote</button>    </div>}
+    {proposal.unresolvedAmendments > 0 && view?.canParticipate && <div data-institution-vote-blocked-amendments="true" style={{ marginTop: ".5rem", padding: ".42rem .5rem", border: "1px solid rgba(245,158,11,.16)", borderRadius: 8, background: "rgba(245,158,11,.045)", color: "rgba(253,230,138,.72)", fontSize: ".59rem", lineHeight: 1.4 }}>
+      Vote is waiting on {proposal.unresolvedAmendments} unresolved amendment{proposal.unresolvedAmendments === 1 ? "" : "s"}. The proposal sponsor must accept or reject each amendment, or its proposer may withdraw it.
+    </div>}
     {proposal.amendmentItems?.length ? <div style={{ marginTop: ".55rem", display: "flex", flexDirection: "column", gap: ".35rem" }}>
       {proposal.amendmentItems.map((amendment) => <div key={amendment.id} style={{ borderLeft: "2px solid rgba(255,255,255,.22)", paddingLeft: ".45rem" }}>
         <div style={{ fontSize: ".64rem", color: "rgba(255,255,255,.68)" }}>{amendment.text}</div>
         <div style={{ marginTop: ".18rem", display: "flex", gap: ".3rem", alignItems: "center" }}><SmallPill tone={amendment.status === "accepted" ? "good" : amendment.status === "rejected" ? "bad" : "neutral"}>{amendment.status}</SmallPill><span style={{ fontSize: ".59rem", color: "rgba(255,255,255,.3)" }}>{amendment.proposedBy ? `by ${amendment.proposedBy}` : ""}</span></div>
-        {amendment.status === "proposed" && (amendment.playerCanResolve || amendment.playerCanWithdraw) && <div style={{ display: "flex", gap: ".3rem", marginTop: ".3rem" }}>
+        {amendment.status === "proposed" && (amendment.playerCanResolve || amendment.playerCanWithdraw || view?.canParticipate) && <div style={{ display: "flex", gap: ".3rem", marginTop: ".3rem", flexWrap: "wrap" }}>
           {amendment.playerCanResolve && ["accepted", "rejected"].map((status) => <button className="oh-tap-row" key={status} disabled={busy} onClick={() => onResolveAmendment(proposal.id, amendment.id, status)} style={{ border: "1px solid rgba(255,255,255,.1)", background: "rgba(255,255,255,.04)", color: status === "accepted" ? "#86efac" : "#fca5a5", borderRadius: 7, padding: ".2rem .35rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>{status === "accepted" ? "Accept" : "Reject"}</button>)}
+          {!amendment.playerCanResolve && view?.canParticipate && <button data-institution-request-amendment-decision="true" className="oh-tap-row" disabled={busy} onClick={() => onRequestAmendmentDecision(proposal, amendment)} style={{ border: "1px solid rgba(245,158,11,.18)", background: "rgba(245,158,11,.06)", color: "#fde68a", borderRadius: 7, padding: ".2rem .38rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Ask sponsor to decide</button>}
           {amendment.playerCanWithdraw && <button className="oh-tap-row" disabled={busy} onClick={() => onResolveAmendment(proposal.id, amendment.id, "withdrawn")} style={{ border: "1px solid rgba(255,255,255,.1)", background: "rgba(255,255,255,.04)", color: "rgba(255,255,255,.6)", borderRadius: 7, padding: ".2rem .35rem", fontSize: ".6rem", cursor: busy ? "wait" : "pointer" }}>Withdraw</button>}        </div>}
       </div>)}
     </div> : null}
@@ -546,6 +550,24 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
   };
   const amend = (proposalId, text) => run(`amend:${proposalId}`, () => commitInstitutionGovernanceCommand({ institutionId: selectedView.institution.id, playerCountry, date: gameDate, expectedGameId: expectedGameId(), command: { type: "amendment", proposalId, proposer: playerCountry, amendment: { text } } }));
   const resolveAmendment = (proposalId, amendmentId, status) => run(`amend:${proposalId}:${amendmentId}`, () => commitInstitutionGovernanceCommand({ institutionId: selectedView.institution.id, playerCountry, date: gameDate, expectedGameId: expectedGameId(), command: { type: "amendment-status", proposalId, amendmentId, status, requester: playerCountry } }));
+  const requestAmendmentDecision = async (proposal, amendment) => {
+    if (busy || !selectedView?.institution?.id || !proposal?.id || !amendment?.id) return null;
+    const institutionId = selectedView.institution.id;
+    setBusy(`amend-request:${proposal.id}:${amendment.id}`);
+    setError("");
+    setSection("council");
+    const comment = `Please resolve the pending amendment on ${proposal.title}. The proposal sponsor should accept or reject it so the proposal can proceed to a formal vote.`;
+    try {
+      return await onRequestCouncilTurn?.({
+        institutionId, proposalId: proposal.id, kind: "amendment", playerComment: comment, source: "resolve-amendment",
+      });
+    } catch (aiError) {
+      setError(`The amendment is still pending because the sponsor response could not be generated: ${aiError?.message || aiError}`);
+      return null;
+    } finally {
+      setBusy("");
+    }
+  };
 
   const foundInstitution = async () => {
     const result = await run("found", () => commitInstitutionLifecycleCommand({
@@ -690,7 +712,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
             <button disabled={Boolean(busy) || !proposalTitle.trim()} onClick={() => createProposal("vote")} style={{ border: "1px solid rgba(245,158,11,.24)", borderRadius: 8, background: "rgba(245,158,11,.075)", color: "#fde68a", cursor: busy || !proposalTitle.trim() ? "not-allowed" : "pointer", padding: ".42rem .64rem", fontSize: ".64rem", fontWeight: 760 }}>Put to vote now</button>
           </div>
         </div>}
-        {selectedView.activeProposals?.length ? selectedView.activeProposals.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} view={selectedView} busy={Boolean(busy)} onVote={vote} onSubmit={submit} onAmend={amend} onResolveAmendment={resolveAmendment} />) : <div style={{ color: "rgba(255,255,255,.3)", fontSize: ".67rem", textAlign: "center", padding: "2rem .5rem" }}>No active proposals, amendments or ballots.</div>}
+        {selectedView.activeProposals?.length ? selectedView.activeProposals.map((proposal) => <ProposalCard key={proposal.id} proposal={proposal} view={selectedView} busy={Boolean(busy)} onVote={vote} onSubmit={submit} onAmend={amend} onResolveAmendment={resolveAmendment} onRequestAmendmentDecision={requestAmendmentDecision} />) : <div style={{ color: "rgba(255,255,255,.3)", fontSize: ".67rem", textAlign: "center", padding: "2rem .5rem" }}>No active proposals, amendments or ballots.</div>}
         {selectedView.openBallots?.some((proposal) => proposal.unresolvedNpcVoters > 0) && <div style={{ ...panel, padding: ".68rem .75rem", fontSize: ".62rem", color: "rgba(255,255,255,.44)", lineHeight: 1.5 }}>When a formal vote opens, one bounded Council round immediately prompts unresolved eligible AI ballots. Any ballots still unresolved remain eligible for the normal post-turn follow-up.</div>}
       </div>}
       {section === "members" && <div data-institution-members-workspace="true" style={{ display: "flex", flexDirection: "column", gap: ".75rem", maxWidth: "56rem", margin: "0 auto" }}>

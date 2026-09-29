@@ -336,6 +336,13 @@ const HARD_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|sh
 // than evidence that two polities are fighting one another.
 const UNAMBIGUOUS_COMBAT_RE = /\b(battle|invasion|invades?|bombard(?:ment|s|ed|ing)?|shell(?:ing|s|ed)?|assault|siege|clash(?:es|ed)?|fighting|firefight|artillery fire|air strike|airstrike|ground fighting)\b/i;
 const DIRECT_COMBAT_CONTEXT_RE = /\b(?:engag(?:e|es|ed|ing)|locked)\b.{0,80}\bcombat\b|\bcombat\b.{0,80}\b(?:against|between|with)\b|\bcombat operations?\b.{0,80}\b(?:against|targeting)\b/i;
+// Direct adversarial action is stronger evidence than a combat noun somewhere in
+// background prose. This catches real fighting such as "assaults on insurgent
+// positions" while leaving "assault plan", "battle tanks" and historical
+// references alone.
+const DIRECT_ADVERSARIAL_ACTION_RE = /\b(?:attack(?:s|ed|ing)?|assault(?:s|ed|ing)?|bombard(?:s|ed|ing)?|shell(?:s|ed|ing)?|raid(?:s|ed|ing)?)\b[^.!?;]{0,72}\b(?:on|against|at|targeting)\b/i;
+const HIGH_CONFIDENCE_COMBAT_TITLE_RE = /(?:\bbattle of\b|\binvasion of\b|\binvad(?:e|es|ed|ing)\b|\bamphibious assault\b|\b(?:air ?strikes?|bombard(?:s|ed|ment|ing)?|shell(?:s|ed|ing)?)\b|\b(?:army|armies|troops?|brigades?|battalions?|regiments?|military units?|warships?|aircraft)\b[^:;.!?]{0,64}\b(?:attack(?:s|ed|ing)?|assault(?:s|ed|ing)?|capture|captures|captured|seize|seizes|seized|storm|storms|stormed|overrun|overruns|overran)\b|\bsiege of\b)/i;
+const ORGANIZED_FORCE_CLASH_RE = /\b(?:army|armies|troops?|brigades?|battalions?|regiments?|military units?)\b[^.!?;]{0,80}\b(?:clash(?:es|ed)?|fight(?:s|ing)?|exchange(?:s|d)? fire|engag(?:e|es|ed|ing))\b/i;
 const ACTIVE_OFFENSIVE_RE = /\b(launch(?:es|ed|ing)?|begin(?:s|ning)?|open(?:s|ed|ing)?|commence(?:s|d|ing)?|initiat(?:es|ed|ing)?|execute(?:s|d|ing)?)\b.{0,60}\b(counter[- ]?)?offensive\b|\b(counter[- ]?)?offensive\b.{0,60}\b(begins?|opens?|commences?|is launched|is underway)\b/i;
 const WAR_START_RE = /\b(declares? war|declaration of war|enters? (?:the )?war|joins? (?:the )?war|war is declared|commences? hostilities)\b/i;
 const CEASEFIRE_RE = /\b(ceasefire (?:takes effect|begins|signed|agreed|declared)|armistice (?:takes effect|signed|agreed)|truce (?:takes effect|signed|agreed))\b/i;
@@ -400,7 +407,9 @@ const NON_BATTLEFIELD_OFFENSIVE_RE =
   /\b(?:diplomatic|charm|peace|political|media|public[- ]relations|propaganda|information|legal|lobbying|economic|trade|investment|marketing|publicity|messaging)\s+(?:counter[- ]?)?offensives?\b/gi;
 
 const combatSemanticText = (event) =>
-  `${normalizeString(event?.title)} ${normalizeString(event?.description)}`
+  [normalizeString(event?.title), normalizeString(event?.description)]
+    .filter(Boolean)
+    .join(". ")
     .replace(NON_BATTLEFIELD_COMBAT_TERMS_RE, " military-equipment ")
     .replace(NON_BATTLEFIELD_ACTION_TERMS_RE, " military-exercise ")
     .replace(NON_BATTLEFIELD_OFFENSIVE_RE, " non-military-campaign ");
@@ -413,16 +422,25 @@ const combatSemanticText = (event) =>
 export const eventNarratesHardCombat = (event) => {
   const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
   const text = combatSemanticText(event);
+  const title = combatSemanticText({ title: event?.title, description: "" });
   const military = normalizeString(event?.kind).toLowerCase() === "military";
+  const combatants = uniquePolities(event?.combatants, 8);
+  const hasOpposingActors = combatants.length >= 2;
   const hasControl = normalizeArray(impacts.regionControlOps)
     .some((op) => ["contest", "control"].includes(normalizeString(op?.op).toLowerCase()));
 
-  if (
-    UNAMBIGUOUS_COMBAT_RE.test(text) ||
-    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
-    ACTIVE_OFFENSIVE_RE.test(text)
-  ) return true;
-  if (military && HARD_COMBAT_RE.test(text)) return true;
+  // High-confidence causal evidence may stand on its own. Generic words such as
+  // "clashes", "fighting" or "battle" in background prose do not. If the
+  // title is not itself a battlefield claim, a military-tagged event needs two
+  // structured combatants before those weaker nouns can demand a canonical war.
+  if (HIGH_CONFIDENCE_COMBAT_TITLE_RE.test(title)) return true;
+  if (ORGANIZED_FORCE_CLASH_RE.test(text)) return true;
+  // Generic "attack/assault against" language is common in politics and law.
+  // Outside a high-confidence battlefield title, require military classification
+  // or at least two structured opposing combatants before it can demand a war.
+  if ((military || hasOpposingActors) && DIRECT_ADVERSARIAL_ACTION_RE.test(text)) return true;
+  if ((military || hasOpposingActors) && (DIRECT_COMBAT_CONTEXT_RE.test(text) || ACTIVE_OFFENSIVE_RE.test(text))) return true;
+  if (military && hasOpposingActors && UNAMBIGUOUS_COMBAT_RE.test(text)) return true;
   return hasControl && HARD_COMBAT_RE.test(text);
 };
 
@@ -468,9 +486,7 @@ const eventSupportsNewWarStart = (event) => {
   const text = combatSemanticText(event);
   return (
     WAR_START_RE.test(text) ||
-    UNAMBIGUOUS_COMBAT_RE.test(text) ||
-    DIRECT_COMBAT_CONTEXT_RE.test(text) ||
-    ACTIVE_OFFENSIVE_RE.test(text) ||
+    eventNarratesHardCombat(event) ||
     WAR_START_EVIDENCE_RE.test(text)
   );
 };
@@ -518,9 +534,16 @@ const eventTransitionExpectation = (event) => {
   return null;
 };
 
-const validateCombatantsAgainstWar = (event, war) => {
+const validateCombatantsAgainstWar = (event, war, { allowLinkedStartSides = false } = {}) => {
   const combatants = uniquePolities(event?.combatants, 8);
   if (combatants.length < 2) {
+    // The causal event that opens a war does not have to duplicate the same
+    // opposing sides already carried by its linked canonical start record.
+    // That start record has already been applied to `war` above, so its sideA /
+    // sideB membership is authoritative for this one event. Any explicit but
+    // incomplete combatants metadata still fails closed instead of being
+    // silently completed from the ledger.
+    if (allowLinkedStartSides && combatants.length === 0) return "";
     return `Combat event "${normalizeString(event?.title)}" must include event.combatants naming at least the two opposing belligerent polities.`;
   }
   const sideA = new Set(war.sideA.map(polityKey));
@@ -641,7 +664,13 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       if (!war || war.status !== "active") {
         return `Combat event "${normalizeString(event.title)}" cannot occur because canonical war ${warId} is ${war?.status || "missing"}, not active.`;
       }
-      const combatantError = validateCombatantsAgainstWar(event, war);
+      const linkedStart = eventUpdates.find((update) =>
+        normalizeString(update?.op).toLowerCase() === "start" &&
+        normalizeString(update?.id) === warId
+      );
+      const combatantError = validateCombatantsAgainstWar(event, war, {
+        allowLinkedStartSides: Boolean(linkedStart),
+      });
       if (combatantError) return combatantError;
     }
   }

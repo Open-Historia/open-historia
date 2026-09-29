@@ -1342,6 +1342,49 @@ export const commitInstitutionalDiplomaticReply = async ({
 
 
 
+// A model occasionally gets the LEGAL decision right but drops the target id
+// from transport: `institution_resolve_amendment` with proposalId + decision,
+// but no amendmentId. Never guess among amendments. If the canonical proposal
+// has exactly one unresolved amendment, however, there is only one possible
+// target; native governance can safely restore that id and then apply the usual
+// sponsor/proposer authority checks. Zero or multiple unresolved amendments stay
+// fail-closed and require an exact id.
+const repairUnambiguousInstitutionChatAction = (action, institution) => {
+  if (action?.type !== "institution_invalid"
+      || lower(action?.rawType) !== "institution_resolve_amendment"
+      || !/requires amendmentId/i.test(clean(action?.validationError))) {
+    return { action: null, reason: clean(action?.validationError) || `${clean(action?.rawType) || "institution action"} is malformed.` };
+  }
+
+  const proposalId = clean(action?.proposalId);
+  const amendmentStatus = lower(action?.amendmentStatus);
+  if (!proposalId || !["accepted", "rejected", "withdrawn"].includes(amendmentStatus)) {
+    return { action: null, reason: clean(action?.validationError) || "institution_resolve_amendment is malformed." };
+  }
+  const proposal = proposalMap(institution)[slug(proposalId)];
+  if (!proposal) return { action: null, reason: `Unknown proposal ${proposalId}.` };
+  const unresolved = list(proposal.amendments)
+    .filter((entry) => lower(entry?.status || "proposed") === "proposed" && clean(entry?.id));
+  if (unresolved.length !== 1) {
+    return {
+      action: null,
+      reason: unresolved.length
+        ? `${proposal.title || proposal.id} has ${unresolved.length} unresolved amendments; an exact amendmentId is required.`
+        : `${proposal.title || proposal.id} has no unresolved amendment to resolve.`,
+    };
+  }
+  return {
+    action: {
+      type: "institution_resolve_amendment",
+      actorName: clean(action?.actorName),
+      proposalId: clean(proposal.id),
+      amendmentId: clean(unresolved[0].id),
+      amendmentStatus,
+    },
+    reason: "",
+  };
+};
+
 // Apply the formal-governance subset of Beta's one-request group-chat action
 // batch. Conversation remains conversation; only explicit institution_* actions
 // may touch the institution ledger. Each action is grounded and applied on its
@@ -1385,13 +1428,18 @@ export const applyInstitutionalChatGovernanceBatch = ({
 
   const applied = [];
   const rejected = [];
-  for (const action of list(formalActions)) {
+  for (const sourceAction of list(formalActions)) {
+    let action = sourceAction;
     if (action?.type === "institution_invalid") {
-      rejected.push({
+      const repair = repairUnambiguousInstitutionChatAction(
         action,
-        reason: clean(action?.validationError) || `${clean(action?.rawType) || "institution action"} is malformed.`,
-      });
-      continue;
+        resolveInstitutionRecord(world, institutionId) || institution,
+      );
+      if (!repair.action) {
+        rejected.push({ action, reason: repair.reason });
+        continue;
+      }
+      action = repair.action;
     }
     const actorToken = clean(action?.actorName);
     const polity = actorByFold.get(lower(actorToken));
@@ -1437,7 +1485,10 @@ export const applyInstitutionalChatGovernanceBatch = ({
       world = result.world;
       chats = result.chats;
       events = result.events;
-      applied.push({ action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null });
+      applied.push({
+        action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null,
+        ...(sourceAction !== action ? { repairedFrom: sourceAction } : {}),
+      });
     } catch (error) {
       rejected.push({ action, reason: clean(error?.message || error) || "formal institutional action was refused" });
     }

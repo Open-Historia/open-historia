@@ -73,7 +73,7 @@ import {
   stripWorldSweepAudit,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
-import { buildScriptedPoliticalImpactInstruction, scriptedPoliticalImpactRequirements, validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import { buildScriptedPoliticalImpactInstruction, clearPoliticalClaimBindings, preparePoliticalClaimContext, scriptedPoliticalImpactRequirements, validatePoliticalImpactCompleteness, validatePolityImpactCompleteness } from "./politicalImpactCompleteness.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
 import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
@@ -361,6 +361,7 @@ import {
 import { describeReportsForPrompt, normalizeReportOp } from "../../runtime/reports.js";
 import {
   applyTerritoryTempo,
+  beatIsWritten,
   buildScriptedEventsInstruction,
   buildWorldDirectionDirective,
   dateKey,
@@ -1848,6 +1849,7 @@ const JUMP_LEVERS = [
   "Everything you change rides on an event's impacts, and no event's text may claim a change its impacts do not make. The output function describes each field; these need a word more:",
   "• polityChanges {\"code\":\"<current full name>\",\"name\":\"<new full name, only for a rename>\",\"color\":\"#RRGGBB\",\"aliases\":[],\"reputation\":0-100,\"intelligence\":0-100,\"tags\":[\"<the complete new list>\"],\"stats\":{\"<only the fields that changed>\":\"\"},\"note\":\"\"}. After a rename the country IS the new name everywhere, so address the change to its current name, never the new one. A better intelligence service is built over time: open it as a project, never as an instant rating.",
   "• politicalActorOps {\"op\":\"<operation>\",\"polityKey\":\"<current full name; the new one if this event also renames it>\",\"argsJson\":\"<one JSON object, as a string>\"}: set-government, replace-leader, form-coalition / leave-coalition, create / update / set-party-*, create / update / set-power-bloc-*, set-political-system, set-strategy, set-traits, set-perceptions / remove-perception. Never guess the decoded argsJson shape: use the one given for the op below. Every change of government, leader or party carries these ops, or it changes only the story; stats.leader and stats.government never carry it.",
+  "• Always return politicalClaims: transient validation only, never world state. One line per event that COMPLETES a national Political World structural change: eventNumber~polity~effectsCSV. Effects: election (final national result), government, coalition, leadership, system, parties (founding/split/merger/reorganization). Use the same polityKey as that event's politicalActorOps (new key after a same-event rename). No line for campaigns, policy, subnational politics, references or later consequences. Empty string when none. Claims never replace politicalActorOps.",
   POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
   `When an election or a new government is the first settled politics of a young polity, set up its parties, governing force, system, goals and traits in the same event; while results are still being counted, narrate the count, not a result. Traits use only these keys: ${POLITICAL_TRAIT_KEYS.join(", ")}. Never use set-political-pressures or set-behavioral-disposition.`,
   "• institutionLifecycleOps: found, invite, apply, respond, withdraw, expel, suspend, reinstate or dissolve, each naming its actorPolity by exact current name; an existing institution by its exact institutionId, and respond with the pending caseId. Governments join, refuse or leave by their own interests and politics, never because relations are friendly, and never for the human player's own membership. An invitation or application is not membership: the institution's own rules decide it.",
@@ -6205,6 +6207,9 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // references just like party/project ids: reject invented ids on a strict
   // attempt and strip them on salvage, but never require full coverage here.
   actions = null,
+  // Transient, pre-sort binding of jump politicalClaims to their event objects.
+  // Null outside timeline jumps keeps the legacy prose detector for CSE/GM paths.
+  politicalClaimContext = null,
 } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
@@ -6400,11 +6405,19 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
 
   // A completed structural political event may not exist as narrative-only history.
   // PWv2 is the canonical owner of governments, leaders, parties, coalitions and
-  // political systems; if the prose establishes one of those facts, require the
-  // matching politicalActorOps before the event can enter the timeline. This is
-  // deliberately semantic/completeness validation, not a second political engine.
-  const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world });
+  // political systems. Timeline jumps carry explicit transient claims; legacy
+  // callers (including authored CSE preflight) retain prose classification until
+  // they gain an equivalent structured contract. politicalActorOps remain the
+  // canonical state authority in both paths.
+  const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world, claimContext: politicalClaimContext });
   if (politicalCompletenessError) return politicalCompletenessError;
+
+  // Country/polity identity is canonical world state too. A completed rename
+  // in prose cannot leave the map, flags, Stats, chats and Political World on
+  // the old key. Keep this separate from Political Actor completeness because
+  // a polity rename is carried by impacts.polityChanges, not politicalActorOps.
+  const polityCompletenessError = validatePolityImpactCompleteness(candidate);
+  if (polityCompletenessError) return polityCompletenessError;
 
   // A normal timeline pass cannot independently pronounce an existing native
   // institution proposal adopted/rejected/etc. Institution governance owns that
@@ -13350,6 +13363,19 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           // attempt 1 skips this validator entirely, which used to make attempt 2
           // look "first" and leak strict feedback out as the fallback reason).
           const strict = !finalAttempt;
+          // politicalClaims uses the model's 1-based event numbers. Bind those
+          // numbers to the actual event objects BEFORE chronological sorting so
+          // the claim cannot drift onto another event when the model wrote dates
+          // out of order. The context is transient and never enters saved state.
+          const politicalClaimContext = preparePoliticalClaimContext(candidate);
+          if (politicalClaimContext.discarded) {
+            delete candidate.politicalClaims;
+            noteReceipt(
+              draft,
+              "dropped",
+              `${politicalClaimContext.discardedReason} The transient claim ledger was ignored and legacy prose completeness validation was used for this answer.`,
+            );
+          }
           // Mechanical: a batch whose dates are all real is put in date order
           // before anything counts positions (a malformed date is left for the
           // date validator below to report).
@@ -13442,6 +13468,18 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
                 noteReceipt(draft, "adjusted", `The scripted event of ${beat.date} — "${beat.title}" — was not in your answer, so the engine wrote it in the author's words, with no impacts. It is history in this world: its consequences are yours to carry forward.`);
               }
             }
+            // CSE author text is known before generation and currently has no
+            // structured Political World claim field of its own. Preserve its
+            // existing fail-closed semantic protection even when this jump uses
+            // politicalClaims for ordinary model-authored events.
+            if (politicalClaimContext.mode === "structured") {
+              const duePoliticalRequirements = scriptedPoliticalImpactRequirements(due, { world: ledgerWorld });
+              for (const requirement of duePoliticalRequirements) {
+                for (const event of normalizeArray(candidate.events)) {
+                  if (beatIsWritten(requirement.beat, [event])) politicalClaimContext.legacyEvents.add(event);
+                }
+              }
+            }
           }
           // The war ledger must see the sanitized impacts, so world changes go first.
           const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, {
@@ -13451,8 +13489,14 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             actions: bundle.actions,
             playerCountry: bundle.game.country,
             actions: bundle.actions,
+            politicalClaimContext,
           });
           if (worldChangeError) return worldChangeError;
+          // Claims are generation-only semantic metadata. Canonical Political
+          // World state remains politicalActorOps; timeline events never persist
+          // a second writable copy of the same truth.
+          clearPoliticalClaimBindings(candidate);
+          delete candidate.politicalClaims;
           const ledgerError = validateSegmentLedgers(candidate, { world: ledgerWorld, strict, segmentIndex, receipt: draft });
           if (ledgerError) return ledgerError;
           return validateSegmentStorylines(candidate, {

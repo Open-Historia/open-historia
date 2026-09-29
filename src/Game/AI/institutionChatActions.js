@@ -95,10 +95,20 @@ export const partitionInstitutionChatActions = (actions) => {
     if (normalized) { formal.push(normalized); continue; }
     const rawType = institutionActionType(entry);
     if (INSTITUTION_CHAT_ACTION_KINDS.includes(rawType)) {
+      // Keep the harmless identity fields from a malformed formal action. Native
+      // governance may be able to repair transport-only omissions when the
+      // canonical target is unambiguous (for example a sponsor accepting the
+      // only unresolved amendment but omitting amendmentId). The invalid marker
+      // remains fail-closed authority: no repair is allowed without proving one
+      // exact canonical target and the normal governance command still validates
+      // the actor's authority.
       formal.push({
         type: "institution_invalid",
         rawType,
         actorName: text(entry?.actorName ?? entry?.actor ?? entry?.speaker),
+        proposalId: clip(entry?.proposalId ?? entry?.proposal ?? entry?.targetProposalId, 160),
+        amendmentId: clip(entry?.amendmentId ?? entry?.amendment, 160),
+        amendmentStatus: lower(entry?.amendmentStatus ?? entry?.status),
         validationError: institutionChatActionValidationError(entry) || `${rawType} is malformed.`,
       });
       continue;

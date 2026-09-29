@@ -1057,6 +1057,22 @@ const eventQuoteSchema = {
   additionalProperties: false,
 };
 
+// Timeline jumps carry this schema on every generated event, so keep the provider
+// contract compact while preserving the full quotation guidance for Game Master.
+// Runtime normalization still enforces the same canonical {text,speaker,role}
+// shape after either transport.
+const jumpEventQuoteSchema = {
+  type: "object",
+  description: "Optional direct quotation; keep it out of description.",
+  properties: {
+    text: { type: "string", minLength: 1 },
+    speaker: { type: "string" },
+    role: { type: "string" },
+  },
+  required: ["text"],
+  additionalProperties: false,
+};
+
 const eventSchema = {
   type: "object",
   description: "One dated campaign event produced by a timeline simulation.",
@@ -1064,8 +1080,8 @@ const eventSchema = {
     id: textSchema("Optional stable event identifier."),
     date: textSchema("In-game date on which the event occurs."),
     title: textSchema("The headline: one sentence saying what happened."),
-    description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again. Do not embed a Markdown blockquote here when quote is available."),
-    quote: eventQuoteSchema,
+    description: textSchema("The story under the headline: what happened, how, where, by whom and with what result, told with its specifics - never the headline said again."),
+    quote: jumpEventQuoteSchema,
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
@@ -1144,18 +1160,18 @@ export const ACTIONS_SCHEMA = {
 
 export const JUMP_FORWARD_SCHEMA = {
   type: "object",
-  description: "A simulated timeline jump containing dated events and the resulting campaign state.",
+  description: "Timeline jump with dated events and campaign changes.",
   properties: {
     events: {
       type: "array",
-      description: "Events occurring during the simulated period.",
+      description: "Events in this period.",
       items: eventSchema,
     },
-    stopDate: textSchema("Date at which the simulation stops."),
-    summary: textSchema("Concise summary of the period and its strategic consequences."),
+    stopDate: textSchema("Simulation stop date."),
+    summary: textSchema("Concise period summary."),
     clearActions: {
       type: "boolean",
-      description: "Whether planned player actions were resolved by this jump. Defaults to true (resolved) when omitted.",
+      description: "Whether planned actions resolved; omitted means true.",
     },
     // No scene (the `catalyst` a skip used to write): a scene is played only
     // from an interactive event a skip offers, which costs the skip nothing
@@ -1163,9 +1179,7 @@ export const JUMP_FORWARD_SCHEMA = {
     // into a save nothing showed it from.
     diplomaticOutreach: {
       type: "array",
-      description:
-        "Polities reaching out to the player on their OWN initiative (feelers, proposals, warnings, "
-        + "invitations), not tied to one event. Empty when nobody plausibly would.",
+      description: "Independent outreach to the player; empty when none.",
       items: createdChatSchema,
     },
     // The canonical ledgers (nativeWarLedger.js, nativeDiplomaticDirector.js)
@@ -1174,24 +1188,27 @@ export const JUMP_FORWARD_SCHEMA = {
     // choke on, and the line formats are taught in the live prompt.
     storylineUpdates: {
       type: "string",
-      description: "Newline-separated storyline records, format in the prompt; unresolved multi-turn crises persist here. Empty string when none.",
+      description: "Storylines; format in prompt. Empty if none.",
     },
     warUpdates: {
       type: "string",
-      description: "Newline-separated war-state records, format in the prompt. Empty string when belligerency did not change.",
+      description: "Wars; format in prompt. Empty if none.",
     },
     relationUpdates: {
       type: "string",
-      description: "Newline-separated bilateral relation records, format in the prompt. Empty string when none changed materially.",
+      description: "Relations; format in prompt. Empty if none.",
     },
     agreementUpdates: {
       type: "string",
-      description: "Newline-separated treaty/agreement lifecycle records, format in the prompt. Empty string when none started, changed or ended.",
+      description: "Agreements; format in prompt. Empty if none.",
     },
     puppetUpdates: {
       type: "string",
-      description:
-        "Compact newline-separated subordination updates - one polity directing another while it remains a separate country. Ops: install, reclassify, loyalty, reveal, release, annex, revolt, suppress. Empty string when no subordination changes. Record format is documented in the live prompt.",
+      description: "Subordination; format in prompt. Empty if none.",
+    },
+    politicalClaims: {
+      type: "string",
+      description: "Political claims; format in prompt. Empty if none.",
     },
   },
   // clearActions is deliberately NOT required: simulateTimelineJump already
@@ -1921,6 +1938,7 @@ const gameMasterEventSchema = {
   ...eventSchema,
   properties: {
     ...eventSchema.properties,
+    quote: eventQuoteSchema,
     impacts: impactsSchema,
   },
 };

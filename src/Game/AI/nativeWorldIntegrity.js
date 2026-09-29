@@ -72,6 +72,13 @@ const STRONG_MILITARY_CONSEQUENCE_RE =
 const CONCRETE_MILESTONE_RE =
   /\b(complet(?:es|ed|ion)|enters?\s+service|entered\s+service|commission(?:s|ed)|launch(?:es|ed)|inaugurat(?:es|ed|ion)|becomes?\s+operational|became\s+operational|production\s+begins|ratif(?:y|ies|ied)|sign(?:s|ed)\s+(?:a|an|the)\s+(?:treaty|accord|agreement|pact))\b/i;
 
+// High-signal civilian/scientific titles must not be hidden because their body
+// happens to mention a patrol, reconnaissance, readiness or another routine
+// military word. This guard is deliberately title-scoped: a genuinely military
+// card can still be screened even if its description mentions politics/science.
+const CLEARLY_NON_MILITARY_TITLE_RE =
+  /\b(?:elections?|referendum|protests?|demonstrations?|parliament|legislature|court|judicial|scientific|research|spacecraft|satellite|lunar|moon|mars|lander|space mission|space probe)\b/i;
+
 // Material endogenous changes that can legitimately wake a deferred process even
 // when they do not yet carry a hard map/ledger impact. The associated storyline
 // update must ALSO move objective state (status/pressure/momentum); this regex alone
@@ -1808,9 +1815,10 @@ const falseNonBelligerentWartimeReason = (
 };
 
 const routineMilitaryNoDeltaReason = (event) => {
-  const text =
-    `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const title = normalizeString(event?.title);
+  const text = `${title} ${normalizeString(event?.description)}`;
 
+  if (CLEARLY_NON_MILITARY_TITLE_RE.test(title)) return "";
   if (!ROUTINE_MILITARY_CUE_RE.test(text)) return "";
   if (STRONG_MILITARY_CONSEQUENCE_RE.test(text)) return "";
   // The cue is single words, so it fires on a noun in passing: a drone
