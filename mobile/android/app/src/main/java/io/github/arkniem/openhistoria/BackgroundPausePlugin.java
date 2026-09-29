@@ -1,5 +1,5 @@
 /*! Open Historia — the app rests in the background © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-package io.github.arkniem.paxhistoria;
+package io.github.arkniem.openhistoria;
 
 import android.app.Activity;
 

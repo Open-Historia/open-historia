@@ -97,7 +97,7 @@ test("the author's own posts are found by key, and comments read only when the c
 });
 
 const bundle = () => ({
-  schema: "pax-historia-scenario-bundle/2",
+  schema: "open-historia-scenario-bundle/2",
   scenario: { name: "Old World", description: "A world.", features: {} },
   data: {
     game: { country: "Alpha", startDate: "1900-01-01" },

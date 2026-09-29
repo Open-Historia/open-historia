@@ -31,8 +31,8 @@ const betaWorkflow = read(".github/workflows/android-apk-beta.yml");
 const stableWorkflow = read(".github/workflows/android-apk.yml");
 const router = read("src/runtime/web/router.js");
 
-const STABLE_ID = "io.github.arkniem.paxhistoria";
-const BETA_ID = "io.github.arkniem.paxhistoria.beta";
+const STABLE_ID = JSON.parse(read("mobile/capacitor.config.json")).appId;
+const BETA_ID = `${STABLE_ID}.beta`;
 const REPO = "https://github.com/Open-Historia/open-historia";
 
 // `gh release <verb> <tag>` lines in a workflow, as [verb, tag].

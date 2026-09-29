@@ -48,7 +48,7 @@ export const ensureUniqueId = async (requestedId, exists) => {
 // hashPayload in basemapStore.js so local + community dedup stays consistent.
 // One implementation for all of them (runtime/sha256.js): WebCrypto where the
 // origin is a secure context, pure JS where it is not (the Android app's
-// http://app.paxhistoria has no crypto.subtle, and this used to throw there).
+// http:// origin has no crypto.subtle, and this used to throw there).
 export { sha256Hex };
 
 // --- Response builders (return real Response objects the intercepted fetch

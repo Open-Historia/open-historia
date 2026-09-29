@@ -1,6 +1,7 @@
 // Unit tests for the server security helpers. Run with `npm test`
 // (node --test). No framework needed — these are pure functions.
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import {
@@ -169,7 +170,9 @@ test("sanitizeRelayHeaders drops hop-by-hop and framing headers, keeps auth", ()
 
 test("allowedCorsOrigin: app shell and same origin only", () => {
   const host = "192.168.1.9:3000";
-  assert.equal(allowedCorsOrigin("http://app.paxhistoria", host), "http://app.paxhistoria");
+  // The Android app's WebView origin (mobile/capacitor.config.json).
+  const appOrigin = `http://${JSON.parse(fs.readFileSync(new URL("../mobile/capacitor.config.json", import.meta.url), "utf8")).server.hostname}`;
+  assert.equal(allowedCorsOrigin(appOrigin, host), appOrigin);
   assert.equal(allowedCorsOrigin("capacitor://localhost", host), "capacitor://localhost");
   assert.equal(allowedCorsOrigin("http://192.168.1.9:3000", host), "http://192.168.1.9:3000");
   // The case that mattered: a random site the player is browsing must not be

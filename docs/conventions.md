@@ -15,7 +15,7 @@ This working clone (`work-repo`) has several remotes configured — useful to kn
 | Remote | URL | Role |
 |--------|-----|------|
 | `upstream` | `github.com/Open-Historia/open-historia` | The canonical org repo. PRs land here; this is "the repo". |
-| `origin` | `github.com/Arkniem/pax-historia-2` | Maintainer's personal working fork. |
+| `origin` | the maintainer's personal fork on GitHub (`Arkniem`) | Maintainer's personal working fork. |
 | `beta` | `github.com/Arkniem/Open-Historia-Beta` | Beta staging fork. |
 | `ltfork` | `github.com/lt20202122/open-historia` | A contributor fork. |
 
@@ -208,13 +208,13 @@ These strings are wired into external contracts (release assets players download
 
 | Identifier | Where | Why it's frozen |
 |-----------|-------|-----------------|
-| **`io.github.arkniem.paxhistoria`** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
-| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from `pax-historia.apk` on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
+| **The Android application id** (Capacitor `appId`) | `mobile/capacitor.config.json:2` | The Android application ID. Changing it makes every existing install a *different* app — no in-place update; users would get a duplicate. |
+| **`open-historia.apk`** (release asset name) | `.github/workflows/android-apk.yml:60,64,76` | The exact filename players download from the `android` release, and what the README and site link by name. Renamed from the project's earlier name on 2026-09-04 (main `e29967e`); see delivery-and-deploy.md §3 for what that cost. |
 | **`android`** (rolling release tag) | `android-apk.yml:74-76` | The APK is republished to this single rolling release; the app updates itself from it. |
 | **`app-stable` / `app-beta`** (release tags) | `app-bundle.yml:57-68` | The `Open-Historia.zip` download tags for the two desktop channels. |
 | **`Open-Historia.zip`** (bundle asset name) | `app-bundle.yml:54,84`; README | The one-download full app; linked by name. |
 | **`map-data`** (release) + the per-asset names | `scripts/map-assets.json` | The map-binary release and asset names (`regions.pmtiles`, `regions-seed-z8.geojson`, `default-regions-names.geojson`, …). The fetch script resolves these by name; a rename orphans every fetch. |
-| **`app.paxhistoria`** (Capacitor `hostname`) | `mobile/capacitor.config.json:7` | The WebView origin the Android app serves under. |
+| **The Android WebView host** (Capacitor `hostname`) | `mobile/capacitor.config.json:7` | The WebView origin the Android app serves under. |
 | **`Build: N`** convention | `android-apk.yml:32-35,72` | The boot screen matches `__APP_BUILD__` (stamped from the run number) against `Build: N` in the release notes to decide whether to self-update. Keep both sides in sync. |
 
 When a map file legitimately changes, you upload a *new* asset and update its `sha256`/`bytes` in `scripts/map-assets.json` — you don't rename the contract-facing names.

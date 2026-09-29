@@ -441,7 +441,7 @@ const SCENARIO_REGION_ID_EXPRESSION = ["to-string", ["coalesce", ["get", "id"], 
 // beneath it. Keep the far/continental wash translucent enough for relief and
 // bathymetry to read, then progressively strengthen ownership color as the
 // player zooms toward province/city detail.
-const PAX_POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
+const POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
   // World view: terrain remains visible while political ownership is readable.
   [1.5, 0.46],
   [2.5, 0.50],
@@ -462,15 +462,15 @@ const PAX_POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
 // MapLibre requires camera expressions to keep ["zoom"] as the direct input
 // of the top-level step/interpolate expression. Data-driven visibility therefore
 // belongs in each stop output, never around the zoom ramp with a top-level case.
-const buildPaxPoliticalFillOpacity = (hiddenExpression = null) => [
+const buildPoliticalFillOpacity = (hiddenExpression = null) => [
   "interpolate", ["linear"], ["zoom"],
-  ...PAX_POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
+  ...POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
     zoom,
     hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
   ]),
 ];
 
-const PAX_POLITICAL_FILL_OPACITY = buildPaxPoliticalFillOpacity();
+const POLITICAL_FILL_OPACITY = buildPoliticalFillOpacity();
 // What fillStyle returns when the stock-countries layer cannot be shown.
 const HIDDEN_COUNTRIES_FILL_PAINT = {
   "fill-color": NEUTRAL_LAND_COLOR,
@@ -486,7 +486,7 @@ const DISPUTED_STRIPE_OPACITY = 0.22;
 // GeoJSON below z4.5, vector tiles from z4.5 upward. Both use the same political
 // opacity policy so the handoff changes geometry source, not visual strength.
 const STOCK_REGION_HANDOFF_ZOOM = 4.5;
-const DISPUTED_TILE_FILL_OPACITY = PAX_POLITICAL_FILL_OPACITY;
+const DISPUTED_TILE_FILL_OPACITY = POLITICAL_FILL_OPACITY;
 
 // GADM assigns disputed / undetermined boundary areas the codes Z01-Z09 (the
 // slivers around India — Kashmir, Aksai Chin, Arunachal Pradesh). The base map
@@ -2278,7 +2278,7 @@ const WorldMap = ({ isGlobe = false }) => {
         : stops.length > 0
         ? ["match", ["get", "GID_0"], ...stops, fallback]
         : fallback,
-      "fill-opacity": PAX_POLITICAL_FILL_OPACITY,
+      "fill-opacity": POLITICAL_FILL_OPACITY,
     };
   }, [colorMap, customFlag, regionOwnershipOverrides, ownerColorCss]);
 
@@ -2887,7 +2887,7 @@ const WorldMap = ({ isGlobe = false }) => {
           // so worker/source scheduling can never expose the target state early.
           sourceReady.setData?.(sliceData);
           enforceMapLayerOrder(mapInstance);
-          mapInstance.setPaintProperty("ownership-transition-sweep-fill", "fill-opacity", PAX_POLITICAL_FILL_OPACITY);
+          mapInstance.setPaintProperty("ownership-transition-sweep-fill", "fill-opacity", POLITICAL_FILL_OPACITY);
           mapInstance.setPaintProperty(
             "ownership-transition-sweep-fill",
             "fill-color",
@@ -3116,7 +3116,7 @@ const WorldMap = ({ isGlobe = false }) => {
     () => customActive
       ? {
           "fill-color": DETAIL_FILL_COLOR,
-          "fill-opacity": PAX_POLITICAL_FILL_OPACITY,
+          "fill-opacity": POLITICAL_FILL_OPACITY,
           "fill-antialias": false,
           "fill-outline-color": DETAIL_FILL_COLOR,
         }
@@ -3124,7 +3124,7 @@ const WorldMap = ({ isGlobe = false }) => {
     [customActive],
   );
   const transitionAwareFillOpacity = useMemo(() => (customFlag
-    ? buildPaxPoliticalFillOpacity([
+    ? buildPoliticalFillOpacity([
         "boolean",
         ["feature-state", "ownershipTransitionHidden"],
         false,
@@ -3155,7 +3155,7 @@ const WorldMap = ({ isGlobe = false }) => {
   // PLAYER's machine works, with the trailing names as fallbacks where the
   // first is not installed.
   const labelFontStack = useMemo(
-    // Pax-style political labels read more like atlas typography than delicate
+    // Political labels read like atlas typography rather than delicate
     // annotations. Georgia is a heavier default on Windows; an authored scenario
     // font wins over it, and the player's own Settings > Map override wins over
     // both - it is the one setting whose whole purpose is to overrule what the
@@ -3223,7 +3223,7 @@ const WorldMap = ({ isGlobe = false }) => {
     // size that is merely capped by the spine. This is what makes RUSSIA stretch.
     "text-size": buildCountryTextSize(1, isGlobe, "fitScale"),
     "text-letter-spacing": ["coalesce", ["get", "letterSpacing"], 0.18],
-    // Pax-like warping should follow a territory, not corkscrew through it.
+    // Atlas-like warping should follow a territory, not corkscrew through it.
     // A moderate max-angle keeps long labels visibly shaped by the polity while
     // rejecting the extreme bends that previously made Bosnia-like cases ugly.
     "text-max-angle": 48,
@@ -3260,7 +3260,7 @@ const WorldMap = ({ isGlobe = false }) => {
   const integratedLabelLayerPaint = useMemo(() => ({
     // Stronger atlas treatment: the polity name is a primary political layer,
     // not a faint annotation. Keep a crisp dark edge so large white serif text
-    // survives both pale and saturated polity fills like the Pax reference.
+    // survives both pale and saturated polity fills, as a printed atlas's does.
     "text-color": labelTextColor || "rgba(250, 249, 244, 0.995)",
     "text-halo-color": labelHaloColor || "rgba(4, 6, 9, 0.96)",
     "text-halo-width": 1.62,

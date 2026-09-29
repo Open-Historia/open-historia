@@ -13,7 +13,7 @@ if (!(ohChannel in ["stable", "beta"])) {
 def ohBeta = ohChannel == "beta"
 
 android {
-    namespace "io.github.arkniem.paxhistoria"
+    namespace "io.github.arkniem.openhistoria"
     compileSdk rootProject.ext.compileSdkVersion
     defaultConfig {
         applicationId ohBeta ? "io.github.arkniem.paxhistoria.beta" : "io.github.arkniem.paxhistoria"
