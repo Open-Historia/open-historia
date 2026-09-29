@@ -4515,6 +4515,14 @@ const commitCanonicalTurnPayload = async (payload, {
     { extra: `${Math.round(body.length / 1024)} KiB`, warnAt: 50 },
   );
 
+  // The campaign this generation is written to, as the endpoints named it when
+  // the commit went out. Several MB of echo take a while to arrive and parse, and
+  // a switch to another save in that time repoints JSON_URLS at it (the token in
+  // them changes): publishing then would fill the new save's caches and map with
+  // this campaign's state, and the next unforced read would hand it back to be
+  // written over the new save. writeJson is safe the same way, by priming the URL
+  // it wrote rather than the one that is current.
+  const generationUrl = String(JSON_URLS.game || "");
   const response = await fetch("/api/runtime/turn-commit", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -4531,6 +4539,17 @@ const commitCanonicalTurnPayload = async (payload, {
   } catch {
     // Alternate/older stores may answer without JSON. The normalized submitted
     // generation remains the best available client representation.
+  }
+
+  // Written, and to the right campaign (the store checked expectedGameId), but
+  // no longer the one on screen: nothing of it belongs in the caches now.
+  if (String(JSON_URLS.game || "") !== generationUrl) {
+    reportPerfOperation(
+      "canonical turn commit",
+      (typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt,
+      { extra: `${transactionId} (not published: the campaign changed)`, warnAt: 100 },
+    );
+    return { ...committed, transactionId, published: false };
   }
 
   publishJsonWriteBatch([
