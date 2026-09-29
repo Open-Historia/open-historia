@@ -661,6 +661,18 @@ export const translateLabel = (text) => {
   return text;
 };
 
+// The loading screen's own text (StartupScreen.jsx), looked up in what the
+// book already holds and nothing more. The DOM translator waits for that screen
+// to go, so it translates itself through this: never queued, never a request,
+// never a wait. Until the pack arrives, and in English, the text is returned
+// as it is.
+export const translateNow = (text) => {
+  if (language === DEFAULT_LANGUAGE || typeof text !== "string" || !text) {
+    return text;
+  }
+  return book.translate(text) ?? text;
+};
+
 // Proactively queue content that exists as data but may not be rendered yet
 // (e.g. freshly fetched Community-hub posts). Only unknown strings cost a call.
 export const enqueueStrings = (strings) => {

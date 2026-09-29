@@ -199,6 +199,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on a sto
 
 | Export | Purpose |
 |---|---|
+| `translateNow(text)` | **Sync**, book only: the loading screen's own text (`StartupScreen.jsx`), which the DOM translator never touches. Never queues or requests; returns the text as is in English or when the book lacks it |
 | `translateLabel(text)` | **Sync** best-effort translate for text drawn outside the DOM (map country labels). Returns the known translation, or the original while queuing the name as content + firing `i18n:updated` when it resolves |
 | `enqueueStrings(strings)` | Proactively queue content (e.g. freshly-fetched hub posts); only unknown strings cost a call |
 | `enqueueEventStrings(events)` | An event log as it is written: queues only the scenario's own events (`source` `"scenario"`); the AI's are written in the player's language |
