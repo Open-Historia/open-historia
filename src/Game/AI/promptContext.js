@@ -861,8 +861,14 @@ export const buildAdvisorHistoryText = (messages, { limit = 18 } = {}) => {
 // longEventLimit); actions simply never were. Matching longEventLimit here.
 export const ACTION_HISTORY_LIMIT = 24;
 
-export const buildActionHistoryText = (actions, { includeResolved = false, limit = ACTION_HISTORY_LIMIT } = {}) => {
-  const normalizedActions = normalizeActions(actions);
+// `includePlanned: false` leaves this round's orders out of a full history:
+// the resolvedActions variable, for a label that says the orders listed were
+// already carried out (PLAYER_EVERY_ACTION_NOT_PREVIOUS). The planned ones are
+// given beside it (PLAYER_ACTIONS_THIS_ROUND), and a skip that read them under
+// that label could treat a live order as done, or carry it out twice.
+export const buildActionHistoryText = (actions, { includeResolved = false, includePlanned = true, limit = ACTION_HISTORY_LIMIT } = {}) => {
+  const normalizedActions = normalizeActions(actions)
+    .filter((action) => includePlanned || action.status !== "planned");
   const renderAction = (action) => {
     const kindLabel = action.kind === "chat" ? "chat" : "action";
     const statusLabel = action.status !== "planned" ? ` [${action.status}]` : "";
@@ -875,7 +881,7 @@ export const buildActionHistoryText = (actions, { includeResolved = false, limit
     return planned.map(renderAction).join("\n");
   }
 
-  if (normalizedActions.length === 0) return "No actions have been recorded yet.";
+  if (normalizedActions.length === 0) return includePlanned ? "No actions have been recorded yet." : "No actions from earlier rounds have been resolved yet.";
 
   // Every PLANNED action survives — those are live orders the model must act on —
   // while only the most recent `limit` finished ones are quoted. The number of
@@ -1810,6 +1816,9 @@ export const buildPromptContext = async (bundle, {
   }
   if (wants("allActions")) {
     result.allActions = buildActionHistoryText(bundle.actions, { includeResolved: true });
+  }
+  if (wants("resolvedActions")) {
+    result.resolvedActions = buildActionHistoryText(bundle.actions, { includeResolved: true, includePlanned: false });
   }
   if (wants("plannedActions")) {
     result.plannedActions = buildActionHistoryText(bundle.actions);

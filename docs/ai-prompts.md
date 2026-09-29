@@ -118,8 +118,9 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `PLAYER_POLITY_REGIONS` | `playerPolityRegions` | Comma list of regions the player owns, or the LANDLESS notice | advisor |
 | `PLAYER_POLITY_BATTALION_SUMMARIES` | `playerBattalionSummaries` | Player + world unit lines (no feasibility doctrine) | advisor |
 | `PLAYER_POLITY_REPUTATION_CONTEXT` | `playerPolityReputationContext` | "International reputation: N/100 (band)." | *(none — injected via the [International Reputation] directive, not the placeholder)* |
-| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions | advisor, actions, jumpForward, autoJumpForward, interactiveCreation, gameMaster, descriptionToAction |
-| `PLAYER_EVERY_ACTION` / `PLAYER_EVERY_ACTION_NOT_PREVIOUS` | `allActions` | All actions incl. resolved | advisor, jumpForward, autoJumpForward |
+| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions. The advisor's is a pointer (`PLANNED_ACTIONS_IN_ACTION_PLANNING`, `main.jsx`): its planned orders are listed once, with ids, in `[Action Planning]` | advisor, actions, jumpForward, autoJumpForward, interactiveCreation, gameMaster, descriptionToAction |
+| `PLAYER_EVERY_ACTION` | `allActions` | All actions incl. resolved | *(none in the defaults)* |
+| `PLAYER_EVERY_ACTION_NOT_PREVIOUS` | `resolvedActions` | Resolved actions only: this round's orders are left out, so the label "already carried out" / "excluding the current round" is true | advisor, jumpForward, autoJumpForward |
 | `GRAND_MAP_DESCRIPTION` | `worldSummary` | Full world snapshot (see §5 `worldSummary`) | advisor, countryStatSheet |
 | `GRAND_MAP_DESCRIPTION_NO_CITY` | `worldSummaryNoCity` | **Identical string** to `worldSummary` (name is historical) | leader, actions, jumpForward, autoJumpForward, descriptionToAction, gameMaster, pregameHistory |
 | `CURRENT_UNITS` | `unitsSummary` | Deployed units **+ conditional military-feasibility doctrine** | jumpForward, autoJumpForward |
@@ -192,6 +193,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `actions` | `formatActionsForPrompt(bundle.actions)` (title + display text) | `promptContext.js` / builder `156` |
 | `plannedActions` | `buildActionHistoryText(bundle.actions)` (planned only) | `promptContext.js` / builder `140` |
 | `allActions` | `buildActionHistoryText(…, {includeResolved:true})` | `promptContext.js` |
+| `resolvedActions` | `buildActionHistoryText(…, {includeResolved:true, includePlanned:false})` | `promptContext.js` |
 | `actionInput` | The `actionInput` option (raw player text) | `promptContext.js` |
 | `date` | `game.gameDate` (raw) | `promptContext.js` |
 | `dateReadable` | `formatDateReadable(date)` → "D MMMM YYYY" (dayjs); raw text if unparseable | `promptContext.js` / builder `165` |

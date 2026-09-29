@@ -3040,6 +3040,12 @@ ${projectsSummary}`;
 // the template keeps its sentence, and this is what now stands in it.
 export const CONVERSATION_IN_TURNS = "(given below as the message turns, oldest first; the newest message is the last one)";
 
+// What stands in the advisor's PLAYER_ACTIONS_THIS_ROUND: this round's orders
+// are listed once, with the ids an edit needs, in [Action Planning]
+// (buildAdvisorActionsDirective). The template used to carry them a second
+// time here, beside the resolved ones.
+export const PLANNED_ACTIONS_IN_ACTION_PLANNING = "(listed once, with their ids, under [Current Planned Actions] in [Action Planning] below)";
+
 // THE ADVISOR'S CONTRACT: it knows everything the player knows and nothing more.
 //
 // This is the first field in any prompt that is filtered by ACQUIRED KNOWLEDGE.
@@ -3172,6 +3178,7 @@ async function buildAdvisorSystemPrompt() {
             worldData,
         })),
         advisorMessages: CONVERSATION_IN_TURNS,
+        plannedActions: PLANNED_ACTIONS_IN_ACTION_PLANNING,
     };
     const helperValues = resolveHelperValues(promptPack.helpers, variables);
 

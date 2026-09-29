@@ -463,7 +463,7 @@ const SHADOW_PLANS = Object.freeze({
     bounded: Object.freeze([
       { key: "recentEvents", budget: 18000, mode: "tail-blocks", label: "recent detailed events" },
       { key: "consolidatedHistory", budget: 24000, mode: "tail-blocks", label: "production long-history summary share" },
-      { key: "allActions", budget: 10000, mode: "tail-lines", label: "resolved player-action continuity" },
+      { key: "resolvedActions", budget: 10000, mode: "tail-lines", label: "resolved player-action continuity" },
     ]),
   }),
   [CONTEXT_PROFILE_KEYS.DIPLOMACY]: Object.freeze({
@@ -491,7 +491,7 @@ const SHADOW_PLANS = Object.freeze({
     bounded: Object.freeze([
       { key: "recentEvents", budget: 18000, mode: "tail-blocks", label: "recent campaign events" },
       { key: "consolidatedHistory", budget: 12000, mode: "tail-blocks", label: "older campaign continuity" },
-      { key: "allActions", budget: 10000, mode: "tail-lines", label: "resolved player actions" },
+      { key: "resolvedActions", budget: 10000, mode: "tail-lines", label: "resolved player actions" },
       { key: "chatHistoryLong", budget: 8000, mode: "head-blocks", label: "recent diplomacy" },
     ]),
   }),
