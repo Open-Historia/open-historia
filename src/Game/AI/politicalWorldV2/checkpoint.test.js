@@ -256,3 +256,23 @@ test("Political World fingerprint includes authored WBR1/divergence canon and ex
   assert.notEqual(first, changedDivergence, "the reference-canon cutoff must invalidate stale PWV2 work");
   assert.notEqual(first, changedTerritory, "explicit start-world territory must invalidate political generation");
 });
+
+test("allowing more calls past the lifetime ceiling raises it one recorded step and clears the pause", async () => {
+  const { grantPoliticalWorldV2ModelCalls, POLITICAL_WORLD_V2_CEILING_GRANT } = await import("./checkpoint.js");
+  const checkpoint = createPoliticalWorldV2Checkpoint({ scenarioId: "s", scenarioDate: "2014-03-22" });
+  checkpoint.modelCalls = 100;
+  checkpoint.status = "paused";
+  checkpoint.pauseReason = "total-model-call-budget";
+  checkpoint.lastError = "Political World generation reached its lifetime safety ceiling of 100 AI calls.";
+  const granted = grantPoliticalWorldV2ModelCalls(checkpoint, { now: "2026-09-28T00:00:00.000Z" });
+  assert.equal(granted.totalModelCallCeiling, 100 + POLITICAL_WORLD_V2_CEILING_GRANT);
+  assert.deepEqual(granted.ceilingGrants, [{ at: "2026-09-28T00:00:00.000Z", from: 100, to: 125, amount: 25 }]);
+  assert.equal(granted.status, "ready");
+  assert.equal(granted.pauseReason, "");
+  assert.equal(granted.lastError, "");
+  assert.equal(checkpoint.totalModelCallCeiling, 100, "the input checkpoint is not mutated");
+
+  const again = normalizePoliticalWorldV2Checkpoint(grantPoliticalWorldV2ModelCalls(granted));
+  assert.equal(again.totalModelCallCeiling, 150);
+  assert.equal(again.ceilingGrants.length, 2, "grants survive normalization");
+});

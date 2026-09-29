@@ -10,6 +10,7 @@ import {
   buildPoliticalWorldInputFingerprint,
   checkpointMatchesInput,
   createPoliticalWorldV2Checkpoint,
+  grantPoliticalWorldV2ModelCalls,
   setCheckpointQuality,
 } from "./checkpoint.js";
 import { runSimplePoliticalWorldV2 } from "./simpleRunner.js";
@@ -319,6 +320,10 @@ export const applyPoliticalWorldV2Checkpoint = ({
 
 export const discardPoliticalWorldV2Checkpoint = (scenarioId) => clearPoliticalWorldV2Checkpoint(scenarioId);
 
+// The way out of a run paused at its lifetime ceiling: raise it one bounded,
+// recorded step and save, so Resume continues the paid work.
+export const grantPoliticalWorldV2Calls = (checkpoint) => savePoliticalWorldV2Checkpoint(grantPoliticalWorldV2ModelCalls(checkpoint));
+
 export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = {}) => ({
   schemaVersion: 2,
   kind: "political-world-v2-diagnostic",
@@ -332,6 +337,7 @@ export const buildPoliticalWorldV2Diagnostic = ({ checkpoint, scenario = {} } = 
     pauseReason: clean(checkpoint?.pauseReason),
     modelCalls: Number(checkpoint?.modelCalls) || 0,
     totalModelCallCeiling: Number(checkpoint?.totalModelCallCeiling) || 0,
+    ceilingGrants: clone(checkpoint?.ceilingGrants || []),
     modelCallsByType: clone(checkpoint?.modelCallsByType || {}),
     modelCallsByStage: clone(checkpoint?.modelCallsByStage || {}),
     qualityMode: clean(checkpoint?.qualityMode),

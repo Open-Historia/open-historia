@@ -305,6 +305,25 @@ test("the session budget and the lifetime ceiling pause before any call", async 
   assert.match(ceiling.lastError, /lifetime safety ceiling of 100 AI calls/);
 });
 
+test("a run paused at its lifetime ceiling resumes after the author allows more calls", async () => {
+  const { grantPoliticalWorldV2ModelCalls } = await import("./checkpoint.js");
+  const atCeiling = withUncoveredInstitution();
+  atCeiling.modelCalls = 100;
+  const paused = await runSimplePoliticalWorldV2({ checkpoint: atCeiling, inputs, maxModelCalls: 5, callModel: noCalls });
+  assert.equal(paused.pauseReason, "total-model-call-budget");
+
+  let calls = 0;
+  const resumed = await runSimplePoliticalWorldV2({
+    checkpoint: grantPoliticalWorldV2ModelCalls(paused),
+    inputs,
+    maxModelCalls: 1,
+    callModel: async () => { calls += 1; return membersAnswer([{ polityKey: "A", status: "member", role: "member" }]); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(resumed.modelCalls, 101);
+  assert.deepEqual(resumed.membership.resolvedInstitutionIds, ["pact"]);
+});
+
 test("the session budget counts calls across tasks and stops exactly at the limit", async () => {
   const checkpoint = finishedCheckpoint();
   checkpoint.stagedWorld.powerStatus.byPolity = {};

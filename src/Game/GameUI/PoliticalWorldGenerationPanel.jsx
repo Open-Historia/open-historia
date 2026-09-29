@@ -464,6 +464,13 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
   const [pipelineResult, setPipelineResult] = useState(null);
   const [v2Checkpoint, setV2Checkpoint] = useState(null);
   const [v2CallBudget, setV2CallBudget] = useState(20);
+  // Discarding paid work takes a second press within four seconds.
+  const [discardArmed, setDiscardArmed] = useState(false);
+  useEffect(() => {
+    if (!discardArmed) return undefined;
+    const timer = setTimeout(() => setDiscardArmed(false), 4000);
+    return () => clearTimeout(timer);
+  }, [discardArmed]);
   const abortRef = useRef(null);
   const restoreRunLogInputRef = useRef(null);
   const generationStartedAtRef = useRef(0);
@@ -960,6 +967,44 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
       downloadJsonFile(`political-world-v2-${safeFileToken(scenarioName)}-${safeFileToken(v2Checkpoint.scenarioDate || scenarioDate)}.json`, diagnostic);
     } catch (nextError) {
       setError(`Could not build Political World generation diagnostic: ${nextError?.message || String(nextError)}`);
+    }
+  };
+
+  // The two ways on from a run paused at its lifetime ceiling: allow a bounded
+  // step of further calls (recorded in the checkpoint), or throw the checkpoint
+  // away and start again.
+  const allowMoreV2Calls = async () => {
+    if (!v2Checkpoint || busy || applying) return;
+    setError("");
+    try {
+      const { grantPoliticalWorldV2Calls } = await import("../AI/politicalWorldV2/pipeline.js");
+      const next = await grantPoliticalWorldV2Calls(v2Checkpoint);
+      const amount = Number(next?.ceilingGrants?.at(-1)?.amount) || 0;
+      setV2Checkpoint(next);
+      setProgress(amount === 1
+        ? "Allowed 1 more AI call. Resume Generation continues the saved work."
+        : `Allowed ${amount} more AI calls. Resume Generation continues the saved work.`);
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
+    }
+  };
+
+  const discardV2Checkpoint = async () => {
+    if (!v2Checkpoint || busy || applying) return;
+    if (!discardArmed) {
+      setDiscardArmed(true);
+      return;
+    }
+    setDiscardArmed(false);
+    setError("");
+    try {
+      const { discardPoliticalWorldV2Checkpoint } = await import("../AI/politicalWorldV2/pipeline.js");
+      await discardPoliticalWorldV2Checkpoint(v2Checkpoint.scenarioId || details?.scenario?.id);
+      setV2Checkpoint(null);
+      setProgressInfo(null);
+      setProgress("Political World checkpoint discarded. Generate Political World starts a fresh run.");
+    } catch (nextError) {
+      setError(nextError?.message || String(nextError));
     }
   };
 
@@ -1654,6 +1699,12 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
                     ? (v2Checkpoint.lastError || "The current AI provider task paused before producing a usable result. Resume after the provider issue is resolved.")
                     : `${v2Unresolved.length} item(s) remain unresolved.`}
               {v2Unresolved.length > 0 && <div style={{ marginTop: "0.25rem" }}>Sample: {v2Unresolved.slice(0, 8).map((entry) => `${entry.polityKey} (${entry.kind})`).join(" · ")}{v2Unresolved.length > 8 ? "…" : ""}</div>}
+              {v2Checkpoint.pauseReason === "total-model-call-budget" && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem", marginTop: "0.5rem" }}>
+                  <button disabled={applying} onClick={allowMoreV2Calls} style={{ ...buttonStyle, opacity: applying ? 0.55 : 1 }} type="button">Allow more AI calls</button>
+                  <button disabled={applying} onClick={discardV2Checkpoint} style={{ ...buttonStyle, background: discardArmed ? "rgba(127,29,29,0.3)" : buttonStyle.background, opacity: applying ? 0.55 : 1 }} type="button">{discardArmed ? "Discard for good" : "Discard checkpoint"}</button>
+                </div>
+              )}
             </div>
           )}
         </div>
