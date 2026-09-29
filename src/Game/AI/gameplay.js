@@ -1920,8 +1920,10 @@ const buildTaskLookups = (bundle, { maxRounds, audience = SIMULATION_AUDIENCE } 
 // The map and the campaign indexed for answering questions (lookupTools.js
 // buildLookupContext), built on first use. The lookup functions answer from it
 // when the model asks; placesNamedIn answers from it before anyone has to — which
-// is the only way it is used while requests are being saved.
-function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
+// is the only way it is used while requests are being saved. `renderedRegions`
+// reads the rendered regions a caller's pass has already read
+// (createRenderedRegionsReader).
+function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE, renderedRegions = null } = {}) {
   let contextPromise = null;
   return () => {
     if (!contextPromise) {
@@ -1933,7 +1935,9 @@ function lazyLookupContext(bundle, { audience = SIMULATION_AUDIENCE } = {}) {
         // declared adjacencies, find neighbours.
         const [catalogRows, renderedGeojson, citiesGeojson] = await Promise.all([
           loadRegionCatalog().catch(() => []),
-          readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null),
+          renderedRegions
+            ? renderedRegions()
+            : readJson(JSON_URLS.regionsGeojson, { defaultValue: null, clone: false }).catch(() => null),
           readJson(JSON_URLS.citiesGeojson, { defaultValue: null }).catch(() => null),
         ]);
         const geometryById = new Map();
@@ -2181,7 +2185,7 @@ const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 // beside it. `receipt` hears what could not be placed; an operation that then has
 // no coordinates at all is left for the normalizer to drop, exactly as one that
 // never had any.
-const resolvePlacements = async (containers, world, { receipt = null } = {}) => {
+const resolvePlacements = async (containers, world, { receipt = null, renderedRegions = null } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
@@ -2210,7 +2214,7 @@ const resolvePlacements = async (containers, world, { receipt = null } = {}) => 
 
   let gazetteer;
   try {
-    gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world })(), world);
+    gazetteer = buildPlacementGazetteer(await lazyLookupContext({ world }, { renderedRegions })(), world);
   } catch (error) {
     console.warn("[placement] the map could not be read; operations keep the coordinates they came with.", error);
     return { placed: 0, spaced: 0 };
@@ -4599,16 +4603,43 @@ const GEOGRAPHY_RESOLVER_MAX_CANDIDATES = 140;
 const GEOGRAPHY_RESOLVER_MAX_AREA_REGIONS = 12;
 const IMPLICIT_WHOLE_COUNTRY_LIMIT = 3;
 
+// The rendered regions file, read at most once by whoever holds this. The file
+// is no-store, so every read fetches and parses it whole — on a detailed map
+// tens of MB, held as some 190 MB parsed — and one validation pass used to read
+// it two or three times: once per resolver call (transfers, then control ops
+// through the same resolver) and again for the placement gazetteer.
+// validateGeneratedWorldChanges shares one reader across all three.
+const createRenderedRegionsReader = () => {
+  let read = null;
+  return () => {
+    read ??= readJson(JSON_URLS.regionsGeojson, {
+      defaultValue: null,
+      force: true,
+      clone: false,
+    }).catch(() => null);
+    return read;
+  };
+};
+
 // `requests` is the time skip this resolution belongs to (createJumpRequests), so
 // the resolver's own model call asks the skip's budget first; callers outside a
-// skip leave it out.
+// skip leave it out. `renderedRegions` (createRenderedRegionsReader) is the map
+// as the caller's pass reads it; without one the resolver reads its own.
 const resolveRegionTransfers = async (containers, world, {
   ownershipMode = "sovereignty",
   enforceNarratedCityCoverage = false,
   exactRegionIdsOnly = false,
   explicitScopeText = "",
   requests = null,
+  renderedRegions = null,
 } = {}) => {
+  // Nothing here names land, so there is nothing to resolve and no reason to
+  // read the map: most answers move no border at all.
+  const namesLand = containers.some(({ impacts }) => normalizeArray(impacts?.regionTransfers).length > 0
+    || normalizeArray(impacts?.regionClaims).length > 0
+    || normalizeArray(impacts?.groupOps).length > 0);
+  if (!namesLand) return [];
+
   // Apply-time GM revalidation must verify the EXACT previewed region ids, not
   // pay to reopen/parse the full scenario geometry and reinterpret friendly
   // place names a second time. The preview path has already resolved every
@@ -4704,11 +4735,7 @@ const resolveRegionTransfers = async (containers, world, {
   // the merged stock catalog (which can trigger a second large scenario read).
   // Prime the compact id/name catalog from this unavoidable parse so Apply can
   // strictly revalidate exact previewed ids without reopening tens of MB of GeoJSON.
-  const renderedRegionsGeojson = await readJson(JSON_URLS.regionsGeojson, {
-    defaultValue: null,
-    force: true,
-    clone: false,
-  }).catch(() => null);
+  const renderedRegionsGeojson = await (renderedRegions ?? createRenderedRegionsReader())();
   const renderedFeatures = normalizeArray(renderedRegionsGeojson?.features);
   if (renderedFeatures.length) {
     primeCustomRegionCatalog(renderedRegionsGeojson, {
@@ -5798,7 +5825,7 @@ const resolveRegionTransfers = async (containers, world, {
 // legal transfers, but they are bounded by current DE-FACTO control instead of
 // sovereignty. Proxy them through the proven resolver rather than maintain two
 // subtly different historical-geography engines.
-const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly = false, explicitScopeText = "", requests = null } = {}) => {
+const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly = false, explicitScopeText = "", requests = null, renderedRegions = null } = {}) => {
   const proxyContainers = containers.map((container) => {
     const proxies = normalizeArray(container?.impacts?.regionControlOps).map((op, index) => {
       const realToCode = normalizeString(op?.toCode);
@@ -5831,6 +5858,7 @@ const resolveRegionControlOps = async (containers, world, { exactRegionIdsOnly =
     exactRegionIdsOnly,
     explicitScopeText,
     requests,
+    renderedRegions,
   });
 
   for (let index = 0; index < containers.length; index += 1) {
@@ -6149,11 +6177,14 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     if (normalizeString(project?.id)) knownProjects.set(normalizeString(project.id), name);
   }
 
+  // The map read at most once for the whole pass (createRenderedRegionsReader).
+  const renderedRegions = createRenderedRegionsReader();
   const unresolvedTransfers = await resolveRegionTransfers(containers, world, {
     ownershipMode: "sovereignty",
     exactRegionIdsOnly: resolvedRegionIdsOnly,
     explicitScopeText,
     requests,
+    renderedRegions,
   });
   if (strict && unresolvedTransfers.length > 0) {
     return buildTransferFeedback(unresolvedTransfers);
@@ -6167,6 +6198,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     exactRegionIdsOnly: resolvedRegionIdsOnly,
     explicitScopeText,
     requests,
+    renderedRegions,
   });
   if (strict && unresolvedControlOps.length > 0) {
     return buildControlFeedback(unresolvedControlOps);
@@ -6179,7 +6211,7 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // that cannot be found is said in the receipt, and the operation keeps any
   // coordinates it came with. Not on the Game Master's apply-time pass, which
   // may not reopen the map's geometry: its preview already placed everything.
-  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt });
+  if (!resolvedRegionIdsOnly) await resolvePlacements(containers, world, { receipt, renderedRegions });
   if (resolvedRegionIdsOnly) {
     const exactClaimError = validateExactApprovedRegionClaims(containers);
     if (exactClaimError) return exactClaimError;
