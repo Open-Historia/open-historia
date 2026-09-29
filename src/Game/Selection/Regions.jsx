@@ -30,14 +30,10 @@ export const setRegionClickInterceptor = (fn) => {
 };
 
 // Stable browser event for passive consumers of a committed normal region
-// selection. Unlike the legacy module-global observer below, this survives
-// lazy chunk / HMR module boundaries and allows multiple listeners without
-// changing the click-consumption contract.
+// selection (the StatsPane re-targets on it). It survives lazy chunk / HMR
+// module boundaries and allows multiple listeners without changing the
+// click-consumption contract.
 export const REGION_SELECTED_EVENT = "oh:region-selected";
-
-// Legacy passive tap retained for compatibility with any synchronous consumers.
-// Never consumes the click — popups still open.
-let _clickObserver = null;
 
 // WHO IS PLAYING, and why it is read here rather than per click. What the card
 // may say about a subordination depends on the viewer, and a COVERT one is
@@ -52,10 +48,6 @@ const rememberPlayerCountry = (readGame) => readGame()
         return _playerCountry;
     })
     .catch(() => _playerCountry);
-
-export const setRegionClickObserver = (fn) => {
-    _clickObserver = typeof fn === "function" ? fn : null;
-};
 
 const cleanSelectionValue = (value) => String(value ?? "").trim();
 
@@ -139,7 +131,6 @@ const commitRegionSelection = (props) => {
             window.dispatchEvent(new CustomEvent(REGION_SELECTED_EVENT, { detail: props }));
         } catch { /* passive listeners must never break clicks */ }
     }
-    try { _clickObserver?.(props); } catch { /* observers must never break clicks */ }
 
     const { COUNTRY, NAME_1, GID_0, GID_1, gid0, owner, lngLat } = props;
     if (!_setSelection) return;

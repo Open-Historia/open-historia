@@ -477,11 +477,6 @@ export const requestUnitOrders = async (unitId, text) => {
   return true;
 };
 
-// Round and game date are read by the Forces panel and the unit popup for
-// naming and order text; exported so nothing has to re-read game.json.
-export const getRound = () => round;
-export const getGameDate = () => gameDate;
-
 export const removeUnit = async (unitId) =>
   commit((list) => list.filter((u) => u.id !== unitId));
 

@@ -287,7 +287,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 
 | Concern | Detail | Connects to |
 |---|---|---|
-| Target | `targetCountry` seeds from the player's country; **clicking any country on the map** re-targets it (`setRegionClickObserver`) | `src/Game/Selection/Regions.jsx` |
+| Target | `targetCountry` seeds from the player's country; **clicking any country on the map** re-targets it: `Regions.jsx` dispatches `REGION_SELECTED_EVENT` (`oh:region-selected`) on every committed region click, and `StatsPane` listens for it and calls `setTargetCountry` | `src/Game/Selection/Regions.jsx` |
 | Data | `generateCountryStatSheet({code, name})` (AI), validated by `validateGameplayPayload("countryStatSheet", …)` | `src/Game/AI/gameplay.js`, `gameplaySchemas.js` |
 | Caching | Per `gameKey:code`, keyed by game date; memory + `localStorage["oh-stat-sheets"]` (cap 60); regenerated when the date moves; ↻ forces regen | — |
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |

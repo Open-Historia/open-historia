@@ -51,7 +51,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `documentMigration.js` | Brings a legacy code-keyed document forward to name-keyed on open. |
 | `documentIO.js` | REST client for `/api/mapeditor/documents` + local JSON download. |
 | `customBackground.js` | Loads uploaded backgrounds (GeoJSON/KML/KMZ/SHP/GeoTIFF/PMTiles/image) into OL layers; persistence helpers. |
-| `geometry.js` | Polygon boolean ops (union/difference/intersection), line split, translate. |
+| `geometry.js` | Polygon boolean ops (union/difference/intersection), translate. |
 | `olStyle.js` | Region → OL `Style` mapping (owner colour, opacity, stroke, disputed striping). |
 | `basemaps.js` | ESRI basemap presets + XYZ/preview URL builders. |
 | `editorStyles.js` | Shared chrome styling constants (`panelSurface`, `inputStyle`, `ACCENT`, `pillButton`, `toolButton`). |
@@ -375,7 +375,6 @@ Boolean ops run directly on OL geometries in EPSG:3857 via `polygon-clipping` (n
 | `unionGeoms(geoms)` | Merge / dissolve. |
 | `subtractFrom(target, cutter)` | Draw-carve (returns survivor, `null` if swallowed whole, or unchanged if disjoint). Drawing inside leaves a hole (interior ring). |
 | `overlaps(a, b)` | Cheap intersection guard so draw only rewrites genuinely-overlapping neighbours. |
-| `splitByLine(olGeom, line)` | Buffer a drawn line into a thin cutter, subtract, group fragments onto the two sides, union each → `[{geom,area},…]` largest first. |
 | `translatedClone(g, dx, dy)` | Copy/paste offset. |
 
 ---

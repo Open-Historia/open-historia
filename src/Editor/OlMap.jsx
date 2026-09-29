@@ -2532,13 +2532,6 @@ const OlMap = ({
     const layer = regionLayerRef.current;
     if (!map || !source) return;
 
-    // Split the region under a drawn line into two (or more) pieces; the largest
-    // piece keeps the original id/attributes, the rest become new regions.
-    // Split every region the freehand path FULLY crosses, following the exact
-    // cursor path. A region is only cut where the path enters through one border
-    // and exits through another; the path's dangling start/end inside a region is
-    // ignored, so no half-border is ever left partway through a region.
-
     // Lasso: select every region whose interior falls inside the drawn shape.
     const selectWithinPolygon = (poly) => {
       const ids = [];

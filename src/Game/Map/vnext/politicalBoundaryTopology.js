@@ -394,12 +394,6 @@ export const derivePolityBoundariesFromTopology = (
   };
 };
 
-export const boundaryFeatureTouchesOwner = (feature, owners) => {
-  const wanted = owners instanceof Set ? owners : new Set([...owners ?? []].map((value) => toCountryName(value)));
-  const names = String(feature?.properties?.owners ?? "").split(" | ").map(toCountryName).filter(Boolean);
-  return names.some((name) => wanted.has(name));
-};
-
 
 const segmentOwners = (segment, topology, ownershipOverrides = {}) => {
   const owners = [];
