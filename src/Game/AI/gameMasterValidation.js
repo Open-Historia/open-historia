@@ -4,6 +4,7 @@
 // sovereignty, chronology, the post-apply territory check and the fingerprint
 // that makes a stale preview fail closed. gameplay.js runs them; they live here
 // so node --test can load them (gameplay.js imports main.jsx and cannot be).
+import { EVENT_IMPACT_KEYS, eventHasImpacts } from "../../runtime/eventImpactKeys.js";
 import { compareGameDates, normalizeGameDate } from "../../runtime/gameDates.js";
 import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
@@ -31,22 +32,9 @@ const gameMasterCanonicalPolityKey = (token, world) => {
 };
 
 const gameMasterEventHasCanonicalEffects = (candidate, eventIndex) => {
-  const event = normalizeArray(candidate?.events)[eventIndex];
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  for (const field of [
-    "regionTransfers",
-    "regionClaims",
-    "polityChanges",
-    "politicalActorOps",
-    "createdChats",
-    "unitOps",
-    "markerOps",
-    "institutionLifecycleOps",
-    "projectOps",
-    "groupOps",
-  ]) {
-    if (normalizeArray(impacts[field]).length > 0) return true;
-  }
+  // Every impact array (eventImpactKeys.js): the old list here left out
+  // regionControlOps, so a future-dated occupation passed the chronology check.
+  if (eventHasImpacts(normalizeArray(candidate?.events)[eventIndex], EVENT_IMPACT_KEYS)) return true;
 
   const linked = (entries) => normalizeArray(entries).some((entry) =>
     normalizeArray(entry?.eventIndexes).some((value) => Number(value) === eventIndex));

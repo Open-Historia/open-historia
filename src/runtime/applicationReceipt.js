@@ -19,8 +19,10 @@
 // newest turn keeps its notes (older entries keep the counts), so the polled
 // world file never grows by more than one receipt.
 //
-// Import-free on purpose: gameState.js normalizes it on every read and write,
-// gameplay.js fills and renders it, and both are tested under bare node.
+// Import-free on purpose (but for the import-free list of impact arrays):
+// gameState.js normalizes it on every read and write, gameplay.js fills and
+// renders it, and both are tested under bare node.
+import { EVENT_IMPACT_KEYS } from "./eventImpactKeys.js";
 
 export const RECEIPT_VERSION = 1;
 export const RECEIPT_MAX_NOTES = 40;
@@ -35,20 +37,12 @@ export const RECEIPT_NOTE_MAX_CHARS = 280;
 // it is none of the three kinds above it; the model is simply told, once, here.
 export const RECEIPT_NOTE_KINDS = Object.freeze(["redone", "withheld", "dropped", "adjusted", "short"]);
 
-// The impact arrays a turn can carry, in the order a reader cares about.
+// The impact arrays a turn can carry, in the order a reader cares about: the
+// shared list (eventImpactKeys.js) but for the resolved orders, which reach
+// the model through the orders list itself.
 const APPLIED_KEYS = Object.freeze([
   "events",
-  "regionTransfers",
-  "regionControlOps",
-  "regionClaims",
-  "groupOps",
-  "polityChanges",
-  "politicalActorOps",
-  "unitOps",
-  "markerOps",
-  "projectOps",
-  "createdChats",
-  "reports",
+  ...EVENT_IMPACT_KEYS.filter((key) => key !== "actionIds"),
 ]);
 
 const APPLIED_LABELS = Object.freeze({
@@ -59,8 +53,10 @@ const APPLIED_LABELS = Object.freeze({
   groupOps: ["group operation", "group operations"],
   polityChanges: ["polity change", "polity changes"],
   politicalActorOps: ["political actor operation", "political actor operations"],
+  institutionLifecycleOps: ["institution operation", "institution operations"],
   unitOps: ["unit operation", "unit operations"],
   markerOps: ["structure operation", "structure operations"],
+  spyOps: ["espionage order", "espionage orders"],
   projectOps: ["project operation", "project operations"],
   createdChats: ["new chat", "new chats"],
   reports: ["report", "reports"],

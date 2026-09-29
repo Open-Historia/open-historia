@@ -117,6 +117,11 @@ test("GM Apply never advances time: future-dated events may not carry canonical 
     /after the current game date/,
     "a linked ledger update counts as an effect",
   );
+  assert.match(
+    validateGameMasterChronology(future({ regionControlOps: [{ op: "control", regionId: "POL.1_1", toCode: "German Empire" }] }), game),
+    /after the current game date/,
+    "a future-dated occupation is a canonical effect too",
+  );
   assert.equal(validateGameMasterChronology(future({}), game), "", "a future-dated note with no effects is allowed");
   assert.equal(validateGameMasterChronology({ events: [{ date: "1915-06-01", impacts: { unitOps: [{}] } }] }, game), "");
   // BC dates are ordered by the calendar.

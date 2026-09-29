@@ -248,6 +248,7 @@ import {
 } from "./actionOutcomeAssociations.js";
 import { allocateCanonicalTurnEventIds, remapLedgerEventIds } from "../../runtime/eventIdentity.js";
 import { sortTimelineEventsChronologically } from "../../runtime/timelineOrder.js";
+import { EVENT_IMPACT_KEYS, eventHasImpacts } from "../../runtime/eventImpactKeys.js";
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import {
   applyWarUpdates,
@@ -3569,13 +3570,12 @@ const withLatestTurnEventIds = (world, rewrite) => {
 // Checked on the merged turn rather than trusted from the segment check, because
 // the unit and territory directors add ops to events after it; spy orders and
 // resolved player orders count too — hiding such an event would leave what it
-// did applied with nothing on the timeline to say so.
-const OWN_CONSEQUENCE_IMPACTS = [
-  "regionTransfers", "regionClaims", "regionControlOps", "polityChanges", "politicalActorOps",
-  "createdChats", "unitOps", "markerOps", "spyOps", "institutionLifecycleOps", "groupOps", "actionIds",
-];
+// did applied with nothing on the timeline to say so. The shared list of impact
+// arrays (eventImpactKeys.js) but for the Board's own projectOps and the
+// documents an event writes (reports), which were never counted here.
+const OWN_CONSEQUENCE_IMPACTS = EVENT_IMPACT_KEYS.filter((key) => key !== "projectOps" && key !== "reports");
 const eventCarriesOwnConsequence = (event) =>
-  OWN_CONSEQUENCE_IMPACTS.some((key) => normalizeArray(event?.impacts?.[key]).length > 0)
+  eventHasImpacts(event, OWN_CONSEQUENCE_IMPACTS)
   || normalizeArray(event?.storylineIds).length > 0
   || Boolean(normalizeString(event?.warId));
 

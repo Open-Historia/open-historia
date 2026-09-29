@@ -53,6 +53,7 @@ import { useRuntimeState } from "../../runtime/useRuntimeState.js";
 import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
+import { eventImpactCounts } from "../../runtime/eventImpactKeys.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -1505,25 +1506,30 @@ const cleanEventText = (value) => String(value ?? "").replace(/\s+/g, " ").trim(
 // collapsing every run of whitespace turned an edited event into a single block
 // and threw the paragraphs away.
 const cleanEventBody = tidyProse;
+// A label for every impact array (EVENT_IMPACT_KEYS), so the "State-linked"
+// badge, the delete warning and the edit notice count all of them.
+const EVENT_IMPACT_LABELS = {
+    regionTransfers: "territory",
+    regionControlOps: "control",
+    regionClaims: "claims",
+    groupOps: "groups",
+    polityChanges: "polity",
+    politicalActorOps: "politics",
+    institutionLifecycleOps: "institutions",
+    unitOps: "units",
+    markerOps: "markers",
+    spyOps: "spies",
+    projectOps: "projects",
+    createdChats: "chats",
+    reports: "reports",
+    actionIds: "actions",
+};
 const eventImpactSummary = (event) => {
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-    const rows = [
-        ["polity", impacts.polityChanges],
-        ["territory", impacts.regionTransfers],
-        ["claims", impacts.regionClaims],
-        ["control", impacts.regionControlOps],
-        ["units", impacts.unitOps],
-        ["markers", impacts.markerOps],
-        ["chats", impacts.createdChats],
-        ["actions", impacts.actionIds],
-    ];
-    const populated = rows
-        .map(([label, value]) => [label, Array.isArray(value) ? value.length : 0])
-        .filter(([, count]) => count > 0);
+    const populated = eventImpactCounts(event);
     const count = populated.reduce((sum, [, value]) => sum + value, 0);
     return {
         count,
-        text: populated.map(([label, value]) => `${label} ${value}`).join(" · "),
+        text: populated.map(([key, value]) => `${EVENT_IMPACT_LABELS[key] || key} ${value}`).join(" · "),
     };
 };
 
@@ -3226,13 +3232,17 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
             const impacts = event?.impacts ?? {};
             acc.territory += (Array.isArray(impacts.regionTransfers) ? impacts.regionTransfers.length : 0)
                 + (Array.isArray(impacts.regionClaims) ? impacts.regionClaims.length : 0);
+            acc.control += Array.isArray(impacts.regionControlOps) ? impacts.regionControlOps.length : 0;
+            acc.groups += Array.isArray(impacts.groupOps) ? impacts.groupOps.length : 0;
             acc.polities += Array.isArray(impacts.polityChanges) ? impacts.polityChanges.length : 0;
             acc.politics += Array.isArray(impacts.politicalActorOps) ? impacts.politicalActorOps.length : 0;
+            acc.institutions += Array.isArray(impacts.institutionLifecycleOps) ? impacts.institutionLifecycleOps.length : 0;
             acc.units += Array.isArray(impacts.unitOps) ? impacts.unitOps.length : 0;
             acc.markers += Array.isArray(impacts.markerOps) ? impacts.markerOps.length : 0;
+            acc.projects += Array.isArray(impacts.projectOps) ? impacts.projectOps.length : 0;
             acc.chats += Array.isArray(impacts.createdChats) ? impacts.createdChats.length : 0;
             return acc;
-        }, { territory: 0, polities: 0, politics: 0, units: 0, markers: 0, chats: 0 });
+        }, { territory: 0, control: 0, groups: 0, polities: 0, politics: 0, institutions: 0, units: 0, markers: 0, projects: 0, chats: 0 });
 
         const eventOps = (field) => events.flatMap((event, eventIndex) =>
             (Array.isArray(event?.impacts?.[field]) ? event.impacts[field] : []).map((op, opIndex) => ({
@@ -3449,12 +3459,16 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginTop: "0.6rem" }}>
                             {countChip("events", events.length)}
                             {countChip("territory", impactCounts.territory)}
+                            {countChip("control", impactCounts.control)}
+                            {countChip("groups", impactCounts.groups)}
                             {countChip("polities", impactCounts.polities)}
                             {countChip("politics", impactCounts.politics)}
+                            {countChip("institutions", impactCounts.institutions)}
                             {countChip("stats", statPatches.length)}
                             {countChip("storylines", storylineUpdates.length)}
                             {countChip("units", impactCounts.units)}
                             {countChip("markers", impactCounts.markers)}
+                            {countChip("projects", impactCounts.projects)}
                             {countChip("wars", warUpdates.length)}
                             {countChip("relations", relationUpdates.length)}
                             {countChip("agreements", agreementUpdates.length)}
