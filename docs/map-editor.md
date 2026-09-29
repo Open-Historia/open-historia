@@ -440,7 +440,7 @@ Save robustness:
 
 ## 19. How edits reach the game — Save / Save & Exit / Apply & Play (`libraryBar.jsx` `applyMapToScenario`)
 
-In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`; keeps the scenario's player country while the map still has it, by its exact name, since the seed's own `game.country` is only the map's first owner: `playerCountryAfterSave.js`, which fixed saves resetting every scenario's start country) then uploads each seed piece as a scenario asset:
+In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`; keeps the scenario's player country while the map still has it, by its exact name, since the seed's own `game.country` is only the map's first owner: `playerCountryAfterSave.js`, which fixed saves resetting every scenario's start country) then uploads each seed piece as a scenario asset. The writes pass `{ refresh: false }` and run inside `withSingleLibraryRefresh` (`src/runtime/library.js`), so the library catalog is rebuilt once after the last one rather than after each:
 
 | Seed field | Scenario asset | Empty behaviour |
 |---|---|---|

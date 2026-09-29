@@ -22,6 +22,7 @@ import {
   loadScenarioDetails,
   saveScenario,
   uploadScenarioAsset,
+  withSingleLibraryRefresh,
 } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
@@ -690,14 +691,17 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     if (!list.length) return;
     const details = await loadScenarioDetails(scenario.id);
     const { patch, uploads, clears } = buildDetailSave(list, details);
-    if (Object.keys(patch).length) await saveScenario(scenario.id, patch);
-    for (const upload of uploads) {
-      const blob = upload.json !== undefined
-        ? new Blob([JSON.stringify(upload.json)], { type: "application/json" })
-        : new Blob([Uint8Array.from(globalThis.atob(upload.base64), (char) => char.charCodeAt(0))], { type: upload.contentType });
-      await uploadScenarioAsset(scenario.id, upload.key, blob);
-    }
-    for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey).catch(() => {});
+    // One catalog refresh for the whole batch, not one per write.
+    await withSingleLibraryRefresh(async () => {
+      if (Object.keys(patch).length) await saveScenario(scenario.id, patch, { refresh: false });
+      for (const upload of uploads) {
+        const blob = upload.json !== undefined
+          ? new Blob([JSON.stringify(upload.json)], { type: "application/json" })
+          : new Blob([Uint8Array.from(globalThis.atob(upload.base64), (char) => char.charCodeAt(0))], { type: upload.contentType });
+        await uploadScenarioAsset(scenario.id, upload.key, blob, { refresh: false });
+      }
+      for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey, { refresh: false }).catch(() => {});
+    });
   };
 
   const accept = async (list) => {

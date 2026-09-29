@@ -63,7 +63,7 @@ The single source of truth for the player's **games**, **scenarios**, and which 
 
 ### Catalog mutations (each refreshes the store)
 
-All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws `payload.error || payload.message || "HTTP <status>"`). Two patterns: functions that receive a fresh `catalog` in the response apply it directly via `applyLibraryCatalog`; the rest call `refreshLibraryCatalog({ force: true })` after mutating.
+All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws `payload.error || payload.message || "HTTP <status>"`). Two patterns: functions that receive a fresh `catalog` in the response apply it directly via `applyLibraryCatalog`; the rest call `refreshLibraryCatalog({ force: true })` after mutating. `saveScenario`, `saveGame` and the four asset upload/clear helpers take a last `{ refresh = true }` option: a caller making several writes in a row passes `{ refresh: false }` to each inside `withSingleLibraryRefresh(write)`, which refreshes once after the last write, whether or not the writes succeeded (the Workshop save and accepting suggested changes do this; a Workshop save used to rebuild the catalog seven times).
 
 | Export | HTTP | Route | Notes |
 |---|---|---|---|

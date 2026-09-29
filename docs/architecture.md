@@ -224,7 +224,7 @@ Because the web router keys on `url.origin === location.origin && pathname.start
 
 ### Write side (mutations)
 
-Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write → PUT `/api/runtime/json/{world|game|events|…}` → store persists → library token bumps → `assets.js` sweeps stale caches → affected layers re-read**. Library mutations (create/select/save game or scenario, asset upload) go through `src/runtime/library.js`, which force-refreshes the catalog and re-syncs the runtime token. See [World state](world-state.md) and [AI system](ai-overview.md).
+Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write → PUT `/api/runtime/json/{world|game|events|…}` → store persists → library token bumps → `assets.js` sweeps stale caches → affected layers re-read**. Library mutations (create/select/save game or scenario, asset upload) go through `src/runtime/library.js`, which force-refreshes the catalog and re-syncs the runtime token (once per batch for a multi-write save, `withSingleLibraryRefresh`). See [World state](world-state.md) and [AI system](ai-overview.md).
 
 ---
 

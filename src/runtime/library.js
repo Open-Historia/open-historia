@@ -261,6 +261,21 @@ export const refreshLibraryCatalog = async ({ force = false } = {}) => {
   return libraryCatalogRequest;
 };
 
+// Every write below refreshes the catalog when it lands: a GET /api/library (a
+// whole IndexedDB catalog build on the web and on Android) and a re-render of
+// everything that reads the library. A caller making several writes in a row —
+// the Workshop's save is a scenario save and six asset writes — passes
+// { refresh: false } to each and runs them inside this instead, so the catalog
+// is rebuilt once, after the last write, whether or not the writes succeeded.
+export const withSingleLibraryRefresh = async (write) => {
+  try {
+    return await write();
+  } finally {
+    // The catalog records its own failure; the writes' outcome is what the caller gets.
+    await refreshLibraryCatalog({ force: true }).catch(() => {});
+  }
+};
+
 export const ensureLibraryCatalog = async () => {
   if (libraryState.loaded) {
     return libraryState;
@@ -284,13 +299,13 @@ export const createScenario = async (payload) => {
   return details;
 };
 
-export const saveScenario = async (scenarioId, payload) => {
+export const saveScenario = async (scenarioId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -342,7 +357,7 @@ export const downloadScenarioJsonAsset = async (scenarioId, assetKey, { coarse =
   }
 };
 
-export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
+export const uploadScenarioAsset = async (scenarioId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -355,22 +370,22 @@ export const uploadScenarioAsset = async (scenarioId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearScenarioAsset = async (scenarioId, assetKey) => {
+export const clearScenarioAsset = async (scenarioId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${SCENARIOS_API_ROOT}/${encodeURIComponent(scenarioId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const uploadGameAsset = async (gameId, assetKey, file) => {
+export const uploadGameAsset = async (gameId, assetKey, file, { refresh = true } = {}) => {
   const response = await fetch(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
@@ -383,18 +398,18 @@ export const uploadGameAsset = async (gameId, assetKey, file) => {
   );
 
   const details = await parseApiResponse(response);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
-export const clearGameAsset = async (gameId, assetKey) => {
+export const clearGameAsset = async (gameId, assetKey, { refresh = true } = {}) => {
   const details = await requestJson(
     `${GAMES_API_ROOT}/${encodeURIComponent(gameId)}/assets/${encodeURIComponent(assetKey)}`,
     {
       method: "DELETE",
     },
   );
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 
@@ -484,13 +499,13 @@ export const createGame = async (payload) => {
   return details;
 };
 
-export const saveGame = async (gameId, payload) => {
+export const saveGame = async (gameId, payload, { refresh = true } = {}) => {
   const details = await requestJson(`${GAMES_API_ROOT}/${encodeURIComponent(gameId)}`, {
     body: payload,
     method: "PUT",
   });
   enqueueContentStrings(payload);
-  await refreshLibraryCatalog({ force: true });
+  if (refresh) await refreshLibraryCatalog({ force: true });
   return details;
 };
 

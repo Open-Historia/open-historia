@@ -36,6 +36,7 @@ import {
   uploadGameAsset,
   uploadScenarioAsset,
   useLibraryState,
+  withSingleLibraryRefresh,
   writeGameSnapshotsText,
 } from "../../runtime/library.js";
 import { loadCountryNames, readJson, writeJson, JSON_URLS } from "../../runtime/assets.js";
@@ -3070,6 +3071,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
+    // A save is a scenario save and up to six asset writes. Each used to rebuild
+    // the library catalog on its own (and could rotate the running map's asset
+    // token half-way through the save); now the catalog is rebuilt once, after
+    // the last write.
+    await withSingleLibraryRefresh(() => writeMapToScenario(scenarioId, seed));
+
+    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
+    // flow below.
+    if (!play) return { saved: true, scenarioId };
+    await playAppliedMap(scenario, scenarioId, seed);
+  };
+
+  const writeMapToScenario = async (scenarioId, seed) => {
     const details = await loadScenarioDetails(scenarioId);
     const currentWorld = details?.data?.world ?? {};
     const currentGame = details?.data?.game ?? {};
@@ -3131,7 +3145,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         startDate:
           currentGame.startDate || currentGame.gameDate || seed.game?.startDate || seed.game?.gameDate || "2016-01-01",
       },
-    });
+    }, { refresh: false });
 
     // The canonical scenario just written, kept in the drawer too; otherwise
     // reopening the Workshop resurrects the old world.json and a later ordinary
@@ -3142,6 +3156,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       scenarioId,
       "colors",
       new Blob([JSON.stringify(seed.colors ?? {})], { type: "application/json" }),
+      { refresh: false },
     );
     // Author-set country flags. Only written when the map actually has some: a map
     // with no flags must leave the scenario's flags.json alone rather than stamping
@@ -3152,9 +3167,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "flags",
         new Blob([JSON.stringify(seed.flags)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "flags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "flags", { refresh: false }).catch(() => {});
     }
     // Author-set country tags, same contract as flags.
     if (seed.tags) {
@@ -3162,9 +3178,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "tags",
         new Blob([JSON.stringify(seed.tags)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "tags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "tags", { refresh: false }).catch(() => {});
     }
     await uploadScenarioAsset(
       scenarioId,
@@ -3172,6 +3189,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       new Blob([JSON.stringify(seed.regions ?? { type: "FeatureCollection", features: [] })], {
         type: "application/json",
       }),
+      { refresh: false },
     );
     await uploadScenarioAsset(
       scenarioId,
@@ -3179,6 +3197,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       new Blob([JSON.stringify(seed.cities ?? { type: "FeatureCollection", features: [] })], {
         type: "application/json",
       }),
+      { refresh: false },
     );
 
     // The custom background's heavy payload (image data URL / vector GeoJSON) is a
@@ -3190,15 +3209,14 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         scenarioId,
         "backgroundData",
         new Blob([JSON.stringify(seed.backgroundData)], { type: "application/json" }),
+        { refresh: false },
       );
     } else {
-      await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+      await clearScenarioAsset(scenarioId, "backgroundData", { refresh: false }).catch(() => {});
     }
+  };
 
-    // A Workshop save is complete by itself; Apply & Play opts into the fresh-game
-    // flow below.
-    if (!play) return { saved: true, scenarioId };
-
+  const playAppliedMap = async (scenario, scenarioId, seed) => {
     // Create + activate a fresh game so the running map reflects the edit. Relying
     // on the player finishing a follow-up picker left the old active game (and old
     // map) in place — this guarantees the new map is live. Menu flag first: the
