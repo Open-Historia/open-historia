@@ -352,13 +352,36 @@ test("on the salvage pass a malformed ledger row is dropped and said, not fatal"
   const notes = salvageDiplomaticLedgerPayload(candidate, { world });
   assert.deepEqual(notes, [
     "Relation update France ↔ Atlantis was dropped: \"Atlantis\" is not a polity on this map.",
-    "Agreement eu-turkey-statement start was dropped: fewer than two of its parties are polities on this map.",
     "Agreement phantom-pact end was dropped: no agreement \"phantom-pact\" exists to end.",
+    "Agreement eu-turkey-statement start was dropped: fewer than two of its parties are polities on this map.",
   ]);
   assert.equal(typeof candidate.relationUpdates, "string", "rewritten in the form it arrived");
   assert.equal(candidate.relationUpdates.split("\n").length, 1, "the good relation stays");
   assert.equal(candidate.agreementUpdates.split("\n").length, 1, "the good agreement stays");
   assert.equal(validateDiplomaticLedgerPayload(candidate, { world, allowNativeBinding: true }), "", "and what is left validates without a retry");
+});
+
+// Salvage runs BEFORE the validator on the final attempt (the only attempt
+// while requests are saved), and it used to drop exactly the rows the
+// validator's lifecycle repairs exist to fix: the pact the story ended stayed
+// active, and a re-signed or re-negotiated one lost its change.
+test("on the salvage pass the lifecycle repairs run before anything is dropped", () => {
+  const salvaged = (ledger, agreementUpdates) => {
+    const candidate = { events: breach(), relationUpdates: "", agreementUpdates };
+    assert.deepEqual(salvageDiplomaticLedgerPayload(candidate, { world: ledger }), [], "nothing dropped");
+    assert.equal(validateDiplomaticLedgerPayload(candidate, { world: ledger, allowNativeBinding: true }), "");
+    return decodeAgreementUpdates(candidate.agreementUpdates);
+  };
+
+  const reaimed = salvaged(allied(), endRow("dual-alliance-pact", "alliance", "Russia,France"));
+  assert.deepEqual(reaimed.map((update) => [update.id, update.op]), [["franco-russian-alliance", "end"]], "an end on an invented id is re-aimed");
+
+  const suspended = allied([{ ...allied().agreements[0], status: "suspended" }]);
+  const resumed = salvaged(suspended, "franco-russian-alliance~start~alliance~France,Russia~1~Franco-Russian Alliance~Mutual military assistance against Germany");
+  assert.deepEqual(resumed.map((update) => update.op), ["resume"], "re-signing a suspended pact resumes it");
+
+  const updated = salvaged(allied(), "franco-russian-alliance~start~alliance~France,Russia~1~Franco-Russian Alliance~Mutual assistance extended to Austria-Hungary");
+  assert.deepEqual(updated.map((update) => update.op), ["update"], "restating an active pact with new terms updates it");
 });
 
 test("the salvage pass leaves a clean answer exactly as it was", () => {

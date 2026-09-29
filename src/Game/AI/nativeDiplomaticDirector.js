@@ -952,13 +952,14 @@ const LIFECYCLE_OPS_BY_STATUS = {
 // `start` in the same response creates is not unknown to the model and is left
 // for validation as before; it must never be re-aimed at an older instrument.
 const normalizeUnknownAgreementLifecycle = (candidate, world) => {
-  if (!candidate || typeof candidate !== "object") return { rewritten: 0, dropped: 0 };
+  if (!candidate || typeof candidate !== "object") return { rewritten: 0, dropped: 0, droppedUpdates: [] };
 
   const wasString = typeof candidate?.agreementUpdates === "string";
   const updates = decodeAgreementUpdates(candidate?.agreementUpdates);
   const existing = agreementMapFromWorld(world);
   const startedHere = new Set(updates.filter((update) => update.op === "start").map((update) => clean(update.id)));
   const output = [];
+  const droppedUpdates = [];
   let rewritten = 0;
   let dropped = 0;
 
@@ -995,6 +996,7 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
     }
 
     dropped += 1;
+    droppedUpdates.push(update);
     console.warn(
       `[OH diplomacy lifecycle repair] dropped ${update.op} for unknown agreement ${id}: ` +
       (matches.length > 1
@@ -1005,7 +1007,7 @@ const normalizeUnknownAgreementLifecycle = (candidate, world) => {
   }
 
   candidate.agreementUpdates = wasString ? encodeAgreementUpdates(output) : output;
-  return { rewritten, dropped };
+  return { rewritten, dropped, droppedUpdates };
 };
 
 // A malformed ledger row on the SALVAGE pass: dropped, and said, instead of
@@ -1042,6 +1044,24 @@ export const salvageDiplomaticLedgerPayload = (candidate, { world } = {}) => {
   }
   if (keptRelations.length !== relations.length) {
     candidate.relationUpdates = relationsWereString ? encodeRelationUpdates(keptRelations) : keptRelations;
+  }
+
+  // The validator's lifecycle repairs first, exactly as on the strict pass: a
+  // start re-signing a suspended pact becomes resume, one restating an active
+  // pact with new terms becomes update, and an end aimed at an invented id is
+  // re-aimed at the one recorded pact it fits. Salvage runs before the
+  // validator, so dropping these rows first threw the repairs' work away: the
+  // pact the story ended stayed active. Only what they cannot place goes below.
+  // They work on a copy, adopted only when they changed something, so a clean
+  // answer is left exactly as it arrived.
+  const lifecycle = { agreementUpdates: candidate.agreementUpdates };
+  const duplicateStarts = normalizeDuplicateAgreementStarts(lifecycle, world);
+  const unknownIds = normalizeUnknownAgreementLifecycle(lifecycle, world);
+  if (duplicateStarts.repaired || duplicateStarts.dropped || unknownIds.rewritten || unknownIds.dropped) {
+    candidate.agreementUpdates = lifecycle.agreementUpdates;
+  }
+  for (const update of unknownIds.droppedUpdates) {
+    notes.push(`Agreement ${clean(update.id)} ${clean(update.op)} was dropped: no agreement "${clean(update.id)}" exists to ${clean(update.op)}.`);
   }
 
   const agreementsWereString = typeof candidate.agreementUpdates === "string";
