@@ -13,9 +13,9 @@ Everything below is in `src/Game/Map/` unless noted.
 | Child | File | Renders | Primary data in |
 |---|---|---|---|
 | `<Nations>` | `Nations.jsx` | Country/region fills, borders, disputed stripes, country/owner labels | `world.json` + `colors.json` + PMTiles + `regionsGeojson` |
-| `<Cities>` | `Cities.jsx` | City symbols (★/◆/■) + labels | `cities.pmtiles` (stock) or `citiesGeojson` (custom) |
+| `<Cities>` | `Cities.jsx` | City circles, capital stars (★) and labels | `cities.pmtiles` (stock) or `citiesGeojson` (custom) |
 | `<MarkersLayer>` | `MarkersLayer.jsx` | Built structures (bases, silos, embassies…) | `world.markers` |
-| `<Units>` | `Units.jsx` | Troop counters (circle + glyph + strength) | `unitsController` (from `world.units`) |
+| `<Units>` | `Units.jsx` | Troop counters (circle + flag or type glyph + short name), heading lines, patrol rings | `unitsController` (from `world.units`) |
 | `<GlobeEffects>` | `GlobeEffects.jsx` | Sun, stars, day/night lighting, auto-rotation (globe only) | wall-clock sun math |
 | `<RegionPopup>` / `<CountryInfoPanel>` / `<UnitPopup>` / `<FeaturePopup>` | `../Selection/*` | Selection popups | click events from `Nations.jsx` |
 
@@ -283,23 +283,57 @@ Both label sources feed `type:"symbol"` layers (`country-labels`, `country-curve
 
 ### Cities — `Cities.jsx`
 
-`<Cities>` picks a path from `world.customCities`:
+`<Cities>` picks a path from `world.customCities` (`resolveCityLayerSource`, `runtime/cityFeatures.js`). Custom scenarios never show the 70k modern database (anachronistic), and while their own set loads they render nothing rather than flash modern names; a custom set that cannot be read falls back to the stock cities. Both paths draw the same three layers into `cities-source`, all placed under `country-curved-labels`:
 
-| Path | Source | Visibility filter | Sort |
-|---|---|---|---|
-| `StockCities` | `cities.pmtiles` (vector, layer `cities`) | `populationFilter` — capitals always; else population thresholds that step down as you zoom (2.5M at z<5 → 100k at z8+) | by population |
-| `CustomCities` | `citiesGeojson` (geojson) | `customTierFilter` — authored tier: 4=capital, 3=major, 2=city (z≥4.3), 1=town (z≥5.8) | `customSortKey` (tier then population) |
+| Layer | Type | Draws |
+|---|---|---|
+| `cities-shapes` | circle | every city but capitals; radius, colour and opacity rise with the city's rank |
+| `cities-capitals` | symbol | a gold `★` (`rgba(228, 185, 61, 0.99)`, dark halo) for capitals, always on top of placement (`text-allow-overlap`) |
+| `cities-labels` | symbol | the name (`Open Sans Semibold`, white with a dark halo, variable anchor), capitals slightly larger |
 
-Custom scenarios never show the 70k modern database (anachronistic), and while the custom set loads they render nothing rather than flash modern names. Both paths use the same visual language and the same two layers (`minzoom 3.4`):
+**Stock** (`cities.pmtiles`, source-layer `cities`): a city ranks by population — the tile's figure, or the one in `world.cityPopulations` (below). Capitals (`capital: "primary"`) always show; the others must be larger than a threshold that steps down as you zoom in (filters in `cityLayerExpressions.js`):
 
-- `cities-shapes` — a glyph per city: `★` capital / `◆` major / `■` other (transparent text, white halo, so only the outline shows).
-- `cities-labels` — the city name (`Open Sans Semibold`, white with dark halo, variable anchor).
+| | Before the first step | Steps |
+|---|---|---|
+| `cities-shapes` (`minzoom 3.4`, `populationFilter`) | 3,000,000 | 1.5M at z5.25, 750k at z6.25, 350k at z7.25, 150k at z8.25 |
+| `cities-labels` (`minzoom 3.7`, `populationLabelFilter`) | 4,000,000 | 2M at z5.5, 1M at z6.5, 500k at z7.5, 250k at z8.5 |
 
-A city in the scenario's `cities.geojson` may carry its **population by year** — a `populationByYear` object (`{"1950": 3400000}`, BC years negative), rows of `{year, population}`, or Natural Earth's flat `POP1950`-style fields (`src/runtime/cityPopulation.js`). `Cities.jsx` redraws those cities once a game year with the figure for the year (straight between the two years around it, the nearest year's outside them); the city card and the AI's city lookups read it for the exact date. A population the AI sets (`markerOps` `population` → `world.cityPopulations`), or the GM changes by hand in the Map Feature Editor, wins from then on, and the series is no longer read for that city.
+Circle size, colour and label opacity step at 2.5M and 1M; the sort keys put capitals, then larger cities, first.
+
+**Custom** (`citiesGeojson`): a city ranks by its authored tier (`_ohTier` or `tier`: 4 capital-class, 3 major city, 2 city, 1 town; `_ohCapital` marks a capital), since historical populations sit far below modern thresholds (Paris in 1200 held ~50k):
+
+| | Always | Tier ≥ 3 | Tier ≥ 2 | Everything |
+|---|---|---|---|---|
+| `cities-shapes` (`minzoom 2.65`, `customTierFilter`) | capitals, tier 4 | z4.7 | z5.8 | z7.0 |
+| `cities-labels` (`minzoom 3.0`, `customLabelFilter`) | capitals, tier 4 | z5.0 | z6.5 | z8.0 |
+
+`customSortKey` orders labels by capital, tier, then population.
+
+A city in the scenario's `cities.geojson` may carry its **population by year** — a `populationByYear` object (`{"1950": 3400000}`, BC years negative), rows of `{year, population}`, or Natural Earth's flat `POP1950`-style fields (`src/runtime/cityPopulation.js`). `Cities.jsx` redraws those cities once a game year with the figure for the year (straight between the two years around it, the nearest year's outside them); the city card and the AI's city lookups read it for the exact date. A population the AI sets (`markerOps` `population` → `world.cityPopulations`), or the GM changes by hand in the Map Feature Editor, wins from then on, and the series is no longer read for that city. On stock cities it decides **whether** a city shows as well as how it looks: a town grown into a city appears where cities do, and a city emptied to 0 leaves the map. The tiles keep a city's original name, so a figure set after an AI rename (`world.cityRenames`) is matched back to it (`cityPopulationOverridesByTileName`).
 
 ### Markers (built structures) — `MarkersLayer.jsx`
 
-Fed from `world.markers` (structures founded during play — bases, silos, embassies…). Each valid marker (`Number.isFinite(lng/lat) && name`) becomes a Point feature. Shape by keyword: `MILITARY_KIND` regex → `▲`, else `■`. Colour by owner via `ownerColorString(colorMap, ownerCode)` (from `getNationColors`; unowned = neutral parchment `rgb(226,222,205)`). Two layers: `markers-shapes` (glyph, owner-coloured) and `markers-labels` (`minzoom 2.6`).
+Fed from `world.markers` (structures founded during play or placed in the Workshop — bases, silos, embassies…). Each marker with a finite position and a name becomes a Point feature in `markers-source`. `getMarkerPresentation` (`vnext/presentationPolicy.js`) reads its kind and name for a family and glyph, and a priority:
+
+| Family | Glyph | Priority | Matches (kind or name) |
+|---|---|---|---|
+| settlement | `●` | 92 | capital, city, town… |
+| military | `▲` | 84 | base, fort, silo, missile, airfield, headquarters… |
+| resource | `◆` | 70 | mine, oilfield, deposit… |
+| infrastructure | `■` | 68 | port, rail, airport, pipeline… |
+| industry / science | `✦` | 64 | factory, laboratory, reactor… |
+| diplomatic | `◇` | 58 | embassy, consulate… |
+| landmark (default) | `•` | 46 | anything else |
+
+Strategic wording (national, strategic, nuclear, capital…) adds 7; status moves it (damaged +4, planned −10, inactive −12, abandoned −18, destroyed −24). The priority picks a visibility tier, and each tier has its own pair of layers:
+
+| Tier | Priority | Shapes (`markers-shapes-<tier>`) from | Labels (`markers-labels-<tier>`) from |
+|---|---|---|---|
+| `strategic` | ≥ 82 | z3.0 | z3.8 |
+| `regional` | ≥ 62 | z4.2 | z5.0 |
+| `local` | below | z5.8 | z6.6 |
+
+A glyph takes its owner's colour as the territory shows it (`ownerColors.js`, §5), neutral parchment `rgb(226, 222, 205)` when unowned; its lifecycle status sets the opacity (1 active down to 0.62 destroyed). The palette is re-read on `oh:colors-updated` and `oh:active-game-changed`.
 
 ---
 
@@ -307,15 +341,17 @@ Fed from `world.markers` (structures founded during play — bases, silos, embas
 
 ### Render — `Units.jsx`
 
-`units-source` (geojson) is fed from `unitsController.getUnits()`. Each unit → a Point feature with a `TYPE_GLYPH` (`infantry:I, armor:A, air:F, naval:N, artillery:G, garrison:C`) and an owner colour. Three stacked layers:
+`units-source` (geojson) is declared empty and filled with `setData` from `unitsController.getUnits()`; positions tween over ~1.2 s outside React. Each unit is a Point feature with its owner's colour (§5), the owner's flag icon where one resolves (`unitFlagIcons.js`), a `TYPE_GLYPH` fallback (`infantry:I, armor:A, air:F, naval:N, artillery:G, garrison:C`) and a two-word label (`shortUnitLabel`). When MapLibre rebuilds the style (3D Terrain, a restored WebGL context) the source comes back new and empty; the layer's `styledata` handler refills it and re-adds the flag icons.
 
-| Layer | Type | Encodes |
-|---|---|---|
-| `units-fill` | circle | owner colour; radius scales with zoom |
-| `units-icons` | symbol | the type glyph |
-| `units-strength` | symbol | numeric strength, offset below (`minzoom 3`) |
+| Layer | Source | Type | Encodes |
+|---|---|---|---|
+| `units-heading` | `units-orders-source` | line | a dashed line to a march's destination (`minzoom 3`) |
+| `units-station` | `units-orders-source` | line | a patrol's station ring |
+| `units-fill` | `units-source` | circle | owner colour and status; smaller for a covert contact |
+| `units-icons` | `units-source` | symbol | the flag, or the type glyph without one |
+| `units-name` | `units-source` | symbol | the short name under the counter (`minzoom 3`); strongest keeps its label on collision |
 
-Status drives styling — **pending** (player-requested, not yet AI-confirmed) units are translucent (`circle-opacity 0.32`) with a blue stroke; **moving** = amber stroke; **engaged** = red stroke; else white.
+Status drives styling — **pending** (player-requested, not yet AI-confirmed) units are translucent (`circle-opacity 0.32`) with a blue stroke; a **covert** contact is fainter and smaller; **moving** = amber stroke; **engaged** = red stroke; else white.
 
 ### Controller — `unitsController.js`
 
@@ -332,7 +368,7 @@ Player deploy is purely local **and** queues a machine-readable `action` (via `q
 The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMode()`:
 
 - **deploy mode** intercepts the click as a *target* (`deployUnit`), then `clearInteractionMode()`; the admin placement tool (`placeUnitAdmin`) rides the same dispatcher.
-- **normal click** priority: unit (`units-fill`) → feature (`markers-shapes` > `cities-shapes`/`cities-labels`) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
+- **normal click** priority: unit (`units-fill`) → feature (the `markers-shapes-*` tiers, then `cities-shapes` / `cities-capitals`; city text is not queried, so a big label cannot steal a province click) → region. Region query uses `["custom-regions-fill","custom-regions-fill-far"]` on drawn-geometry maps but `["custom-regions-fill","regions-fill"]` on re-ownership maps (so a click on fantasy ocean resolves to nothing, not the leftover real country underneath — `hasDrawnGeometry`). The resolved region is handed to `onRegionSelected` with the **owner name** resolved (via `ownerLookupRef`), the underlying GADM `gid0` kept as a flag fallback.
 
 The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system).
 
@@ -344,11 +380,11 @@ Active only when `projection === "globe"` (`active` prop). It drives four things
 
 - **Real sun:** `sunWorldPosition = subsolarPoint()` — the actual subsolar point for the current wall clock (seasonal declination + Earth's rotation). Moving the camera changes perspective without sliding light across the countries; the terminator matches the planet outside your window. `LIVE_SUN_REFRESH_MS = 60_000` refreshes it even when the map is fully idle.
 - **Auto-rotation:** `ROTATION_DEG_PER_MS = 360 / (10 min)`. Disabled by the `disableIdleRotation` map setting, and interrupted by any drag/zoom/pointerdown.
-- **Aggressive idle throttling (the main perf lever):** while actively dragging/zooming, sun+lighting+stars redraw at 60 fps; while idle (including auto-rotate) they drop to ~15 fps (`*_FRAME_MS_IDLE`), and the auto-rotate `jumpTo` itself steps at 15 fps (`IDLE_ROTATE_FRAME_MS`) using real elapsed time so rotation *speed* is unchanged. Idle auto-rotate previously forced a full MapLibre re-render + from-scratch lighting repaint 60×/s forever — this was cooking phones.
+- **Aggressive idle throttling (the main perf lever):** while the player drags or zooms, the stars and sun redraw at 25 fps (`CELESTIAL_FRAME_MS_ACTIVE`) and the lighting every frame (`LIGHTING_FRAME_MS_ACTIVE = 0`), or at 30 fps on a phone (`LIGHTING_FRAME_MS_ACTIVE_CONSTRAINED`, `isConstrainedDevice()`), where each redraw is a 48,000-pixel shade on the main thread. While idle (including auto-rotate) both drop to 15 fps (`*_FRAME_MS_IDLE`), and the auto-rotate `jumpTo` itself steps at 15 fps (`IDLE_ROTATE_FRAME_MS`) using real elapsed time so rotation *speed* is unchanged. Idle auto-rotate previously forced a full MapLibre re-render + from-scratch lighting repaint 60×/s forever — this was cooking phones.
 - **Projection morph:** the globe↔mercator morph fades stars/lighting via `projectionTransition` (1 on settled globe, 0 on flat, between only mid-fade). The morph fires no map "move" event, so `isMorphing` forces full-rate redraws during the fade; only the settled globe throttles.
 - **WebGL context loss** is handled: on `webglcontextlost` it cancels the rAF loop and releases the canvases; on restore it resyncs and resets the rotation clock so the first tick doesn't jump the globe by the whole lost interval.
 
-Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globeCelestialCanvas.js` (with `globeLightingPixels.js`, `globeCelestialCanvas.js`, `globeSunMath.js`).
+Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js` (with `globeLightingPixels.js`) and `globeCelestialCanvas.js`.
 
 ---
 
@@ -364,9 +400,9 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | Polity names end at z7.5 | `LABEL_MAX_ZOOM` (every label layer's `maxzoom` and ramp, `Nations.jsx`), `POLITY_TEXT_MAX_ZOOM` (`labels/polityTextLayout.js`) | Names fade over the last half zoom and stop at 7.5; past that the map is provinces and cities |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |
 | No pixel-ratio switch | `pixelRatio={1}` on `<Map>` | R5.0 switched density at z4.5/z5 and hitched at the boundary; one fixed 1× density since R5.1 (§2) |
-| Cities `minzoom 3.4`, city thresholds step by zoom | `Cities.jsx` | Thin out symbols as you zoom out |
+| Cities from z3.4 (stock) / z2.65 (custom), thresholds step by zoom | `Cities.jsx`, `cityLayerExpressions.js` | Thin out symbols as you zoom out (§8) |
 | Label `text-opacity` fades to 0 by z8 | `labelLayerPaint` | Country/owner labels hand the screen to city labels on zoom in |
-| Markers labels `minzoom 2.6` | `MarkersLayer.jsx` | Structure names appear slightly earlier than cities |
+| Structures from z3.0 / z4.2 / z5.8 by tier, labels 0.8 zoom later | `MarkersLayer.jsx` | Strategic sites read at continental zoom, local ones only close up (§8) |
 
 ---
 
