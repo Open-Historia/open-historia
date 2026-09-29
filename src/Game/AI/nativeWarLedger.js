@@ -233,7 +233,7 @@ const firstLinkedDate = (update, events) =>
   linkedEventsForUpdate(update, events)
     .map((event) => normalizeString(event.date))
     .filter((date) => parseIsoDate(date))
-    .sort()[0] || "";
+    .sort(compareGameDates)[0] || "";
 
 const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents = [] }) => {
   const id = normalizeString(update?.id);

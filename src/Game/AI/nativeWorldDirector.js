@@ -941,12 +941,12 @@ const coalesceWorldStorylines = (worldLike) => {
     const startedDates = group
       .map((entry) => normalizeString(entry?.startedDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const lastVisibleDates = group
       .map((entry) => normalizeString(entry?.lastVisibleEventDate))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
 
     const sourceEventIds = [...new Set(
       group.flatMap((entry) => normalizeArray(entry?.sourceEventIds))
@@ -1098,8 +1098,8 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
   if (!nextReview) {
     score += storyline.status === "active" ? 12 : 3;
   } else if (parseIsoDate(nextReview) != null && parseIsoDate(targetDate) != null) {
-    if (nextReview <= originDate) score += 16;
-    else if (nextReview <= targetDate) score += 11;
+    if (parseIsoDate(originDate) != null && compareIso(nextReview, originDate) <= 0) score += 16;
+    else if (compareIso(nextReview, targetDate) <= 0) score += 11;
   }
 
   // Starvation bonus: a lower-ranked but still unresolved process gradually
@@ -2533,7 +2533,7 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = related
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const earliestVisible = relatedDates[0] || "";
     const newestVisible = relatedDates.at(-1) || "";
 
@@ -2628,13 +2628,13 @@ export const applyWorldStorylineUpdates = ({
     const relatedDates = normalizeArray(related)
       .map((event) => normalizeString(event?.date))
       .filter((date) => parseIsoDate(date) != null)
-      .sort();
+      .sort(compareIso);
     const newestVisible = relatedDates.at(-1) || "";
     if (!newestVisible) continue;
 
     const priorVisible = normalizeString(prior?.lastVisibleEventDate);
     const nextVisible =
-      parseIsoDate(priorVisible) == null || newestVisible > priorVisible
+      parseIsoDate(priorVisible) == null || compareIso(newestVisible, priorVisible) > 0
         ? newestVisible
         : priorVisible;
 

@@ -129,6 +129,18 @@ export const compareGameDates = (a, b) => {
   return text(a).localeCompare(text(b));
 };
 
+// The same order for a newest-first list: game dates latest first, still
+// before anything that is not one (swapping the arguments of compareGameDates
+// would put the undated first).
+export const compareGameDatesNewestFirst = (a, b) => {
+  const left = gameDateDayNumber(a);
+  const right = gameDateDayNumber(b);
+  if (left !== null && right !== null) return left === right ? 0 : left > right ? -1 : 1;
+  if (left !== null) return -1;
+  if (right !== null) return 1;
+  return text(b).localeCompare(text(a));
+};
+
 export const gameDateYear = (value) => parseGameDate(value)?.year ?? null;
 
 const ordinal = (n) => {

@@ -1,7 +1,7 @@
 /*! Open Historia — Intervene tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Run: node --test src/Game/AI/intervene.test.js
 //
-// Runs without node_modules: intervene.js imports nothing.
+// Runs without node_modules: intervene.js imports only runtime/gameDates.js.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -74,6 +74,13 @@ test("the closing date is the last kept event's, never before the day after the 
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-21", "same day")], originDate: "2014-04-21", minimumDate: "2014-04-22" }), "2014-04-22");
     assert.equal(closingDateAfterIntervene({ keptEvents: [event("a", "2014-04-30", "x"), event("b", "2014-04-25", "y")], originDate: "2014-04-21" }), "2014-04-30", "the latest date, whatever the order");
     assert.equal(closingDateAfterIntervene({ keptEvents: [], originDate: "2014-04-21" }), "2014-04-21");
+});
+
+test("BC closing dates follow the calendar across a year boundary", () => {
+    const kept = [event("a", "-0218-12-20", "Winter quarters"), event("b", "-0217-01-15", "The thaw")];
+    assert.equal(closingDateAfterIntervene({ keptEvents: kept, originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0217-01-15", "217 BC comes after 218 BC");
+    assert.equal(closingDateAfterIntervene({ keptEvents: [kept[1]], originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0217-01-15", "a later BC year is not before the floor");
+    assert.equal(closingDateAfterIntervene({ keptEvents: [event("c", "-0218-12-10", "Same day")], originDate: "-0218-12-10", minimumDate: "-0218-12-11" }), "-0218-12-11");
 });
 
 test("the receipt names where the player stopped and what never happened", () => {

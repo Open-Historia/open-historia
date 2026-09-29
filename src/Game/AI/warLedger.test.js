@@ -215,3 +215,19 @@ test("an unbindable combat event is reported for unbinding, never for deletion",
   assert.deepEqual(decodeWarUpdates(candidate.warUpdates), [], "no war record was conjured either");
   assert.match(repair.residual, /no event.warId/, "the residual complaint is about the ledger, and is only logged");
 });
+
+test("a war starts on its earliest linked event by the calendar, BC years included", () => {
+  const events = [
+    { id: "e2", date: "-0217-01-15", title: "Carthage marches on Rome", description: "Carthage answers the declaration.", kind: "diplomacy", warId: "war-rome-carthage" },
+    { id: "e1", date: "-0218-12-20", title: "Rome declares war on Carthage", description: "Rome declares war on Carthage.", kind: "diplomacy", warId: "war-rome-carthage" },
+  ];
+  const [start] = decodeWarUpdates("war-rome-carthage~start~Rome~Carthage~1~Declaration of war");
+  const merge = applyWarUpdates({
+    world: { polityOverrides: {}, wars: [] },
+    updates: [{ ...start, eventIds: ["e2", "e1"] }],
+    events,
+    stopDate: "-0217-01-31",
+    round: 2,
+  });
+  assert.equal(merge.wars[0].startedDate, "-0218-12-20", "218 BC comes before 217 BC");
+});

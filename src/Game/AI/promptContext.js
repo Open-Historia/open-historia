@@ -19,7 +19,7 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
-import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
+import { compareGameDates, compareGameDatesNewestFirst, formatGameDateReadable } from "../../runtime/gameDates.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -689,7 +689,8 @@ const sortDiplomaticChatsByRecentActivity = (chats) =>
       hasMemory: Boolean(getLatestDiplomaticMemory(chat)),
     }))
     .sort((left, right) => {
-      const byActivity = right.activity.localeCompare(left.activity);
+      // By the calendar (BC years run backwards as text); dated threads first.
+      const byActivity = compareGameDatesNewestFirst(left.activity, right.activity);
       if (byActivity !== 0) return byActivity;
 
       // On the same in-game date, prefer a thread that already carries durable
@@ -1097,7 +1098,7 @@ export const buildMarkersSummaryText = (
 
   scored.sort((a, b) =>
     b.score - a.score
-    || String(b.touched).localeCompare(String(a.touched))
+    || compareGameDatesNewestFirst(a.touched, b.touched)
     || a.rotation - b.rotation
     || a.index - b.index);
 

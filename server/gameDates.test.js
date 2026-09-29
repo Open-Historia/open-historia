@@ -11,6 +11,7 @@ import {
   addGameDays,
   addGameMonths,
   compareGameDates,
+  compareGameDatesNewestFirst,
   diffGameDays,
   formatGameDateReadable,
   gameDateDaysInMonth,
@@ -74,6 +75,11 @@ test("differences and comparisons follow the calendar, not the text", () => {
   assert.deepEqual(order, ["-0300-01-01", "-0218-03-01", "-218-03-02", "-0001-12-31", "0001-01-01", "2016-01-01"]);
   assert.equal(compareGameDates("-0218-03-01", "-218-03-01"), 0, "spellings of one day are equal");
   assert.deepEqual(["Undated", "2016-01-01", "-0218-03-01"].sort(compareGameDates), ["-0218-03-01", "2016-01-01", "Undated"], "non-dates sort last");
+});
+
+test("newest first runs the calendar backwards and still puts the undated last", () => {
+  const order = ["Undated", "-0218-12-20", "", "-0217-01-15", "2016-01-01"].sort(compareGameDatesNewestFirst);
+  assert.deepEqual(order, ["2016-01-01", "-0217-01-15", "-0218-12-20", "Undated", ""]);
 });
 
 test("calendar months and years step over the missing year zero", () => {

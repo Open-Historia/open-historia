@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildEventHistoryText, selectRankedEvents } from "../src/Game/AI/promptContext.js";
+import { buildChatSummaryText, buildEventHistoryText, selectRankedEvents } from "../src/Game/AI/promptContext.js";
 import { normalizeEvents } from "../src/runtime/gameState.js";
 
 const event = (date, title, extra = {}) => ({ date, title, description: "", ...extra });
@@ -54,4 +54,15 @@ test("a transfer between polities not on the map ranks below one that involves t
   ]);
   const selected = selectRankedEvents(events, { limit: 1, world, currentDate: "2014-03-02" });
   assert.deepEqual(selected.map((entry) => entry.title), ["France takes a province"]);
+});
+
+test("the chat summary leads with the newest thread by the calendar, BC years included, and undated threads last", () => {
+  const chat = (id, a, b, time, text) => ({ id, countries: [{ name: a, code: a }, { name: b, code: b }], messages: [{ role: "leader", speaker: a, text, time }] });
+  const text = buildChatSummaryText([
+    chat("c1", "Rome", "Massalia", "-0218-12-10", "An old promise"),
+    chat("c2", "Rome", "Syracuse", "", "An undated note"),
+    chat("c3", "Carthage", "Rome", "-0217-01-20", "This turn's ultimatum"),
+  ], { limit: 2 });
+  assert.ok(text.indexOf("This turn's ultimatum") >= 0 && text.indexOf("This turn's ultimatum") < text.indexOf("An old promise"));
+  assert.ok(!text.includes("An undated note"));
 });
