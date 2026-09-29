@@ -1713,6 +1713,14 @@ export const INTERACTIVE_EXECUTOR_SCHEMA = {
       maxItems: 5,
       items: nonEmptyTextSchema("One player choice."),
     },
+    // The record of a scene that ends on this move, written with the move
+    // itself: without it, the scene cost a second request (interactiveSummary)
+    // just to condense what this answer had already concluded. Optional; a
+    // resolved answer without them falls back to that request (gameplay.js
+    // resolveInteractiveScene).
+    recordTitle: textSchema("Only when resolved is true: a concise headline for the whole finished interactive event as one campaign timeline event. Empty otherwise."),
+    recordDescription: textSchema("Only when resolved is true: a complete but concise account of the whole interactive event's outcome, as one campaign timeline event. Empty otherwise."),
+    recordImportance: textSchema("Only when resolved is true: the event's importance, normally major. Empty otherwise."),
   },
   required: ["summary", "resolved", "nextChoices"],
   additionalProperties: false,

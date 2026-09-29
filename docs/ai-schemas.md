@@ -270,7 +270,7 @@ The **pregame bootstrap** declares Puppets already standing on the start date in
 | Schema | Fields (required*) |
 |---|---|
 | `interactiveSchema` | `title`*, `premise`*, `opening`*, `choices`* (array, `minItems: 2`, `maxItems: 5`, nonempty items) |
-| `INTERACTIVE_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items) |
+| `INTERACTIVE_EXECUTOR_SCHEMA` (`:519`) | `summary`*, `resolved`* (bool), `nextChoices`* (array `maxItems: 5`, nonempty items), `recordTitle`, `recordDescription`, `recordImportance` (optional: the finished scene's record, filled only when `resolved`; saves the `interactiveSummary` request) |
 | `INTERACTIVE_SUMMARY_SCHEMA` (`:539`) | `title`*, `description`*, `importance`* |
 
 ### 4.9 Small single-purpose schemas

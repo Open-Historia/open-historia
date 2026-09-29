@@ -12832,21 +12832,47 @@ export const setAsideActiveInteractive = async () => {
 
 // The scene's beats written into the record as one event, and the scene closed:
 // how it resolves when the scene decides it has, and how the player ends it
-// early. The one request any resolution costs.
-const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history }) => {
-  const summaryVariables = await buildTemplateVariables(bundle, {
-    interactiveHistory: normalizeArray(history)
-      .map((entry) => `${entry.choice}: ${entry.summary}`)
-      .join("\n"),
-    interactivePremise: interactive.premise || interactive.title || "",
-  });
-  const { generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("interactiveSummary", {
-    fallback: () => ({ description: "", importance: "major", title: "" }),
-    userMessage: "Summarize the finished interactive event into one campaign event as JSON only.",
-    variables: summaryVariables,
-  });
-  const failed = sceneStepFailed(summaryGeneration, "The scene could not be written into the record");
-  if (failed) throw failed;
+// early.
+//
+// A scene that ends on a move usually brings its own record (`record`: the
+// executor's recordTitle / recordDescription / recordImportance), written with
+// the conclusion itself, and costs nothing more. The interactiveSummary request
+// is the fallback: for a scene the player ends early, for an answer that left
+// the record out, and for a scenario whose author wrote their own summary
+// guidance, which only that request carries. That request is also the only one
+// with its own model row and temperature; a scene that brings its record gives
+// those up to save the request.
+const hasAuthoredSummaryGuidance = async () => {
+  const prompts = await loadPromptCatalog().catch(() => null);
+  return Object.keys(prompts?.guidance?.tasks?.interactiveSummary ?? {}).length > 0;
+};
+
+const sceneRecordFrom = (payload) => {
+  const title = normalizeString(payload?.recordTitle);
+  const description = normalizeString(payload?.recordDescription);
+  if (!title || !description) return null;
+  return { title, description, importance: normalizeString(payload?.recordImportance) || "major" };
+};
+
+const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history, record = null, recordGeneration = null }) => {
+  const ownRecord = record && recordGeneration && !(await hasAuthoredSummaryGuidance()) ? record : null;
+  let summaryGeneration = recordGeneration;
+  let summaryPayload = ownRecord;
+  if (!ownRecord) {
+    const summaryVariables = await buildTemplateVariables(bundle, {
+      interactiveHistory: normalizeArray(history)
+        .map((entry) => `${entry.choice}: ${entry.summary}`)
+        .join("\n"),
+      interactivePremise: interactive.premise || interactive.title || "",
+    });
+    ({ generation: summaryGeneration, payload: summaryPayload } = await runJsonTask("interactiveSummary", {
+      fallback: () => ({ description: "", importance: "major", title: "" }),
+      userMessage: "Summarize the finished interactive event into one campaign event as JSON only.",
+      variables: summaryVariables,
+    }));
+    const failed = sceneStepFailed(summaryGeneration, "The scene could not be written into the record");
+    if (failed) throw failed;
+  }
   const lastSummary = normalizeString(normalizeArray(history).at(-1)?.summary);
 
   const interactiveEvent = normalizeGeneratedEvent({
@@ -12959,7 +12985,12 @@ export const advanceActiveInteractive = async (choiceText) => {
   const { generation, payload } = await runJsonTask("interactiveExecutor", {
     lookups: buildTaskLookups(bundle),
     fallback: () => ({ nextChoices: [], resolved: false, summary: "" }),
-    userMessage: "Continue the interactive event as JSON only.",
+    // A move that ends the scene also writes its record, so the scene does not
+    // cost a second request to be condensed (resolveInteractiveScene).
+    userMessage: "Continue the interactive event as JSON only. "
+      + "If this move brings the event to its conclusion (resolved true), also fill recordTitle, recordDescription and recordImportance: "
+      + "the whole finished event condensed into one campaign timeline event, with a concise headline, a complete but concise account of its outcome, and its importance (normally major). "
+      + "Leave them empty while the event goes on.",
     variables,
   });
   const failed = sceneStepFailed(generation, "The scene did not go on");
@@ -12996,6 +13027,8 @@ export const advanceActiveInteractive = async (choiceText) => {
     campaignId,
     interactive,
     history: [...normalizeArray(interactive.history), historyEntry],
+    record: sceneRecordFrom(payload),
+    recordGeneration: generation,
   });
   } finally {
     endSimulation();

@@ -9,8 +9,10 @@
 // in progress (gameplay.js refuses a skip).
 //
 // Costs, said beside the buttons that spend them: playing an offer out is one
-// AI request, each move one more, and ending the scene one more. Letting an
-// offer pass, taking a move back and setting a scene aside cost nothing.
+// AI request and each move one more. Ending the scene yourself is one more; a
+// scene that reaches its own end is usually written up by its last move at no
+// extra cost (gameplay.js resolveInteractiveScene). Letting an offer pass,
+// taking a move back and setting a scene aside cost nothing.
 import React, { useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -263,7 +265,7 @@ export const InteractivePanel = ({ open = true, onClose, onOpenTimeline }) => {
                             <div style={{ alignItems: "center", display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                                 <button type="button" className="oh-tap-row" onClick={begin} disabled={!idle || revealing} style={primaryButton(!idle || revealing)}>Play it out</button>
                                 <button type="button" className="oh-tap-row" onClick={letPass} disabled={!idle} title="Let the moment pass as it happened — free" style={quietButton(!idle)}>Let it pass</button>
-                                <span style={caption}>Playing it out is one AI request; each move is one more, and ending it one more. Letting it pass costs nothing.</span>
+                                <span style={caption}>Playing it out is one AI request, and each move is one more. Ending it yourself is one more; a scene that reaches its own end is usually written up with its last move. Letting it pass costs nothing.</span>
                             </div>
                         </>
                     ) : !finished && (

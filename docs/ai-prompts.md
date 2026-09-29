@@ -326,7 +326,8 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.9 `interactiveSummary` — finished scene → one event
 - **Purpose:** When an interactive event resolves, condense it into a single campaign event.
-- **Prompt:** `tasks.interactiveSummary`. **Entry:** the resolution branch of `advanceActiveInteractive` (`gameplay.js`), then `applySimulationResult` with `mode:"interactive"`.
+- **Prompt:** `tasks.interactiveSummary`. **Entry:** `resolveInteractiveScene` (`gameplay.js`) — `endActiveInteractive`, and the resolution branch of `advanceActiveInteractive` — then `applySimulationResult` with `mode:"interactive"`.
+- **Usually not asked when the scene ends on its own.** The move that resolves a scene brings its own record (`recordTitle`, `recordDescription`, `recordImportance` on `INTERACTIVE_EXECUTOR_SCHEMA`, asked for in the executor's user message), and the scene is written from that at no extra request. This request runs only when the player ends the scene early, when the resolving answer left the record out, or when the scenario's author wrote their own summary guidance (only this request carries it). A scene that brings its record gives up this task's own model row and temperature, to save the request.
 - **Tool/schema:** `submit_interactive_summary` / `INTERACTIVE_SUMMARY_SCHEMA`: `{ title, description, importance }`.
 
 ### 7.10 `pregameHistory` — backstory generator
