@@ -402,7 +402,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         api.serializeRegions() || { type: "FeatureCollection", features: [] },
         d.colors,
       );
-      await onApplyToScenario(seed, { play });
+      // The renames made since the last save, so the scenario's player country
+      // and its name-keyed world records follow them (useMapDocument renamePolity).
+      const renames = d.polityRenames;
+      await onApplyToScenario(seed, { play, renames });
+      d.settlePolityRenames(renames.length);
       // What the author decided about a suggestion's map changes is kept with
       // the scenario only now that the map it decided about is saved into it.
       if (reviewSource) {

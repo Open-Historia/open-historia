@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
-import { renamePolityInDocument } from "../../server/polityRename.js";
+import { findPolityKey, renamePolityInDocument } from "../../server/polityRename.js";
 import { mergeCityMarkers } from "./cityMarkers.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -227,19 +227,33 @@ export const useMapDocument = (initial) => {
   // colour, flag, tag and city marker keyed by the old one follows, and the old
   // name is not kept anywhere (server/polityRename.js). The map's regions are
   // re-keyed by OlMap.renameOwner; MapEditor calls both.
+  //
+  // The scenario's own game and world still use the old key, so every accepted
+  // rename is also logged, in order, as `polityRenames` (session state: not in
+  // the saved document). A scenario save replays the log onto them
+  // (playerCountryAfterSave.js scenarioAfterWorkshopRenames) and then settles it.
   const renamePolity = useCallback((key, nextName) => {
     const from = String(key || "").trim();
     const to = String(nextName || "").trim();
     if (!from || !to) return;
     setDoc((d) => {
       try {
-        return renamePolityInDocument(d, from, to);
+        const renamed = renamePolityInDocument(d, from, to);
+        const fromKey = findPolityKey(d.polities, from) || from;
+        return { ...renamed, polityRenames: [...(Array.isArray(d.polityRenames) ? d.polityRenames : []), { from: fromKey, to }] };
       } catch (error) {
         console.warn("[editor] polity rename refused:", error);
         return d;
       }
     });
     setSaveStatus("dirty");
+  }, []);
+
+  // Drops the first `count` logged renames once a scenario save has applied
+  // them; any made while the save ran stay for the next one.
+  const settlePolityRenames = useCallback((count) => {
+    if (!count) return;
+    setDoc((d) => (Array.isArray(d.polityRenames) ? { ...d, polityRenames: d.polityRenames.slice(count) } : d));
   }, []);
 
   const removePolity = useCallback((key) => {
@@ -460,6 +474,8 @@ export const useMapDocument = (initial) => {
     setPolities,
     upsertPolity,
     renamePolity,
+    polityRenames: Array.isArray(doc.polityRenames) ? doc.polityRenames : [],
+    settlePolityRenames,
     removePolity,
     removePolities,
     importPolityRoster,

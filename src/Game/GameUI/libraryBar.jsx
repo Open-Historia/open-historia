@@ -64,7 +64,7 @@ import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
-import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
+import { playerCountryAfterSave, scenarioAfterWorkshopRenames } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
@@ -3066,13 +3066,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   // player SEES the map right away — the stock country-level renderer can't show
   // per-region ownership, so every applied map ships its geometry and renders via
   // the custom GeoJSON layer.
-  const applyMapToScenario = async (scenario, seed, { play = true } = {}) => {
+  const applyMapToScenario = async (scenario, seed, { play = true, renames = [] } = {}) => {
     if (!scenario || !seed) return;
     const scenarioId = scenario.id;
 
     const details = await loadScenarioDetails(scenarioId);
-    const currentWorld = details?.data?.world ?? {};
-    const currentGame = details?.data?.game ?? {};
+    // The countries renamed in the Workshop since its last save: the player
+    // country and the world's name-keyed records follow them before the map
+    // is written (playerCountryAfterSave.js scenarioAfterWorkshopRenames).
+    const { world: currentWorld, game: currentGame } = scenarioAfterWorkshopRenames(
+      details?.data?.world ?? {},
+      details?.data?.game ?? {},
+      renames,
+    );
 
     // A Workshop that has not finished loading the scenario's map holds an empty
     // document, and writing that over a scenario with territory is never what a
@@ -3137,6 +3143,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     // reopening the Workshop resurrects the old world.json and a later ordinary
     // scenario save can write the stale basemap back.
     setEditorDetails(savedScenarioDetails);
+    // The drawer's Country field too, when it still shows the country the save
+    // replaced; a later drawer save would otherwise write the old name back.
+    const previousCountry = details?.data?.game?.country ?? "";
+    const savedCountry = savedScenarioDetails?.data?.game?.country;
+    if (typeof savedCountry === "string" && savedCountry !== previousCountry) {
+      setEditorState((current) => (current && current.country === previousCountry ? { ...current, country: savedCountry } : current));
+    }
 
     await uploadScenarioAsset(
       scenarioId,
