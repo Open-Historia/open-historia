@@ -345,7 +345,7 @@ import {
   describeLeaderStanding,
   describeReputationStanding,
   describeTerritorialRows,
-  describeTerritoryFor,
+  describeTerritoryForConversation,
   territorialControlRows,
 } from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
@@ -12278,7 +12278,7 @@ export const runChatActionBatch = async ({
       describeLeaderStanding(bundle.world, { player, speakers: aiParticipants }),
       // The regions where any of them is the lawful owner, the holder or a
       // claimant and those differ, as a one-to-one leader is told.
-      describeTerritoryFor(bundle.world, await loadRegionCatalog().catch(() => []), [player, ...aiParticipants]),
+      await describeTerritoryForConversation(bundle.world, loadRegionCatalog, [player, ...aiParticipants]),
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
       institutionLifecyclePrompt,
       formalInstitutionPrompt,

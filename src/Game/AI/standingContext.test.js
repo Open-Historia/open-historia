@@ -19,6 +19,8 @@ import {
   describeStatSheet,
   describeTerritorialRows,
   describeTerritoryFor,
+  describeTerritoryForConversation,
+  hasTerritorialRecords,
   otherRecordedReputations,
   recordedReputation,
   reputationOf,
@@ -187,4 +189,38 @@ test("a conversation's list is bounded", () => {
   const text = describeTerritoryFor({ regionOwnershipOverrides: many, regionSovereigntyOverrides: Object.fromEntries(Object.keys(many).map((id) => [id, "Homeland"])) }, Array.from({ length: 40 }, (_unused, index) => ({ id: `R.${index}`, name: `Region ${index}`, country: "Homeland" })), ["Homeland"]);
   assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, CONVERSATION_TERRITORIAL_ROWS);
   assert.match(text, /\(\+16 more non-normal territorial states omitted\)$/);
+});
+
+// The advisor, a leader and the group-chat batch hold the world as it is
+// stored, where an older save can file a region's holder under a GADM code or
+// a renamed polity's display name. The jump reads the rows through
+// normalizeWorldState, which folds those onto the owner's name; a conversation
+// must too, or its exact-name filter drops the row.
+test("a conversation reads the rows from the world as the jump does, owners folded", async () => {
+  const stored = {
+    polityOverrides: { Germany: { code: "Germany", name: "Third Reich" } },
+    // Occupied by Germany under its display name; claimed by France under its code.
+    regionOwnershipOverrides: { "POL.1_1": "Third Reich" },
+    regionSovereigntyOverrides: { "POL.1_1": "Poland" },
+    regionClaimants: { "ESP.1_1": ["FRA"] },
+  };
+  const catalog = [
+    { id: "POL.1_1", name: "Danzig", country: "Poland" },
+    { id: "ESP.1_1", name: "Catalonia", country: "Spain" },
+  ];
+  assert.equal(describeTerritoryFor(stored, catalog, ["Germany"]), "", "unfolded, the display name hides the row");
+  const asked = [];
+  const loadCatalog = async () => { asked.push(true); return catalog; };
+  const german = await describeTerritoryForConversation(stored, loadCatalog, ["Germany"]);
+  assert.match(german, /- Danzig \(POL\.1_1\): sovereign Poland; controller Germany/);
+  assert.doesNotMatch(german, /Catalonia/);
+  assert.match(await describeTerritoryForConversation(stored, loadCatalog, ["France"]), /- Catalonia \(ESP\.1_1\): sovereign Spain; controller Spain; active claimants\/contenders France/);
+  assert.equal(asked.length, 2);
+
+  // A world with nothing recorded never loads the catalog.
+  assert.equal(hasTerritorialRecords({ regionClaimants: {} }), false);
+  assert.equal(await describeTerritoryForConversation({}, loadCatalog, ["Germany"]), "");
+  assert.equal(asked.length, 2);
+  // A catalog that fails to load still gives the rows, by region id.
+  assert.match(await describeTerritoryForConversation(stored, async () => { throw new Error("offline"); }, ["Germany"]), /- POL\.1_1 \(POL\.1_1\): sovereign Poland; controller Germany/);
 });

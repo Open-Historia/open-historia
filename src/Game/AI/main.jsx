@@ -112,7 +112,7 @@ import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
-import { describeLeaderStanding, describeOurFigures, describeTerritoryFor } from "./standingContext.js";
+import { describeLeaderStanding, describeOurFigures, describeTerritoryForConversation } from "./standingContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -3202,9 +3202,9 @@ async function buildAdvisorSystemPrompt() {
     // The regions the player lawfully owns, holds or claims where those differ
     // (standingContext.js): "is it ours or only occupied?" answered from the
     // ledgers the map is drawn from. Empty in a world with no such region.
-    const advisorTerritory = describeTerritoryFor(
+    const advisorTerritory = await describeTerritoryForConversation(
         worldData,
-        await loadRegionCatalog().catch(() => []),
+        loadRegionCatalog,
         [gameData?.country || ""],
     );
     const directives = [
@@ -3366,7 +3366,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // owner, the holder or a claimant and those differ: a claim to press, an
     // occupation to protest. Empty when there are none.
     const territory = speaker
-        ? describeTerritoryFor(worldData, await loadRegionCatalog().catch(() => []), [speaker, playerCountry || gameData?.country || ""])
+        ? await describeTerritoryForConversation(worldData, loadRegionCatalog, [speaker, playerCountry || gameData?.country || ""])
         : "";
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).

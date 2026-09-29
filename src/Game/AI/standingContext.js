@@ -21,6 +21,7 @@
 
 import { buildCompactEconomicContext, normalizeCountryStatSheet, normalizeCountryStatsHistory } from "../../runtime/countryStats.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { normalizeWorldState } from "../../runtime/gameState.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 
@@ -146,7 +147,10 @@ export const describeStatSheet = (sheetInput, name = "") => {
 // chart of change over time plots real points.
 export const STAT_HISTORY_ROWS = 6;
 export const describeStatHistory = (world, name, limit = STAT_HISTORY_ROWS) => {
-  const samples = normalizeCountryStatsHistory(asObject(world?.countryStatsHistory))[asText(name)] ?? [];
+  // This country's series only: the advisor asks on every message, and the
+  // other polities' histories are not needed to read one.
+  const key = asText(name);
+  const samples = normalizeCountryStatsHistory({ [key]: asObject(world?.countryStatsHistory)[key] })[key] ?? [];
   return samples.slice(-Math.max(0, limit)).map((sample) => {
     const values = [
       field("GDP-eq", sample.gdp, (number) => `€${compactNumber(number)}`),
@@ -263,4 +267,23 @@ export const describeTerritoryFor = (world, catalog, polities) => {
     "Where the lawful owner (sovereign) and the holder on the ground (controller) differ, or others press a claim. Occupation is not annexation: a region held but not ceded still belongs to its sovereign.",
     describeTerritorialRows(rows, { maxRows: CONVERSATION_TERRITORIAL_ROWS }),
   ].join("\n");
+};
+
+// Does the world record any change of control, sovereignty or claim at all?
+// A fresh game does not, and then nothing below needs the region catalog.
+export const hasTerritorialRecords = (world) =>
+  [world?.regionOwnershipOverrides, world?.regionSovereigntyOverrides, world?.regionClaimants]
+    .some((ledger) => Object.keys(asObject(ledger)).length > 0);
+
+// describeTerritoryFor from the world as it is stored, which is how the
+// advisor, a leader and the group-chat batch hold it. The ledgers' owners are
+// folded on read (gameState.js normalizeWorldState): an older save can file a
+// region under a GADM code or a polity's era display name, and the rows are
+// matched to the conversation's polities by exact name, so they are read
+// through the same normalisation the jump's rows are. `loadCatalog` is asked
+// only when there is something to describe.
+export const describeTerritoryForConversation = async (world, loadCatalog, polities) => {
+  if (!hasTerritorialRecords(world)) return "";
+  const catalog = await Promise.resolve().then(loadCatalog).catch(() => []);
+  return describeTerritoryFor(normalizeWorldState(world), catalog, polities);
 };
