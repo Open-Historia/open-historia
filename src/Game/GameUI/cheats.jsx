@@ -59,6 +59,7 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
 import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { polityNameInUse } from "../../runtime/gmPolityNames.js";
+import { changedEditorFields, countryStatPatchFromForm, editorStateChanged } from "./countryEditorStats.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -592,14 +593,6 @@ const notifyCitiesUpdated = () => {
     }
 };
 
-const editorNumber = (value, { min = -Infinity, max = Infinity, label = "Value" } = {}) => {
-    if (value === "" || value === null || value === undefined) return null;
-    const number = Number(value);
-    if (!Number.isFinite(number)) throw new Error(`${label} must be a number.`);
-    if (number < min || number > max) throw new Error(`${label} must be between ${min} and ${max}.`);
-    return number;
-};
-
 const editorFieldStyle = {
     background: "rgba(0,0,0,0.22)",
     border: "1px solid rgba(255,255,255,0.11)",
@@ -673,15 +666,8 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                 const gdp = Number(sheet?.economy?.gdp);
                 const perCapita = Number(sheet?.economy?.gdpPerCapita);
 
-                setBaseline({
-                    sheet,
-                    componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
-                    perCapita: Number.isFinite(perCapita) ? perCapita : null,
-                });
-                setPoliticsForm(politicalEditorStateFromWorld(world, target));
-                setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
-                setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
-                setForm({
+                const loadedPolitics = politicalEditorStateFromWorld(world, target);
+                const loadedForm = {
                     name: polity.name || nameOf.get(target) || target,
                     color,
                     capital: sheet?.capital || "",
@@ -706,7 +692,20 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                     agriculture: sheet?.gdpBreakdown?.agriculture ?? "",
                     industry: sheet?.gdpBreakdown?.industry ?? "",
                     services: sheet?.gdpBreakdown?.services ?? "",
+                };
+                // What the form loaded with, so a Save writes only what the
+                // player changed (countryEditorStats.js).
+                setBaseline({
+                    sheet,
+                    componentCount: Array.isArray(sheet?.territorialComponents) ? sheet.territorialComponents.length : 0,
+                    perCapita: Number.isFinite(perCapita) ? perCapita : null,
+                    form: loadedForm,
+                    politics: loadedPolitics,
                 });
+                setPoliticsForm(loadedPolitics);
+                setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
+                setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
+                setForm(loadedForm);
             })
             .catch((error) => {
                 if (!cancelled) setStatus(`Failed: ${error.message}`);
@@ -827,8 +826,12 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
 
         const world = await readWorldState({ force: true });
         const existing = world.polityOverrides?.[target] ?? {};
-        const requestedName = String(form.name ?? "").trim();
-        const colorHex = String(form.color ?? "").trim();
+        // Only what the player changed since the form loaded: a turn may have
+        // moved the rest meanwhile, and writing the form back undid it.
+        const changed = changedEditorFields(form, baseline?.form);
+        const politicsChanged = editorStateChanged(politicsForm, baseline?.politics);
+        const requestedName = changed.has("name") ? String(form.name ?? "").trim() : "";
+        const colorHex = changed.has("color") ? String(form.color ?? "").trim() : "";
         const nextName = requestedName || existing.name || nameOf.get(target) || target;
         const aliases = [...new Set([
             ...(Array.isArray(existing.aliases) ? existing.aliases : []),
@@ -849,8 +852,9 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         // Political World v2 is the sole political authority. The editor writes
         // directly into world.politicalActors and never creates a parallel
         // "country politics" copy inside Stats. Hidden/derived PWv2 fields not
-        // exposed by this surface are preserved by the bridge.
-        const nextPoliticalActor = applyPoliticalEditorStateToWorld(world, target, politicsForm);
+        // exposed by this surface are preserved by the bridge. Left alone when
+        // the political form was not touched.
+        const nextPoliticalActor = politicsChanged ? applyPoliticalEditorStateToWorld(world, target, politicsForm) : null;
         setPoliticsDebug(politicalDebugSnapshotFromWorld(world, target));
         setDecisionContextText(buildPoliticalDecisionContext(world, target, { maxChars: 12000 })?.text || "");
 
@@ -865,63 +869,10 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
         };
 
         let nextSheet = world.countryStats?.[target] ?? null;
-        if (hasComponentBaseline) {
-            const populationM = editorNumber(form.populationM, { min: 0.001, max: 20000, label: "Population (millions)" });
-            const gdpB = editorNumber(form.gdpB, { min: 0.001, max: 1000000, label: "GDP (billions)" });
-            const stability = editorNumber(form.stability, { min: 0, max: 100, label: "Stability" });
-            const gdpGrowth = editorNumber(form.gdpGrowth, { min: -1000, max: 1000, label: "GDP growth" });
-            const inflation = editorNumber(form.inflation, { min: 0, max: 1000, label: "Inflation" });
-            const unemployment = editorNumber(form.unemployment, { min: 0, max: 100, label: "Unemployment" });
-            const publicDebt = editorNumber(form.publicDebt, { min: 0, max: 1000, label: "Public debt" });
-            const budgetBalance = editorNumber(form.budgetBalance, { min: -1000, max: 1000, label: "Budget balance" });
-
-            const indexPatch = {};
-            for (const [key, label] of [
-                ["sovereignty", "Sovereignty"],
-                ["foodAutonomy", "Food autonomy"],
-                ["energyAutonomy", "Energy autonomy"],
-                ["economicIndependence", "Economic independence"],
-                ["internalSecurity", "Internal security"],
-                ["internationalReputation", "International reputation"],
-            ]) {
-                const value = editorNumber(form[key], { min: 0, max: 100, label });
-                if (value != null) indexPatch[key] = value;
-            }
-
-            const agriculture = editorNumber(form.agriculture, { min: 0, max: 100, label: "Agriculture share" });
-            const industry = editorNumber(form.industry, { min: 0, max: 100, label: "Industry share" });
-            const services = editorNumber(form.services, { min: 0, max: 100, label: "Services share" });
-            const hasAnyBreakdown = [agriculture, industry, services].some((value) => value != null);
-            if (hasAnyBreakdown && [agriculture, industry, services].some((value) => value == null)) {
-                throw new Error("Set all three GDP-sector shares together.");
-            }
-
-            const patch = {
-                ...(String(form.capital ?? "").trim() ? { capital: String(form.capital).trim() } : {}),
-                ...(String(form.continent ?? "").trim() ? { continent: String(form.continent).trim() } : {}),
-                ...(String(nextPoliticalActor?.government?.form ?? "").trim() ? { government: String(nextPoliticalActor.government.form).trim() } : {}),
-                ...((nextPoliticalActor?.government?.headOfGovernment || nextPoliticalActor?.government?.headOfState || nextPoliticalActor?.leader)
-                    ? { leader: String(
-                        typeof (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader) === "string"
-                            ? (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)
-                            : (nextPoliticalActor.government?.headOfGovernment || nextPoliticalActor.government?.headOfState || nextPoliticalActor.leader)?.name || ""
-                    ).trim() }
-                    : {}),
-                ...(stability == null ? {} : { stability }),
-                ...(Object.keys(indexPatch).length ? { indices: indexPatch } : {}),
-                ...(populationM == null ? {} : { population: { total: Math.round(populationM * 1e6) } }),
-                economy: {
-                    ...(gdpB == null ? {} : { gdp: Math.round(gdpB * 1e9) }),
-                    ...(gdpGrowth == null ? {} : { gdpGrowth }),
-                    ...(inflation == null ? {} : { inflation }),
-                    ...(unemployment == null ? {} : { unemployment }),
-                    ...(publicDebt == null ? {} : { publicDebt }),
-                    ...(budgetBalance == null ? {} : { budgetBalance }),
-                    ...(String(form.currency ?? "").trim() ? { currency: String(form.currency).trim() } : {}),
-                },
-                ...(hasAnyBreakdown ? { gdpBreakdown: { agriculture, industry, services } } : {}),
-            };
-
+        const patch = hasComponentBaseline
+            ? countryStatPatchFromForm({ form, changed, politicalActor: nextPoliticalActor })
+            : null;
+        if (patch) {
             nextSheet = applyCountryStatPatchToWorld(world, target, patch);
             const reputation = Number(nextSheet?.indices?.internationalReputation);
             if (Number.isFinite(reputation)) {
