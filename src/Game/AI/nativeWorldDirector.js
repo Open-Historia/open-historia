@@ -3641,6 +3641,11 @@ export const buildWorldInitiativeContext = (
     ...(crisisLines.length ? ["", "Instability the record says may be turning into a crisis:", ...crisisLines] : []),
     "",
     `Conflict risk in this world right now: ${conflictRiskPosture.label}. ${conflictRiskPosture.guidance}.`,
+    // The breadth repair is told this too, but it is its own request and is
+    // skipped while requests are saved; this line reaches every skip for free.
+    ...(consequenceSignal.level === "low"
+      ? [`Recent history is busy but thin on real outcomes: ${consequenceSignal.consequentialCount} of the last ${consequenceSignal.eventCount} events in about ${consequenceSignal.lookbackDays} days changed what anyone can do next. Check first whether a pressure already in the record has matured into a real outcome (a vote, a resignation or appointment, a strike settled, a capability completed, an escalation or a climb-down); where none has, write ordinary history and do not invent drama.`]
+      : []),
     "",
     "Economic baselines (a strained state can still borrow, tax or print, at a price):",
     economicAttention.length
