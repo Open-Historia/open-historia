@@ -418,10 +418,11 @@ const compactMembershipCatalogSummary = (catalog) => array(catalog)
   .join(" | ")
   .slice(0, 9000);
 
-const existingInstitutionMembers = (institution) => Object.entries(institution?.members || {})
-  .filter(([, membership]) => membership && membership.status !== "left")
-  .map(([polity]) => clean(polity))
-  .filter(Boolean);
+// normalizeInstitutionRecord stores members as an array of {polity, status,
+// role}; every status it keeps is a positive one.
+const existingInstitutionMembers = (institution) => array(institution?.members)
+  .filter((member) => clean(member?.polity))
+  .map((member) => `${clean(member.polity)}${member.status && member.status !== "member" ? `:${member.status}` : ""}`);
 
 const buildInstitutionMembersPrompt = ({ scenarioDate, historyAuthority = null, institution, world, scenarioContext, allPolityKeys }) => ({
   systemPrompt: `You resolve the COMPLETE positive formal membership set for exactly ONE canonical institution in OpenHistoria.
@@ -1003,6 +1004,7 @@ export const generateGeopoliticalWorldBaseline = async ({
     try {
       const prompt = buildCatalogPrompt({
         scenarioDate,
+        historyAuthority,
         world,
         scenarioContext,
         allPolityKeys,
@@ -1075,6 +1077,7 @@ export const generateGeopoliticalWorldBaseline = async ({
   const normalizeMembershipRows = async (targets, meta = {}) => {
     const prompt = buildMembershipPrompt({
       scenarioDate,
+      historyAuthority,
       batch: targets,
       world,
       scenarioContext,
