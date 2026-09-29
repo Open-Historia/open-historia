@@ -216,6 +216,16 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
         if (typeof chunk.content_block?.name === "string") block.name = chunk.content_block.name;
         if (typeof chunk.content_block?.id === "string") block.id = chunk.content_block.id;
         if (typeof chunk.content_block?.text === "string") block.text += chunk.content_block.text;
+        // Normally {} here, with the real arguments following as deltas — and
+        // the whole input when the call takes none (list_powers({})), which
+        // then gets no delta at all.
+        if (chunk.content_block?.input && typeof chunk.content_block.input === "object") block.input = chunk.content_block.input;
+        return state;
+    }
+
+    // The block is whole: a tool call with no argument deltas was not cut off.
+    if (type === "content_block_stop") {
+        blockAt(state, chunk.index).closed = true;
         return state;
     }
 
@@ -255,6 +265,11 @@ export function applyAnthropicFrame(state, chunk, onToolProgress) {
 // back (see jsonSalvage.js). The raw fragment comes back on partialToolJson for
 // the diagnostics log only — never as content, where a salvage pass could find a
 // balanced fragment inside it and apply half a turn.
+//
+// A call that takes no arguments streams no JSON at all. Once its block has
+// closed (or the message stopped to use a tool) it is whole, and goes out with
+// the input its start event carried, {} — it used to vanish, which lost a
+// lookup like list_powers({}) and wasted the request.
 export function finishAnthropicStream(state) {
     const content = [];
     let partialToolJson = "";
@@ -264,7 +279,9 @@ export function finishAnthropicStream(state) {
         if (block.type === "tool_use") {
             let input = null;
             try {
-                input = block.json ? JSON.parse(block.json) : null;
+                input = block.json
+                    ? JSON.parse(block.json)
+                    : (block.closed || state.stopReason === "tool_use" ? (block.input ?? {}) : null);
             } catch {
                 input = null;
             }

@@ -158,6 +158,39 @@ test("anthropic: a truncated tool call yields no input and keeps the fragment as
   assert.equal(data.partialToolJson, '{"events":[{"title":"A wa');
 });
 
+// list_powers({}) streams its start and stop and no argument delta at all.
+test("anthropic: a call with no arguments is kept, with an empty input", () => {
+  const state = runAnthropic([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "list_powers", input: {} } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_2", name: "war_ledger", input: {} } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
+  ]);
+
+  const data = finishAnthropicStream(state);
+  assert.deepEqual(data.content, [
+    { type: "tool_use", id: "toolu_1", name: "list_powers", input: {} },
+    { type: "tool_use", id: "toolu_2", name: "war_ledger", input: {} },
+  ]);
+  assert.equal(data.partialToolJson, undefined);
+});
+
+test("anthropic: a message that stopped to use a tool counts the call as whole without a stop event", () => {
+  const state = runAnthropic([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "list_powers", input: {} } },
+    { type: "message_delta", delta: { stop_reason: "tool_use" } },
+  ]);
+  assert.deepEqual(finishAnthropicStream(state).content, [{ type: "tool_use", id: "toolu_1", name: "list_powers", input: {} }]);
+});
+
+test("anthropic: a stream cut off right after a call started still yields no call", () => {
+  const state = runAnthropic([
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_1", name: "submit_jump_result", input: {} } },
+  ]);
+  assert.deepEqual(finishAnthropicStream(state).content, []);
+});
+
 test("anthropic: an overloaded error event on a 200 stream is surfaced", () => {
   const state = runAnthropic([{ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }]);
   assert.equal(finishAnthropicStream(state).error.type, "overloaded_error");
