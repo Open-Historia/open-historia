@@ -146,7 +146,7 @@ The game used to set no sampling parameters at all, so every call ran at the pro
 
 **The refusal is remembered, per endpoint and model.** A reasoning model rejects every call that carries a temperature, so a concession scoped to one call would rediscover the same 400 forever, at one refused request each time, against the allowance the whole [request budget](#the-request-budget) exists to protect. This is the failure `structuredMode.js` was written about, and it was made again here before being caught. `createTemperatureMemory` (`sampling.js`, keyed by `temperatureRefusalKey({ provider, endpoint, model })`, stored under `ai_temperature_refusals`) holds what was learned, so `disableTemperature` starts true for a model already known to refuse and no request is spent. It is kept in memory as well as in localStorage, so a browser refusing storage still forgets only between sessions rather than between calls, and an entry goes stale after 30 days because a provider may change what it accepts.
 
-**A key that names no task is silently inert**, which is the one way this table can be wrong without anything failing, so `sampling.test.js` checks every key against the prompt pack.
+**A key that names no task is silently inert**, which is the one way this table can be wrong without anything failing, so `sampling.test.js` checks every key against the task registry (`AI_TASK_ROUTING` in `providerConfig.js`, where `turnReview` lives with no prompt of its own) and the prompt pack's tasks. It also pins the clamp to [0, 1] and the refusal memory: one entry per provider, endpoint and model, gone after 30 days.
 
 ### Reasoning toggle
 
