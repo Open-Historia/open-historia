@@ -74,7 +74,7 @@ export const checksHeldError = (failures) => {
         + `turn did not all come back, so nothing has been saved yet: ${what}. `
         + "Retry the checks, continue without them, or discard the turn.",
     );
-    error.reviewHeld = true;
+    error.checksHeld = true;
     error.failedChecks = list.map(({ key }) => key);
     return error;
 };

@@ -16,7 +16,7 @@ let activeSimulations = 0;
 // turn held on a failed turn review.
 let pendingJumpSegment = null;
 let pendingProjectsJump = null;
-let pendingReviewJump = null;
+let pendingChecksJump = null;
 
 // The idle chat poll is mid-generation ("someone might be typing").
 let chatGenerationInFlight = false;
@@ -40,9 +40,9 @@ export const setPendingProjectsJump = (value) => {
   pendingProjectsJump = value ?? null;
 };
 
-export const getPendingReviewJump = () => pendingReviewJump;
-export const setPendingReviewJump = (value) => {
-  pendingReviewJump = value ?? null;
+export const getPendingChecksJump = () => pendingChecksJump;
+export const setPendingChecksJump = (value) => {
+  pendingChecksJump = value ?? null;
 };
 
 export const setChatGenerationInFlight = (inFlight) => {
@@ -70,14 +70,14 @@ export const subscribeChatGeneration = (listener) => {
 
 export const hasPendingJumpSegment = () => pendingJumpSegment !== null;
 export const hasPendingProjectsJump = () => pendingProjectsJump !== null;
-export const hasPendingReviewJump = () => pendingReviewJump !== null;
+export const hasPendingChecksJump = () => pendingChecksJump !== null;
 
 // A held jump counts as busy: the idle pulse checks this before it writes, so it
 // cannot write into a world that is about to be replaced by the held turn.
 export const isSimulationBusy = () => activeSimulations > 0
   || pendingProjectsJump !== null
   || pendingJumpSegment !== null
-  || pendingReviewJump !== null;
+  || pendingChecksJump !== null;
 
 export const isChatGenerationLikely = () => chatGenerationInFlight;
 
@@ -103,10 +103,10 @@ export const discardPendingProjectsJump = () => {
   return had;
 };
 
-export const discardPendingReviewJump = () => {
-  const had = pendingReviewJump !== null;
-  pendingReviewJump = null;
-  if (had) logDebugEvent("turn", "Held turn discarded; the turn review never came back and nothing was written.");
+export const discardPendingChecksJump = () => {
+  const had = pendingChecksJump !== null;
+  pendingChecksJump = null;
+  if (had) logDebugEvent("turn", "Held turn discarded; a check after its events failed and nothing was written.");
   return had;
 };
 

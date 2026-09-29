@@ -383,16 +383,16 @@ import {
   beginSimulation,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
-  discardPendingReviewJump,
+  discardPendingChecksJump,
   endSimulation,
   getPendingJumpSegment,
   getPendingProjectsJump,
-  getPendingReviewJump,
+  getPendingChecksJump,
   isSimulationBusy,
   setChatGenerationInFlight,
   setPendingJumpSegment,
   setPendingProjectsJump,
-  setPendingReviewJump,
+  setPendingChecksJump,
 } from "./simulationStatus.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -4459,7 +4459,7 @@ const activeCampaignId = () => {
 // written. Held so the player is told which segment failed and can retry just
 // that segment or discard the turn (see runJumpSegments).
 //
-// pendingReviewJump: a jump whose every segment is in hand but whose turn
+// pendingChecksJump: a jump whose every segment is in hand but whose turn
 // review (runTurnReview) did not come back, so the units, territory,
 // structures, board and agents' reports it answers for were never decided.
 // Nothing is written. The player retries the review, takes the turn without it
@@ -4474,10 +4474,10 @@ export {
   NO_RESPONSE_BODY_NOTE,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
-  discardPendingReviewJump,
+  discardPendingChecksJump,
   hasPendingJumpSegment,
   hasPendingProjectsJump,
-  hasPendingReviewJump,
+  hasPendingChecksJump,
   isChatGenerationLikely,
   isSimulationBusy,
 } from "./simulationStatus.js";
@@ -14040,7 +14040,7 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
 // the unit and territory Directors whatever the settings, as it always has.
 const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = null, gameDate = "", sections = null, receipt = null }) => {
   const runs = (key) => !sections || (sections.includes(key) && requestSettings.reviewSection(key));
-  const ask = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
+  const requestDirector = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
     lookups: buildTaskLookups(bundle),
     fallback,
     signal,
@@ -14050,27 +14050,27 @@ const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = n
   });
   // Through the turn's checks when a time skip has them (turnChecks.js): a
   // director that fell back holds the turn instead of leaving its changes out.
-  const asked = (key, taskKey, fallback, userMessage, variables) => (checks
-    ? checks.run(key, () => ask(taskKey, fallback, userMessage, variables), fellBack)
-    : ask(taskKey, fallback, userMessage, variables));
+  const askAsCheck = (key, taskKey, fallback, userMessage, variables) => (checks
+    ? checks.run(key, () => requestDirector(taskKey, fallback, userMessage, variables), fellBack)
+    : requestDirector(taskKey, fallback, userMessage, variables));
 
   const units = !runs("units") ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
-      : await asked("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+      : await askAsCheck("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
     await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
     return answer;
   };
 
   const territory = !runs("territory") ? null : async (input) => (review
     ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
-    : asked("territory", "territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+    : askAsCheck("territory", "territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
 
   const structuresRun = sections ? runs("structures") : (review || requestSettings.reviewSection("structures"));
   const structures = !structuresRun ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
-      : await asked("structures", "structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
+      : await askAsCheck("structures", "structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
         structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }));
     return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
   };
@@ -14551,7 +14551,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // Held here rather than at the write when the one request is what failed:
   // nothing after it has anything to go on.
   if (checksHoldTurn(checks)) {
-    setPendingReviewJump({ context, state });
+    setPendingChecksJump({ context, state });
     throw checksHeldError(checks.failures());
   }
 
@@ -14677,7 +14677,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     if (error?.projectsHeld) setPendingProjectsJump({ applyArgs });
     // A check made inside the apply failed (the timeline clean-up): held by
     // the checks, like the rest, so the same Retry and Continue answer it.
-    if (error?.reviewHeld) setPendingReviewJump({ context, state });
+    if (error?.checksHeld) setPendingChecksJump({ context, state });
     throw error;
   }
 };
@@ -14690,7 +14690,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (!evaluationMode) {
     discardPendingProjectsJump();
     discardPendingJumpSegment();
-    discardPendingReviewJump();
+    discardPendingChecksJump();
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed
@@ -14877,22 +14877,22 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
   }
 };
 
-// Finish a turn held on a failed check (turnChecks.js). `withoutReview` takes
+// Finish a turn held on a failed check (turnChecks.js). `withoutFailedChecks` takes
 // the turn as the failed checks left it — each leaves the turn as written, as a
 // failed check always did — and asks nothing. Otherwise only the failed checks
 // are asked again: the segments are in hand and are not regenerated, and a
 // check that answered keeps its answer. Re-holds itself on another failure.
-export const retryPendingReviewJump = async ({ onProgress, signal, withoutReview = false } = {}) => {
-  const held = getPendingReviewJump();
+export const retryPendingChecksJump = async ({ onProgress, signal, withoutFailedChecks = false } = {}) => {
+  const held = getPendingChecksJump();
   if (!held) throw new Error("There is no turn waiting on its review.");
   const { context, state } = held;
   beginSimulation();
   try {
     // Released before the attempt, so a turn can never be applied twice.
-    setPendingReviewJump(null);
+    setPendingChecksJump(null);
     // The checks that answered are given their answers back either way; the
     // failed ones are asked again, or taken as they failed.
-    if (withoutReview) state.checks?.accept();
+    if (withoutFailedChecks) state.checks?.accept();
     // A fresh decision to spend, as a segment retry is: the held attempt spent
     // the budget's review request, and the apply still asks for its own.
     const spentSoFar = state.requests ?? { used: 0, refused: 0 };
