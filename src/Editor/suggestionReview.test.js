@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { applyMapChange, changeDependencies, changeTargets, mapChangeStatus } from "./suggestionReview.js";
-import { measureGeometry } from "../runtime/scenarioChanges.js";
+import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
 const square = (x, y, size = 1) => ({ type: "Polygon", coordinates: [[[x, y], [x + size, y], [x + size, y + size], [x, y + size], [x, y]]] });
@@ -245,6 +245,59 @@ test("undoing a country's removal brings its puppet rows back and keeps a puppet
   assert.ok(state.doc.polities.Beta);
   assert.deepEqual(state.doc.puppets.map((row) => row.id).sort(), ["p-beta", "p-gamma"]);
   assert.equal(mapChangeStatus(puppet, ctx), "applied", "the later puppet change is still on the map");
+});
+
+test("a new set of cities is a conflict when the author's cities changed since, and applied once taken", () => {
+  const { state, d, ctx } = setup();
+  const suggested = [
+    { name: "Newtown", coord: [0.2, 0.2], population: 20000, capital: true },
+    { name: "Farport", coord: [10.5, 10.5], population: 3000, capital: false },
+  ];
+  const replace = { id: "cities-replace", area: "map", kind: "cities-replace", from: 1, to: suggested };
+  assert.equal(mapChangeStatus(replace, ctx), "open", "the author still has the post's one city");
+  d.setFeatures((list) => [...list, { id: "feat2", name: "Added", type: "Coordinate", coord: [5, 5], population: 10, tags: ["city"] }]);
+  assert.equal(mapChangeStatus(replace, ctx), "conflict", "a city added since would be thrown away");
+  const undo = applyMapChange(replace, ctx);
+  assert.equal(mapChangeStatus(replace, ctx), "applied");
+  undo();
+  assert.equal(state.doc.features.length, 2);
+
+  // Back to the built-in cities: the map stops carrying a set of its own.
+  const builtIn = { id: "cities-replace", area: "map", kind: "cities-replace", from: 2, to: null };
+  assert.equal(mapChangeStatus(builtIn, ctx), "open");
+  const undoBuiltIn = applyMapChange(builtIn, ctx);
+  assert.equal(state.doc.metadata.citiesAuthored, false);
+  assert.equal(mapChangeStatus(builtIn, ctx), "applied");
+  undoBuiltIn();
+  assert.equal(state.doc.features.length, 2);
+  assert.equal(state.doc.metadata.citiesAuthored, undefined);
+
+  // The post had the built-in cities: any the author has now are their own.
+  assert.equal(mapChangeStatus({ ...replace, from: null }, ctx), "conflict");
+});
+
+test("a new custom basemap is open, applied or a conflict by what the map has now", () => {
+  const { d, ctx } = setup();
+  const setBackground = (saved) => d.patchMetadata({ customBackground: saved });
+  ctx.setBackground = setBackground;
+  const hashOf = (data) => hashText(canonicalJson(data));
+  const ours = { kind: "image", dataUrl: "data:image/png;base64,T1VSUw==" };
+  const theirs = { dataUrl: "data:image/png;base64,VEhFSVJT" };
+  setBackground(ours);
+  const change = {
+    id: "map:background", area: "map", kind: "background",
+    from: { kind: "image", hash: hashOf({ dataUrl: ours.dataUrl }) },
+    to: { kind: "image", hash: hashOf(theirs), data: theirs },
+  };
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  const undo = applyMapChange(change, ctx);
+  assert.equal(mapChangeStatus(change, ctx), "applied");
+  undo();
+  assert.equal(mapChangeStatus(change, ctx), "open");
+  setBackground({ kind: "image", dataUrl: "data:image/png;base64,T1RIRVI=" });
+  assert.equal(mapChangeStatus(change, ctx), "conflict", "the author put another basemap on since");
+  setBackground(null);
+  assert.equal(mapChangeStatus({ ...change, to: null }, ctx), "applied", "no basemap is what the suggestion asks for");
 });
 
 test("cities, units, map features, puppets and groups: applied and taken back", () => {

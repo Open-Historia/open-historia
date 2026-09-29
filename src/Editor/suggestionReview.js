@@ -17,7 +17,7 @@
 import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
 import { withoutPolities } from "./scenarioPuppets.js";
-import { cityTierOf, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
+import { canonicalJson, cityTierOf, hashText, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -74,6 +74,14 @@ const markerView = (marker) => marker ? {
   lng: Number(Number(marker.lng ?? marker.coord?.[0]).toFixed(4)), lat: Number(Number(marker.lat ?? marker.coord?.[1]).toFixed(4)),
   status: clean(marker.status) || "active", note: clean(marker.note),
 } : null;
+// The custom basemap as the diff fingerprints it (scenarioChanges.js
+// buildScenarioSnapshot): its kind and a hash of the payload a save uploads
+// (exportPreset.js buildBackgroundForGame), or null.
+const backgroundOf = (saved) => {
+  if (saved?.kind === "image" && saved.dataUrl) return { kind: "image", hash: hashText(canonicalJson({ dataUrl: saved.dataUrl })) };
+  if (saved?.kind === "vector" && Array.isArray(saved.geojson?.features)) return { kind: "vector", hash: hashText(canonicalJson({ geojson: saved.geojson })) };
+  return null;
+};
 const puppetView = (row) => row ? {
   overlord: clean(row.overlord), puppet: clean(row.puppet), kind: clean(row.kind) || "satellite",
   secrecy: row.secrecy === "covert" ? "covert" : "open", loyalty: Math.round(Number(row.loyalty) || 0), status: clean(row.status) || "active",
@@ -211,8 +219,17 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       if (sameValue(cityView(current), suggestedCityView(change.to))) return "applied";
       return sameValue(cityView(current), suggestedCityView(change.from)) ? "open" : "conflict";
     }
-    case "cities-replace":
-      return "open";
+    case "cities-replace": {
+      // The post had its own cities (change.from counts them) or the built-in
+      // set (null); the suggestion has its own (a list) or the built-in set.
+      const current = cityFeatures(ctx.doc);
+      const authored = Boolean(ctx.doc?.metadata?.citiesAuthored) || current.length > 0;
+      if (Array.isArray(change.to)
+        ? authored && current.length === change.to.length && change.to.every((city) => sameValue(cityView(findCity(ctx.doc, city)), suggestedCityView(city)))
+        : !authored) return "applied";
+      if (change.from === null || change.from === undefined) return authored ? "conflict" : "open";
+      return current.length === Number(change.from) ? "open" : "conflict";
+    }
     case "unit-add":
       return (ctx.doc?.units ?? []).some((unit) => clean(unit.id) === change.key) ? "applied" : "open";
     case "unit-remove":
@@ -248,8 +265,12 @@ export const mapChangeStatus = (change, ctx, { renames = {} } = {}) => {
       if (current === clean(change.to)) return "applied";
       return current === clean(change.from) ? "open" : "conflict";
     }
-    case "background":
-      return "open";
+    case "background": {
+      const current = backgroundOf(ctx.doc?.metadata?.customBackground);
+      const matches = (entry) => (entry ? Boolean(current) && current.kind === clean(entry.kind) && current.hash === entry.hash : !current);
+      if (matches(change.to)) return "applied";
+      return matches(change.from) ? "open" : "conflict";
+    }
     default:
       return "open";
   }
@@ -527,10 +548,15 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
     }
     case "cities-replace": {
       const before = cityFeatures(ctx.doc);
+      const authored = ctx.doc?.metadata?.citiesAuthored;
       const next = (Array.isArray(change.to) ? change.to : []).map((city) => editorCity(city));
       d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...next]);
-      d.patchMetadata({ citiesAuthored: true });
-      return () => d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...before]);
+      // No list is the built-in cities: the map stops carrying a set of its own.
+      d.patchMetadata({ citiesAuthored: Array.isArray(change.to) });
+      return () => {
+        d.setFeatures((list) => [...list.filter((feature) => clean(feature?.kind)), ...before]);
+        d.patchMetadata({ citiesAuthored: authored });
+      };
     }
     case "unit-add":
     case "unit-change": {

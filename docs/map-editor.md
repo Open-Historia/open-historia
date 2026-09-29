@@ -534,6 +534,8 @@ When a player suggests changes to a community scenario, the author reviews the m
   - *conflict*: the author changed it since posting ("You changed this too"; accepting replaces it);
   - *applied*: already so;
   - *missing*: what it changes is not on this map any more ("Not on your map").
+
+  A new set of cities (`cities-replace`) is a conflict when the author's city count is no longer the post's (or the post had the built-in cities and the map now has its own), and applied when the map has exactly the suggested cities. Accepting "go back to the built-in cities" clears `citiesAuthored`. A custom basemap (`background`) is compared by its kind and a hash of its payload, as the diff fingerprints it.
 - **Accepting applies the change at once** (`applyMapChange`, which returns its undo):
   - regions through the map's own API: `setRegionAttrs` for owners, names, types, claims and groups, and `applyRegionPatch` for borders, one undo step;
   - the document's records (countries, groups, cities, units, features, puppet states, the basemap and background) through `useMapDocument`'s setters.
