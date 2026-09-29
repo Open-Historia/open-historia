@@ -343,7 +343,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.12 `countryStatSheet` — structured national stats
 - **Purpose:** Compile a full stat sheet for a selected polity for the Stats tab.
-- **Prompt:** `tasks.countryStatSheet`. **Entry:** `generateCountryStatSheet({code, name})` `gameplay.js` (userMessage carries a `buildTargetDossier` + era slice).
+- **Prompt:** `tasks.countryStatSheet`. **Entry:** `generateCountryStatSheet({code, name})` `gameplay.js` (userMessage carries a `buildTargetDossier` + era slice). The dossier has one implementation, `buildTargetDossierKernel` (`countryStatsWorkerKernel.js`), which the worker and `gameplay.js` both call; it counts the target's regions over the whole map by effective owner (the override, else the catalog row's base owner, `regionOwnerName`), says how many it holds and how many it is the lawful sovereign of, names what it holds beyond its starting territory in the scenario and counts what of that territory others hold.
 - **Tool/schema:** `submit_country_stat_sheet` / `COUNTRY_STAT_SHEET_SCHEMA`: `capital, continent, government, leader, stability(0–100), indices{sovereignty,foodAutonomy,energyAutonomy,economicIndependence,internalSecurity,internationalReputation}, economy{gdp,gdpGrowth,gdpPerCapita,currency,inflation,unemployment,publicDebt,budgetBalance}, gdpBreakdown{agriculture,industry,services}`.
 - **Validation:** all strings non-blank; all indices 0–100 integers; `agriculture+industry+services === 100` (`gameplaySchemas.js`). No fallback.
 

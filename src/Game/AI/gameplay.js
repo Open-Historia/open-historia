@@ -99,7 +99,7 @@ import {
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
-import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
+import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   decodeGameMasterTransportPayload,
@@ -8106,57 +8106,16 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
 // dossier for intelligence briefings. The generic world summary truncates hard
 // (24 of possibly thousands of region overrides, 16 polities), so without this
 // the target usually isn't in the prompt at all and the AI can only shrug.
+// One implementation: the Stats worker's (countryStatsWorkerKernel.js), over
+// the same catalogs the main-thread Stats basis reads — the rendered scenario
+// partition, or the broad merged catalog when there is none.
 const buildTargetDossier = async (bundle, code, normalizedWorld = null) => {
   const world = normalizedWorld || normalizeWorldState(bundle.world);
-  const lines = [];
-
-  const polity = code ? world.polityOverrides?.[code] : null;
-  if (polity) {
-    lines.push(
-      `Polity: ${polity.name || code} (code ${code})${
-        polity.aliases?.length > 0 ? ` — also known as ${polity.aliases.join(", ")}` : ""
-      }`,
-    );
-    if (polity.note) lines.push(`Notes: ${polity.note}`);
-  }
-
-  const overrides = Object.entries(world.regionOwnershipOverrides ?? {});
-  const owned = code ? overrides.filter(([, owner]) => owner === code) : [];
-  if (owned.length > 0) {
-    const regionCatalog = await loadRegionCatalog();
-    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
-    const names = owned.slice(0, 40).map(([regionId]) => {
-      const region = regionLookup.get(regionId);
-      return region ? `${region.name}${region.country ? ` (${region.country})` : ""}` : regionId;
-    });
-    lines.push(
-      `Territory: holds ${owned.length} regions${owned.length > names.length ? ", including" : ""}: ${names.join(", ")}${
-        owned.length > names.length ? ", …" : ""
-      }`,
-    );
-  } else if (code) {
-    lines.push(
-      overrides.length > 0
-        ? `Territory: no regions on the current map are recorded as held by ${code}.`
-        : `Territory: holds its modern-day territory (no territorial changes recorded).`,
-    );
-  }
-
-  const units = normalizeArray(bundle.world?.units).filter((unit) => unit?.ownerCode === code);
-  if (units.length > 0) {
-    const byType = new Map();
-    let strength = 0;
-    for (const unit of units) {
-      byType.set(unit.type, (byType.get(unit.type) || 0) + 1);
-      strength += Number(unit.strength) || 0;
-    }
-    const composition = Array.from(byType.entries()).map(([type, n]) => `${n} ${type}`).join(", ");
-    lines.push(`Deployed forces: ${units.length} units (${composition}), combined strength ${strength}.`);
-  } else {
-    lines.push("Deployed forces: none currently on the map.");
-  }
-
-  return lines.join("\n");
+  const scenarioCatalog = code ? await loadScenarioRegionCatalog({ force: false }).catch(() => []) : [];
+  const fallbackCatalog = code && !normalizeArray(scenarioCatalog).length
+    ? await loadRegionCatalog({ force: false }).catch(() => [])
+    : [];
+  return buildTargetDossierKernel({ bundle: { ...bundle, world }, code, scenarioCatalog, fallbackCatalog });
 };
 
 const canonicalStatsPolity = (token, world) => {
