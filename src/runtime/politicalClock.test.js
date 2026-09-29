@@ -60,3 +60,12 @@ test("political date math works for historical and future four-digit scenario ye
     responseRemainderMonths: 0.9999,
   });
 });
+
+test("the clock keeps the held-region snapshot and drops malformed counts", () => {
+  assert.deepEqual(
+    normalizePoliticalSimulationClock({ heldRegions: { A: 6, "  B ": 3, C: 0, D: -2, E: 1.5, F: "x", "": 4 } }).heldRegions,
+    { A: 6, B: 3 },
+  );
+  assert.equal(normalizePoliticalSimulationClock({ heldRegions: {} }).heldRegions, undefined);
+  assert.equal(normalizePoliticalSimulationClock({ heldRegions: ["A"] }).heldRegions, undefined);
+});

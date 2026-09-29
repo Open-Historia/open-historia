@@ -29,16 +29,33 @@ export const politicalDaysBetween = (fromDate, toDate) => {
   return Math.max(0, Math.round((to.time - from.time) / 86400000));
 };
 
+// Regions each Political Actor administered when the clock last advanced
+// (politicalStructuralPressure.js heldRegionCounts), so the next advance can
+// feel a net loss of ground.
+const MAX_HELD_REGION_POLITIES = 512;
+const normalizeHeldRegions = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out = {};
+  for (const [rawKey, rawCount] of Object.entries(value).slice(0, MAX_HELD_REGION_POLITIES)) {
+    const key = clean(rawKey);
+    const count = Number(rawCount);
+    if (key && Number.isInteger(count) && count > 0) out[key] = count;
+  }
+  return Object.keys(out).length ? out : null;
+};
+
 export const normalizePoliticalSimulationClock = (value) => {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const lastProcessedDate = parseDateParts(source.lastProcessedDate)?.text || "";
   const lastProcessedRound = Number(source.lastProcessedRound);
   const remainder = Number(source.responseRemainderMonths);
+  const heldRegions = normalizeHeldRegions(source.heldRegions);
   return {
     schemaVersion: POLITICAL_SIMULATION_CLOCK_VERSION,
     ...(lastProcessedDate ? { lastProcessedDate } : {}),
     ...(Number.isInteger(lastProcessedRound) && lastProcessedRound >= 0 ? { lastProcessedRound } : {}),
     responseRemainderMonths: Number.isFinite(remainder) ? round4(clamp(remainder, 0, 0.9999)) : 0,
+    ...(heldRegions ? { heldRegions } : {}),
   };
 };
 

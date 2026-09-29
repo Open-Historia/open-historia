@@ -193,3 +193,25 @@ test("a committed background run logs verbosely, and outside verbose mode when a
   const capped = describePoliticalBackgroundResult({ skipped: false, plan: { droppedResponseTicks: 12 } });
   assert.equal(capped.detail.droppedResponseTicks, 12);
 });
+
+test("a committed background run records the ground each actor holds, and the next run feels a loss", async () => {
+  const world = { ...makeWorld(), regionOwnershipOverrides: { r1: "A", r2: "A", r3: "A", r4: "A" } };
+  const first = await advancePoliticalBackgroundSimulation({ world, fromDate: "2014-03-22", toDate: "2014-04-22", round: 2, backgroundAdvance });
+  assert.deepEqual(first.world.politicalSimulation.heldRegions, { A: 4 });
+
+  const shrunk = { ...first.world, regionOwnershipOverrides: { r1: "A", r2: "Elsewhere", r3: "Elsewhere", r4: "Elsewhere" } };
+  let seen;
+  const second = await advancePoliticalBackgroundSimulation({
+    world: shrunk,
+    fromDate: "2014-04-22",
+    toDate: "2014-05-22",
+    round: 3,
+    backgroundAdvance: async (payload) => {
+      seen = payload.signalsByPolity;
+      return advancePoliticalBackgroundKernel(payload);
+    },
+  });
+  assert.ok(seen.A.some((signal) => signal.source.id === "territory:A:lost"));
+  assert.deepEqual(second.world.politicalSimulation.heldRegions, { A: 1 });
+  assert.ok(second.world.politicalActors.byPolity.A.politicalPressures.issues.national_identity);
+});

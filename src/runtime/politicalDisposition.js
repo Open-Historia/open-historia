@@ -182,7 +182,18 @@ export const derivePoliticalDispositionForActor = (inputActor, { polityKey = "",
   const costOfLiving = pressureMagnitude(pressures, "cost_of_living");
   const unemployment = pressureMagnitude(pressures, "unemployment");
   const institutionalTrust = pressureMagnitude(pressures, "institutional_trust");
+  const regionalism = pressureMagnitude(pressures, "regionalism");
+  const sovereignty = pressureMagnitude(pressures, "sovereignty");
+  const nationalIdentityDirection = directionalPressure(pressures, "national_identity");
   const genericStrain = averagePressureStrain(pressures);
+
+  // Ground held by groups, occupied, lost or under a foreign overlord weighs on
+  // the regime and hardens its stance, more weakly than direct security pressure.
+  add(buckets.regimeVulnerability, regionalism, 0.35);
+  add(buckets.regimeVulnerability, sovereignty, 0.25);
+  add(buckets.threatPerception, sovereignty, 0.3);
+  add(buckets.assertiveness, nationalIdentityDirection, 0.2);
+  add(buckets.escalationPressure, nationalIdentityDirection, 0.25);
 
   add(buckets.assertiveness, securityDirection, 0.35);
   add(buckets.escalationPressure, securityDirection, 0.55);

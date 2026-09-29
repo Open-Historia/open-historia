@@ -4,7 +4,7 @@ import { applyPoliticalActorOperations, POLITICAL_ACTOR_OPS } from "./politicalA
 import { normalizePoliticalActors } from "./politicalActors.js";
 import { advancePoliticalBackgroundBatchInWorker } from "./politicalBackgroundClient.js";
 import { buildPoliticalClockPlan, normalizePoliticalSimulationClock } from "./politicalClock.js";
-import { derivePoliticalStructuralSignals } from "./politicalStructuralPressure.js";
+import { derivePoliticalStructuralSignals, heldRegionCounts } from "./politicalStructuralPressure.js";
 
 const cloneValue = (value) => {
   if (value == null || typeof value !== "object") return value;
@@ -148,7 +148,8 @@ export const advancePoliticalBackgroundSimulation = async ({
   const dispositionApply = applyPoliticalActorOperations(nextWorld, computed?.dispositionOperations || [], { stopOnError: false });
   const dispositionErrors = dispositionApply.results.filter((entry) => entry.error).map((entry) => entry.error);
 
-  nextWorld.politicalSimulation = plan.nextClock;
+  // The ground each actor holds now is what the next advance measures a loss against.
+  nextWorld.politicalSimulation = normalizePoliticalSimulationClock({ ...plan.nextClock, heldRegions: heldRegionCounts(nextWorld) });
   return {
     world: nextWorld,
     skipped: false,

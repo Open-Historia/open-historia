@@ -1,6 +1,7 @@
 /*! Open Historia — structural world-to-politics pressure derivation (Continuum) */
 
 import { getPoliticalProfileKey } from "./politicalActors.js";
+import { puppetStatesEnabled } from "./puppets.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -233,6 +234,168 @@ const warSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor })
   }
 };
 
+// Regions each Political Actor administers, from the explicit ownership map. A
+// stock map owned through its base tiles has rows only where a region changed
+// hands, so its polities count only those; the snapshot the clock keeps
+// (heldRegions) lets the next turn see a net loss.
+export const heldRegionCounts = (world, polityKeyFor = polityKeyResolver(world)) => {
+  const counts = {};
+  for (const owner of Object.values(world?.regionOwnershipOverrides || {})) {
+    const polityKey = polityKeyFor(owner);
+    if (polityKey) counts[polityKey] = (counts[polityKey] || 0) + 1;
+  }
+  return counts;
+};
+
+// How much of a polity an area is: its share of what the polity administers
+// when that is known, else a plain region count.
+const areaSeverity = (count, total) => (total > 0
+  ? clamp((count / total) * 3, 0, 1)
+  : clamp(count / 30, 0, 1));
+
+// Groups (world.groupAreas) controlling regions a polity administers: a state
+// that does not hold its own ground faces regional and security pressure.
+const groupControlSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor, held }) => {
+  const owners = world?.regionOwnershipOverrides || {};
+  const byPolity = new Map();
+  for (const [regionId, group] of Object.entries(world?.groupAreas || {})) {
+    const polityKey = clean(group) ? polityKeyFor(owners[regionId]) : "";
+    if (!polityKey) continue;
+    const state = byPolity.get(polityKey) || { regions: 0, groups: new Set() };
+    state.regions += 1;
+    state.groups.add(clean(group));
+    byPolity.set(polityKey, state);
+  }
+
+  for (const [polityKey, state] of byPolity) {
+    const severity = areaSeverity(state.regions, held[polityKey] || 0);
+    const note = `${state.regions} region(s) controlled by ${state.groups.size} group(s) outside the government's control.`;
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "regionalism",
+      salience: 3 + (9 * severity),
+      strain: 3 + (10 * severity),
+      lean: 55,
+      persistence: 0.86,
+      source: source({ id: `groups:${polityKey}:regionalism`, date: updatedAt, note }),
+    }, months));
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "security",
+      salience: 4 + (8 * severity),
+      strain: 3 + (9 * severity),
+      lean: 65,
+      persistence: 0.86,
+      source: source({ id: `groups:${polityKey}:security`, date: updatedAt, note }),
+    }, months));
+  }
+};
+
+// Ground a polity is sovereign over but does not hold (an occupation), and
+// ground it claims that another polity holds, press on sovereignty and
+// national identity; an occupation far more than a standing claim.
+const unheldTerritorySignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor, held }) => {
+  const owners = world?.regionOwnershipOverrides || {};
+  const sovereigns = world?.regionSovereigntyOverrides || {};
+  const occupied = new Map();
+  const claimed = new Map();
+  const count = (map, key) => map.set(key, (map.get(key) || 0) + 1);
+
+  for (const [regionId, sovereign] of Object.entries(sovereigns)) {
+    const polityKey = polityKeyFor(sovereign);
+    if (polityKey && polityKeyFor(owners[regionId]) !== polityKey) count(occupied, polityKey);
+  }
+  for (const [regionId, claimants] of Object.entries(world?.regionClaimants || {})) {
+    const holder = polityKeyFor(owners[regionId]);
+    const sovereign = polityKeyFor(sovereigns[regionId]);
+    for (const polityKey of new Set(asArray(claimants).map(polityKeyFor))) {
+      if (polityKey && polityKey !== holder && polityKey !== sovereign) count(claimed, polityKey);
+    }
+  }
+
+  for (const [polityKey, regions] of occupied) {
+    const severity = areaSeverity(regions, (held[polityKey] || 0) + regions);
+    const note = `${regions} region(s) under its sovereignty held by another power.`;
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "sovereignty",
+      salience: 4 + (10 * severity),
+      strain: 5 + (12 * severity),
+      lean: 85,
+      persistence: 0.88,
+      source: source({ id: `territory:${polityKey}:occupied`, date: updatedAt, note }),
+    }, months));
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "national_identity",
+      salience: 3 + (8 * severity),
+      strain: 3 + (9 * severity),
+      lean: 65,
+      persistence: 0.88,
+      source: source({ id: `territory:${polityKey}:occupied-identity`, date: updatedAt, note }),
+    }, months));
+  }
+
+  for (const [polityKey, regions] of claimed) {
+    const severity = clamp(regions / 20, 0, 1);
+    const note = `Claims ${regions} region(s) another polity holds.`;
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "sovereignty",
+      salience: 1 + (4 * severity),
+      strain: 1 + (3 * severity),
+      lean: 60,
+      persistence: 0.8,
+      source: source({ id: `territory:${polityKey}:claims`, date: updatedAt, note }),
+    }, months));
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "national_identity",
+      salience: 2 + (5 * severity),
+      strain: 1 + (4 * severity),
+      lean: 55,
+      persistence: 0.8,
+      source: source({ id: `territory:${polityKey}:claims-identity`, date: updatedAt, note }),
+    }, months));
+  }
+};
+
+// An open puppet feels its overlord's direction as a sovereignty question, the
+// more so the less loyal it is. A covert arrangement is not public, so it moves
+// no public opinion, and none of this runs while Puppet states is switched off.
+const puppetSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
+  if (!puppetStatesEnabled()) return;
+  for (const row of asArray(world?.puppets)) {
+    if (clean(row?.status).toLowerCase() !== "active" || clean(row?.secrecy).toLowerCase() === "covert") continue;
+    const polityKey = polityKeyFor(row?.puppet);
+    if (!polityKey || polityKey === polityKeyFor(row?.overlord)) continue;
+    const loyalty = finite(row?.loyalty);
+    const severity = clamp(1 - ((loyalty ?? 50) / 100), 0, 1);
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "sovereignty",
+      salience: 4 + (6 * severity),
+      strain: 3 + (9 * severity),
+      lean: 80,
+      persistence: 0.9,
+      source: source({ id: `puppets:${polityKey}`, date: updatedAt, note: `Openly directed by a foreign overlord (${clean(row?.kind) || "subordinate"}).` }),
+    }, months));
+  }
+};
+
+// Ground lost since the clock last advanced, net of ground gained.
+const territoryLossSignals = ({ world, months, updatedAt, signalsByPolity, held }) => {
+  const byPolity = world?.politicalActors?.byPolity || {};
+  const previous = world?.politicalSimulation?.heldRegions;
+  if (!previous || typeof previous !== "object") return;
+  for (const [polityKey, before] of Object.entries(previous)) {
+    const lost = (Number(before) || 0) - (held[polityKey] || 0);
+    if (lost <= 0 || !Object.prototype.hasOwnProperty.call(byPolity, polityKey)) continue;
+    const severity = clamp(Math.max((lost / Math.max(1, Number(before))) * 4, lost / 20), 0, 1);
+    append(signalsByPolity, polityKey, scaledSignal({
+      issue: "national_identity",
+      salience: 3 + (9 * severity),
+      strain: 3 + (10 * severity),
+      lean: 75,
+      persistence: 0.85,
+      source: source({ id: `territory:${polityKey}:lost`, date: updatedAt, note: `Lost ${lost} region(s) since the last political update.` }),
+    }, months));
+  }
+};
+
 // This is a DERIVATION boundary only. It reads canonical world ledgers/stats and
 // emits already-structured pressure signals for existing Political Actors. It
 // never creates actors, edits Stats/war/diplomatic state, or emits timeline news.
@@ -241,10 +404,15 @@ export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt 
   const signalsByPolity = {};
   if (elapsed <= 0 || !world?.politicalActors?.byPolity) return signalsByPolity;
 
-  const context = { world, months: elapsed, updatedAt, signalsByPolity, polityKeyFor: polityKeyResolver(world) };
+  const polityKeyFor = polityKeyResolver(world);
+  const context = { world, months: elapsed, updatedAt, signalsByPolity, polityKeyFor, held: heldRegionCounts(world, polityKeyFor) };
   statsSignals(context);
   relationSignals(context);
   warSignals(context);
+  groupControlSignals(context);
+  unheldTerritorySignals(context);
+  puppetSignals(context);
+  territoryLossSignals(context);
 
   return Object.fromEntries(
     Object.entries(signalsByPolity)

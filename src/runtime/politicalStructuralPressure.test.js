@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizePoliticalActors } from "./politicalActors.js";
-import { derivePoliticalStructuralSignals } from "./politicalStructuralPressure.js";
+import { derivePoliticalStructuralSignals, heldRegionCounts } from "./politicalStructuralPressure.js";
+import { setPuppetStatesEnabled } from "./puppets.js";
 
 const baseWorld = () => ({
   politicalActors: normalizePoliticalActors({
@@ -112,4 +113,82 @@ test("names that are not actor keys resolve through the profile lookup, once per
   const relation = result.A.find((entry) => entry.source.id === "relations:A");
   assert.match(relation.source.note, /^3 materially strained/);
   assert.ok(result.A.some((entry) => entry.source.id === "wars:A:active"));
+});
+
+const territoryWorld = () => ({
+  ...baseWorld(),
+  regionOwnershipOverrides: { a1: "A", a2: "A", a3: "A", a4: "A", a5: "A", a6: "A", b1: "B", b2: "B", b3: "B" },
+});
+const signalFor = (signals, polity, id) => (signals[polity] || []).find((entry) => entry.source.id === id);
+
+test("held region counts come from the explicit ownership map, per Political Actor", () => {
+  const world = territoryWorld();
+  world.regionOwnershipOverrides.x1 = "Nowhere";
+  assert.deepEqual(heldRegionCounts(world), { A: 6, B: 3 });
+});
+
+test("groups controlling a polity's regions raise regionalism and security, scaled by the share held", () => {
+  const world = territoryWorld();
+  world.groupAreas = { a1: "Cartel", a2: "Cartel", a3: "Rebels", b1: "Cartel" };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
+  const regionalism = signalFor(result, "A", "groups:A:regionalism");
+  assert.ok(regionalism);
+  assert.equal(regionalism.issue, "regionalism");
+  assert.match(regionalism.source.note, /^3 region\(s\) controlled by 2 group\(s\)/);
+  assert.ok(signalFor(result, "A", "groups:A:security"));
+  assert.ok(signalFor(result, "B", "groups:B:regionalism"));
+  const one = territoryWorld();
+  one.groupAreas = { a1: "Cartel" };
+  const smaller = signalFor(derivePoliticalStructuralSignals(one, { months: 1, updatedAt: "2014-04-22" }), "A", "groups:A:regionalism");
+  assert.ok(smaller.salience < regionalism.salience);
+});
+
+test("occupied ground presses sovereignty and national identity harder than a standing claim", () => {
+  const world = territoryWorld();
+  world.regionOwnershipOverrides.a1 = "B";
+  world.regionSovereigntyOverrides = { a1: "A" };
+  world.regionClaimants = { a1: ["A", "B"], b2: ["A"], b3: ["B"] };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
+  const occupied = signalFor(result, "A", "territory:A:occupied");
+  const claims = signalFor(result, "A", "territory:A:claims");
+  assert.equal(occupied.issue, "sovereignty");
+  assert.ok(signalFor(result, "A", "territory:A:occupied-identity"));
+  assert.match(claims.source.note, /^Claims 1 region/);
+  assert.ok(occupied.salience > claims.salience);
+  assert.equal(signalFor(result, "B", "territory:B:claims"), undefined);
+});
+
+test("an open puppet feels sovereignty pressure; a covert one, a released one or a switched-off system does not", () => {
+  const world = baseWorld();
+  world.puppets = [{ id: "p1", overlord: "B", puppet: "A", kind: "satellite", secrecy: "open", status: "active", loyalty: 20 }];
+  const open = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
+  assert.equal(signalFor(open, "A", "puppets:A").issue, "sovereignty");
+  assert.equal(open.B, undefined);
+
+  world.puppets[0].secrecy = "covert";
+  assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
+  world.puppets[0].secrecy = "open";
+  world.puppets[0].status = "released";
+  assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
+
+  world.puppets[0].status = "active";
+  setPuppetStatesEnabled(false);
+  try {
+    assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
+  } finally {
+    setPuppetStatesEnabled(true);
+  }
+});
+
+test("a net loss of ground since the clock last advanced raises national identity pressure", () => {
+  const world = territoryWorld();
+  world.politicalSimulation = { heldRegions: { A: 10, B: 3 } };
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
+  const lost = signalFor(result, "A", "territory:A:lost");
+  assert.equal(lost.issue, "national_identity");
+  assert.match(lost.source.note, /^Lost 4 region/);
+  assert.equal(signalFor(result, "B", "territory:B:lost"), undefined);
+
+  delete world.politicalSimulation;
+  assert.equal(derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" }).A, undefined);
 });
