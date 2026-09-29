@@ -139,9 +139,16 @@ export const CONTEXT_PROFILES = Object.freeze({
   }),
 });
 
+// Every task that reaches logContextDiagnostics: the runJsonTask tasks and the
+// two jump repairs. A task missing here reads as General.
 const TASK_PROFILE_MAP = Object.freeze({
-  advisorChat: CONTEXT_PROFILE_KEYS.ADVISOR,
-  diplomaticReply: CONTEXT_PROFILE_KEYS.DIPLOMACY,
+  chatActions: CONTEXT_PROFILE_KEYS.DIPLOMACY,
+  demandCheck: CONTEXT_PROFILE_KEYS.DIPLOMACY,
+  spyIntercept: CONTEXT_PROFILE_KEYS.DIPLOMACY,
+  intelligenceAssessment: CONTEXT_PROFILE_KEYS.ADVISOR,
+  projects: CONTEXT_PROFILE_KEYS.MECHANICAL,
+  worldMotionRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
+  worldBreadthRepair: CONTEXT_PROFILE_KEYS.WORLD_SIMULATION,
   eventConsolidator: CONTEXT_PROFILE_KEYS.HISTORY,
   geographyResolver: CONTEXT_PROFILE_KEYS.MECHANICAL,
   timelineCurator: CONTEXT_PROFILE_KEYS.HISTORY,
@@ -895,11 +902,9 @@ export const logContextDiagnostics = ({
     );
     const productionWorldHistory = ["jumpForward", "autoJumpForward"].includes(report.taskKey);
     console.log(
-      report.taskKey === "diplomaticReply"
-        ? "PHASE 9.3A FOCUSED DIPLOMACY IS ACTIVE. Exact current canon/thread continuity is protected; bounded narrative context is model-visible."
-        : productionWorldHistory
-          ? "PHASE 9.4A LONGITUDINAL ATTENTION IS ACTIVE. Young campaigns keep full old history; after 24k chars the same old-history envelope becomes ~18k broad summary coverage + up to 6k direct canonical-event anchors. Current hard state/recent continuity are unchanged."
-          : "THIS TASK'S MODEL-VISIBLE REQUEST IS UNCHANGED BY PHASE 9.4A. Shadow attention below remains measurement-only.",
+      productionWorldHistory
+        ? "PHASE 9.4A LONGITUDINAL ATTENTION IS ACTIVE. Young campaigns keep full old history; after 24k chars the same old-history envelope becomes ~18k broad summary coverage + up to 6k direct canonical-event anchors. Current hard state/recent continuity are unchanged."
+        : "THIS TASK'S MODEL-VISIBLE REQUEST IS UNCHANGED BY PHASE 9.4A. Shadow attention below remains measurement-only.",
     );
     console.log("Profile intent:", profile.intent);
     console.log("Profile priorities:", profile.priority);
@@ -922,7 +927,8 @@ export const logContextDiagnostics = ({
     if (promptTemplate) {
       console.log(
         "Phase 9.5B ACTUAL prompt-pack demand: derives placeholders from the loaded/frozen task + reachable helper templates, " +
-        "then adds variables consumed by current live runtime directives. OBSERVATIONAL ONLY; no context is skipped yet.",
+        "then adds variables consumed by current live runtime directives (LIVE_RUNTIME_VARIABLE_KEYS). " +
+        "For a caller that names its task, this demand DECIDES what buildTemplateVariables constructs: a variable not listed is never built.",
       );
       console.table({
         constructedCandidateVariables: {
@@ -962,11 +968,9 @@ export const logContextDiagnostics = ({
     }
 
     if (shadow.exact.length > 0 || shadow.bounded.length > 0) {
-      const memoryLabel = report.taskKey === "diplomaticReply"
-        ? "Focused diplomacy MEMORY envelope"
-        : productionWorldHistory
-          ? "Production World Simulation longitudinal attention envelope"
-          : "Shadow MEMORY envelope only";
+      const memoryLabel = productionWorldHistory
+        ? "Production World Simulation longitudinal attention envelope"
+        : "Shadow MEMORY envelope only";
       console.log(
         `${memoryLabel}: ${shadow.shadowMemoryChars.toLocaleString()} chars ` +
         `(~${shadow.shadowMemoryApproxTokens.toLocaleString()} tokens). ` +
