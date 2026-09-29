@@ -97,3 +97,19 @@ test("economic structural pressure prefers recent deterioration over modern-era 
   assert.ok(issues.has("cost_of_living"));
   assert.ok(issues.has("unemployment"));
 });
+
+test("names that are not actor keys resolve through the profile lookup, once per name, to the same actor", () => {
+  const world = baseWorld();
+  world.polityOverrides = { A: { name: "Republic of A", aliases: ["Old A"] } };
+  world.relations = [
+    { a: "Old A", b: "B", score: -80 },
+    { a: "Republic of A", b: "B", score: -60 },
+    { a: "Old A", b: "Nowhere", score: -90 },
+  ];
+  world.wars = [{ status: "active", sideA: ["Old A"], sideB: ["B"], startedDate: "2014-01-01" }];
+  const result = derivePoliticalStructuralSignals(world, { months: 1, updatedAt: "2014-04-22" });
+  assert.deepEqual(Object.keys(result), ["A", "B"]);
+  const relation = result.A.find((entry) => entry.source.id === "relations:A");
+  assert.match(relation.source.note, /^3 materially strained/);
+  assert.ok(result.A.some((entry) => entry.source.id === "wars:A:active"));
+});

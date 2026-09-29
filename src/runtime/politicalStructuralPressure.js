@@ -40,7 +40,21 @@ const append = (signalsByPolity, polityKey, signal) => {
   signalsByPolity[polityKey].push(signal);
 };
 
-const polityKeyFor = (world, token) => getPoliticalProfileKey(world, clean(token));
+// One resolver per derivation: every stats key, relation side and war participant
+// names a polity, and the same few hundred names repeat across thousands of
+// rows. An exact Political Actor key answers at once; anything else goes through
+// the full profile lookup once and is remembered for the rest of the call.
+const polityKeyResolver = (world) => {
+  const byPolity = world?.politicalActors?.byPolity || {};
+  const known = new Map();
+  return (token) => {
+    const name = clean(token);
+    if (!name) return "";
+    if (Object.prototype.hasOwnProperty.call(byPolity, name)) return name;
+    if (!known.has(name)) known.set(name, getPoliticalProfileKey(world, name));
+    return known.get(name);
+  };
+};
 
 const source = ({ id, date, note }) => ({
   kind: "structural",
@@ -60,9 +74,9 @@ const previousStatsSample = (world, statsKey, updatedAt) => {
   return candidates[0] || null;
 };
 
-const statsSignals = ({ world, months, updatedAt, signalsByPolity }) => {
+const statsSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
   for (const [statsKey, sheet] of Object.entries(world?.countryStats || {})) {
-    const polityKey = polityKeyFor(world, statsKey);
+    const polityKey = polityKeyFor(statsKey);
     if (!polityKey || !sheet || typeof sheet !== "object") continue;
     const economy = sheet.economy && typeof sheet.economy === "object" ? sheet.economy : {};
     const previous = previousStatsSample(world, statsKey, updatedAt);
@@ -143,13 +157,13 @@ const statsSignals = ({ world, months, updatedAt, signalsByPolity }) => {
   }
 };
 
-const relationSignals = ({ world, months, updatedAt, signalsByPolity }) => {
+const relationSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
   const byPolity = new Map();
   for (const relation of asArray(world?.relations)) {
     const score = finite(relation?.score);
     if (score == null || score > -40) continue;
     for (const token of [relation?.a, relation?.b]) {
-      const polityKey = polityKeyFor(world, token);
+      const polityKey = polityKeyFor(token);
       if (!polityKey) continue;
       const current = byPolity.get(polityKey) || { worst: 0, count: 0 };
       current.worst = Math.min(current.worst, score);
@@ -171,7 +185,7 @@ const relationSignals = ({ world, months, updatedAt, signalsByPolity }) => {
   }
 };
 
-const warSignals = ({ world, months, updatedAt, signalsByPolity }) => {
+const warSignals = ({ world, months, updatedAt, signalsByPolity, polityKeyFor }) => {
   const byPolity = new Map();
   const toTime = /^\d{4}-\d{2}-\d{2}$/.test(clean(updatedAt)) ? new Date(`${updatedAt}T00:00:00Z`).getTime() : NaN;
 
@@ -186,7 +200,7 @@ const warSignals = ({ world, months, updatedAt, signalsByPolity }) => {
 
     const participants = [...asArray(war?.sideA), ...asArray(war?.sideB)];
     for (const token of participants) {
-      const polityKey = polityKeyFor(world, token);
+      const polityKey = polityKeyFor(token);
       if (!polityKey) continue;
       const state = byPolity.get(polityKey) || { count: 0, longestDays: 0 };
       state.count += 1;
@@ -227,9 +241,10 @@ export const derivePoliticalStructuralSignals = (world, { months = 0, updatedAt 
   const signalsByPolity = {};
   if (elapsed <= 0 || !world?.politicalActors?.byPolity) return signalsByPolity;
 
-  statsSignals({ world, months: elapsed, updatedAt, signalsByPolity });
-  relationSignals({ world, months: elapsed, updatedAt, signalsByPolity });
-  warSignals({ world, months: elapsed, updatedAt, signalsByPolity });
+  const context = { world, months: elapsed, updatedAt, signalsByPolity, polityKeyFor: polityKeyResolver(world) };
+  statsSignals(context);
+  relationSignals(context);
+  warSignals(context);
 
   return Object.fromEntries(
     Object.entries(signalsByPolity)
