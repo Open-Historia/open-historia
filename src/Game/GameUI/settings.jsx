@@ -523,7 +523,6 @@ const StructuredModeSelect = ({ onChange, value }) => {
         <div style={fieldGroupStyle}>
         <label style={labelStyle}>How the AI answers</label>
         <select
-        data-no-translate
         value={mode}
         onChange={(event) => onChange(event.target.value)}
         style={{ ...inputStyle, cursor: "pointer" }}
@@ -1898,7 +1897,6 @@ const PlayerFocusSetting = () => {
         <div style={fieldGroupStyle}>
         <label style={{ ...labelStyle, fontWeight: 700 }}>Player focus — for this game</label>
         <select
-        data-no-translate
         disabled={saving || !gameId}
         value={following ? "" : focus}
         onChange={(event) => choose(event.target.value || null)}
@@ -2125,7 +2123,7 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Map presentation" description="Choose the visual base and which political labels are shown.">
                     <div style={fieldGroupStyle}>
                         <label style={labelStyle} htmlFor="game-basemap-style">Basemap</label>
-                        <select id="game-basemap-style" data-no-translate value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                        <select id="game-basemap-style" value={basemapStyle} onChange={(event) => updateBasemapStyle(event.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
                             <option value="" style={{ color: "black" }}>Scenario default</option>
                             {ESRI_BASEMAPS.map((basemap) => <option key={basemap.id} value={basemap.id} style={{ color: "black" }}>{basemap.label}</option>)}
                         </select>
