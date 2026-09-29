@@ -40,6 +40,7 @@ import {
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
@@ -519,6 +520,9 @@ const WorldMap = ({ isGlobe = false }) => {
     labelHaloColor,
     labelTextColor,
   } = useWorldState();
+  // Groups switched off for this game draw no area (server/gameFeatures.js);
+  // the world keeps them for a game switched back on.
+  const groupsOn = useActiveFeatures().groups?.enabled !== false;
   const mapDisplaySettings = {
     hideCountryLabels: useMapSetting(MAP_SETTING_KEYS.hideCountryLabels),
     disableCurvedCountryLabels: useMapSetting(MAP_SETTING_KEYS.disableCurvedCountryLabels),
@@ -3545,7 +3549,7 @@ const WorldMap = ({ isGlobe = false }) => {
         </Source>
       )}
 
-      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown)} hasMapLayer={hasMapLayer} />
+      <GroupAreaLayers data={groupAreaData} visible={Boolean(customActive && worldKnown && groupsOn)} hasMapLayer={hasMapLayer} />
 
       <Source id="polity-boundaries-source" type="geojson" data={EMPTY_FEATURE_COLLECTION} tolerance={0.25}>
         <Layer

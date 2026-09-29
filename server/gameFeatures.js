@@ -23,6 +23,12 @@ export const FEATURE_DEFINITIONS = Object.freeze([
     settings: Object.freeze([]),
   }),
   Object.freeze({
+    key: "groups",
+    label: "Groups",
+    description: "Actors that are not countries, such as insurgencies, cartels, militias, cults or an outbreak, each controlling an area of regions that stay their countries'. Off: the simulator is not given the groups or their areas, anything it writes about groups is left out, and no group's area is shown on the map or on a region's card. A game switched back on finds its groups as it left them.",
+    settings: Object.freeze([]),
+  }),
+  Object.freeze({
     key: "idleDiplomacy",
     label: "Idle diplomacy",
     description: "While the game sits open between turns, a polity with a live reason to speak may send the player an unprompted note. Every attempt is an AI request nobody pressed a button for, so it only runs while Background AI is on (Settings, AI, AI requests; on by default), and stops at that player's daily cap.",

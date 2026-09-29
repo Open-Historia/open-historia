@@ -1745,8 +1745,12 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("territorialControlContext")) {
     variables.territorialControlContext = await buildTerritorialControlContext(bundle.world, lookups ? { maxRows: 24, viaLookups: true } : {});
   }
-  variables.groupsContext = await buildGroupsContext(bundle.world);
-  variables.playerGroupContext = await buildPlayerGroupContext(bundle.world, bundle.game?.country);
+  // Groups switched off for this game (server/gameFeatures.js): no task is
+  // given them, which also leaves out the time skip's [Groups] rule and the
+  // Game Master's block (both read these).
+  const groupsOn = isActiveFeatureEnabled("groups");
+  variables.groupsContext = groupsOn ? await buildGroupsContext(bundle.world) : "";
+  variables.playerGroupContext = groupsOn ? await buildPlayerGroupContext(bundle.world, bundle.game?.country) : "";
   if (wants("canonicalStorylineContext")) {
     variables.canonicalStorylineContext = buildGameMasterStorylineContext(bundle.world);
   }
@@ -2383,7 +2387,7 @@ const buildJumpLiveState = async ({ variables = {}, lookups = null, reminders = 
   if (normalizeString(game?.difficulty)) blocks.push(jumpDifficultyDirective(game.difficulty));
 
   blocks.push(`[Occupied and Contested Regions]\n${normalizeString(variables.territorialControlContext) || "None."}`);
-  blocks.push(buildJumpGroupsBlock(variables.groupsContext));
+  if (isActiveFeatureEnabled("groups")) blocks.push(buildJumpGroupsBlock(variables.groupsContext));
   // The player leads a group rather than a country (runtime/groups.js).
   if (normalizeString(variables.playerGroupContext)) blocks.push(`${variables.playerGroupContext}\n${PLAYER_GROUP_JUMP_RULE}`);
 
@@ -2446,7 +2450,10 @@ ${brief}`);
   if (stats.customFullStatSheet) blocks.push(scenarioStatSheetDirective(stats.statSheetDefinition));
   else if (stats.customStatIndices) blocks.push(scenarioStatIndicesDirective(stats.statIndexRows));
 
-  blocks.push(JUMP_LEVERS);
+  // Groups switched off for this game: their lever goes with their rule.
+  blocks.push(isActiveFeatureEnabled("groups")
+    ? JUMP_LEVERS
+    : JUMP_LEVERS.split("\n").filter((line) => !line.startsWith("• groupOps ")).join("\n"));
   if (isActiveFeatureEnabled("espionage")) blocks.push(buildSpyOrdersDirective(playerName));
 
   // The player's standing goal (runtime/playerGoal.js), then their focus and
@@ -6099,6 +6106,17 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     for (const action of screened.actions) {
       noteReceipt(receipt, "adjusted", describeBasisAction(action, { eventTitle: titleAt(path) }));
       console.info(`[ai] ${path}.${action.family}: basis "${action.basis}" on ${action.region} — ${action.outcome === "claimed" ? "recorded as a claim" : "not applied"}.`);
+    }
+  }
+  // Groups switched off for this game (server/gameFeatures.js): what the model
+  // wrote about them is left out, and it is not told, as it is never told the
+  // system exists. The world's own groups are kept for a game switched back on.
+  if (!isActiveFeatureEnabled("groups")) {
+    for (const { impacts, path } of containers) {
+      const count = normalizeArray(impacts?.groupOps).length;
+      if (!count) continue;
+      impacts.groupOps = [];
+      console.info(`[ai] ${path}.groupOps: ${count} left out; groups are switched off for this game.`);
     }
   }
   // Every project an op could legitimately address: what is already on the

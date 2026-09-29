@@ -5,6 +5,7 @@ import { useMap } from "react-map-gl/maplibre";
 import { getNationFlags, getPrimedScenarioRegionCatalog, resolveCountryDisplayName } from "../../runtime/assets.js";
 import { withMapClaims } from "../../runtime/mapClaims.js";
 import { normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
+import { isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { readGameData, readWorldState } from "../../runtime/gameState.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
 import { getWorldStateSnapshot } from "../Map/useWorldState.js";
@@ -581,7 +582,10 @@ const RegionPopup = () => {
             .filter((value) => value && value !== controllerCode),
     )];
     const isUnclaimed = controllerCode === "";
-    const controllingGroup = regionId ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null : null;
+    // Not shown while groups are switched off for this game (server/gameFeatures.js).
+    const controllingGroup = regionId && isActiveFeatureEnabled("groups")
+        ? territoryState.groups?.[territoryState.groupAreas?.[regionId]] ?? null
+        : null;
     const isOccupied = Boolean(controllerCode && sovereignCode && controllerCode !== sovereignCode);
     const isContested = claimants.length > 0;
     const controlStatus = isOccupied && isContested
