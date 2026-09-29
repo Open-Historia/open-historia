@@ -1015,7 +1015,9 @@ const createGame = async (body = {}) => {
 
   // Meta cascade + seed inheritance, byte-faithful to server createGame (:1343).
   const createdAt = nowIso();
-  const scenarioSummary = sourceScenarioSummary ?? await getScenarioSummary(sourceGameSummary?.scenarioId ?? DEFAULT_SCENARIO_ID);
+  // A copy's scenario is looked up the way its source's is: a save whose map
+  // is missing still clones (server twin: createGame).
+  const scenarioSummary = sourceScenarioSummary ?? await getGameScenarioSummary(sourceGameSummary.scenarioId);
   const seedName = sourceGameSummary?.name ?? scenarioSummary.name;
   record.meta = {
     accentColor: trimmed(body.accentColor) || sourceGameSummary?.accentColor || scenarioSummary.accentColor || DEFAULT_GAME_META.accentColor,
@@ -1028,6 +1030,8 @@ const createGame = async (body = {}) => {
     name: trimmed(body.name) || `${seedName} Session`,
     scenarioId: scenarioSummary.id,
     coverImageContentType: sourceGameSummary?.coverImageContentType ?? null,
+    importedScenarioName: sourceGameSummary?.importedScenarioName ?? null,
+    importedScenarioOrigin: sourceGameSummary?.importedScenarioOrigin ?? null,
     features: normalizeFeatureOverrides(body.features ?? sourceGameSummary?.features),
     subtitle: trimmed(body.subtitle) || sourceGameSummary?.subtitle || scenarioSummary.subtitle || DEFAULT_GAME_META.subtitle,
     updatedAt: createdAt,

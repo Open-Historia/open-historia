@@ -69,7 +69,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | --- | --- | --- | --- |
 | GET | `/api/games` | Game catalog (`{ games, activeGameId }`) | `server/server.js:360` |
 | GET | `/api/games/:gameId` | One game's summary + all 7 core JSON assets + its scenario summary | `server/server.js:368` |
-| POST | `/api/games` | Create a game from a scenario (or seed from `seedGameId`) → 201 | `server/server.js:376` |
+| POST | `/api/games` | Create a game from a scenario (or seed from `seedGameId`; a copy keeps its source's scenario even when that scenario is gone, and a refused create leaves nothing on disk) → 201 | `server/server.js:376` |
 | PUT | `/api/games/active` | Set the active game (stamps `lastPlayedAt`/`playCount`) | `server/server.js:384` |
 | PUT | `/api/games/:gameId` | Update meta / `world` / `game` / `prompts` / `storage.*` | `server/server.js:392` |
 | GET | `/api/games/:gameId/assets/:assetKey` | Stream a game upload asset (only `cover`) | `server/server.js:400` |

@@ -2143,18 +2143,33 @@ const createGame = ({
 
   const resolvedGameId = ensureUniqueId(id || name || "game", "game");
   const gameDir = getGameDirectory(resolvedGameId);
+
+  // Everything that can refuse the request is resolved before anything is on
+  // disk. A clone used to copy the source's files — game.json included — and
+  // only then look its scenario up, which throws when the scenario is gone; the
+  // half-made directory then listed as a "Modern Day Session" holding a copy
+  // of that campaign. A copy's scenario is looked up the way its source is
+  // (getGameScenarioSummary): a save whose map is missing still clones.
+  let sourceScenario = null;
+  let sourceGame = null;
+  const cloning = Boolean(seedGameId && fs.existsSync(getGameDirectory(seedGameId)));
+  const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
+
+  if (cloning) {
+    sourceGame = getGameSummary(seedGameId);
+  } else {
+    sourceScenario = getScenarioSummary(nextScenarioId);
+  }
+  const scenarioSummary = sourceScenario ?? getGameScenarioSummary(sourceGame.scenarioId);
+  const seedName = sourceGame?.name ?? scenarioSummary.name;
+
+  try {
   ensureDirectory(gameDir);
   ensureDirectory(path.join(gameDir, "storage"));
 
-  let sourceScenario = null;
-  let sourceGame = null;
-
-  if (seedGameId && fs.existsSync(getGameDirectory(seedGameId))) {
-    sourceGame = getGameSummary(seedGameId);
+  if (cloning) {
     seedGameJsonFilesFromGame(resolvedGameId, seedGameId);
   } else {
-    const nextScenarioId = String(scenarioId ?? DEFAULT_SCENARIO_ID).trim() || DEFAULT_SCENARIO_ID;
-    sourceScenario = getScenarioSummary(nextScenarioId);
     seedGameJsonFilesFromScenario(resolvedGameId, nextScenarioId);
   }
 
@@ -2173,8 +2188,6 @@ const createGame = ({
   }
 
   const createdAt = new Date().toISOString();
-  const scenarioSummary = sourceScenario ?? getScenarioSummary(sourceGame?.scenarioId ?? DEFAULT_SCENARIO_ID);
-  const seedName = sourceGame?.name ?? scenarioSummary.name;
 
   writeJsonFile(getGameMetaPath(resolvedGameId), {
     features: normalizeFeatureOverrides(features ?? sourceGame?.features),
@@ -2206,6 +2219,10 @@ const createGame = ({
     name: String(name ?? "").trim() || `${seedName} Session`,
                 scenarioId: scenarioSummary.id,
                 coverImageContentType: sourceGame?.coverImageContentType ?? null,
+                // What the source's sender called its scenario: the copy of a
+                // game imported without its map is named by it the same way.
+                importedScenarioName: sourceGame?.importedScenarioName ?? null,
+                importedScenarioOrigin: sourceGame?.importedScenarioOrigin ?? null,
                 subtitle:
                 String(subtitle ?? "").trim() ||
                 sourceGame?.subtitle ||
@@ -2213,6 +2230,12 @@ const createGame = ({
                 DEFAULT_GAME_META.subtitle,
                 updatedAt: createdAt,
   });
+  } catch (error) {
+    // A game directory with a game.json lists as a game, meta or not.
+    fs.rmSync(gameDir, { recursive: true, force: true });
+    invalidateCatalogs();
+    throw error;
+  }
 
   const manifest = getGameManifest();
   manifest.order = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
