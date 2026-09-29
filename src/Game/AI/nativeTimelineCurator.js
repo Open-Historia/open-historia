@@ -1284,9 +1284,14 @@ export const curateGeneratedEventsWithHidden = async ({
   let analysisResult = null;
   let analysisError = "";
 
+  // The analyst is a request. When no candidate is one it could remove
+  // (candidatesWorthJudging: every event carries a transfer, a unit op or a
+  // war, or resembles nothing on record), every event is kept whatever it
+  // says, so it is not asked — the same rule the turn review applies.
   if (
     incoming.length &&
-    typeof analyzeBatch === "function"
+    typeof analyzeBatch === "function" &&
+    candidatesWorthJudging({ events: incoming, priorEvents, mode }).length > 0
   ) {
     try {
       analysisResult =
