@@ -1372,10 +1372,12 @@ app.delete("/api/basemaps/:id", (req, res) => {
   }
 });
 
-// Vendored Fantasy Map Generator (Azgaar, MIT), built to ../fmg/dist by the
-// updater (scripts/fetch-fmg.mjs) and served same-origin so the map editor's
-// "Generate" console can run it in a hidden iframe and read its data. Present
-// only after it's been vendored — otherwise /fmg 404s and the editor says so.
+// Vendored Fantasy Map Generator (Azgaar, MIT), fetched to ../fmg/dist by
+// scripts/fetch-fmg.mjs — run by hand in a source checkout; no installer ships
+// it — and served same-origin so the map editor's "Generate" console can run
+// it in a hidden iframe and read its data. Present only after it's been
+// vendored; otherwise the editor's probe (fmgDriver.js checkFmgAvailable) sees
+// no generator and hides the Generate tab.
 // Mounted before the SPA fallback so /fmg/* isn't swallowed by index.html.
 const fmgDistDir = path.join(__dirname, "../fmg/dist");
 if (fs.existsSync(fmgDistDir)) app.use("/fmg", express.static(fmgDistDir));

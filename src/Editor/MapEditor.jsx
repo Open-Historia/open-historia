@@ -54,7 +54,7 @@ import { buildGameSeed } from "./exportPreset.js";
 import { panelSurface, inputStyle } from "./editorStyles.js";
 import FmgPanel from "./fmg/FmgPanel.jsx";
 import SuggestionReviewPanel, { useSuggestionMarkup, useSuggestionReview } from "./SuggestionReviewPanel.jsx";
-import { generateFmgWorld } from "./fmg/fmgDriver.js";
+import { checkFmgAvailable, generateFmgWorld } from "./fmg/fmgDriver.js";
 import { fmgToEditorSeed } from "./fmg/fmgImport.js";
 
 const hexToRgb = (value) => {
@@ -137,6 +137,14 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [fmgOpen, setFmgOpen] = useState(false); // FMG "Generate" drawer
   const [fmgBusy, setFmgBusy] = useState(false);
   const [fmgLog, setFmgLog] = useState([]);
+  // Whether this build serves the generator (fmgDriver.js checkFmgAvailable):
+  // null until asked once, and the GENERATE tab shows only on true.
+  const [fmgAvailable, setFmgAvailable] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    checkFmgAvailable().then((ok) => { if (!cancelled) setFmgAvailable(ok); });
+    return () => { cancelled = true; };
+  }, []);
 
   // ---- reviewing a suggestion's map changes (SuggestionReviewPanel.jsx) -----
   // A suggested basemap goes on the map the way the Basemap picker puts one
@@ -1284,13 +1292,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       <BorderCleanupNote text={cleanupNote} top={isMobile ? 200 : 56} />
       <BorderCleanupOverlay state={borderCleanup} onStop={() => { cleanupStopRef.current = true; }} />
 
-      <FmgPanel
-        open={fmgOpen}
-        onToggle={() => setFmgOpen((o) => !o)}
-        busy={fmgBusy}
-        log={fmgLog}
-        onGenerate={generateFromFmg}
-      />
+      {fmgAvailable && (
+        <FmgPanel
+          open={fmgOpen}
+          onToggle={() => setFmgOpen((o) => !o)}
+          busy={fmgBusy}
+          log={fmgLog}
+          onGenerate={generateFromFmg}
+        />
+      )}
     </div>
   );
 };
