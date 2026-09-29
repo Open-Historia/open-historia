@@ -1353,15 +1353,45 @@ export const applyInstitutionUpdates = ({
   return { world: { ...world, institutions }, institutions, appliedIds, error: "" };
 };
 
+// A polity that no longer exists leaves every institution: its seat and any
+// leadership, its place on an open ballot it had not yet voted in (a ballot it
+// cast still counts), and every open case it opened or was the subject of,
+// with that case's ballot. The history says why its seat went.
 export const removePolityFromInstitutions = (institutionsInput, polityInput, world = {}, date = "") => {
   const institutions = normalizeInstitutions(institutionsInput, world);
   const polity = canonicalPolity(polityInput, world);
   if (!polity) return institutions;
-  for (const [id, institution] of Object.entries(institutions.byId)) {
-    const members = array(institution.members).filter((member) => lower(member.polity) !== lower(polity));
-    const leaders = array(institution.leaders).filter((leader) => lower(leader) !== lower(polity));
-    if (members.length === institution.members.length && leaders.length === institution.leaders.length) continue;
-    institutions.byId[id] = { ...institution, members, leaders, lastUpdatedDate: clean(date) || institution.lastUpdatedDate || "" };
+  const isPolity = (value) => lower(value) === lower(polity);
+  const when = clean(date);
+  for (const [id, current] of Object.entries(institutions.byId)) {
+    const institution = clone(current);
+    let changed = false;
+    if (array(institution.members).some((member) => isPolity(member.polity)) || array(institution.leaders).some(isPolity)) {
+      institution.members = array(institution.members).filter((member) => !isPolity(member.polity));
+      institution.leaders = array(institution.leaders).filter((leader) => !isPolity(leader));
+      appendInstitutionMembershipHistory(institution, { action: "dissolved", polity, actor: polity, date: when }, world);
+      changed = true;
+    }
+    for (const proposal of Object.values(institution.proposals || {})) {
+      if (lower(proposal.status) !== "voting" || !proposal.voting) continue;
+      if (!array(proposal.voting.eligibleVoters).some(isPolity)) continue;
+      if (Object.values(proposal.voting.ballots || {}).some((ballot) => isPolity(ballot?.polity))) continue;
+      proposal.voting.eligibleVoters = proposal.voting.eligibleVoters.filter((voter) => !isPolity(voter));
+      changed = true;
+    }
+    for (const entry of Object.values(institution.lifecycleCases || {})) {
+      if (!["pending", "negotiating", "pending-approval"].includes(lower(entry?.status))) continue;
+      if (!isPolity(entry.polity) && !isPolity(entry.initiatedBy)) continue;
+      institution.lifecycleCases[entry.id] = { ...entry, status: "withdrawn", resolvedDate: when, updatedDate: when };
+      const proposal = institution.proposals?.[entry.proposalId];
+      if (proposal && ["draft", "debate", "amendment", "formalized", "voting"].includes(lower(proposal.status))) {
+        institution.proposals[proposal.id] = { ...proposal, status: "withdrawn", lastUpdatedDate: when || proposal.lastUpdatedDate || "" };
+      }
+      changed = true;
+    }
+    if (!changed) continue;
+    institution.lastUpdatedDate = when || institution.lastUpdatedDate || "";
+    institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
   }
   return institutions;
 };

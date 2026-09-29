@@ -26,6 +26,7 @@ import {
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
   normalizeInstitutions,
+  removePolityFromInstitutions,
 } from "./institutions.js";
 import { normalizePowerStatus } from "./powerStatus.js";
 import { normalizeInstitutionLifecycleImpactOp } from "./institutionLifecycleCore.js";
@@ -5119,6 +5120,31 @@ const applyPolityAndTerritoryImpacts = ({
         lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
       };
     });
+    // It leaves its institutions (seats, open ballots, open cases), and every
+    // subordination it was party to ends: released when it was the Overlord,
+    // annexed when it was the Puppet and this event handed its land to the
+    // Overlord, released otherwise.
+    if (world.institutions && typeof world.institutions === "object") {
+      world.institutions = removePolityFromInstitutions(world.institutions, code, world, endedDate);
+    }
+    if (Array.isArray(world.puppets)) {
+      world.puppets = world.puppets.map((row) => {
+        if (!row || typeof row !== "object" || normalizeOptionalString(row.status || "active").toLowerCase() !== "active") return row;
+        const isOverlord = samePolity(row.overlord, code);
+        if (!isOverlord && !samePolity(row.puppet, code)) return row;
+        const annexed = !isOverlord && regionTransfers.some((transfer) => (
+          samePolity(resolveOwner(transfer.fromCode) || transfer.fromCode, code)
+          && samePolity(resolveOwner(transfer.toCode) || transfer.toCode, row.overlord)
+        ));
+        return {
+          ...row,
+          status: annexed ? "annexed" : "released",
+          endedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+          lastUpdatedDate: endedDate || canonicalizeDateString(row.lastUpdatedDate),
+          ...(eventId ? { sourceEventIds: [...new Set([...normalizeArray(row.sourceEventIds), eventId])].slice(-24) } : {}),
+        };
+      });
+    }
     delete colors[code];
     console.info(`[polity lifecycle] dissolved "${code}".`);
   }
