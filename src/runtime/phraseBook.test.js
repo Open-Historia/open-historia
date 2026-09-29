@@ -9,7 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { compilePattern, createPhraseBook, isPatternKey } from "./phraseBook.js";
+import { compilePattern, createPhraseBook, fillSlots, isPatternKey } from "./phraseBook.js";
+import { uiString } from "./translator.js";
 
 const bookOf = (entries) => {
   const book = createPhraseBook();
@@ -142,4 +143,32 @@ test("a later entry replaces an earlier one, patterns included", () => {
   book.set("Save game", "Speichern");
   book.set("Save game", "Spiel speichern");
   assert.equal(book.translate("Save game"), "Spiel speichern");
+});
+
+test("a sentence the game writes itself is looked up by its own key, patterns included", () => {
+  const book = bookOf({
+    "We refuse this demand.": "Wir lehnen diese Forderung ab.",
+    "We accept: {{summary}}.": "Wir akzeptieren: {{summary}}.",
+    "We have reconsidered. {{text}}": "Wir haben es uns anders überlegt. {{text}}",
+  });
+  assert.equal(book.format("We refuse this demand."), "Wir lehnen diese Forderung ab.");
+  // A value that is a whole sentence, which matching a rendered string would
+  // refuse for a pattern this short: the key is known, so nothing is matched.
+  assert.equal(
+    book.format("We accept: {{summary}}.", { summary: "Withdraw your fleet. Then we talk" }),
+    "Wir akzeptieren: Withdraw your fleet. Then we talk.",
+  );
+  assert.equal(book.format("We have reconsidered. {{text}}", { text: "Fine." }), "Wir haben es uns anders überlegt. Fine.");
+  assert.equal(book.format("We accept your alternative: {{alternative}}.", { alternative: "x" }), null, "no entry: null");
+});
+
+test("slots are filled by name, and a missing one is dropped", () => {
+  assert.equal(fillSlots("We accept: {{summary}}.", { summary: "$1 a barrel" }), "We accept: $1 a barrel.");
+  assert.equal(fillSlots("{{a}} and {{b}}", { a: "One" }), "One and ");
+  assert.equal(fillSlots("Plain", undefined), "Plain");
+});
+
+test("uiString is the English, filled, when no pack is loaded, and never queues anything", () => {
+  assert.equal(uiString("We accept: {{summary}}.", { summary: "the terms" }), "We accept: the terms.");
+  assert.equal(uiString("We refuse this demand."), "We refuse this demand.");
 });

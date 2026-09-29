@@ -61,6 +61,7 @@ import {
   sortProjects,
 } from "../../runtime/projects.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { uiString } from "../../runtime/translator.js";
 
 // The seed the empty state and the per-card button hand to the advisor. Both
 // pre-fill the input and never send — the player edits and presses send, which is
@@ -73,14 +74,10 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 // board stays empty and the player gets a wall of text. Ten at a time, one
 // sentence each, and only the milestones still ahead keeps a reply inside its
 // budget; the retry button asks for the next batch.
-export const PROJECTS_BACKFILL_PROMPT =
-  "Put my current projects and operations on the board — the sustained efforts, "
-  + "mine and any belonging to other powers that we know about. Start with the TEN "
-  + "most significant and stop there; I will ask for the next batch after. Keep each "
-  + "summary to one sentence, and give each only the milestones still ahead of it "
-  + "plus the single most recent one already achieved. Only include efforts that genuinely "
-  + "appear in our history — never invent one to round out the list — and say plainly if "
-  + "you are unsure about any of them.";
+//
+// One string, so the string catalog reads it whole; handed over in the
+// interface's language (uiString).
+export const PROJECTS_BACKFILL_PROMPT = "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.";
 
 const buildBriefPrompt = (project) => {
   const label = project.kind === "operation" ? "operation" : "project";
@@ -1223,7 +1220,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
             <button
               type="button"
               className="oh-tap-row"
-              onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+              onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
               style={{
                 background: "rgba(255,255,255,0.06)",
                 border: "1px solid rgba(255,255,255,0.25)",
@@ -1310,7 +1307,7 @@ const ProjectsPanel = ({ isOpen, onClose, onOpenAdvisor, mapRef }) => {
           <button
             type="button"
             className="oh-tap-row"
-            onClick={() => askAdvisor(PROJECTS_BACKFILL_PROMPT)}
+            onClick={() => askAdvisor(uiString(PROJECTS_BACKFILL_PROMPT))}
             style={{ ...ghostButtonStyle, marginTop: "0.2rem", padding: "0.45rem" }}
             onMouseEnter={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
             onMouseLeave={(event) => { event.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}

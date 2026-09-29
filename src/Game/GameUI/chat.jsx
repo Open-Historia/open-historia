@@ -43,6 +43,7 @@ import { buildThreadCatchUp } from "../AI/conversationCatchUp.js";
 import { spyOperationOps } from "../../runtime/projects.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { chatTextDirection } from "../../runtime/i18n.js";
+import { uiString } from "../../runtime/translator.js";
 import { compareGameDates, formatGameDateReadable, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -1645,10 +1646,14 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 // A change of mind says so, or the other side reads the
                 // acceptance as coming out of nowhere.
                 const reconsidered = demand.status === "refused";
+                // In the interface's language (the shipped pack's own entries):
+                // the player's line, as the player would have typed it.
                 const line = answer === "accepted"
-                    ? (reconsidered ? `We have reconsidered. We accept: ${demand.summary}.` : `We accept: ${demand.summary}.`)
-                    : answer === "refused" ? "We refuse this demand."
-                        : (reconsidered ? `We have reconsidered. ${text}` : text);
+                    ? (reconsidered
+                        ? uiString("We have reconsidered. We accept: {{summary}}.", { summary: demand.summary })
+                        : uiString("We accept: {{summary}}.", { summary: demand.summary }))
+                    : answer === "refused" ? uiString("We refuse this demand.")
+                        : (reconsidered ? uiString("We have reconsidered. {{text}}", { text }) : text);
                 await submitPlayerText(line);
             } finally {
                 setDemandBusy(false);
@@ -1661,7 +1666,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             setDemandBusy(true);
             try {
                 appendThreadEvents([event]);
-                await submitPlayerText(`We accept your alternative: ${demand.alternative}.`);
+                await submitPlayerText(uiString("We accept your alternative: {{alternative}}.", { alternative: demand.alternative }));
             } finally {
                 setDemandBusy(false);
             }
@@ -1672,7 +1677,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         const rejectAlternative = async (demand, revised = "") => {
             setDemandBusy(true);
             try {
-                await submitPlayerText(revised || `No. The demand stands: ${demand.summary}.`, {
+                await submitPlayerText(revised || uiString("No. The demand stands: {{summary}}.", { summary: demand.summary }), {
                     onSent: ({ messageId, time }) => appendThreadEvents([playerDemandEvent({
                         player: playerCountry,
                         target: demand.target,

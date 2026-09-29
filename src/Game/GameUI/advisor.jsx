@@ -9,6 +9,7 @@ import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { chatLanguageDiffersFromUi, chatTextDirection } from "../../runtime/i18n.js";
+import { uiString } from "../../runtime/translator.js";
 import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
@@ -375,6 +376,11 @@ const AdvisorProjectsCard = ({ items, onOpenProjects }) => {
 // outcome — the player sees a wall of JSON in the chat, the board stays empty,
 // and nothing anywhere explains why. The overwhelmingly common cause is the
 // reply hitting its token cap partway through a long array.
+//
+// "Ask for the next batch" puts this in the composer, in the interface's
+// language (uiString): named, so the string catalog reads it whole.
+const RETRY_PROJECTS_TEXT = "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing.";
+
 const AdvisorProjectsProblem = ({ kind, detail, excerpt, onRetry }) => {
     const [showExcerpt, setShowExcerpt] = useState(false);
     const message = kind === "truncated"
@@ -1363,10 +1369,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // want to narrow what they are asking for, and this file has never auto-sent
     // anything on the player's behalf (see the requestedPrompt effect above).
     const handleRetryProjects = React.useCallback(() => {
-        setInput("Continue putting my projects and operations on the board — the last reply was cut off. "
-            + "Pick up from where you stopped and skip anything already on the board. Send no more than ten, "
-            + "one sentence each. Only include efforts that genuinely appear in our history — if everything real "
-            + "is already on the board, just tell me that and add nothing.");
+        setInput(uiString(RETRY_PROJECTS_TEXT));
         inputRef.current?.focus();
     }, []);
 

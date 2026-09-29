@@ -20,6 +20,19 @@ const extract = (code) => {
   return { exact: [...result.exact.keys()], patterns: [...result.patterns.keys()] };
 };
 
+// What the game's own source files yield for the catalog (every string,
+// patterns too), read the way extractTree reads them.
+const catalogOf = (files) => {
+  const found = new Set();
+  for (const rel of files) {
+    const jsx = rel.endsWith(".jsx");
+    const result = extractFromSource(fs.readFileSync(rel, "utf8"), rel, { jsx, catchAll: jsx, messages: jsx });
+    assert.equal(result.error, undefined);
+    for (const text of [...result.exact.keys(), ...result.patterns.keys()]) found.add(text);
+  }
+  return found;
+};
+
 test("JSX text is read with React's whitespace rules", () => {
   assert.equal(cleanJsxText("\n   Hello   world\n   again  \n"), "Hello   world again");
   const { exact } = extract("export const A = () => <h2>\n    Save the\n    game\n  </h2>;");
@@ -143,9 +156,28 @@ test("a difficulty level's profile values and effect bullets are read", () => {
   assert.deepEqual([...result.exact.keys()].sort(), [
     "Low", "Mistakes have durable consequences.", "NPCs react promptly to threats.", "Relaxed", "Soft", "Very high",
   ], "the model's directives and an id list are not interface text");
-  const real = extractTree(process.cwd()).exact;
+  const real = catalogOf(["src/runtime/difficulty.js"]);
   for (const text of ["Interest-based", "Low–medium", "Ambiguous but reasonable player intent is interpreted generously."]) {
     assert.ok(real.has(text), `${text} is in the catalog`);
+  }
+});
+
+test("the sentences the game puts in a composer are in the catalog whole", () => {
+  // uiString looks these up by their own key, so the key must be the whole
+  // sentence exactly as the code passes it.
+  const real = catalogOf(["src/Game/GameUI/actions.jsx", "src/Game/GameUI/advisor.jsx", "src/Game/GameUI/projects.jsx", "src/Game/GameUI/chat.jsx"]);
+  for (const text of [
+    "Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.",
+    "Continue putting my projects and operations on the board — the last reply was cut off. Pick up from where you stopped and skip anything already on the board. Send no more than ten, one sentence each. Only include efforts that genuinely appear in our history — if everything real is already on the board, just tell me that and add nothing.",
+    "Put my current projects and operations on the board — the sustained efforts, mine and any belonging to other powers that we know about. Start with the TEN most significant and stop there; I will ask for the next batch after. Keep each summary to one sentence, and give each only the milestones still ahead of it plus the single most recent one already achieved. Only include efforts that genuinely appear in our history — never invent one to round out the list — and say plainly if you are unsure about any of them.",
+    "We accept: {{summary}}.",
+    "We have reconsidered. We accept: {{summary}}.",
+    "We refuse this demand.",
+    "We have reconsidered. {{text}}",
+    "We accept your alternative: {{alternative}}.",
+    "No. The demand stands: {{summary}}.",
+  ]) {
+    assert.ok(real.has(text), `${text.slice(0, 60)}… is in the catalog`);
   }
 });
 

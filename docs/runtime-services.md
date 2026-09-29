@@ -200,6 +200,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 | Export | Purpose |
 |---|---|
 | `translateLabel(text)` | **Sync** best-effort translate for text drawn outside the DOM (map country labels). Returns the known translation, or the original while queuing the name as content + firing `i18n:updated` when it resolves |
+| `uiString(text, params)` | **Sync** lookup of the interface's own words for a sentence the DOM translator never reaches: one put in a composer (textareas are skipped) or sent as the player's line (their bubbles are `data-no-translate`), such as the seeded advisor prompts and the demand card's replies. `text` is the English key, a `{{slot}}` pattern included, filled from `params` (`phraseBook.format`); never queued for the AI, the English without an entry |
 | `enqueueStrings(strings)` | Proactively queue content (e.g. freshly-fetched hub posts); only unknown strings cost a call |
 | `enqueueEventStrings(events)` | An event log as it is written: queues only the scenario's own events (`source` `"scenario"`); the AI's are written in the player's language |
 | `enqueueContentStrings(payload)` | Deep-walk a saved payload (≤6 deep, arrays of ≤500; `collectContentText` in `translationRules.js`) pulling human-readable fields (`CONTENT_TEXT_KEYS` + `aliases`), skipping `features`/`geometry`/`coordinates`, and enqueue them. Called by `library.js` on `createScenario/saveScenario/createGame/saveGame` so edited names/descriptions translate **and reach the server pack** the moment they're saved |

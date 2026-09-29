@@ -20,6 +20,7 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
+import { uiString } from "../../runtime/translator.js";
 
 dayjs.extend(advancedFormat);
 
@@ -751,7 +752,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         // queued actions right from that conversation (see advisor.jsx), so this
         // is the more direct route into the same plan-the-turn workflow the AI
         // suggestions above offer.
-        onClick={() => onOpenAdvisor("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue.")}
+        onClick={() => onOpenAdvisor(uiString("Let's brainstorm a plan of concrete actions for this round. Ask me what I'm trying to accomplish, then propose specific ones we can queue."))}
         style={{
             background: "rgba(255,255,255,0.05)",
             border: "1px solid rgba(255,255,255,0.2)",

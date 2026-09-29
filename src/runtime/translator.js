@@ -40,7 +40,7 @@ import {
   syncLanguageFromServer,
 } from "./i18n.js";
 import { createDateLocalizer } from "./localDates.js";
-import { createPhraseBook } from "./phraseBook.js";
+import { createPhraseBook, fillSlots } from "./phraseBook.js";
 import { loadPromptTranslations } from "./promptTranslations.js";
 import {
   BATCH_MAX_STRINGS,
@@ -706,6 +706,15 @@ export const translateLabel = (text) => {
   }
   return text;
 };
+
+// The interface's own words for a sentence the DOM translator never reaches:
+// one the game puts in a composer for the player to edit or send as theirs
+// (textareas are skipped, and the player's bubbles are data-no-translate).
+// `text` is the English as the packs key it, a `{{slot}}` pattern included,
+// and `params` fill its slots. Synchronous, from the shipped pack and what
+// the server's pack has learned; never sent to the AI: without an entry it
+// is the English.
+export const uiString = (text, params = {}) => book.format(text, params) ?? fillSlots(text, params);
 
 // Proactively queue content that exists as data but may not be rendered yet
 // (e.g. freshly fetched Community-hub posts). Only unknown strings cost a call.
