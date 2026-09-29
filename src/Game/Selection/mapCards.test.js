@@ -65,6 +65,8 @@ test("a second structure of the same name is another structure", () => {
 test("two towns of one name are told apart by where they are", () => {
   const springfield = { source: "city", name: "Springfield", lng: -89.65, lat: 39.8 };
   assert.equal(isSameFeatureSelection(springfield, { ...springfield }), true);
+  // Clicked again after zooming in: the tile's rounding moves it a little.
+  assert.equal(isSameFeatureSelection(springfield, { ...springfield, lng: -89.639, lat: 39.811 }), true, "the same town, one zoom later");
   assert.equal(isSameFeatureSelection(springfield, { ...springfield, lng: -72.59, lat: 42.1 }), false);
   assert.equal(isSameFeatureSelection(springfield, { ...springfield, source: "marker" }), false, "a city is never a structure");
   assert.equal(isSameFeatureSelection(null, springfield), false);

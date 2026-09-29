@@ -59,7 +59,11 @@ export const cardScreenPoint = (map, lngLat) => {
 // Whether a click landed on the place whose card is already open, which closes
 // it; any other place replaces it. Names are not identities: two structures
 // called "Naval Base", two towns of one name, a drawn map's many "New Region"s.
-const SAME_SPOT_DEGREES = 1e-5;
+// A city's coordinates come from the tile the click hit, rounded to that tile's
+// grid (about a hundredth of a degree when zoomed out), so the same town
+// clicked again after a zoom is a little way off: a few kilometres is still
+// that town, and a second town of the same name is never that close.
+const SAME_SPOT_DEGREES = 0.05;
 const cleanId = (value) => String(value ?? "").trim();
 
 export const isSameFeatureSelection = (current, next) => {
