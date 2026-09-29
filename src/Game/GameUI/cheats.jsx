@@ -3522,7 +3522,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                     {String(entry.op || "update").toUpperCase()} · {entry.name || "Unnamed group"}{entry.newName ? ` → ${entry.newName}` : ""}
                                                 </strong>
                                                 <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
-                                                {regions.length > 0 ? <div style={{ marginTop: "0.12rem" }}>Regions: {regions.join(", ")}</div> : null}
+                                                {regions.length > 0 ? <div style={{ marginTop: "0.12rem" }}>{`Regions: ${regions.join(", ")}`}</div> : null}
                                                 {entry.description ? <div style={{ color: "rgba(255,255,255,0.44)", marginTop: "0.12rem" }}>{entry.description}</div> : null}
                                                 {entry.note ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.note}</div> : null}
                                             </div>
@@ -3540,7 +3540,11 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                                 {String(entry.op || "update").toUpperCase()} · {entry.name || entry.institutionId || "Unknown institution"}
                                             </strong>
                                             <span style={{ color: "rgba(255,255,255,0.34)" }}> · {eventRef(entry)}</span>
-                                            <div style={{ marginTop: "0.12rem" }}>Actor: {entry.actorPolity || "—"}{entry.targetPolity ? ` · Target: ${entry.targetPolity}` : ""}</div>
+                                            <div style={{ marginTop: "0.12rem" }}>
+                                                {entry.targetPolity
+                                                    ? `Actor: ${entry.actorPolity || "—"} · Target: ${entry.targetPolity}`
+                                                    : `Actor: ${entry.actorPolity || "—"}`}
+                                            </div>
                                             {entry.reason || entry.terms ? <div style={{ color: "rgba(255,255,255,0.42)", marginTop: "0.14rem" }}>{entry.reason || entry.terms}</div> : null}
                                         </div>
                                     ))}

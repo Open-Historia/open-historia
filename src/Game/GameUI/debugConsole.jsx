@@ -372,7 +372,9 @@ const GenerationDetail = ({ record, onRate }) => {
                         <div style={{ marginBottom: "0.6rem", fontSize: "0.66rem", color: COLORS.muted, fontFamily: MONO, lineHeight: 1.6 }}>
                             {record.lookups.roundUsage.map((round, index) => (
                                 <div key={`usage-${round.round}-${index}`}>
-                                    {`round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)}${round.cachedTokens ? ` · ${fmtInt(round.cachedTokens)} cached` : ""} · ${fmtMs(round.elapsedMs)}`}
+                                    {round.cachedTokens
+                                        ? `round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)} · ${fmtInt(round.cachedTokens)} cached · ${fmtMs(round.elapsedMs)}`
+                                        : `round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)} · ${fmtMs(round.elapsedMs)}`}
                                 </div>
                             ))}
                         </div>
