@@ -94,5 +94,13 @@ export const discardPendingProjectsJump = () => {
   return had;
 };
 
-// Compared by identity in a render path (time.jsx).
+// Written into a fallback's rawResponse when there is no model output to show
+// (gameplay.js), and compared by identity in a render path (time.jsx) so the
+// debug report labels its section honestly rather than matching on the wording.
 export const NO_RESPONSE_BODY_NOTE = "(no response body — the request failed before the model answered, so there was nothing to parse. See the failure reason above: a transport or HTTP error like this usually means the provider URL, API key or model name is wrong, not that the model misbehaved.)";
+export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
+
+// True when a fallback's rawResponse is one of the notes above rather than
+// model text that failed to parse or validate.
+export const isResponseBodyNote = (rawResponse) =>
+  rawResponse === NO_RESPONSE_BODY_NOTE || rawResponse === EMPTY_RESPONSE_BODY_NOTE;

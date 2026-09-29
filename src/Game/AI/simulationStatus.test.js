@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+  EMPTY_RESPONSE_BODY_NOTE,
+  NO_RESPONSE_BODY_NOTE,
   isChatGenerationLikely,
+  isResponseBodyNote,
   setChatGenerationInFlight,
   subscribeChatGeneration,
 } from "./simulationStatus.js";
@@ -41,4 +44,13 @@ test("the chat panel subscribes instead of polling the flag on a timer", () => {
   const chat = fs.readFileSync(new URL("../GameUI/chat.jsx", import.meta.url), "utf8");
   assert.match(chat, /subscribeChatGeneration\(setIsGenerating\)/);
   assert.doesNotMatch(chat, /setInterval\(\(\) => setIsGenerating/);
+});
+
+test("both response-body notes are told apart from rejected model text", () => {
+  assert.equal(isResponseBodyNote(NO_RESPONSE_BODY_NOTE), true);
+  assert.equal(isResponseBodyNote(EMPTY_RESPONSE_BODY_NOTE), true);
+  assert.notEqual(NO_RESPONSE_BODY_NOTE, EMPTY_RESPONSE_BODY_NOTE);
+  assert.equal(isResponseBodyNote("{\"events\": ["), false);
+  assert.equal(isResponseBodyNote(""), false);
+  assert.equal(isResponseBodyNote(undefined), false);
 });

@@ -16,7 +16,7 @@ import {
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
 import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
+import { discardPendingJumpSegment, discardPendingProjectsJump, isResponseBodyNote } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
@@ -2829,10 +2829,11 @@ const DateWidget = ({
                 ["Player's queued actions this round", actionsList],
                 ["Most recent prior events", recentEvents],
                 [
-                    // A transport failure has no response to show, so do not label
-                    // the note that explains that as one — it sent readers hunting
-                    // for a parsing bug when the real cause was the provider config.
-                    record.rawResponse === NO_RESPONSE_BODY_NOTE
+                    // A transport failure or an empty answer has no model text to
+                    // show, so do not label the note that explains that as rejected
+                    // text — it sent readers hunting for a parsing bug when the real
+                    // cause was the provider.
+                    isResponseBodyNote(record.rawResponse)
                         ? "Model response"
                         : "Raw model response that was rejected (failed to parse or to validate)",
                     // Every fallback now fills this in — with the raw text when

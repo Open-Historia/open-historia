@@ -381,6 +381,7 @@ import {
 } from "./worldDirection.js";
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
+  EMPTY_RESPONSE_BODY_NOTE,
   NO_RESPONSE_BODY_NOTE,
   beginSimulation,
   discardPendingJumpSegment,
@@ -1459,12 +1460,6 @@ const JUMP_LEVERS = [
   "• regionClaims {\"regionId\":\"\",\"claimantCode\":\"<full name>\",\"note\":\"\"}, with \"drop\":true when a claim is given up; the region stays striped until a transfer or a drop settles it.",
   "• actionIds: the ids of the player's orders an event resolves, so the game can clear them.",
 ].join("\n");
-
-// Written into a fallback's rawResponse when there is no model output to show.
-// Exported so the debug report (time.jsx) can tell this apart from real model
-// text and label its section honestly, rather than matching on the wording.
-// NO_RESPONSE_BODY_NOTE lives in simulationStatus.js and is re-exported below.
-export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty response body — the request succeeded but the model produced no text)";
 
 // "Limit AI generation" (OFF by default) — the whole policy, in one place rather
 // than a number per call site.
@@ -3834,6 +3829,7 @@ const activeCampaignId = () => {
 const motionRepairFailures = new Map();
 
 export {
+  EMPTY_RESPONSE_BODY_NOTE,
   NO_RESPONSE_BODY_NOTE,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
