@@ -600,7 +600,7 @@ const writeJsonFile = (targetPath, value) => {
   // one choke point every meta and manifest write goes through — including
   // create and delete, which rewrite the manifest — so hooking it here is what
   // makes the cache safe without touching 43 call sites individually.
-  invalidateCatalogs();
+  invalidateCatalogs(targetPath);
 };
 
 // Turn commits need crash-safe individual file replacement. A temporary file in
@@ -629,7 +629,7 @@ const writeJsonFileAtomic = (targetPath, value) => {
     if (fd !== null) fs.closeSync(fd);
     if (fs.existsSync(tempPath)) fs.rmSync(tempPath, { force: true });
   }
-  invalidateCatalogs();
+  invalidateCatalogs(targetPath);
 };
 
 // ---- Catalog cache ---------------------------------------------------------
@@ -638,19 +638,35 @@ const writeJsonFileAtomic = (targetPath, value) => {
 // it: resolving one runtime asset (the 5s poll for world.json) cost 139 sync
 // file ops and ~43ms of blocked event loop, just to learn which game is active.
 //
-// Cache both, and drop BOTH on any write. Coarse on purpose: writes are rare and
-// a rebuild is cheap, while a stale catalog is a bug that surfaces as "my save
-// vanished". Correctness first — the win is in the reads.
+// Cache both, and drop BOTH on any write: a stale catalog is a bug that surfaces
+// as "my save vanished". Correctness first — the win is in the reads.
+//
+// Writes are not rare during play, though — every chat line, order and turn
+// commit is one — so a rebuild has to be cheap. The expensive part was each
+// game's figures (country, date, round, event and pending-order counts), which
+// parse its game.json, actions.json and events.json: every campaign in the
+// library, after every write. Those are kept per game (readGameFigures), stamped
+// on the three files' size and mtime and forgotten when the store writes into
+// that game, so a rebuild re-reads only the game that changed.
 let gameCatalogCache = null;
 let scenarioCatalogCache = null;
 // Degraded summaries for scenarios a game names but the catalog lacks
 // (getGameScenarioSummary), rebuilt on the catalogs' schedule.
 let missingScenarioSummaryCache = new Map();
+const gameFiguresCache = new Map(); // game id -> { stamp, figures }
 
-const invalidateCatalogs = () => {
+// `writtenPath`, when a write names one, also forgets the figures of the game
+// it lies in.
+const invalidateCatalogs = (writtenPath = null) => {
   gameCatalogCache = null;
   scenarioCatalogCache = null;
   missingScenarioSummaryCache = new Map();
+  if (writtenPath) {
+    const relative = path.relative(GAMES_DIR, writtenPath);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      gameFiguresCache.delete(relative.split(path.sep)[0]);
+    }
+  }
 };
 
 const normalizeId = (rawValue, prefix) => {
@@ -1706,6 +1722,44 @@ const getGameCatalog = () => {
   return gameCatalogCache;
 };
 
+const fileStamp = (targetPath) => {
+  try {
+    const stat = fs.statSync(targetPath);
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return "-";
+  }
+};
+
+// What the library shows of a game's play: parsed only when one of its three
+// files changed since the last read (see the catalog cache above).
+const readGameFigures = (gameId) => {
+  const gamePath = getGameJsonPath(gameId, "game");
+  const actionsPath = getGameJsonPath(gameId, "actions");
+  const eventsPath = getGameJsonPath(gameId, "events");
+  const stamp = [gamePath, actionsPath, eventsPath].map(fileStamp).join("|");
+  const cached = gameFiguresCache.get(gameId);
+  if (cached?.stamp === stamp) return cached.figures;
+
+  const gameData = readJsonFile(gamePath, {});
+  const actions = readJsonFile(actionsPath, []);
+  const events = readJsonFile(eventsPath, []);
+  const figures = {
+    country: String(gameData?.country ?? "").trim(),
+    currentDate: String(gameData?.gameDate ?? "").trim(),
+    eventCount: Array.isArray(events) ? events.length : 0,
+    pendingActions: Array.isArray(actions)
+      ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
+      : 0,
+    round:
+      Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
+        ? Math.trunc(Number(gameData.round))
+        : 1,
+  };
+  gameFiguresCache.set(gameId, { stamp, figures });
+  return figures;
+};
+
 const buildGameCatalog = () => {
   ensureGameStore();
   const scenarioCatalog = getScenarioCatalog();
@@ -1736,16 +1790,11 @@ const buildGameCatalog = () => {
 
     const meta = readGameMeta(gameId);
     const assetStatus = getGameAssetStatus(gameId);
-    const gameData = readJsonFile(getGameJsonPath(gameId, "game"), {});
-    const actions = readJsonFile(getGameJsonPath(gameId, "actions"), []);
-    const events = readJsonFile(getGameJsonPath(gameId, "events"), []);
+    const figures = readGameFigures(gameId);
     // The same shape as a catalog entry when the scenario is gone, so the
     // library never hands out two spellings of "a scenario".
     const scenario = scenarioLookup.get(meta.scenarioId)
       ?? buildScenarioCatalogEntry(meta.scenarioId, { canDelete: false, missing: true });
-    const pendingActions = Array.isArray(actions)
-    ? actions.filter((entry) => String(entry?.status ?? "").trim() !== "resolved").length
-    : 0;
     const cacheToken = `${gameId}-${meta.updatedAt}`;
     const ownCoverImageUrl = assetStatus.cover
     ? buildGameAssetUrl(gameId, COVER_IMAGE_ASSET_KEY, cacheToken)
@@ -1756,16 +1805,13 @@ const buildGameCatalog = () => {
       assetStatus,
       cacheToken,
       canDelete: true,
-      country: String(gameData?.country ?? "").trim(),
+      country: figures.country,
        coverImageUrl: ownCoverImageUrl ?? scenario?.coverImageUrl ?? null,
-       currentDate: String(gameData?.gameDate ?? "").trim(),
-       eventCount: Array.isArray(events) ? events.length : 0,
+       currentDate: figures.currentDate,
+       eventCount: figures.eventCount,
        ownCoverImageUrl,
-       pendingActions,
-       round:
-       Number.isFinite(Number(gameData?.round)) && Number(gameData.round) > 0
-       ? Math.trunc(Number(gameData.round))
-       : 1,
+       pendingActions: figures.pendingActions,
+       round: figures.round,
        scenarioAccentColor: scenario?.accentColor ?? meta.accentColor,
        // The first client reader of `missing`: pressing Play on a game whose map
        // is not here has to offer to go and get it rather than open a blank world.
@@ -2598,6 +2644,7 @@ const deleteGame = (gameId) => {
 
   moveDirectoryToTrash(resolved, "game", gameId);
   invalidateOwnerSchemaCache("game", gameId);
+  gameFiguresCache.delete(gameId);
 
   const manifest = getGameManifest();
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
