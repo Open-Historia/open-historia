@@ -308,13 +308,13 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply } from "../../runtime/institutionalGovernance.js";
-import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement } from "../../runtime/institutionalGovernance.js";
 import {
   autonomousInstitutionBallotDirective,
   collectAutonomousInstitutionBallotWork,
   institutionBallotWorkForProposal,
   interactiveInstitutionBallotDirective,
+  routeAutonomousBallotVotes,
 } from "./institutionAutonomy.js";
 import { buildIdleInstitutionRoutingContext, resolveIdleInstitutionRoute } from "./institutionIdleRouting.js";
 import {
@@ -12489,10 +12489,15 @@ export const runChatActionBatch = async ({
 };
 
 // Once a completed turn lands, formal ballots in institutions the player belongs
-// to must not freeze merely because the Council was closed. One bounded existing
-// chatActions request per affected institution asks only the unresolved NPC
-// voters for the oldest open ballot. Native governance still casts, dedupes,
-// closes and implements the vote; this function owns no parallel ballot state.
+// to must not freeze merely because the Council was closed. ONE ballot-only
+// chatActions request asks the unresolved AI voters of every open ballot, in
+// every such institution, several proposals each; its votes are sorted back to
+// their institutions and applied through the native governance path, which
+// casts, dedupes, closes and implements. Then, with no request, every
+// government that was asked and did not vote is counted, and each ballot that
+// can close now (institutionBallotSettlement) is closed: a seat asked
+// INSTITUTION_BALLOT_MAX_ASKS times is not asked again, so no ballot costs a
+// request every turn or holds up the ballots behind it.
 export const runPostTurnInstitutionBallots = async ({
   playerCountry = "",
   date = "",
@@ -12500,49 +12505,104 @@ export const runPostTurnInstitutionBallots = async ({
   expectedGameId = "",
   requests = null,
 } = {}) => {
-  const snapshot = await readGameStateBundle({ force: true });
-  const player = normalizeString(playerCountry) || normalizeString(snapshot.game?.country);
+  const bundle = await readGameStateBundle({ force: true });
+  const player = normalizeString(playerCountry) || normalizeString(bundle.game?.country);
   if (!player) return { attempted: 0, applied: 0, results: [] };
-  const work = collectAutonomousInstitutionBallotWork(snapshot.world, player, { maxInstitutions: 4, maxVotersPerInstitution: 32 });
-  // In request-saving mode one provider slot is reserved for institutional
-  // governance. Resolve the oldest affected institution this turn; additional
-  // institutions remain open and take the reserved slot on later turns. With
-  // request saving off, preserve the existing all-institutions behavior.
-  const scheduledWork = requests?.saving ? work.slice(0, 1) : work;
+  const time = normalizeString(date) || normalizeString(bundle.game?.gameDate);
+  const gameId = expectedGameId || normalizeString(bundle.game?.id || bundle.game?.gameId);
+  const work = collectAutonomousInstitutionBallotWork(bundle.world, player, { maxInstitutions: 4, maxVotersPerInstitution: 32, maxBallots: 48 });
   const results = [];
   let applied = 0;
-  for (const item of scheduledWork) {
-    if (signal?.aborted) break;
+  let answered = false;
+  if (work.length && !signal?.aborted) {
     try {
-      const materialized = await ensureInstitutionalChannel({
-        institutionId: item.institutionId,
-        playerCountry: player,
-        date: normalizeString(date) || normalizeString(snapshot.game?.gameDate),
-        expectedGameId: expectedGameId || normalizeString(snapshot.game?.id || snapshot.game?.gameId),
+      const actors = [...new Set(work.flatMap((item) => item.actors))];
+      const politicalDecisionSet = buildBoundedPoliticalDecisionContextSet(bundle.world, {
+        actorPolities: actors,
+        counterpartByActor: Object.fromEntries(actors.map((name) => [name, player])),
+        maxActors: 32,
+        perActorMaxChars: 900,
+        maxTotalChars: 26000,
+        decisionFocusText: work.map((item) => [item.proposalTitle, item.proposalSummary].filter(Boolean).join("\n")).join("\n"),
+        limits: {
+          traits: 5, goals: 4, fears: 3, ambitions: 3, domesticPressures: 3,
+          pressureIssues: 3, governingEntities: 3, oppositionEntities: 1,
+          perceptions: 3, relations: 2, agreements: 2, wars: 2, institutions: 6,
+        },
       });
-      const result = await runChatActionBatch({
-        chat: materialized.channel,
-        playerCountry: player,
-        time: normalizeString(date) || normalizeString(snapshot.game?.gameDate),
+      const institutionIds = [...new Set(work.map((item) => item.institutionId))];
+      const variables = {
+        ...(await buildTemplateVariables(bundle, { taskKey: "chatActions" })),
+        chatParticipants: [
+          ...actors.map((name) => `- ${name} — AI-controlled: you act for it`),
+          `- ${player} — HUMAN-controlled (the player): never speak or act for it`,
+        ].join("\n"),
+        chatHistory: "(no conversation: this is a ballot-only pass)",
+        CHAT_OPEN_POLLS: "",
+        CROSS_CHAT_KNOWLEDGE: "",
+        CHAT_ACTION_FEEDBACK: "",
+      };
+      const { payload, generation } = await runJsonTask("chatActions", {
+        fallback: () => ({ actions: [] }),
         signal,
-        formalBusinessRequested: true,
-        useCanonicalState: true,
+        userMessage: [
+          autonomousInstitutionBallotDirective(work),
+          politicalDecisionSet.text
+            ? `[PRIVATE POLITICAL DECISION CONTEXT - ENGINE DATA]\n${politicalDecisionSet.text}\n\nUse each actor capsule only for that actor. Do not reveal one participant's private politics to another merely because this combined request contains both.`
+            : "",
+          ...institutionIds.map((id) => institutionGovernancePrompt(bundle.world, id, player)),
+          "Return this turn's actions as JSON only.",
+        ].filter(Boolean).join("\n\n"),
+        variables,
+        // Raw JSON, as for every institution conversation (runChatActionBatch).
+        toolOverride: null,
         ...jumpTaskOptions(requests, "institutionBallots"),
       });
-      const votes = normalizeArray(result?.formalActions).filter((action) => action?.type === "institution_vote");
-      const refusedVotes = normalizeArray(result?.rejected).filter((entry) => entry?.action?.type === "institution_vote").length;
-      applied += Math.max(0, votes.length - refusedVotes);
-      results.push({ ...item, requested: item.actors.length, votes: votes.length, rejected: refusedVotes });
+      answered = generation?.source === "ai";
+      const votes = partitionInstitutionChatActions(normalizeArray(payload?.actions)).formal;
+      const routed = routeAutonomousBallotVotes(work, votes);
+      for (const [institutionId, formalActions] of routed.byInstitution) {
+        try {
+          const committed = await commitInstitutionalChatGovernanceBatch({
+            institutionId,
+            playerCountry: player,
+            date: time,
+            chatEvents: [],
+            formalActions,
+            expectedGameId: gameId,
+          });
+          const refused = normalizeArray(committed?.rejected).length;
+          applied += Math.max(0, formalActions.length - refused);
+          results.push({ institutionId, votes: formalActions.length, rejected: refused });
+        } catch (error) {
+          console.warn(`[institution autonomy] ballots for ${institutionId} could not be recorded; the completed turn remains committed.`, error);
+          results.push({ institutionId, votes: formalActions.length, rejected: formalActions.length, error: normalizeString(error?.message || error) });
+        }
+      }
+      if (routed.unmatched.length) results.push({ unmatched: routed.unmatched.length });
     } catch (error) {
-      console.warn(`[institution autonomy] ${item.institutionName || item.institutionId} ballot pass failed; the completed turn remains committed.`, error);
-      results.push({ ...item, requested: item.actors.length, votes: 0, rejected: item.actors.length, error: normalizeString(error?.message || error) });
+      if (signal?.aborted) throw error;
+      console.warn("[institution autonomy] post-turn ballot request failed; the completed turn remains committed.", error);
+      results.push({ error: normalizeString(error?.message || error) });
     }
   }
-  if (work.length) {
-    const deferred = Math.max(0, work.length - scheduledWork.length);
-    logDebugEvent("turn", `Institution autonomy: ${scheduledWork.length}/${work.length} open ballot(s) checked after the turn; ${applied} NPC ballot action(s) accepted${deferred ? `; ${deferred} institution(s) deferred by request-saving mode` : ""}.`, results, { verbose: true });
+  // Only an answer the model actually gave counts against the governments it
+  // was asked for; a failed request is nobody's refusal.
+  let settlement = { closed: [], failed: [] };
+  try {
+    settlement = await commitInstitutionBallotSettlement({
+      playerCountry: player,
+      date: time,
+      asked: answered ? work : [],
+      expectedGameId: gameId,
+    });
+  } catch (error) {
+    console.warn("[institution autonomy] ballot settlement failed; the completed turn remains committed.", error);
   }
-  return { attempted: scheduledWork.length, deferred: Math.max(0, work.length - scheduledWork.length), applied, results };
+  if (work.length || settlement.closed.length) {
+    logDebugEvent("turn", `Institution autonomy: ${work.length} open ballot(s) asked in ${work.length ? 1 : 0} request(s); ${applied} NPC ballot action(s) accepted; ${settlement.closed.length} ballot(s) closed.`, { work, results, closed: settlement.closed, failed: settlement.failed }, { verbose: true });
+  }
+  return { attempted: work.length, applied, results, closed: settlement.closed };
 };
 
 // What an AI's reply does about a demand, in the one-on-one thread between the

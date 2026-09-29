@@ -4,11 +4,12 @@ import test from "node:test";
 
 const read = (rel) => fs.readFileSync(new URL(rel, import.meta.url), "utf8");
 
-test("completed turns run a bounded autonomous institution ballot pass through existing chatActions", () => {
+test("completed turns run one bounded autonomous institution ballot request through chatActions", () => {
   const gameplay = read("./gameplay.js");
   assert.match(gameplay, /export const runPostTurnInstitutionBallots/);
-  assert.match(gameplay, /formalBusinessRequested: true/);
-  assert.match(gameplay, /useCanonicalState: true/);
+  assert.match(gameplay, /autonomousInstitutionBallotDirective\(work\)/);
+  assert.match(gameplay, /routeAutonomousBallotVotes\(work, votes\)/);
+  assert.match(gameplay, /commitInstitutionBallotSettlement\(/);
   assert.match(gameplay, /await runPostTurnInstitutionBallots\(/);
   assert.match(gameplay, /completed turn remains committed/i);
   assert.match(gameplay, /maxInstitutions: 4/);

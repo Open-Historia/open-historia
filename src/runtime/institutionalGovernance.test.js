@@ -754,3 +754,65 @@ test("one-request institution batch refuses model authority for the human withou
   assert.ok(result.world.institutions.byId.council.proposals["npc-motion"]);
   assert.equal(result.world.institutions.byId.council.proposals["fake-player-motion"], undefined);
 });
+
+test("a ballot waiting on the player stays open; once they have voted, a decided ballot closes", async () => {
+  const { institutionBallotSettlement } = await import("./institutionalGovernance.js");
+  const settle = (world) => {
+    const institution = world.institutions.byId.council;
+    return institutionBallotSettlement({ institution, proposal: institution.proposals.p1, playerCountry: "A" });
+  };
+  let world = vote(open().world, "B", "yes").world;
+  world = vote(world, "C", "yes").world;
+  assert.deepEqual(settle(world), { close: false, reason: "" }, "two AI yes votes carry it, but the player has not voted");
+  let playerFirst = vote(open().world, "A", "yes").world;
+  playerFirst = vote(playerFirst, "B", "yes").world;
+  assert.deepEqual(settle(playerFirst), { close: true, reason: "decided" }, "C voting no cannot stop a 2-of-3 majority");
+  let split = vote(open().world, "A", "yes").world;
+  split = vote(split, "B", "no").world;
+  assert.deepEqual(settle(split), { close: false, reason: "" }, "C decides it");
+  let lost = vote(open({ ...simpleRule, type: "unanimity" }).world, "A", "yes").world;
+  lost = vote(lost, "B", "no").world;
+  assert.deepEqual(settle(lost), { close: true, reason: "decided" }, "one no already sinks a unanimity vote");
+});
+
+test("the player's vote closes a ballot whose AI holdouts have been asked enough", () => {
+  let world = vote(open().world, "B", "yes").world;
+  world.institutions.byId.council.proposals.p1.voting.asked = { C: 2 };
+  const result = applyInstitutionGovernanceCommand({
+    world, chats: [], events: [], institutionId: "council", playerCountry: "A", date: "2000-01-06",
+    command: { type: "vote", proposalId: "p1", polity: "A", choice: "no", authority: "player", finalizeWhenComplete: true, implementWhenPassed: true },
+  });
+  assert.equal(result.proposal.status, "failed");
+  assert.equal(result.outcome.participating, 2);
+  assert.equal(result.outcome.reason, "threshold-not-met");
+  assert.equal(result.events.length, 1);
+});
+
+test("the post-turn settlement counts an unanswered ask and closes the ballot at the limit, with no request", async () => {
+  const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
+  let world = vote(open().world, "A", "yes").world;
+  world = vote(world, "B", "no").world;
+  const asked = [{ institutionId: "council", proposalId: "p1", actors: ["C"] }];
+  const first = settleInstitutionBallotsCore({ world, chats: [], events: [], playerCountry: "A", date: "2000-02-01", asked });
+  assert.equal(first.world.institutions.byId.council.proposals.p1.voting.asked.C, 1);
+  assert.equal(first.closed.length, 0);
+  assert.equal(first.changed, true);
+  const idle = settleInstitutionBallotsCore({ world: first.world, chats: first.chats, events: first.events, playerCountry: "A", date: "2000-02-15" });
+  assert.equal(idle.changed, false, "without an answered request nothing is counted");
+  const second = settleInstitutionBallotsCore({ world: first.world, chats: first.chats, events: first.events, playerCountry: "A", date: "2000-03-01", asked });
+  assert.deepEqual(second.closed.map((entry) => [entry.proposalId, entry.reason, entry.status]), [["p1", "exhausted", "failed"]]);
+  const proposal = second.world.institutions.byId.council.proposals.p1;
+  assert.equal(proposal.status, "failed");
+  assert.equal(proposal.voting.closedDate, "2000-03-01");
+  assert.equal(second.events.length, 1);
+});
+
+test("a government that has voted is not counted as asked", async () => {
+  const { settleInstitutionBallotsCore } = await import("./institutionalGovernance.js");
+  const world = vote(open().world, "B", "yes").world;
+  const result = settleInstitutionBallotsCore({
+    world, playerCountry: "A", date: "2000-02-01",
+    asked: [{ institutionId: "council", proposalId: "p1", actors: ["B", "C"] }],
+  });
+  assert.deepEqual(result.world.institutions.byId.council.proposals.p1.voting.asked, { C: 1 });
+});

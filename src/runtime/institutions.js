@@ -808,6 +808,15 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
     const ballot = normalizeProposalBallot(rawBallot, rawPolity, world, identityIndex);
     if (ballot) ballots[ballot.polity] = ballot;
   }
+  const askedSource = value?.voting?.asked && typeof value.voting.asked === "object" && !Array.isArray(value.voting.asked)
+    ? value.voting.asked
+    : {};
+  const asked = {};
+  for (const [rawPolity, rawCount] of Object.entries(askedSource)) {
+    const polity = canonicalPolity(rawPolity, world, identityIndex);
+    const count = Math.trunc(Number(rawCount));
+    if (polity && count > 0) asked[polity] = Math.min(99, count);
+  }
   const voting = value.voting && typeof value.voting === "object" && !Array.isArray(value.voting)
     ? {
       openedDate: clean(value.voting.openedDate),
@@ -815,6 +824,9 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
       rule: normalizeInstitutionVotingRule(value.voting.rule, world, identityIndex),
       eligibleVoters: unique(value.voting.eligibleVoters, 256).map((polity) => canonicalPolity(polity, world, identityIndex)).filter(Boolean),
       ballots,
+      // How many post-turn ballot passes asked each government that still has
+      // not voted (institutionBallotAskCount).
+      ...(Object.keys(asked).length ? { asked } : {}),
       outcome: value.voting.outcome && typeof value.voting.outcome === "object" && !Array.isArray(value.voting.outcome)
         ? clone(value.voting.outcome)
         : null,
@@ -845,6 +857,18 @@ export const normalizeInstitutionProposal = (value = {}, fallbackId = "", world 
     sourceEventIds: unique(value.sourceEventIds, 24),
     note: clean(value.note).slice(0, 1200),
   };
+};
+
+// A government asked this many times by the post-turn ballot pass without
+// voting is asked no more: its seat no longer holds the ballot open, and no
+// further request is spent on it.
+export const INSTITUTION_BALLOT_MAX_ASKS = 2;
+
+export const institutionBallotAskCount = (proposal = {}, polity = "") => {
+  const wanted = lower(polity);
+  if (!wanted) return 0;
+  const entry = Object.entries(proposal?.voting?.asked || {}).find(([key]) => lower(key) === wanted);
+  return Math.max(0, Math.trunc(Number(entry?.[1]) || 0));
 };
 
 export const normalizeInstitutionProposals = (value = {}, world = {}, identityIndex = null) => {

@@ -7,7 +7,10 @@ import {
   applyInstitutionMembershipResolution,
   applyInstitutionStatusResolution,
   canonicalInstitutionIdentity,
+  INSTITUTION_BALLOT_MAX_ASKS,
+  institutionBallotAskCount,
   institutionChannelParticipants,
+  institutionsForPolity,
   normalizeInstitutionProposal,
   normalizeInstitutions,
   normalizeInstitutionVotingRule,
@@ -226,6 +229,48 @@ export const tallyInstitutionBallot = ({ institution = {}, proposal = {} } = {})
     yesWeightShare,
     vetoPolities: vetoBallots.map((ballot) => ballot.polity),
   };
+};
+
+// Whether an open ballot can close now, and why:
+// - "complete": every eligible government has voted;
+// - "decided": the player has voted (or has no vote), and no way the AI votes
+//   still out could go changes whether it passes: it passes even if all of
+//   them vote no or stay away and none of them holds a veto, or it fails even
+//   if all of them vote yes;
+// - "exhausted": every AI government still out is no longer an active member
+//   or has been asked INSTITUTION_BALLOT_MAX_ASKS times, and the player has
+//   voted (or has no vote). The charter's quorum and threshold then judge the
+//   turnout there is.
+// A ballot still waiting on the player stays open until they vote. That costs
+// no request: only AI governments are ever asked.
+export const institutionBallotSettlement = ({ institution = {}, proposal = {}, playerCountry = "" } = {}) => {
+  const voting = proposal?.voting;
+  if (lower(proposal?.status) !== "voting" || !voting) return { close: false, reason: "" };
+  const eligible = unique(voting.eligibleVoters);
+  if (!eligible.length) return { close: false, reason: "" };
+  const recorded = new Set(Object.values(voting.ballots || {}).map((ballot) => lower(ballot?.polity)).filter(Boolean));
+  const outstanding = eligible.filter((polity) => !recorded.has(lower(polity)));
+  if (!outstanding.length) return { close: true, reason: "complete" };
+  if (clean(playerCountry) && outstanding.some((polity) => lower(polity) === lower(playerCountry))) return { close: false, reason: "" };
+
+  const rule = normalizeInstitutionVotingRule(voting.rule || {});
+  if (rule.type === "unspecified") return { close: false, reason: "" };
+  const statusIf = (choice) => {
+    const ballots = { ...(voting.ballots || {}) };
+    if (choice) for (const polity of outstanding) ballots[polity] = { polity, choice };
+    return tallyInstitutionBallot({ institution, proposal: { ...proposal, voting: { ...voting, ballots } } }).status;
+  };
+  const vetoOutstanding = outstanding.some((polity) => isVetoHolder(institution, rule, polity));
+  if (statusIf("yes") !== "passed") return { close: true, reason: "decided" };
+  if (!vetoOutstanding && statusIf("") === "passed" && statusIf("no") === "passed") return { close: true, reason: "decided" };
+
+  const activeMembers = new Set(list(institution?.members)
+    .filter((member) => lower(member?.status || "member") !== "suspended")
+    .map((member) => lower(member?.polity)));
+  const exhausted = outstanding.every((polity) => (
+    !activeMembers.has(lower(polity)) || institutionBallotAskCount(proposal, polity) >= INSTITUTION_BALLOT_MAX_ASKS
+  ));
+  return exhausted ? { close: true, reason: "exhausted" } : { close: false, reason: "" };
 };
 
 export const createInstitutionProposal = ({
@@ -917,10 +962,12 @@ export const applyInstitutionGovernanceCommand = ({
     implementation = implemented.implementation;
   }
   if (["vote", "vote-batch"].includes(type) && command.finalizeWhenComplete === true && lower(result.proposal?.status) === "voting") {
-    const voting = result.proposal.voting || {};
-    const recorded = new Set(Object.values(voting.ballots || {}).map((ballot) => lower(ballot?.polity)).filter(Boolean));
-    const complete = list(voting.eligibleVoters).every((polity) => recorded.has(lower(polity)));
-    if (complete) {
+    const settlement = institutionBallotSettlement({
+      institution: resolveInstitutionRecord(result.world, institutionId),
+      proposal: result.proposal,
+      playerCountry,
+    });
+    if (settlement.close) {
       const closed = closeInstitutionProposalVoting({ world: result.world, institutionId, proposalId: result.proposal.id, date });
       result = { ...result, ...closed, ballots: result.ballots, ballot: result.ballot };
       outcome = closed.outcome;
@@ -956,6 +1003,82 @@ export const applyInstitutionGovernanceCommand = ({
   };
 };
 
+
+// After the post-turn ballot request (costs none of its own): every government
+// that request asked and that still has not voted is counted as asked once
+// more, then every open ballot in the player's institutions that
+// institutionBallotSettlement says can close is closed, and what passed is
+// implemented. `asked` is [{ institutionId, proposalId, actors }]; pass none
+// when the request failed, so a provider outage is never held against a seat.
+export const settleInstitutionBallotsCore = ({
+  world: worldInput = {}, chats: chatsInput = [], events: eventsInput = [], playerCountry = "", date = "", asked = [],
+} = {}) => {
+  let world = clone(worldInput || {});
+  world.institutions = normalizeInstitutions(world.institutions, world);
+  let chats = list(chatsInput);
+  let events = normalizeEvents(eventsInput);
+  let changed = false;
+  for (const item of list(asked)) {
+    const resolved = resolveInstitutionRecord(world, item?.institutionId);
+    const institution = resolved ? world.institutions.byId[resolved.id] : null;
+    const proposal = institution?.proposals?.[slug(item?.proposalId)];
+    if (!proposal || lower(proposal.status) !== "voting" || !proposal.voting) continue;
+    const recorded = new Set(Object.values(proposal.voting.ballots || {}).map((ballot) => lower(ballot?.polity)).filter(Boolean));
+    const counts = { ...(proposal.voting.asked || {}) };
+    for (const actor of unique(item?.actors)) {
+      const voter = list(proposal.voting.eligibleVoters).find((entry) => lower(entry) === lower(actor));
+      if (!voter || recorded.has(lower(voter))) continue;
+      counts[voter] = institutionBallotAskCount(proposal, voter) + 1;
+      changed = true;
+    }
+    institution.proposals = {
+      ...institution.proposals,
+      [proposal.id]: normalizeInstitutionProposal({ ...proposal, voting: { ...proposal.voting, asked: counts } }, proposal.id, world),
+    };
+  }
+
+  const closed = [];
+  const failed = [];
+  for (const { institution: row } of institutionsForPolity(world, playerCountry, { includeSuspended: false })) {
+    const institutionId = clean(row?.id);
+    const proposalIds = Object.keys(resolveInstitutionRecord(world, institutionId)?.proposals || {});
+    for (const proposalId of proposalIds) {
+      const institution = resolveInstitutionRecord(world, institutionId);
+      const proposal = institution?.proposals?.[proposalId];
+      const settlement = institutionBallotSettlement({ institution, proposal, playerCountry });
+      if (!settlement.close) continue;
+      try {
+        const result = applyInstitutionGovernanceCommand({
+          world, chats, events, institutionId, playerCountry, date,
+          command: { type: "close-voting", proposalId, implementWhenPassed: true },
+        });
+        world = result.world;
+        chats = result.chats;
+        events = result.events;
+        changed = true;
+        closed.push({ institutionId, proposalId, reason: settlement.reason, status: clean(result.outcome?.status) });
+      } catch (error) {
+        failed.push({ institutionId, proposalId, reason: clean(error?.message || error) });
+      }
+    }
+  }
+  return { world, chats, events, closed, failed, changed };
+};
+
+export const commitInstitutionBallotSettlement = async ({
+  playerCountry = "", date = "", asked = [], expectedGameId = "",
+} = {}) => {
+  let result = null;
+  const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
+    result = settleInstitutionBallotsCore({
+      world, chats, events, asked,
+      playerCountry: playerCountry || game?.country || "",
+      date: date || game?.gameDate || "",
+    });
+    return result.changed ? { world: result.world, chats: result.chats, events: result.events } : null;
+  }, { playerCountry, expectedGameId });
+  return { closed: result?.closed || [], failed: result?.failed || [], committed: Boolean(result?.changed && !committed?.skipped) };
+};
 
 const activeInstitutionalMemberForPlayer = (world, institutionId, playerCountry) => {
   const institution = resolveInstitutionRecord(world, institutionId);
