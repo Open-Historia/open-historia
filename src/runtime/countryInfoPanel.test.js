@@ -4,7 +4,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  briefingCacheKey,
   classifyPolityRegions,
+  createBriefingCache,
   createEventMatcher,
   knownPolityNames,
   resolvePanelPolity,
@@ -185,4 +187,28 @@ test("related events come newest first, undated last", () => {
 test("BC dates sort by the calendar, not the text", () => {
   const events = [{ id: "300bc", date: "-0300-01-01" }, { id: "218bc", date: "-0218-03-01" }];
   assert.deepEqual(sortEventsNewestFirst(events).map((event) => event.id), ["218bc", "300bc"]);
+});
+
+// ---- advisor report cache --------------------------------------------------
+
+test("the briefing key changes with the campaign, polity, round, date and language", () => {
+  const base = { gameId: "g1", polity: "France", date: "1940-05-10", round: 3, language: "English" };
+  const key = briefingCacheKey(base);
+  assert.equal(briefingCacheKey({ ...base }), key);
+  for (const change of [{ gameId: "g2" }, { polity: "Germany" }, { date: "1940-06-10" }, { round: 4 }, { language: "French" }]) {
+    assert.notEqual(briefingCacheKey({ ...base, ...change }), key, JSON.stringify(change));
+  }
+});
+
+test("the briefing cache keeps the newest entries within its bound", () => {
+  const cache = createBriefingCache({ max: 2 });
+  cache.set("a", "A");
+  cache.set("b", "B");
+  cache.set("a", "A2");
+  cache.set("c", "C");
+  assert.equal(cache.get("b"), undefined);
+  assert.equal(cache.get("a"), "A2");
+  assert.equal(cache.get("c"), "C");
+  cache.clear();
+  assert.equal(cache.size, 0);
 });

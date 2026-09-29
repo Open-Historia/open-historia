@@ -1,7 +1,7 @@
 /*! Open Historia — country info panel rules © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // What the map's country panel (Game/Selection/CountryPanel.jsx) shows, kept
 // out of React so node can test it: which polity a click means, which regions
-// it holds and which events are about it.
+// it holds, which events are about it, and the Advisor Report it last paid for.
 import COUNTRY_NAMES from "./generated/countryNames.js";
 import { gameDateDayNumber } from "./gameDates.js";
 import { buildOwnerAliasMap, createOwnerResolver, regionBaseOwner } from "./ownerNames.js";
@@ -167,3 +167,26 @@ export const sortEventsNewestFirst = (events) =>
       return right.index - left.index;
     })
     .map(({ event }) => event);
+
+// The Advisor Report costs a request. One per polity per round is enough: the
+// answer is kept under the campaign, the polity, the round's date and the
+// language the prompt asks for, so reopening the panel shows it again and a
+// new round or another campaign asks afresh.
+export const briefingCacheKey = ({ gameId = "", polity = "", date = "", round = "", language = "" } = {}) =>
+  [gameId, polity, date, round, language].map(clean).join("|");
+
+export const createBriefingCache = ({ max = 32 } = {}) => {
+  const entries = new Map();
+  return {
+    get: (key) => entries.get(key),
+    set: (key, text) => {
+      entries.delete(key);
+      entries.set(key, text);
+      while (entries.size > max) entries.delete(entries.keys().next().value);
+    },
+    clear: () => entries.clear(),
+    get size() {
+      return entries.size;
+    },
+  };
+};

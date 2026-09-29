@@ -10705,9 +10705,11 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     `WORLD STATE:\n${variables.worldSummary || variables.grandMapDescription || "(no summary)"}\n\n` +
     `RECENT EVENTS:\n${variables.recentEvents || "(none)"}\n\n` +
     `Respond in ${variables.language || "English"} as 4-6 short bullet points, each prefixed with "- ". No preamble, no closing remarks.`;
+  // Its own task, not the stat sheet's: its own row in usage and in the
+  // per-task model picks, and no stat-sheet temperature on prose.
   const raw = await callAI(system, [
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
-  ], { taskKey: "countryStatSheet" });
+  ], { taskKey: "countryBriefing" });
   return String(raw || "").trim();
 };
 

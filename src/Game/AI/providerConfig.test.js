@@ -614,3 +614,22 @@ test("Political World generation and verification keep independent/inherited tas
   assert.equal(plan.preferredEntryId, verification);
   assert.equal(plan.implicit, false);
 });
+
+test("the Advisor Report has its own routing row and starts on the stat-sheet pick until it has one", () => {
+  assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === "countryBriefing"));
+
+  const [top] = config.getResolvedFallbackList();
+  const statSheet = config.addEntry({ connectionId: top.connectionId, model: "stat-sheet-model" });
+  const briefing = config.addEntry({ connectionId: top.connectionId, model: "briefing-model" });
+
+  config.setTaskPick("countryStatSheet", statSheet);
+  let plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, statSheet, "an old stat-sheet pick still covers the briefing");
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("countryBriefing", briefing);
+  plan = config.resolveTaskFallbackEntries("countryBriefing");
+  assert.equal(plan.preferredEntryId, briefing);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("countryStatSheet").preferredEntryId, statSheet, "the stat sheet never inherits back");
+});

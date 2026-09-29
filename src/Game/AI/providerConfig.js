@@ -213,6 +213,7 @@ export const AI_TASK_ROUTING = [
     { key: "descriptionToAction", label: "Action parsing", hint: "Small model: text to a structured command", group: "Player" },
     { key: "idleDiplomacy", label: "Idle diplomacy", hint: "Small/mid-tier model", group: "Player" },
     { key: "countryStatSheet", label: "Stat sheet", hint: "Mid-tier model", group: "Player" },
+    { key: "countryBriefing", label: "Advisor Report", hint: "Mid-tier: a short briefing on one country", group: "Player" },
     { key: "interactiveCreation", label: "Interactive event creation", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
@@ -934,11 +935,19 @@ export function setTaskPick(taskKey, entryId) {
     notifyFallbackChange();
 }
 
+// A task with no pick of its own that starts on another task's pick.
+const INHERITED_TASK_PICKS = Object.freeze({
+    // Both halves of one authored bootstrap use the same model by default.
+    politicalWorldVerification: "politicalWorldGeneration",
+    // The Advisor Report ran as the stat-sheet task until it had its own key;
+    // a player's stat-sheet pick still covers it until they give it one.
+    countryBriefing: "countryStatSheet",
+});
+
 // Resolve the effective starting entry for a task without mutating the player's
-// stored Fallback list. Political World verification inherits the generation
-// task's pick when it has no dedicated choice so both halves of one authored
-// bootstrap use the same model by default. A dedicated verification pick still
-// wins. All other tasks keep Beta's ordinary Fallback-list behavior.
+// stored Fallback list. A task in INHERITED_TASK_PICKS inherits its source
+// task's pick when it has no dedicated choice; a dedicated pick still wins.
+// All other tasks keep Beta's ordinary Fallback-list behavior.
 export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
     const key = String(taskKey ?? "").trim();
     const entries = Array.isArray(sourceEntries) ? [...sourceEntries] : getResolvedFallbackList();
@@ -949,10 +958,11 @@ export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
         return { entries, preferredEntryId: explicitPick, implicit: false };
     }
 
-    if (key === "politicalWorldVerification") {
-        const generationPick = getTaskPick("politicalWorldGeneration");
-        if (generationPick && entries.some((entry) => entry.id === generationPick)) {
-            return { entries, preferredEntryId: generationPick, implicit: true };
+    const source = Object.hasOwn(INHERITED_TASK_PICKS, key) ? INHERITED_TASK_PICKS[key] : "";
+    if (source) {
+        const inheritedPick = getTaskPick(source);
+        if (inheritedPick && entries.some((entry) => entry.id === inheritedPick)) {
+            return { entries, preferredEntryId: inheritedPick, implicit: true };
         }
     }
 

@@ -1,5 +1,5 @@
 /*! Open Historia — country info panel © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP } from "../../runtime/mobileUi.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
@@ -8,13 +8,17 @@ import ReactMarkdown from "react-markdown";
 import { JSON_URLS, getNationFlags, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import {
+    briefingCacheKey,
     classifyPolityRegions,
+    createBriefingCache,
     createEventMatcher,
     knownPolityNames,
     resolvePanelPolity,
     sortEventsNewestFirst,
 } from "../../runtime/countryInfoPanel.js";
 import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
+import { getLibraryState } from "../../runtime/library.js";
+import { onMemoryPressure } from "../../runtime/memoryPressure.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
@@ -93,6 +97,29 @@ const EVENT_STEP = 30;
 const SOVEREIGN_PILLS = 80;
 const OTHER_PILLS = 40;
 
+// The Advisor Reports this session has paid for, one per polity per round
+// (runtime/countryInfoPanel.js), and the ones still being written, so a
+// second press or a reopened panel waits for the same request.
+const briefings = createBriefingCache();
+const briefingsInFlight = new Map();
+if (typeof window !== "undefined") {
+    window.addEventListener("oh:active-game-changed", () => briefings.clear());
+}
+onMemoryPressure(() => briefings.clear());
+
+// Shows a briefing request's answer, unless the panel has moved on to
+// another country or round by the time it arrives.
+const showBriefing = async (key, request, shownKey, setReport) => {
+    shownKey.current = key;
+    setReport("loading");
+    try {
+        const text = await request;
+        if (shownKey.current === key) setReport(text || "No information available.");
+    } catch (error) {
+        if (shownKey.current === key) setReport({ error: error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." });
+    }
+};
+
 const RegionPills = ({ names, limit, expanded, onExpand }) => (
     <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
     {(expanded ? names : names.slice(0, limit)).map((regionName) => (
@@ -121,6 +148,8 @@ const CountryInfoPanel = () => {
     const [flagCatalog, setFlagCatalog] = useState({});
     const [flagPickerOpen, setFlagPickerOpen] = useState(false);
     const [worldWrites, setWorldWrites] = useState(0);
+    // The briefing the report box is for; "" until one is shown or asked for.
+    const shownReportKey = useRef("");
     // The map's world store. During a turn's staged reveal it holds the world
     // the map is showing, not the saved one the reveal is heading towards, so
     // the panel never tells the player what the map has not shown yet.
@@ -135,6 +164,7 @@ const CountryInfoPanel = () => {
         setEventLimit(EVENT_STEP);
         setExpandedLists({});
         setReport(null);
+        shownReportKey.current = "";
         setFlagFailed(false);
         setFlagPickerOpen(false);
     };
@@ -245,6 +275,30 @@ const CountryInfoPanel = () => {
         return sortEventsNewestFirst(loaded.allEvents.filter(involves));
     }, [identity, aliases, loaded, worldState]);
 
+    // The campaign, polity, round and prompt language a briefing answers for.
+    const briefingKeyFor = (game) => briefingCacheKey({
+        gameId: getLibraryState()?.activeGameId ?? "",
+        polity: polityKey || country?.code,
+        date: game?.date,
+        round: game?.round,
+        language: worldState?.language || game?.language || "English",
+    });
+    const reportKey = identity ? briefingKeyFor(loaded.game) : "";
+
+    // Reopened in the same round: the briefing already paid for, or the one
+    // still on its way, instead of an empty box and a second request.
+    useEffect(() => {
+        if (!reportKey || shownReportKey.current) return;
+        const cached = briefings.get(reportKey);
+        if (cached !== undefined) {
+            shownReportKey.current = reportKey;
+            setReport(cached);
+            return;
+        }
+        const request = briefingsInFlight.get(reportKey);
+        if (request) void showBriefing(reportKey, request, shownReportKey, setReport);
+    }, [reportKey]);
+
     useEffect(() => {
         if (!country) return;
         let cancelled = false;
@@ -302,15 +356,26 @@ const CountryInfoPanel = () => {
         flags: flagCatalog,
     });
 
+    // A briefing on screen makes the button "Regenerate Report": a new request
+    // is then the player's deliberate choice, and replaces the kept one.
+    const hasReport = typeof report === "string" && report !== "loading";
+
     const runAdvisorReport = async () => {
-        if (report === "loading") return;
-        setReport("loading");
-        try {
-            const text = await generateCountryStats({ code: polityKey || country.code, name: displayName || country.name });
-            setReport(text || "No information available.");
-        } catch (error) {
-            setReport({ error: error?.message || "Couldn't generate a report. Set an AI provider + key in Settings." });
+        if (report === "loading" || !ready) return;
+        const game = await readGameData().catch(() => loaded.game);
+        const key = briefingKeyFor(game);
+        let request = briefingsInFlight.get(key);
+        if (!request) {
+            request = generateCountryStats({ code: polityKey || country.code, name: displayName || country.name })
+                .then((raw) => {
+                    const text = String(raw || "").trim();
+                    if (text) briefings.set(key, text);
+                    return text;
+                })
+                .finally(() => briefingsInFlight.delete(key));
+            briefingsInFlight.set(key, request);
         }
+        await showBriefing(key, request, shownReportKey, setReport);
     };
 
     const openDiplomacy = () => {
@@ -561,7 +626,7 @@ const CountryInfoPanel = () => {
         {/* Footer */}
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
         <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={footerButtonStyle}>
-        Advisor Report
+        {hasReport ? "Regenerate Report" : "Advisor Report"}
         </button>
         <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
         Open Diplomacy

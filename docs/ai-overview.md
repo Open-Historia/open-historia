@@ -165,7 +165,7 @@ It is deliberately still **one global toggle**, not per task, and that is worth 
 
 ### Per-task model routing
 
-Ported from the abdulrahman-2005 fork. Every AI call names its task — the prompt-pack task key for `runJsonTask` calls (`jumpForward`, `timelineCurator`, `territoryDirector`…), the repair/briefing keys the direct calls pass, and `advisor` / `diplomacy` for the chats. A task with a pick (`getTaskPick(taskKey)`, `providerConfig.js`) tries that Fallback entry first, then the list from the top, so it only fails when every entry is used up; a task without one starts at the top. `AI_TASK_ROUTING` lists the tasks Settings → Advanced → **Per-task models** shows, each a choice among the list's entries.
+Ported from the abdulrahman-2005 fork. Every AI call names its task — the prompt-pack task key for `runJsonTask` calls (`jumpForward`, `timelineCurator`, `territoryDirector`…), the repair/briefing keys the direct calls pass, and `advisor` / `diplomacy` for the chats. A task with a pick (`getTaskPick(taskKey)`, `providerConfig.js`) tries that Fallback entry first, then the list from the top, so it only fails when every entry is used up; a task without one starts at the top, except that a task in `INHERITED_TASK_PICKS` starts on another task's pick (`politicalWorldVerification` on `politicalWorldGeneration`'s, `countryBriefing` on `countryStatSheet`'s). `AI_TASK_ROUTING` lists the tasks Settings → Advanced → **Per-task models** shows, each a choice among the list's entries.
 
 ### Connection templates and recent models
 
@@ -620,7 +620,7 @@ A model knows that a tank army is "massing east of Kharkiv"; it does not know th
 | `interactiveExecutor` | `submit_interactive_execution` | `advanceActiveInteractive` (and `rewindActiveInteractive` with a choice) | Play one move of the scene. |
 | `interactiveSummary` | `submit_interactive_summary` | the scene resolving, or `endActiveInteractive` | The scene written into the record as one event. |
 | `gameMaster` | `submit_game_master` | `applyGameMasterCommand` | GM console: apply free‑text world/map edits. |
-| `countryStatSheet` | `submit_country_stat_sheet` | `generateCountryStatSheet` / `generateCountryStats` | National statistics sheet. |
+| `countryStatSheet` | `submit_country_stat_sheet` | `generateCountryStatSheet` | National statistics sheet. (The country panel's free-text Advisor Report, `generateCountryStats`, is its own task, `countryBriefing`: [ai-prompts.md §7.16](ai-prompts.md).) |
 | `timelineCurator` | `submit_timeline_curator` | `curateGeneratedEvents` (`nativeTimelineCurator.js`, from `applySimulationResult`) | Judges each fresh event against recent canon before it persists; deterministic gates (hard impacts, retrieved prior matches, saturation) decide what may be dropped, default KEEP. |
 | `unitDirector` | `submit_unit_director` | `directGeneratedUnitOps` (`nativeUnitDirector.js`, from `finishTimelineJump`) | Keeps existing NPC formations coherent with the turn's military events: proposes spawn/move/strength/remove ops that native rules sanitize before they ride the normal unitOps path. |
 | `idleDiplomacy` | `submit_idle_diplomacy` | `maybeSendIdleDiplomacy` | Optional unprompted diplomatic note. |
