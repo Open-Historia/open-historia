@@ -3684,6 +3684,18 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
   }
   writeScenarioMeta(scenarioId, metaPatch);
 
+  // A community basemap the game could not download arrives as its reference
+  // (resolveScenarioBundleBackground). Keep the basemap this scenario already
+  // has, and the world's note of what kind it is, rather than wipe a working
+  // basemap over a failed download.
+  const keepBackground = assets.backgroundData?.mode === "communityRef";
+  const world = { ...(data.world ?? {}) };
+  if (keepBackground) {
+    const currentBackground = readJsonFile(getScenarioJsonPath(scenarioId, "world"), {})?.background;
+    if (currentBackground) world.background = currentBackground;
+    else delete world.background;
+  }
+
   updateScenario(scenarioId, {
     game: data.game ?? {},
     prompts: data.prompts ?? {},
@@ -3693,10 +3705,11 @@ const updateScenarioFromBundle = (scenarioId, bundle) => {
       chat: data.chat ?? [],
       events: data.events ?? [],
     },
-    world: data.world ?? {},
+    world,
   });
 
   for (const assetKey of Object.keys(UPLOADABLE_SCENARIO_ASSET_FILES)) {
+    if (keepBackground && assetKey === "backgroundData") continue;
     applyScenarioBundleAsset(scenarioId, assetKey, assets[assetKey]);
   }
 

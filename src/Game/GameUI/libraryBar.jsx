@@ -54,7 +54,7 @@ import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runtime/politicalWorldCapability.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
-import { splitScenarioBundleImage } from "../../runtime/communityBasemaps.js";
+import { splitScenarioBundleImage, unresolvedBundleBackground } from "../../runtime/communityBasemaps.js";
 import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
@@ -2178,6 +2178,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       const bundle = await downloadHubBundle(post.bundleUrl);
       bundle.hubOrigin = { postId: post.id, bundleUrl: post.bundleUrl, title: post.title, author: post.author };
       await updateScenarioFromBundle(scenario.id, bundle);
+      // The stores keep the basemap the scenario had when the new one could not
+      // be downloaded (updateScenarioFromBundle).
+      const missingBasemap = unresolvedBundleBackground(bundle);
+      if (missingBasemap) {
+        setEditorError(`The scenario was updated, but its community basemap could not be downloaded (${missingBasemap}), so it keeps the basemap it had.`);
+      }
     } catch (nextError) {
       setEditorError(`Update failed: ${nextError.message}`);
     } finally {
@@ -2901,6 +2907,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       setActiveTab("scenarios");
       setMenuOpen(true);
       await openScenarioEditor(details.scenario.id);
+      // Shown in the drawer that just opened on it.
+      const missingBasemap = unresolvedBundleBackground(bundle);
+      if (missingBasemap) {
+        setEditorError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+      }
     } catch (nextError) {
       setEditorError(nextError.message);
     } finally {

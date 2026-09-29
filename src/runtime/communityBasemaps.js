@@ -448,9 +448,16 @@ export const dedupeScenarioBundleBackground = async (bundle) => {
 
 // On import: turn a community reference back into an embedded background by
 // fetching the referenced basemap, so the server import writes it normally.
+//
+// A reference that cannot be fetched (offline, a 403 or 502, a moved file) is
+// KEPT, with the reason beside it, rather than deleted: the import still goes
+// ahead, the stores write no background for it, an Update keeps the basemap
+// the scenario already had, and the caller can tell the player why
+// (unresolvedBundleBackground).
 export const resolveScenarioBundleBackground = async (bundle) => {
   const asset = bundle?.assets?.backgroundData;
   if (!asset || asset.mode !== "communityRef" || !asset.url) return bundle;
+  let reason = "";
   try {
     let payload = null;
     // Drive the fetch by how it was referenced, not by kind: an old .basemap.json
@@ -470,15 +477,25 @@ export const resolveScenarioBundleBackground = async (bundle) => {
         fileName: "background.json",
         contentType: "application/json",
       };
-    } else {
-      delete bundle.assets.backgroundData;
+      return bundle;
     }
-  } catch {
-    // Couldn't resolve the reference — import without the background rather than
-    // failing the whole scenario import.
-    delete bundle.assets.backgroundData;
+    reason = "The shared basemap has no image or map in it.";
+  } catch (error) {
+    reason = String(error?.message || "").trim() || "The download failed.";
   }
+  // Import without the background rather than failing the whole scenario.
+  bundle.assets.backgroundData = { ...asset, missingReason: reason };
   return bundle;
+};
+
+// Why a bundle's community basemap is still only a reference after
+// resolveScenarioBundleBackground, or null when there is nothing missing. The
+// reason is an error message, without its closing full stop so it reads
+// inside brackets.
+export const unresolvedBundleBackground = (bundle) => {
+  const asset = bundle?.assets?.backgroundData;
+  if (asset?.mode !== "communityRef") return null;
+  return String(asset.missingReason || "The shared basemap could not be found.").replace(/\.\s*$/, "");
 };
 
 // ---- Scenario zip bundle (image travels as a real file, not base64) -------

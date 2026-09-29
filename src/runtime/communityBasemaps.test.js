@@ -21,6 +21,7 @@ import {
   fetchCommunityBasemaps,
   installCommunityBasemap,
   resolveScenarioBundleBackground,
+  unresolvedBundleBackground,
 } from "./communityBasemaps.js";
 import { sha256Hex } from "./basemapLibrary.js";
 
@@ -219,4 +220,24 @@ test("a reference resolves back into the basemap it was made from", async () => 
   // Written before `via` existed: the kind decides.
   const legacy = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", kind: "image", url: INLINE_URL } } });
   assert.deepEqual(embeddedPayload(legacy), { dataUrl: PNG_DATA_URL });
+});
+
+test("a reference that cannot be fetched is kept, with the reason, instead of deleted", async () => {
+  await setUpHub();
+  const gone = { mode: "communityRef", hash: "x", via: "image", url: "https://github.com/user-attachments/assets/moved.png", fileName: "background.json" };
+  const bundle = await resolveScenarioBundleBackground({ assets: { backgroundData: { ...gone } } });
+  assert.deepEqual(bundle.assets.backgroundData, { ...gone, missingReason: "Not found on the hub." });
+  assert.equal(unresolvedBundleBackground(bundle), "Not found on the hub", "no closing full stop, so it reads inside brackets");
+
+  // A file that downloads but carries no basemap is missing too.
+  files.set("https://github.com/user-attachments/files/9/empty.json", { bytes: new TextEncoder().encode(JSON.stringify({ payload: {} })), type: "application/json" });
+  const empty = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "dataFile", url: "https://github.com/user-attachments/files/9/empty.json" } } });
+  assert.equal(empty.assets.backgroundData.mode, "communityRef");
+  assert.equal(unresolvedBundleBackground(empty), "The shared basemap has no image or map in it");
+
+  // Resolved, embedded or absent: nothing missing.
+  const resolved = await resolveScenarioBundleBackground({ assets: { backgroundData: { mode: "communityRef", via: "image", url: INLINE_URL } } });
+  assert.equal(unresolvedBundleBackground(resolved), null);
+  assert.equal(unresolvedBundleBackground({ assets: {} }), null);
+  assert.equal(unresolvedBundleBackground(null), null);
 });

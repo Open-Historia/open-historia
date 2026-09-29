@@ -1326,15 +1326,26 @@ const updateScenarioFromBundle = async (scenarioId, bundle) => {
   if (scenario.features && typeof scenario.features === "object") {
     metaPatch.features = normalizeFeatureSettings(scenario.features);
   }
+  // A community basemap the game could not download arrives as its reference:
+  // keep the basemap this scenario already has, and the world's note of its
+  // kind (server twin: updateScenarioFromBundle).
+  const keepBackground = bundle.assets?.backgroundData?.mode === "communityRef";
+  const world = { ...(data.world ?? {}) };
+  if (keepBackground) {
+    const currentBackground = jsonAsset(existing, "world")?.background;
+    if (currentBackground) world.background = currentBackground;
+    else delete world.background;
+  }
   writeScenarioMeta(existing, metaPatch);
   await putScenario(existing);
 
   await updateScenario(scenarioId, {
-    game: data.game ?? {}, prompts: data.prompts ?? {}, world: data.world ?? {},
+    game: data.game ?? {}, prompts: data.prompts ?? {}, world,
     storage: { actions: data.actions ?? [], advisor: data.advisor ?? [], chat: data.chat ?? [], events: data.events ?? [] },
   });
 
   for (const key of UPLOADABLE_SCENARIO_ASSET_KEYS) {
+    if (keepBackground && key === "backgroundData") continue;
     const descriptor = (bundle.assets ?? {})[key];
     const embedded = descriptor?.mode === "embedded";
     if (key === COVER_IMAGE_ASSET_KEY) {

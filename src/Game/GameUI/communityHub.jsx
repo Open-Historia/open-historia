@@ -25,6 +25,7 @@ import { DISCORD_BLURPLE, DiscordMark } from "./communityLogos.jsx";
 import {
   dedupeScenarioBundleBackground,
   splitScenarioBundleImage,
+  unresolvedBundleBackground,
 } from "../../runtime/communityBasemaps.js";
 import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { zipBundle } from "../../runtime/bundleZip.js";
@@ -512,6 +513,10 @@ const CommunityPanel = ({ fullPage = false, onImported }) => {
           `Imported "${details?.scenario?.name ?? post.title}" — it's in your Scenarios tab. ` +
             `Enjoyed it? Open its hub post (👍 Like ↗) and hit 👍 to like or 💬 to comment.`,
         );
+        const missingBasemap = unresolvedBundleBackground(bundle);
+        if (missingBasemap) {
+          setError(`The scenario was imported, but its community basemap could not be downloaded (${missingBasemap}). Try again later.`);
+        }
       }
       onImported?.(details);
     } catch (nextError) {
