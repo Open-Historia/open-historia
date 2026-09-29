@@ -236,11 +236,13 @@ A "type" carries render + gameplay settings and is referenced by each region's `
 | `zIndex` | `olStyle.js` | Draw order. |
 | `strokeWidth`, `strokeColor`, `strokeOpacity` | `olStyle.js` | Border. |
 | `overrideColor` | `olStyle.js` | Force a fixed fill instead of the owner colour (`null` = off). |
-| `pathfindingSpeed`, `interactable`, `passable`, `showToDefaultPrompt` | game | Gameplay flags. |
+| `pathfindingSpeed`, `interactable`, `passable`, `showToDefaultPrompt` | nothing yet | Gameplay flags, saved with the map but read by no code: the game has no pathfinding or passability system for them to feed. The panel says so above them. |
 | `includedInLabels` | `OlMap` label layer | `false` suppresses the region label. |
 | `zoomSettings: [{minZoom,maxZoom}]` | `pickZoomBand` (`olStyle.js:88`) | Hides the type outside the zoom band. |
 
 At least one type must always exist (delete is disabled at length 1).
+
+**Types are Workshop-only.** Every "Used by" above is the Workshop's own map. The game export keeps a region's `typeId` (and the suggestion diff compares it), but nothing in the game looks the type up: the game map draws every region in its owner's colour and labels it regardless of the type. The panel says this under its Add row.
 
 ---
 
