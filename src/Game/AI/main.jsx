@@ -3,6 +3,7 @@ import {
     GEMINI_DEFAULT_CHAIN,
     OPENAI_DEFAULT_MODEL,
     fallbackStateStore,
+    getConnections,
     getEntryStatus,
     getRateLimitPolicy,
     getReasoningEnabled,
@@ -3729,13 +3730,15 @@ const anthropicBatchHeaders = (apiKey) => ({
 });
 
 // The provider's batch id is what retrieval polls; the custom id names our
-// request inside it. In memory, like the registry in gameplay.js. The key rides
-// along because retrieval must ask the same account that was sent the batch.
+// request inside it. The key rides along because retrieval must ask the same
+// account that was sent the batch. In memory; gameplay.js also stores the batch
+// id and the Connection that sent it (batchRegistry.js), and restoreAIBatch
+// gives the handle back after a reload.
 const pendingBatchIds = new Map(); // customId -> { batchId, apiKey }
 
-// Resolves to { customId } when the batch was accepted, null when batching is
-// unavailable or the submission was refused — the caller then runs the task
-// synchronously.
+// Resolves to { customId, batchId, connectionId } when the batch was accepted,
+// null when batching is unavailable or the submission was refused — the caller
+// then runs the task synchronously.
 export async function submitAIBatch({ customId, systemPrompt, history, taskKey, tool }) {
     const entry = batchEntryFor(taskKey);
     if (entry?.provider !== "anthropic") return null;
@@ -3796,12 +3799,24 @@ export async function submitAIBatch({ customId, systemPrompt, history, taskKey, 
         if (!batchId) return null;
         pendingBatchIds.set(customId, { batchId, apiKey });
         logDebugEvent("ai-call", `Batch submission for "${taskKey}" accepted as ${batchId}.`);
-        return { customId, batchId, record };
+        return { customId, batchId, connectionId: entry.connectionId, record };
     } catch (error) {
         logDebugEvent("ai-call", `Batch submission for "${taskKey}" failed: ${error?.message || error}`);
         finishAiRecord(record, { ok: false, error: String(error?.message || error) });
         return null;
     }
+}
+
+// A batch submitted before a reload: give retrieval its handle back, with the
+// key of the Connection that sent it as that Connection is now. False when the
+// Connection is gone, is no longer Anthropic or has no key: the batch cannot be
+// collected.
+export function restoreAIBatch(customId, { batchId, connectionId } = {}) {
+    const connection = getConnections().find((candidate) => candidate.id === connectionId);
+    const apiKey = String(connection?.apiKey ?? "").trim();
+    if (!customId || !batchId || connection?.provider !== "anthropic" || !apiKey) return false;
+    pendingBatchIds.set(customId, { batchId, apiKey });
+    return true;
 }
 
 // One batch request's outcome: { status: "pending" | "done" | "failed",

@@ -1,5 +1,6 @@
 /*! Open Historia — portions (briefing dossiers + timeout/fallback hardening) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
-import { callAI, providerSupportsBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDiplomaticMessageOnceOff, submitAIBatch } from "./main.jsx";
+import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validateTimelineDates } from "./timelineDates.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
@@ -315,7 +316,7 @@ import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
-import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
+import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -2668,6 +2669,9 @@ const runJsonTask = async (taskKey, {
   // fails. Everything else takes the normal synchronous path, unchanged.
   sync = true,
   onBatchResult,
+  // Plain JSON from which the applier can be rebuilt after a reload
+  // (batchApplierFor); stored with the batch so it is collected, not orphaned.
+  batchResume = null,
   // Lookup functions for this task (buildTaskLookups): { tools, execute,
   // maxRounds? }. Declared beside the output function on every provider; the
   // model's calls are answered inside callAI and the answers go back as the
@@ -2729,7 +2733,17 @@ const runJsonTask = async (taskKey, {
         tool: batchTool,
       });
       if (submitted) {
-        registerPendingBatch({ customId, fallback, onBatchResult, record: submitted.record ?? null, taskKey, validatePayload });
+        registerPendingBatch({
+          batchId: submitted.batchId,
+          connectionId: submitted.connectionId,
+          customId,
+          fallback,
+          onBatchResult,
+          record: submitted.record ?? null,
+          resume: batchResume,
+          taskKey,
+          validatePayload,
+        });
         return { deferred: true, generation: { source: "batch", fallbackReason: "", deferred: true }, payload: null };
       }
       // Submission refused (no key, provider hiccup): the synchronous path
@@ -3609,7 +3623,7 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest } = {}) => {
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, batchResume = null, onRequest } = {}) => {
   // The document this pass revises, and the revision it was read at: a pass
   // that lands against a different revision (a hand edit in the meantime)
   // appends rather than overwrites (applyHistoryDocumentUpdate).
@@ -3647,6 +3661,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     // may land later through the batch poller.
     sync: typeof onBatchResult !== "function",
     onBatchResult,
+    batchResume,
   });
   if (deferred) return { deferred: true, generation, summary: "", document: "", baseRevision };
   return {
@@ -3655,6 +3670,58 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     document: normalizeString(payload?.document),
     baseRevision,
   };
+};
+
+// One shape for both writers — the synchronous pass and the deferred applier —
+// so a batch-consolidated entry reads exactly like a live one. `resume` is the
+// pass's boundary as plain JSON (see compactHistoryIfNeeded), so the applier
+// can be rebuilt after a reload.
+const consolidationEntryFor = (resume, summary, source, priorHistory) => ({
+  actionIds: normalizeArray(resume?.actionIds),
+  chatIds: normalizeArray(resume?.chatIds),
+  createdAt: new Date().toISOString(),
+  source,
+  summary,
+  throughDate: normalizeString(resume?.throughDate),
+  throughEventId: normalizeString(resume?.throughEventId) || normalizeArray(priorHistory).at(-1)?.throughEventId || "",
+  throughRound: resume?.throughRound,
+});
+
+// Batch routing (Settings → Batch background AI tasks): the summary lands later
+// through the poller and is written here out of band. Declines (false: kept for
+// the next poll) while a simulation runs or while another campaign is open.
+const deferredConsolidationApplier = (resume) => async (resultPayload, source) => {
+  if (isSimulationBusy()) return false;
+  if (campaignChanged(resume?.campaignId, activeCampaignId())) return false;
+  const summaryText = normalizeString(resultPayload?.summary);
+  if (!summaryText) return true;
+  const current = await readGameStateBundle({ force: true });
+  const currentWorld = normalizeWorldState(current.world);
+  // Superseded when a synchronous consolidation covered these events in the
+  // meantime: two summaries of the same weeks would double the campaign's
+  // memory of them.
+  const throughEventId = normalizeString(resume?.throughEventId);
+  const stillOpen = throughEventId
+    ? getUnconsolidatedEvents(current.events, currentWorld).some((event) => event.id === throughEventId)
+    : true;
+  if (!stillOpen) return true;
+  const entry = consolidationEntryFor(resume, summaryText, source, currentWorld.consolidatedHistory);
+  const documentUpdate = applyHistoryDocumentUpdate(currentWorld, {
+    document: resultPayload?.document,
+    summary: summaryText,
+    source,
+    throughDate: entry.throughDate,
+    throughEventId: entry.throughEventId,
+    throughRound: entry.throughRound,
+    baseRevision: resume?.baseRevision ?? 0,
+  });
+  await writeWorldState(normalizeWorldState({
+    ...currentWorld,
+    consolidatedHistory: [...currentWorld.consolidatedHistory, entry],
+    historyDocument: documentUpdate.historyDocument,
+  }));
+  logDebugEvent("ai", `Deferred consolidation applied (${source}): ${resume?.eventCount ?? 0} events, ${resume?.chatCount ?? 0} chats; history document ${documentUpdate.mode}.`);
+  return true;
 };
 
 // Consolidation never edits the event log: a pass appends its record to
@@ -3669,6 +3736,15 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
   const { eventsToConsolidate, closedChats, actionsToConsolidate, throughEvent } = planHistoryConsolidation(bundle, { force });
 
   if (eventsToConsolidate.length === 0 && closedChats.length === 0) return world;
+  // A consolidation already sent as a batch covers these events: sending them
+  // again would pay twice and, when both land, remember those weeks twice.
+  if (hasPendingBatch("eventConsolidator", activeCampaignId())) {
+    logDebugEvent("turn", "History consolidation waits for the batch already submitted for this campaign.", {
+      events: eventsToConsolidate.length,
+      chats: closedChats.length,
+    });
+    return world;
+  }
   // The skip's budget is asked HERE, not inside the task: a refused task falls
   // back to its deterministic digest, and folding history with a digest is
   // permanent — those events are never shown to the simulator again. Refused,
@@ -3680,19 +3756,20 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
     });
     return world;
   }
-  // One shape for both writers — the synchronous return below and the
-  // deferred applier — so a batch-consolidated entry reads exactly like a
-  // live one.
-  const entryFor = (summary, source, priorHistory) => ({
+  // The pass's boundary as plain JSON: what the entry records, and what a
+  // batch applier needs to be rebuilt after a reload (batchApplierFor).
+  const resume = {
+    kind: "consolidation",
+    campaignId: activeCampaignId(),
     actionIds: actionsToConsolidate.map((action) => action.id),
     chatIds: closedChats.map((chat) => chat.id),
-    createdAt: new Date().toISOString(),
-    source,
-    summary,
     throughDate: throughEvent?.date || bundle.game.gameDate,
-    throughEventId: throughEvent?.id || priorHistory.at(-1)?.throughEventId || "",
+    throughEventId: throughEvent?.id || "",
     throughRound: bundle.game.round,
-  });
+    baseRevision: world.historyDocument?.revision ?? 0,
+    eventCount: eventsToConsolidate.length,
+    chatCount: closedChats.length,
+  };
   const { generation, summary, document, baseRevision } = await consolidateHistoryBatch(
     bundle,
     eventsToConsolidate,
@@ -3700,45 +3777,15 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
     actionsToConsolidate,
     {
       onRequest: jumpTaskOptions(requests, "history").onRequest,
-      // Batch routing (Settings → Batch background AI tasks): the summary lands
-      // later through the poller and is written here out of band, while the
-      // jump that asked for it carries on with the events unconsolidated.
-      onBatchResult: async (resultPayload, source) => {
-        if (isSimulationBusy()) return false;
-        const summaryText = normalizeString(resultPayload?.summary);
-        if (!summaryText) return true;
-        const current = await readGameStateBundle({ force: true });
-        const currentWorld = normalizeWorldState(current.world);
-        // Superseded when a synchronous consolidation covered these events
-        // in the meantime: two summaries of the same weeks would double the
-        // campaign's memory of them.
-        const stillOpen = throughEvent
-          ? getUnconsolidatedEvents(current.events, currentWorld).some((event) => event.id === throughEvent.id)
-          : true;
-        if (!stillOpen) return true;
-        const entry = entryFor(summaryText, source, currentWorld.consolidatedHistory);
-        const documentUpdate = applyHistoryDocumentUpdate(currentWorld, {
-          document: resultPayload?.document,
-          summary: summaryText,
-          source,
-          throughDate: entry.throughDate,
-          throughEventId: entry.throughEventId,
-          throughRound: entry.throughRound,
-          baseRevision,
-        });
-        await writeWorldState(normalizeWorldState({
-          ...currentWorld,
-          consolidatedHistory: [...currentWorld.consolidatedHistory, entry],
-          historyDocument: documentUpdate.historyDocument,
-        }));
-        logDebugEvent("ai", `Deferred consolidation applied (${source}): ${eventsToConsolidate.length} events, ${closedChats.length} chats; history document ${documentUpdate.mode}.`);
-        return true;
-      },
+      // The jump that asked for it carries on with the events unconsolidated
+      // while a batched summary is outstanding (deferredConsolidationApplier).
+      onBatchResult: deferredConsolidationApplier(resume),
+      batchResume: resume,
     },
   );
   if (!summary) return world;
 
-  const entry = entryFor(summary, generation.source, world.consolidatedHistory);
+  const entry = consolidationEntryFor(resume, summary, generation.source, world.consolidatedHistory);
   const documentUpdate = applyHistoryDocumentUpdate(world, {
     document,
     summary,
@@ -3865,33 +3912,86 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
 // --- Batch dispatch (ported from the abdulrahman-2005 fork) -------------------
 // Tasks submitted with sync:false register here; a lazy poller asks the
 // provider's batch endpoint and applies validated results out of band, never
-// while a simulation is running. The registry is in memory on purpose: a page
-// reload orphans an in-flight batch, which for the event consolidator only
-// means those events stay unconsolidated and ride along with the next
-// consolidation — nothing is lost, and there is no stale handle to migrate.
+// while a simulation is running. A batch is paid for when it is sent, so the
+// registry is also stored (batchRegistry.js) with a plain-JSON `resume` note:
+// after a reload, or Android killing the WebView, rehydratePendingBatches gives
+// retrieval its handle back and rebuilds the applier, so the answer is
+// collected instead of the same work being sent and paid for again.
 const batchBackgroundTasksEnabled = () => getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks);
 const BATCH_POLL_INTERVAL_MS = 60000;
-const pendingBatches = new Map(); // customId -> { taskKey, fallback, validatePayload, onBatchResult }
+// customId -> { taskKey, campaignId, fallback, validatePayload, onBatchResult, record, result? }
+const pendingBatches = new Map();
 let batchPollerTimer = null;
 
-const registerPendingBatch = (entry) => {
-  pendingBatches.set(entry.customId, entry);
-  logDebugEvent("ai", `Task "${entry.taskKey}" submitted as batch ${entry.customId} (${pendingBatches.size} in flight).`);
+const startBatchPoller = () => {
   if (!batchPollerTimer && typeof window !== "undefined") {
     batchPollerTimer = window.setInterval(() => { pollPendingBatches(); }, BATCH_POLL_INTERVAL_MS);
   }
 };
 
-export const pendingBatchCount = () => pendingBatches.size;
+// The applier a stored `resume` note stands for, or null for a kind this build
+// does not know (the batch is then forgotten).
+const batchApplierFor = (resume) =>
+  resume?.kind === "consolidation" ? deferredConsolidationApplier(resume) : null;
+
+const registerPendingBatch = ({ batchId, connectionId, resume, ...entry }) => {
+  const campaignId = normalizeString(resume?.campaignId);
+  pendingBatches.set(entry.customId, { ...entry, campaignId });
+  if (resume && batchId) {
+    rememberBatch({ customId: entry.customId, batchId, connectionId, taskKey: entry.taskKey, campaignId, resume });
+  }
+  logDebugEvent("ai", `Task "${entry.taskKey}" submitted as batch ${entry.customId} (${pendingBatches.size} in flight).`);
+  startBatchPoller();
+};
+
+// Whether a batch for this task and campaign is still out: its answer will be
+// applied when it lands, so the work must not be sent again meanwhile.
+const hasPendingBatch = (taskKey, campaignId) => {
+  for (const entry of pendingBatches.values()) {
+    if (entry.taskKey === taskKey && !campaignChanged(entry.campaignId, campaignId)) return true;
+  }
+  return false;
+};
+
+// Once per page: put every stored batch back in the registry.
+let batchesRehydrated = false;
+const rehydratePendingBatches = () => {
+  if (batchesRehydrated) return;
+  batchesRehydrated = true;
+  for (const stored of readStoredBatches()) {
+    if (pendingBatches.has(stored.customId)) continue;
+    const onBatchResult = batchApplierFor(stored.resume);
+    if (!onBatchResult || !restoreAIBatch(stored.customId, stored)) {
+      forgetBatch(stored.customId);
+      logDebugEvent("ai", `Stored batch ${stored.customId} ("${stored.taskKey}") cannot be collected any more and was dropped.`);
+      continue;
+    }
+    // No fallback: a batch that failed is simply forgotten, and the work is
+    // due again on the next skip.
+    pendingBatches.set(stored.customId, {
+      customId: stored.customId,
+      taskKey: stored.taskKey,
+      campaignId: stored.campaignId,
+      fallback: null,
+      validatePayload: null,
+      onBatchResult,
+      record: null,
+    });
+    logDebugEvent("ai", `Batch ${stored.customId} ("${stored.taskKey}") submitted before this page loaded is being collected.`);
+  }
+  if (pendingBatches.size) startBatchPoller();
+};
 
 export const pollPendingBatches = async () => {
   if (pendingBatches.size === 0 || isSimulationBusy()) return;
   for (const [customId, entry] of [...pendingBatches]) {
-    const outcome = await retrieveAIBatch(customId);
+    // An answer the applier declined last time is kept on the entry: the
+    // provider handle is spent once a batch has been read.
+    const outcome = entry.result ? { status: "held" } : await retrieveAIBatch(customId);
     if (outcome.status === "pending") continue;
     pendingBatches.delete(customId);
     try {
-      let result = null;
+      let result = entry.result ?? null;
       if (entry.record && outcome.usage) entry.record.usage = outcome.usage;
       if (outcome.status === "done") {
         const candidate = outcome.payload ?? (outcome.rawText ? extractJsonPayload(outcome.rawText) : null);
@@ -3913,7 +4013,7 @@ export const pollPendingBatches = async () => {
           finishAiRecord(entry.record, { ok: false, error: "The batch answer failed validation.", rawResponse: outcome.rawText ?? "" });
           logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") failed validation: ${validation.error} Applying the deterministic fallback.`);
         }
-      } else {
+      } else if (outcome.status !== "held") {
         finishAiRecord(entry.record, { ok: false, error: "The batch request did not succeed." });
         logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") did not succeed. Applying the deterministic fallback.`);
       }
@@ -3921,16 +4021,32 @@ export const pollPendingBatches = async () => {
         const fallbackPayload = typeof entry.fallback === "function" ? await entry.fallback() : null;
         result = fallbackPayload ? { value: fallbackPayload, source: "fallback" } : null;
       }
-      if (!result) continue;
+      if (!result) {
+        forgetBatch(customId);
+        continue;
+      }
       const applied = await entry.onBatchResult(result.value, result.source);
-      // The applier declined (a simulation started meanwhile): keep the entry
-      // and try again on the next poll.
-      if (applied === false) pendingBatches.set(customId, entry);
+      // The applier declined (a simulation started meanwhile, or another
+      // campaign is open): keep the entry, with its answer, for the next poll.
+      if (applied === false) {
+        pendingBatches.set(customId, { ...entry, result });
+        continue;
+      }
+      forgetBatch(customId);
     } catch (error) {
+      forgetBatch(customId);
       logDebugEvent("ai", `Batch ${customId} ("${entry.taskKey}") could not be applied: ${normalizeString(error?.message || error)}`);
     }
   }
 };
+
+if (typeof window !== "undefined") {
+  try {
+    rehydratePendingBatches();
+  } catch (error) {
+    logDebugEvent("ai", `Stored batches could not be restored: ${normalizeString(error?.message || error)}`);
+  }
+}
 
 const resolveInvitees = async (names, world, additionalCountries = []) => {
   const countryCatalog = [
