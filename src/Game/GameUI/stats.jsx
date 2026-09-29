@@ -332,11 +332,21 @@ const CustomStatCard = ({ stat, value }) => {
     );
 };
 
-const CustomStatsSheet = ({ definition, sheet }) => {
+// The custom-sheet row the default layout calls "Intelligence service" is a
+// separate value generated with the sheet. Beside the live rating espionage
+// actually uses (world.intelligence, IntelligenceServiceCard) it would show a
+// second, different number under the same name, so it is not drawn then.
+const LIVE_INTELLIGENCE_STAT_KEYS = Object.freeze(["intelligenceService"]);
+
+// `hiddenKeys`: stat keys not to draw. A section left with nothing is skipped.
+const CustomStatsSheet = ({ definition, sheet, hiddenKeys = [] }) => {
     const values = sheet?.customStats || {};
+    const sections = definition.sections
+        .map((section) => ({ ...section, stats: section.stats.filter((stat) => !hiddenKeys.includes(stat.key)) }))
+        .filter((section) => section.stats.length > 0);
     return (
         <>
-            {definition.sections.map((section, sectionIndex) => (
+            {sections.map((section, sectionIndex) => (
                 <React.Fragment key={section.key}>
                     <div style={{ ...sectionTitleStyle, marginTop: sectionIndex === 0 ? "1rem" : sectionTitleStyle.marginTop }}>
                         {section.icon || "◆"} {section.label}
@@ -351,6 +361,21 @@ const CustomStatsSheet = ({ definition, sheet }) => {
         </>
     );
 };
+
+// The polity's intelligence service as espionage reads it (world.intelligence),
+// on the standard and on a custom sheet alike: the pane asks for a first
+// reading of it either way.
+const IntelligenceServiceCard = ({ value, style }) => (
+    <div style={{ ...cardStyle, ...style }}>
+        <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.45rem" }}>
+            <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                🕵 Intelligence service
+            </span>
+            <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>{value}/100</span>
+        </div>
+        <Bar value={value} color="#38bdf8" />
+    </div>
+);
 
 const stabilityColor = (value) => (value < 40 ? "#ef4444" : value < 70 ? "#f59e0b" : "#22c55e");
 
@@ -2342,7 +2367,14 @@ const StatsPaneBody = ({ active }) => {
             {statsView === "economy" && !statSheetDefinitionError && sheet && state.status === "ready" && (
                 <>
                 {statSheetDefinition.custom ? (
-                    <CustomStatsSheet definition={statSheetDefinition} sheet={sheet} />
+                    <>
+                    {intelligence !== null && <IntelligenceServiceCard value={intelligence} style={{ marginTop: "1rem" }} />}
+                    <CustomStatsSheet
+                    definition={statSheetDefinition}
+                    sheet={sheet}
+                    hiddenKeys={intelligence !== null ? LIVE_INTELLIGENCE_STAT_KEYS : []}
+                    />
+                    </>
                 ) : (
                     <>
                 {/* National stability */}
@@ -2358,17 +2390,7 @@ const StatsPaneBody = ({ active }) => {
                 <Bar value={sheet.stability} color={stabilityColor(clamp01(sheet.stability))} />
                 </div>
 
-                {intelligence !== null && (
-                <div style={{ ...cardStyle, marginTop: "0.6rem" }}>
-                <div style={{ alignItems: "center", display: "flex", justifyContent: "space-between", marginBottom: "0.45rem" }}>
-                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.68rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
-                🕵 Intelligence service
-                </span>
-                <span data-no-translate style={{ fontSize: "0.85rem", fontWeight: 800 }}>{intelligence}/100</span>
-                </div>
-                <Bar value={intelligence} color="#38bdf8" />
-                </div>
-                )}
+                {intelligence !== null && <IntelligenceServiceCard value={intelligence} style={{ marginTop: "0.6rem" }} />}
 
                 {/* Strategic indices */}
                 <div style={sectionTitleStyle}>⚑ Strategic indices</div>
