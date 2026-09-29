@@ -109,6 +109,14 @@ export const normalizeTerritoryBasis = (value) => {
 export const basisMovesTheMap = (basis) => !NO_CONTROL.has(normalizeTerritoryBasis(basis));
 export const basisBecomesClaim = (basis) => normalizeTerritoryBasis(basis) === "claim";
 
+// Whether two resolved entries are the same change to one region: the same
+// region, going to the same side, by the same kind of operation. A contest and a
+// capture both name the side that gains, and are still two changes. `fold`
+// spells a side's name as the map does, so "burkina faso" is Burkina Faso.
+export const sameRegionChange = (a, b, fold = clean) => clean(a?.regionId) === clean(b?.regionId)
+  && fold(a?.toCode) === fold(b?.toCode)
+  && clean(a?.op).toLowerCase() === clean(b?.op).toLowerCase();
+
 const labelOf = (entry) => clean(entry?.regionName) || clean(entry?.regionId) || "an unnamed region";
 
 // Screens one event's territorial operations. Pure: returns new arrays and the

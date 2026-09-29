@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyMapConsequences, markOrderedEvents } from "./mapConsequences.js";
+import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { eventNeedsNativeUnitDirector } from "./nativeUnitDirector.js";
 import { eventNeedsStructureDirector } from "./nativeStructureDirector.js";
 
@@ -86,6 +86,24 @@ test("an event answering the player's order to raise or build is one the Directo
     ]);
     assert.equal(eventNeedsNativeUnitDirector(marked), true);
     assert.equal(eventNeedsStructureDirector(marked), true);
+});
+
+// Seen in a live check (2026-09-29): a Scene whose beats built a headquarters
+// and raised a battalion was summed up as "Establishment of the Alliance of
+// Sahel States Unified Military Command", and no Director read it. A Scene's
+// beats are the player's choices, so they mark its outcome as an order does.
+test("a Scene outcome whose beats raise or build is one the Directors read, however it is summed up", () => {
+    const outcome = { title: "Establishment of the Alliance of Sahel States Unified Military Command", description: "The command is established.", impacts: {} };
+    assert.equal(eventNeedsNativeUnitDirector(outcome), false);
+    assert.equal(eventNeedsStructureDirector(outcome), false);
+    const marked = markSceneOutcome(outcome, [
+        { choice: "Propose a unified command headquartered in Ouagadougou", summary: "Mali and Niger agree." },
+        { choice: "Order construction to begin and raise a guard battalion", summary: "Construction of the headquarters compound begins, and a new rapid-reaction battalion is raised to guard it." },
+    ]);
+    assert.equal(eventNeedsNativeUnitDirector(marked), true);
+    assert.equal(eventNeedsStructureDirector(marked), true);
+    const talks = markSceneOutcome(outcome, [{ choice: "Push for a shared mining fund", summary: "Ministers agree to study a fund." }]);
+    assert.deepEqual(talks, outcome);
 });
 
 test("an order that raises or builds nothing marks nothing, and unrelated events are untouched", () => {

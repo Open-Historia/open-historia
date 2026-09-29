@@ -37,11 +37,21 @@ export const markOrderedEvents = (events, actions) => {
     return asArray(events).map((event) => {
         const orders = asArray(event?.impacts?.actionIds).map((id) => byId.get(text(id))).filter(Boolean);
         if (!orders.length) return event;
-        const words = orders.map((action) => `${text(action.title)} ${text(action.text)}`);
-        const forces = words.some(orderRaisesForces);
-        const build = words.some(orderBuildsStructure);
-        return forces || build ? { ...event, ordered: { forces, build } } : event;
+        return markedBy(event, orders.map((action) => `${text(action.title)} ${text(action.text)}`));
     });
+};
+
+// A Scene's beats are the player's choices and what came of them: they mark the
+// Scene outcome as an order marks the event that answers it, because the model
+// that sums the Scene up may leave out the headquarters or the battalion.
+export const markSceneOutcome = (outcome, beats) => (outcome
+    ? markedBy(outcome, asArray(beats).map((beat) => `${text(beat?.choice)} ${text(beat?.summary)}`))
+    : outcome);
+
+const markedBy = (event, words) => {
+    const forces = words.some(orderRaisesForces);
+    const build = words.some(orderBuildsStructure);
+    return forces || build ? { ...event, ordered: { forces, build } } : event;
 };
 
 const withoutHints = (events) => asArray(events).map((event) => {

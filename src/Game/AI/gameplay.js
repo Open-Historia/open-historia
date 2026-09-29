@@ -5,7 +5,7 @@ import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
@@ -20,7 +20,7 @@ import {
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
 import { buildUnitDirectorInput } from "./nativeUnitDirector.js";
-import { applyMapConsequences, markOrderedEvents } from "./mapConsequences.js";
+import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
 import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
 import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
 import {
@@ -5367,13 +5367,7 @@ const resolveRegionTransfers = async (containers, world, {
     const toCode = regionKey(transfer?.toCode);
     if (!id || !toCode) return;
 
-    const duplicate = target.some(
-      (entry) =>
-        normalizeString(entry?.regionId) === id &&
-        regionKey(entry?.toCode) === toCode,
-    );
-
-    if (!duplicate) target.push(transfer);
+    if (!target.some((entry) => sameRegionChange(entry, transfer, regionKey))) target.push(transfer);
   };
 
   const unresolved = [];
@@ -12982,7 +12976,7 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   // units, occupied land and Structures, and the Board. Seen in a live game
   // (2026-09-27): a Scene established a headquarters in Ouagadougou and nothing
   // appeared, because a Scene outcome never reached a Director.
-  const scene = outcome ? await sceneMapConsequences({ bundle, outcome, generation: summaryGeneration }) : null;
+  const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, history), generation: summaryGeneration }) : null;
   const sceneOutcome = scene?.events?.[0] ?? outcome;
 
   const applyScene = (withBoard) => applySimulationResult({
