@@ -405,7 +405,7 @@ Two authors create the board's entries (the player only sets a priority or aband
 | Deploy controls | type (restricted by scenario `getAllowedUnitTypes()`), strength (1–1000), optional name → `setInteractionMode({kind:"deploy", params})` then closes the panel | unitsController |
 | **Mode banner** (z 10000) | Global hint while `mode.kind !== "idle"` (deploy) + Cancel (`clearInteractionMode`) | interaction-mode state |
 
-Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re-renders once the lookup warms). `TYPE_GLYPH`/`TYPE_LABEL` map unit types to icons/labels; strength color-codes >600 green / >250 amber / else red.
+Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re-renders once the lookup warms and on every name change, `subscribePolityNames`). `TYPE_GLYPH`/`TYPE_LABEL` map unit types to icons/labels; strength color-codes >600 green / >250 amber / else red.
 
 ---
 

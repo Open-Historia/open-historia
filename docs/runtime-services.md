@@ -152,9 +152,10 @@ Where the override resolver renames by scenario, `polityNames.js` resolves a **c
 
 | Export | Purpose |
 |---|---|
-| `ensurePolityNames()` | Refreshes `nameByCode` if older than 15 s; merges `loadCountryNames()` with `world.polityOverrides` (era polity wins **only when it carries a name**) |
-| `polityDisplayName(code)` | Sync lookup, falls back to the code until a refresh has run |
-| `useCountryDisplayName(code)` | Hook: renders the code, then swaps to the resolved name after `ensurePolityNames()` |
+| `ensurePolityNames()` | Seeds `nameByCode` once per game from a plain cached read of `world.json` (no force, no clone); merges `loadCountryNames()` with `world.polityOverrides` (era polity wins **only when it carries a name**). After that the map is rebuilt from `oh:world-updated`'s `detail.world` on every world write, and cleared and re-seeded on `oh:active-game-changed`; nothing polls |
+| `polityDisplayName(code)` | Sync lookup, falls back to the code until the seed has run |
+| `subscribePolityNames(listener)` | Told whenever the names change (a world write, a game switch) |
+| `useCountryDisplayName(code)` | Hook: renders the code, then the resolved name, and follows a rename as soon as it is written |
 
 ---
 
