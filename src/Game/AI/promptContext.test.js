@@ -8,6 +8,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildEventHistoryText,
+  buildHistoricalAnchorText,
   buildPlayerPolityRegionsText,
   buildPromptContext,
   buildUnitsSummaryText,
@@ -128,4 +130,37 @@ test("the player's region list says how many regions it left out", async () => {
   const text = await buildPlayerPolityRegionsText({ game, world }, regions);
   assert.equal(text.split(", ").length, 25);
   assert.match(text, /, \(\+6 more\)$/);
+});
+
+const occupationAndGroup = (extra = {}) => ({
+  id: "e-occupation",
+  date: "1930-03-01",
+  title: "Kharkiv falls",
+  description: "Russian forces take the city; a partisan band forms in the woods.",
+  importance: "minor",
+  impacts: {
+    regionControlOps: [
+      { op: "control", regionId: "UKR.7_1", regionName: "Kharkiv", fromCode: "Ukraine", toCode: "Russian Federation" },
+      { op: "contest", regionId: "UKR.10_1", regionName: "Luhansk", fromCode: "Ukraine", actorCode: "Russian Federation" },
+    ],
+    groupOps: [{ op: "create", name: "Kharkiv Partisans", regionIds: ["UKR.7_1", "UKR.7_2"] }],
+  },
+  ...extra,
+});
+
+test("recent events note occupations and groups, not only sovereignty transfers", () => {
+  const text = buildEventHistoryText([occupationAndGroup()]);
+  assert.match(text, /Control: Kharkiv -> Russian Federation \(from Ukraine\), Luhansk contested by Russian Federation \(held by Ukraine\)/);
+  assert.match(text, /Groups: Kharkiv Partisans founded in 2 regions/);
+});
+
+test("a group founding or an occupation is a durable anchor for a long campaign", () => {
+  const events = [
+    occupationAndGroup(),
+    { id: "e-parade", date: "1930-03-02", title: "Parade", description: "A parade.", importance: "minor", impacts: {} },
+  ];
+  const world = { consolidatedHistory: [{ id: "h1", summary: "Spring 1930.", throughEventId: "e-parade", throughDate: "1930-03-02" }] };
+  const anchors = buildHistoricalAnchorText(events, world);
+  assert.match(anchors, /Kharkiv falls/);
+  assert.doesNotMatch(anchors, /Parade/);
 });

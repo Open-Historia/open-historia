@@ -173,8 +173,10 @@ const rankEvent = (event, { ledgerActors, currentDate }) => {
   const recencyDays = currentDate && date ? Math.max(0, daysBetweenIso(date, currentDate)) : 0;
   const recencyScore = 1 / (1 + recencyDays / 180);
   const importanceScore = normalizeLower(event?.importance) === "major" ? 1 : 0.4;
-  const involved = normalizeArray(event?.impacts?.regionTransfers)
-    .flatMap((transfer) => [transfer?.fromCode, transfer?.toCode])
+  const involved = [
+    ...normalizeArray(event?.impacts?.regionTransfers).flatMap((transfer) => [transfer?.fromCode, transfer?.toCode]),
+    ...normalizeArray(event?.impacts?.regionControlOps).flatMap((op) => [op?.fromCode, op?.toCode, op?.actorCode]),
+  ]
     .map((code) => toCountryName(normalizeString(code)))
     .filter(Boolean);
   const relevance = involved.length === 0 || involved.some((name) => ledgerActors.has(normalizeLower(name))) ? 1 : 0.5;
@@ -193,6 +195,35 @@ export const selectRankedEvents = (events, { limit, world = null, currentDate = 
     .slice(0, limit)
     .sort((a, b) => a.index - b.index)
     .map((ranked) => ranked.entry);
+};
+
+// Occupations and groups are history too: without these notes a group's
+// founding or a city's fall read as prose alone and vanished from the record
+// the moment the prose was summarised. Compact, and cut after a few entries,
+// because the live state of both already reaches the model elsewhere
+// (territorialControlContext, the [Groups] block).
+const IMPACT_NOTE_ENTRIES = 6;
+
+const compactImpactList = (entries) => {
+  const shown = entries.slice(0, IMPACT_NOTE_ENTRIES);
+  const more = entries.length - shown.length;
+  return `${shown.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
+};
+
+const describeControlOp = (op) => {
+  const place = op.regionName || op.regionId;
+  if (op.op === "contest") return `${place} contested by ${op.actorCode} (held by ${op.fromCode})`;
+  if (op.op === "clear_contest") return `${place} contest by ${op.clearAll ? "all claimants" : op.claimantCode} ended`;
+  return `${place} -> ${op.toCode} (from ${op.fromCode})`;
+};
+
+const describeGroupOp = (op) => {
+  const regions = op.regionIds.length === 1 ? "1 region" : `${op.regionIds.length} regions`;
+  if (op.op === "create") return `${op.name} founded${op.regionIds.length ? ` in ${regions}` : ""}`;
+  if (op.op === "dissolve") return `${op.name} dissolved`;
+  if (op.op === "take") return `${op.name} took ${regions}`;
+  if (op.op === "release") return `${op.name} lost ${regions}`;
+  return `${op.name} changed${op.newName ? ` (now ${op.newName})` : ""}`;
 };
 
 export const buildEventHistoryText = (
@@ -225,9 +256,17 @@ export const buildEventHistoryText = (
         );
       }
 
+      if (event.impacts.regionControlOps.length > 0) {
+        impactNotes.push(`Control: ${compactImpactList(event.impacts.regionControlOps.map(describeControlOp))}`);
+      }
+
+      if (event.impacts.groupOps.length > 0) {
+        impactNotes.push(`Groups: ${compactImpactList(event.impacts.groupOps.map(describeGroupOp))}`);
+      }
+
       if (event.impacts.polityChanges.length > 0) {
         impactNotes.push(
-          `Polity changes: ${event.impacts.polityChanges
+          `Polity changes:${event.impacts.polityChanges
             .map((entry) => `${entry.code}${entry.name ? ` renamed to ${entry.name}` : ""}${entry.color ? ` color ${entry.color}` : ""}`)
             .join(", ")}`,
         );
@@ -479,6 +518,13 @@ const hasDurableStructuralEventImpact = (event) => {
     .some((change) => ["create", "restore", "rename", "dissolve"]
       .includes(normalizeString(change?.operation).toLowerCase()));
   if (lifecycleChange) return true;
+
+  // An occupation, and a group founded or erased, outlast the event as surely
+  // as a transfer does.
+  if (normalizeArray(event?.impacts?.regionControlOps)
+    .some((op) => normalizeString(op?.op).toLowerCase() === "control")) return true;
+  if (normalizeArray(event?.impacts?.groupOps)
+    .some((op) => ["create", "dissolve"].includes(normalizeString(op?.op).toLowerCase()))) return true;
 
   return normalizeArray(event?.impacts?.regionTransfers).some((transfer) => {
     const from = normalizeString(transfer?.fromCode).toLowerCase();
