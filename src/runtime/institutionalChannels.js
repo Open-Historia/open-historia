@@ -30,6 +30,18 @@ export const institutionalChannelIdFor = (institutionInput) => {
   return identity.id ? `institution-channel-${identity.id}`.slice(0, 160) : "";
 };
 
+// An institution's permanent Council thread, found by thread identity. An
+// accession or lifecycle hearing carries the same institutionId (so it can be
+// tied to the ledger) and is often first in the list, so matching on
+// institutionId alone handed back the hearing: the post-turn ballots and the
+// player's debates then ran there, with the wrong governments, and no ballot
+// was cast.
+export const findInstitutionalChannel = (chats, institutionId) => {
+  const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
+  if (!canonicalId || !Array.isArray(chats)) return null;
+  return chats.find((chat) => chatThreadIdentityKey(chat) === `institution:${canonicalId}`) || null;
+};
+
 const institutionalSystemMessage = (text, date = "") => ({
   role: "system",
   speaker: "System",
@@ -131,7 +143,9 @@ export const ensureInstitutionalChannel = async ({
     expectedGameId,
   });
   if (committed?.skipped || !result) throw new Error("Institutional channel was not committed.");
-  const channel = reconcileChatsForPlayer(committed.chat || committed.chats || result.chats, committed.world, playerCountry || committed.game?.country || "")
-    .find((chat) => lower(chat?.institutionId) === lower(result.channel.institutionId));
+  const channel = findInstitutionalChannel(
+    reconcileChatsForPlayer(committed.chat || committed.chats || result.chats, committed.world, playerCountry || committed.game?.country || ""),
+    result.channel.institutionId,
+  );
   return { ...result, world: committed.world, chats: committed.chat || result.chats, channel: channel || result.channel };
 };
