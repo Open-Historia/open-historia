@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { getEntryStatus, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { politicalWorldEvalEvolvedOutcomeSummary } from "../AI/politicalWorldEvalCore.js";
 import { saveTextToDisk } from "../../runtime/saveFile.js";
+import { useIsMobile } from "../../runtime/useIsMobile.js";
 import {
   capturePoliticalWorldEvalSnapshot,
   listPoliticalWorldEvalActors,
@@ -136,6 +137,7 @@ export default function PoliticalWorldABLab({ onClose }) {
   const [revealed, setRevealed] = useState(false);
   const [judgements, setJudgements] = useState({});
   const abortRef = useRef(null);
+  const isMobile = useIsMobile();
   const entries = useMemo(() => getResolvedFallbackList(), []);
   const [config, setConfig] = useState({
     testType: "diplomacy",
@@ -287,18 +289,23 @@ export default function PoliticalWorldABLab({ onClose }) {
 
   return createPortal(
     <div role="dialog" aria-modal="true" aria-label="Political World A/B Lab" style={{ alignItems: "center", background: "rgba(3,3,5,0.74)", backdropFilter: "blur(18px)", display: "flex", inset: 0, justifyContent: "center", padding: "1rem", position: "fixed", zIndex: 2147483600 }}>
-      <div style={{ background: "linear-gradient(180deg, rgba(33,30,43,0.98), rgba(13,13,17,0.98))", border: "1px solid rgba(167,139,250,0.28)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.55)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: "min(900px, calc(100vh - 2rem))", maxWidth: "1320px", overflow: "hidden", width: "min(97vw, 1320px)" }}>
-        <header style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", padding: "0.9rem 1rem" }}>
+      <div style={{ background: "linear-gradient(180deg, rgba(33,30,43,0.98), rgba(13,13,17,0.98))", border: "1px solid rgba(167,139,250,0.28)", borderRadius: "16px", boxShadow: "0 28px 90px rgba(0,0,0,0.55)", color: "white", display: "flex", flexDirection: "column", fontFamily: "sans-serif", height: "min(900px, calc(100vh - 2rem))", maxWidth: "1320px", overflow: "hidden", width: isMobile ? "100%" : "min(97vw, 1320px)" }}>
+        <header style={{ alignItems: "center", borderBottom: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.8rem", padding: isMobile ? "0.75rem" : "0.9rem 1rem" }}>
           <div style={{ alignItems: "center", background: "rgba(139,92,246,0.16)", border: "1px solid rgba(167,139,250,0.24)", borderRadius: "9px", display: "flex", fontWeight: 900, height: "2.2rem", justifyContent: "center", width: "2.2rem" }}>A/B</div>
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "1rem", fontWeight: 900 }}>Political World A/B Lab</div>
             <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.65rem", marginTop: "0.15rem" }}>Frozen, read-only paired Gemini/provider evaluation. Campaign canon is never applied or changed.</div>
           </div>
           <button type="button" onClick={onClose} disabled={running} style={{ ...input, cursor: running ? "not-allowed" : "pointer", fontSize: "1rem", padding: 0, width: "2.25rem", height: "2.25rem" }}>×</button>
         </header>
 
-        <div style={{ display: "grid", flex: 1, gridTemplateColumns: "minmax(270px, 330px) minmax(0, 1fr)", minHeight: 0 }}>
-          <aside style={{ borderRight: "1px solid rgba(255,255,255,0.08)", minHeight: 0, overflowY: "auto", padding: "0.85rem" }}>
+        {/* On a phone the settings stack above the results in one scrolling column. */}
+        <div style={isMobile
+          ? { display: "flex", flex: 1, flexDirection: "column", minHeight: 0, overflowY: "auto" }
+          : { display: "grid", flex: 1, gridTemplateColumns: "minmax(270px, 330px) minmax(0, 1fr)", minHeight: 0 }}>
+          <aside style={isMobile
+            ? { borderBottom: "1px solid rgba(255,255,255,0.08)", flex: "0 0 auto", padding: "0.75rem" }
+            : { borderRight: "1px solid rgba(255,255,255,0.08)", minHeight: 0, overflowY: "auto", padding: "0.85rem" }}>
             <div style={{ ...panel, marginBottom: "0.7rem" }}>
               <div style={{ color: "#ddd6fe", fontSize: "0.66rem", fontWeight: 900, textTransform: "uppercase" }}>Frozen source</div>
               {loadingSnapshot ? <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.72rem", marginTop: "0.45rem" }}>Reading current campaign...</div> : snapshot ? (
@@ -351,7 +358,7 @@ export default function PoliticalWorldABLab({ onClose }) {
 
               {config.testType === "diplomacy" && <>
                 <Field title="Speaking polity">
-                  <select value={config.speaker} onChange={(e) => patch({ speaker: e.target.value, sensitivityActor: e.target.value, evolvedGoalSource: "", chatId: "" })} style={input}>{actors.map((name) => <option key={name}>{name}</option>)}</select>
+                  <select value={config.speaker} onChange={(e) => patch({ speaker: e.target.value, sensitivityActor: e.target.value, evolvedGoalSource: "", chatId: "" })} style={input}>{actors.map((name) => <option key={name} value={name}>{name}</option>)}</select>
                 </Field>
                 <Field title="Conversation context (optional)">
                   <select value={config.chatId} onChange={(e) => patch({ chatId: e.target.value })} style={input}>
@@ -403,7 +410,7 @@ export default function PoliticalWorldABLab({ onClose }) {
               </Field>}
 
               {config.experimentMode === "sensitivity" && config.testType !== "diplomacy" && <Field title="Sensitivity actor">
-                <select value={effectiveSensitivityActor} onChange={(e) => patch({ sensitivityActor: e.target.value })} style={input}>{sensitivityActors.map((name) => <option key={name}>{name}</option>)}</select>
+                <select value={effectiveSensitivityActor} onChange={(e) => patch({ sensitivityActor: e.target.value })} style={input}>{sensitivityActors.map((name) => <option key={name} value={name}>{name}</option>)}</select>
               </Field>}
 
               {["diplomacy", "group"].includes(config.testType) && <Field title={config.experimentMode === "frozenGoalAblation" ? "Ablation test message" : "Test message"}>
@@ -428,7 +435,7 @@ export default function PoliticalWorldABLab({ onClose }) {
             </div>
           </aside>
 
-          <main style={{ minHeight: 0, overflowY: "auto", padding: "0.9rem" }}>
+          <main style={isMobile ? { flex: "0 0 auto", padding: "0.75rem" } : { minHeight: 0, overflowY: "auto", padding: "0.9rem" }}>
             {error && <div style={{ ...panel, borderColor: "rgba(248,113,113,0.35)", color: "#fecaca", fontSize: "0.74rem", marginBottom: "0.7rem" }}>{error}</div>}
             {running && progress && (
               <div style={{ ...panel, marginBottom: "0.7rem" }}>
@@ -437,7 +444,7 @@ export default function PoliticalWorldABLab({ onClose }) {
               </div>
             )}
             {!report && !running && (
-              <div style={{ alignItems: "center", color: "rgba(255,255,255,0.35)", display: "flex", flexDirection: "column", height: "100%", justifyContent: "center", minHeight: "300px", textAlign: "center" }}>
+              <div style={{ alignItems: "center", color: "rgba(255,255,255,0.35)", display: "flex", flexDirection: "column", height: "100%", justifyContent: "center", minHeight: isMobile ? "180px" : "300px", textAlign: "center" }}>
                 <div style={{ fontSize: "2rem", marginBottom: "0.55rem" }}>A/B</div>
                 <div style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.9rem", fontWeight: 850 }}>Same campaign. Same task. Same model.</div>
                 <div style={{ fontSize: "0.72rem", lineHeight: 1.5, marginTop: "0.35rem", maxWidth: "520px" }}>The harness can suppress, perturb, or synthetically evolve only the explicit Political World decision context, proves the remaining prompt hash matches, and never applies either candidate to the campaign.</div>
@@ -469,15 +476,15 @@ export default function PoliticalWorldABLab({ onClose }) {
 
                 {report.runs.map((runResult, runIndex) => (
                   <section key={runIndex} style={{ ...panel, background: "rgba(255,255,255,0.018)" }}>
-                    <div style={{ alignItems: "center", display: "flex", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.65rem" }}>
+                    <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between", marginBottom: "0.65rem" }}>
                       <div style={{ fontSize: "0.78rem", fontWeight: 900 }}>Run {runIndex + 1}</div>
-                      <div style={{ display: "flex", gap: "0.5rem" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                         <div style={{ color: runResult.modelParity ? "#86efac" : "#fca5a5", fontSize: "0.62rem", fontWeight: 800 }}>{runResult.modelParity ? "model MATCH" : "model mismatch"}</div>
                         <div style={{ color: runResult.promptParity ? "#86efac" : "#fca5a5", fontSize: "0.62rem", fontWeight: 800 }}>{runResult.promptParity ? "non-PW prompt MATCH" : "prompt parity NOT PROVEN"}</div>
                         <div style={{ color: runResult.contextIsolation?.ok ? "#86efac" : "#fca5a5", fontSize: "0.62rem", fontWeight: 800 }}>{runResult.contextIsolation?.ok ? "PW isolation PROVEN" : "PW isolation NOT PROVEN"}</div>
                       </div>
                     </div>
-                    <div style={{ display: "grid", gap: "0.65rem", gridTemplateColumns: `repeat(${Math.min(4, runResult.arms.length)}, minmax(0, 1fr))` }}>
+                    <div style={{ display: "grid", gap: "0.65rem", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : `repeat(${Math.min(4, runResult.arms.length)}, minmax(0, 1fr))` }}>
                       {runResult.arms.map((arm, armIndex) => <ArmCard key={`${arm.variant}:${armIndex}`} arm={arm} blindName={String.fromCharCode(65 + armIndex)} revealed={revealed || !config.blind} />)}
                     </div>
                     {config.blind && !isGoalExperimentMode(report.config?.experimentMode) && runResult.arms.length === 2 && !revealed && (
