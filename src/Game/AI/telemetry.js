@@ -171,6 +171,10 @@ export const startAiRecord = (meta = {}) => {
     // what the model asked for on the way (lookupTools.js): every function call
     // it made and what it was told, round by round — see attachLookupRound
     lookups: null,
+    // every HTTP request the generation made — lookup rounds, retries, fallback
+    // switches — by outcome, as the request budget counts them: see
+    // attachRequestOutcome
+    requests: null,
     // human feedback
     rating: null,
     ratedAt: null,
@@ -224,6 +228,29 @@ export const attachLookupRound = (record, { round, calls = [], elapsedMs = null,
   }
   ledger.roundUsage.push({ round: roundNumber, elapsedMs: Number.isFinite(elapsedMs) ? elapsedMs : null, ...(usage && typeof usage === "object" ? usage : {}) });
   record.lookups = ledger;
+};
+
+// One provider response for this generation, classified the way the request
+// budget (requestBudget.js) classifies it: 2xx answered, 429 refused, anything
+// else failed. One generation can be many requests.
+export const attachRequestOutcome = (record, status) => {
+  if (!record) return;
+  const requests = record.requests && typeof record.requests === "object"
+    ? record.requests
+    : { ok: 0, refused: 0, failed: 0 };
+  const code = Number(status);
+  if (code >= 200 && code < 300) requests.ok += 1;
+  else if (code === 429) requests.refused += 1;
+  else requests.failed += 1;
+  record.requests = requests;
+};
+
+// All the requests a record made, or null for a record from before they were
+// counted.
+export const requestCount = (record) => {
+  const requests = record?.requests;
+  if (!requests || typeof requests !== "object") return null;
+  return (Number(requests.ok) || 0) + (Number(requests.refused) || 0) + (Number(requests.failed) || 0);
 };
 
 export const finishAiRecord = (record, { ok = true, error = "", rawResponse = "" } = {}) => {
@@ -361,6 +388,7 @@ const CSV_COLUMNS = [
   "thinkingTokens", "latencyMs", "firstByteMs", "systemPromptChars",
   "responseChars", "staticPrefixEnd", "ok", "validationError", "rating",
   "eventCount", "stopDate", "lookupRounds", "lookupCalls", "lookupNames",
+  "requestsOk", "requestsRefused", "requestsFailed",
 ];
 
 const csvCell = (value) => {
@@ -398,6 +426,9 @@ export const exportTelemetryCsv = (records) => {
       record.lookups?.rounds ?? "",
       record.lookups?.calls ?? "",
       (record.lookups?.entries ?? []).map((entry) => entry.name).join(" "),
+      record.requests?.ok ?? "",
+      record.requests?.refused ?? "",
+      record.requests?.failed ?? "",
     ].map(csvCell).join(","));
   }
   return rows.join("\n");

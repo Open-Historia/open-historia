@@ -19,6 +19,7 @@ import {
     downloadFile,
     exportTelemetryCsv,
     getAiRecords,
+    requestCount,
     setGenerationRating,
 } from "../AI/telemetry.js";
 import { readWorldState } from "../../runtime/gameState.js";
@@ -266,6 +267,9 @@ const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
         <span style={{ ...figure("4.2rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO, ...(compact && !record.lookups?.calls ? { display: "none" } : null) }} title={record.lookups?.calls ? `${record.lookups.calls} lookup call${record.lookups.calls === 1 ? "" : "s"} over ${record.lookups.rounds} round${record.lookups.rounds === 1 ? "" : "s"}` : undefined}>
             {record.lookups?.calls ? `fn ×${record.lookups.calls}` : ""}
         </span>
+        <span style={{ ...figure("3.6rem"), flexShrink: 0, textAlign: "right", color: requestCount(record) > 1 ? COLORS.gold : COLORS.muted, fontFamily: MONO, ...(compact && requestCount(record) == null ? { display: "none" } : null) }} title={requestCount(record) == null ? undefined : requestsTitle(record)}>
+            {requestCount(record) == null ? "" : `req ×${requestCount(record)}`}
+        </span>
         <span style={{ ...figure("8rem"), flexShrink: 0, textAlign: "right", color: COLORS.muted, fontFamily: MONO }}>
             {record.usage ? `↑${fmtInt(record.usage.promptTokens)} ↓${fmtInt(record.usage.outputTokens)}` : "no usage"}
         </span>
@@ -275,11 +279,18 @@ const GenerationRow = ({ record, selected, onSelect, compact = false }) => {
     );
 };
 
+// What a generation's HTTP requests came to (telemetry.js attachRequestOutcome).
+const requestsTitle = (record) => {
+    const requests = record?.requests ?? {};
+    return `${requests.ok ?? 0} answered · ${requests.refused ?? 0} refused (429) · ${requests.failed ?? 0} failed`;
+};
+
 const SUMMARY_FIELDS = [
     ["eventCount", "events"],
     ["regionTransferCount", "transfers"],
     ["controlOpCount", "control ops"],
     ["polityChangeCount", "polity changes"],
+    ["politicalActorOpCount", "political actor ops"],
     ["unitOpCount", "unit ops"],
     ["warUpdateCount", "war updates"],
     ["relationUpdateCount", "relation updates"],
@@ -311,6 +322,9 @@ const GenerationDetail = ({ record, onRate }) => {
                 <Card label="Tokens in" value={fmtInt(usage.promptTokens)} sub={usage.cachedTokens ? `${fmtInt(usage.cachedTokens)} from cache` : undefined} />
                 <Card label="Tokens out" value={fmtInt(usage.outputTokens)} sub={usage.thinkingTokens ? `${fmtInt(usage.thinkingTokens)} thinking` : undefined} />
                 <Card label="Latency" value={fmtMs(record.latencyMs)} sub={Number.isFinite(record.firstByteMs) ? `first byte ${fmtMs(record.firstByteMs)}` : undefined} />
+                {requestCount(record) != null ? (
+                    <Card label="Requests" value={fmtInt(requestCount(record))} sub={requestsTitle(record)} />
+                ) : null}
                 {record.lookups?.calls ? (
                     <Card
                         label="Lookups"
@@ -353,6 +367,16 @@ const GenerationDetail = ({ record, onRate }) => {
 
             {record.lookups?.entries?.length ? (
                 <Section title="Function calls" right={<span style={{ color: COLORS.muted, fontFamily: MONO, fontSize: "0.62rem" }}>{record.lookups.rounds} round{record.lookups.rounds === 1 ? "" : "s"} before the answer</span>}>
+                    {/* What each round's request cost: every round is a whole request. */}
+                    {(record.lookups.roundUsage ?? []).length ? (
+                        <div style={{ marginBottom: "0.6rem", fontSize: "0.66rem", color: COLORS.muted, fontFamily: MONO, lineHeight: 1.6 }}>
+                            {record.lookups.roundUsage.map((round, index) => (
+                                <div key={`usage-${round.round}-${index}`}>
+                                    {`round ${round.round} · ↑${fmtInt(round.promptTokens)} ↓${fmtInt(round.outputTokens)}${round.cachedTokens ? ` · ${fmtInt(round.cachedTokens)} cached` : ""} · ${fmtMs(round.elapsedMs)}`}
+                                </div>
+                            ))}
+                        </div>
+                    ) : null}
                     {record.lookups.entries.map((entry, index) => (
                         <PreBlock
                             key={`${entry.round}-${index}`}
@@ -380,6 +404,7 @@ const emptyRow = (label) => ({
     calls: 0,
     failed: 0,
     lookups: 0,
+    requests: 0,
     tokensIn: 0,
     tokensOut: 0,
     cacheRead: 0,
@@ -393,6 +418,7 @@ const addRecordToRow = (row, record) => {
     row.calls += 1;
     if (record.ok === false) row.failed += 1;
     row.lookups += record.lookups?.calls ?? 0;
+    row.requests += requestCount(record) ?? 0;
     if (record.usage) {
         row.tokensIn += record.usage.promptTokens ?? 0;
         row.tokensOut += record.usage.outputTokens ?? 0;
@@ -411,6 +437,7 @@ const RowsTable = ({ rows, firstHeader }) => (
                     <th style={thStyle}>Calls</th>
                     <th style={thStyle}>Failed</th>
                     <th style={thStyle}>Lookups</th>
+                    <th style={thStyle}>Requests</th>
                     <th style={thStyle}>Tokens in</th>
                     <th style={thStyle}>Tokens out</th>
                     <th style={thStyle}>Cache read</th>
@@ -425,6 +452,7 @@ const RowsTable = ({ rows, firstHeader }) => (
                         <td style={monoTd}>{row.calls}</td>
                         <td style={monoTd}>{row.failed || ""}</td>
                         <td style={monoTd}>{row.lookups || ""}</td>
+                        <td style={monoTd}>{row.requests || ""}</td>
                         <td style={monoTd}>{fmtInt(row.tokensIn)}</td>
                         <td style={monoTd}>{fmtInt(row.tokensOut)}</td>
                         <td style={monoTd}>{fmtInt(row.cacheRead)}</td>
@@ -447,6 +475,7 @@ export const DebugConsole = ({ open, onClose }) => {
     const [modelFilter, setModelFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [search, setSearch] = useState("");
+    const [sortBy, setSortBy] = useState("newest");
     const isMobile = useIsMobile();
     // A phone held sideways gets the desktop layout, where the list shares the
     // width with an open record; there too the rows wrap instead of running on
@@ -491,8 +520,11 @@ export const DebugConsole = ({ open, onClose }) => {
                 }
                 return true;
             })
+            // The most expensive generations first: a record from before
+            // requests were counted sorts last.
+            .sort((a, b) => (sortBy === "requests" ? (requestCount(b) ?? -1) - (requestCount(a) ?? -1) : 0))
             .slice(0, 200);
-    }, [records, taskFilter, modelFilter, statusFilter, search]);
+    }, [records, taskFilter, modelFilter, statusFilter, search, sortBy]);
 
     const selected = filtered.find((record) => record.id === selectedId) ?? null;
 
@@ -636,6 +668,10 @@ export const DebugConsole = ({ open, onClose }) => {
                                     <option value="ok">OK</option>
                                     <option value="failed">Failed</option>
                                 </select>
+                                <select className="oh-tap-row" value={sortBy} onChange={(event) => setSortBy(event.target.value)} style={selectStyle}>
+                                    <option value="newest">Newest first</option>
+                                    <option value="requests">Most requests first</option>
+                                </select>
                                 <input
                                     className="oh-tap-row"
                                     value={search}
@@ -656,7 +692,7 @@ export const DebugConsole = ({ open, onClose }) => {
                                         ) : (
                                             <>
                                                 <div style={{ padding: "0.25rem 0.7rem", fontSize: "0.6rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: COLORS.muted, borderBottom: "1px solid #262628", backgroundColor: COLORS.bg }}>
-                                                    {filtered.length} shown (newest first)
+                                                    {sortBy === "requests" ? `${filtered.length} shown (most requests first)` : `${filtered.length} shown (newest first)`}
                                                 </div>
                                                 {filtered.map((record) => (
                                                     <GenerationRow key={record.id} record={record} selected={selected?.id === record.id} onSelect={setSelectedId} compact={isMobile || (touch && Boolean(selected))} />
