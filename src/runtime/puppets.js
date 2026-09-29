@@ -243,10 +243,13 @@ export const puppetSummaryFor = (world, viewer, countryName) => {
   // the save came back and told the player their own overlord was somebody
   // else's arrangement ("Puppet state of Russia").
   if (!world || !name || !String(viewer ?? "").trim()) return null;
-  const rows = visiblePuppetsFor(world, viewer);
+  // Only the standing arrangements. The ledger keeps ended rows ahead of later
+  // ones, so a country released by one Overlord and taken by another would
+  // otherwise be found by its ended row first, and show nothing.
+  const rows = livePuppetsFor(world, viewer);
   const row = rows.find((entry) => entry.puppet === name)
     || rows.find((entry) => entry.overlord === name && entry.role === "puppet");
-  if (!row || row.status !== "active") return null;
+  if (!row) return null;
 
   const label = puppetKindLabel(row.kind);
   const since = row.startedDate ? `Since ${readableDate(row.startedDate)}` : "";
