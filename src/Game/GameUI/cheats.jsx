@@ -54,6 +54,8 @@ import { tidyProse } from "./markdownText.js";
 import { useUnseenEventIds } from "./useUnseenEvents.js";
 import { compareGameDates, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimeline.js";
+import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
+import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -1922,7 +1924,9 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
     const load = async () => {
         const next = await readEventsState({ force: true });
         const list = Array.isArray(next) ? next : [];
-        await syncVisibleTimeline(list);
+        // A turn being generated writes the world too; the repair waits for
+        // the next open or save rather than race it.
+        if (!isSimulationBusy()) await syncVisibleTimeline(list);
         await refreshReactionQueue();
         setEvents(list);
         return list;
@@ -1953,15 +1957,37 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                 .then(([nextEvents]) => setEvents(Array.isArray(nextEvents) ? nextEvents : []))
                 .catch(() => {});
         };
+        // A time skip (or anything else) that writes the ledger while the
+        // editor is open shows up in the list at once.
+        const onRuntimeJson = (event) => {
+            if (event?.detail?.url !== JSON_URLS.events) return;
+            readEventsState()
+                .then((nextEvents) => setEvents(Array.isArray(nextEvents) ? nextEvents : []))
+                .catch(() => {});
+        };
         window.addEventListener("oh:event-outreach-evaluated", refresh);
         window.addEventListener("oh:event-outreach-queue-changed", refresh);
+        window.addEventListener("oh:runtime-json-updated", onRuntimeJson);
         return () => {
             window.removeEventListener("oh:event-outreach-evaluated", refresh);
             window.removeEventListener("oh:event-outreach-queue-changed", refresh);
+            window.removeEventListener("oh:runtime-json-updated", onRuntimeJson);
         };
     }, []);
 
-    const persist = async (nextEvents) => {
+    // One add, edit or delete (runtime/eventEditorRows.js), applied to the
+    // ledger as it is now rather than to this view's copy of it: writing the
+    // copy back erased every event written since the editor opened. Refused
+    // while a turn is being generated, since the turn writes the ledger too.
+    const persist = async (change) => {
+        if (isSimulationBusy()) throw new Error("A turn is being generated; wait for it to finish.");
+        const freshRaw = await readEventsState({ force: true });
+        const fresh = Array.isArray(freshRaw) ? freshRaw : [];
+        const nextEvents = applyEventRowChange(fresh, change);
+        if (!nextEvents) {
+            setEvents(fresh);
+            throw new Error("That event is no longer in the record. The list has been refreshed.");
+        }
         const ordered = sortEventsChronologically(nextEvents);
         await writeEventsState(ordered);
         const persistedRaw = await readEventsState({ force: true });
@@ -2331,7 +2357,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                     source: "manual",
                                     title,
                                 };
-                                const persisted = await persist([...(events ?? []), nextEvent]);
+                                const persisted = await persist({ add: nextEvent });
                                 const persistedEvent = persisted.find((event) => eventReactionIdentity(event) === eventReactionIdentity(nextEvent)) || nextEvent;
                                 if (createForm.allowNpcReactions) {
                                     await syncReactionQueueForEvent(persistedEvent, true);
@@ -2423,7 +2449,7 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                 : `Delete “${event.title || "this event"}” from canonical history?`;
                                             if (!window.confirm(warning)) return;
                                             void runBusy(async () => {
-                                                await persist((events ?? []).filter((_, index) => index !== sourceIndex));
+                                                await persist({ shown: event, index: sourceIndex, remove: true });
                                                 await syncReactionQueueForEvent(event, false);
                                                 await noteGmChange("timeline", `Deleted the event "${cleanEventText(event.title) || "untitled"}"${cleanEventText(event.date) ? ` (${cleanEventText(event.date)})` : ""} from the record${impact.count ? "; what it changed on the map was left as it is" : ""}.`);
                                                 if (editingKey === editorKey) setEditingKey(null);
@@ -2463,10 +2489,11 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                         className="oh-tap-row"
                                         disabled={busy}
                                         onClick={() => runBusy(async () => {
-                                            const next = (events ?? []).map((entry, index) => index === sourceIndex
-                                                ? { ...entry, npcReaction: { ...(entry?.npcReaction || {}), enabled: false } }
-                                                : entry);
-                                            const persisted = await persist(next);
+                                            const persisted = await persist({
+                                                shown: event,
+                                                index: sourceIndex,
+                                                update: (entry) => ({ ...entry, npcReaction: { ...(entry?.npcReaction || {}), enabled: false } }),
+                                            });
                                             const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event)) || event;
                                             await syncReactionQueueForEvent(persistedEvent, false);
                                             return "Pending NPC reaction cancelled. The event remains canonical.";
@@ -2545,13 +2572,17 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                 const wasEnabled = Boolean(event?.npcReaction?.enabled);
                                                 const enabled = Boolean(editForm.allowNpcReactions);
                                                 const deliberatelyReenabled = enabled && !wasEnabled;
-                                                const nextReaction = enabled
+                                                // Built on the row as it is in the ledger now, so a
+                                                // reaction result that landed meanwhile is kept.
+                                                const nextReaction = (entry) => (enabled
                                                     ? deliberatelyReenabled
                                                         ? { enabled: true }
-                                                        : { ...(event?.npcReaction || {}), enabled: true }
-                                                    : { ...(event?.npcReaction || {}), enabled: false };
-                                                const next = (events ?? []).map((entry, index) => index === sourceIndex
-                                                    ? {
+                                                        : { ...(entry?.npcReaction || {}), enabled: true }
+                                                    : { ...(entry?.npcReaction || {}), enabled: false });
+                                                const persisted = await persist({
+                                                    shown: event,
+                                                    index: sourceIndex,
+                                                    update: (entry) => ({
                                                         ...entry,
                                                         date,
                                                         description,
@@ -2560,11 +2591,10 @@ const EventEditorView = ({ meta, header, busy, status, game, runBusy }) => {
                                                         notable: Boolean(editForm.notable),
                                                         playerRelated: Boolean(editForm.playerRelated),
                                                         quote: quote || null,
-                                                        npcReaction: nextReaction,
+                                                        npcReaction: nextReaction(entry),
                                                         title,
-                                                    }
-                                                    : entry);
-                                                const persisted = await persist(next);
+                                                    }),
+                                                });
                                                 const persistedEvent = persisted.find((candidate) => eventReactionIdentity(candidate) === eventReactionIdentity(event));
                                                 if (persistedEvent) {
                                                     await syncReactionQueueForEvent(persistedEvent, enabled, { restart: deliberatelyReenabled });
