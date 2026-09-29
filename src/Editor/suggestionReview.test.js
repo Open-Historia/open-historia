@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { applyMapChange, changeDependencies, changeTargets, mapChangeStatus } from "./suggestionReview.js";
 import { measureGeometry } from "../runtime/scenarioChanges.js";
+import { withoutPolities } from "./scenarioPuppets.js";
 
 const square = (x, y, size = 1) => ({ type: "Polygon", coordinates: [[[x, y], [x + size, y], [x + size, y + size], [x, y + size], [x, y]]] });
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -88,7 +89,7 @@ const fakeDocument = (doc) => {
     removePolity: (key) => set((current) => {
       const polities = { ...current.polities };
       delete polities[key];
-      return { polities };
+      return { polities, puppets: withoutPolities(current.puppets, key) };
     }),
     renamePolity: (from, to) => { state.doc = renamePolityInDocument(state.doc, from, to); },
     setColorOverride: keyed("colorOverrides"),
@@ -226,6 +227,24 @@ test("undoing a rename puts back the country's own colour, flag, tags and record
   assert.equal(state.doc.flags["Beta Republic"], undefined);
   assert.equal(state.doc.tags["Beta Republic"], undefined);
   assert.equal(mapChangeStatus(rename, ctx), "open", "the row is open again, not quietly changed");
+});
+
+test("undoing a country's removal brings its puppet rows back and keeps a puppet accepted since", () => {
+  const { state, d, ctx } = setup();
+  d.setPuppets(() => [
+    { id: "p-beta", overlord: "Alpha", puppet: "Beta", kind: "satellite", secrecy: "open", loyalty: 40, status: "active" },
+  ]);
+  const remove = { id: "polity-remove:Beta", area: "map", kind: "polity-remove", key: "Beta", record: { name: "Beta" } };
+  const undoRemove = applyMapChange(remove, ctx);
+  assert.equal(state.doc.polities.Beta, undefined);
+  assert.deepEqual(state.doc.puppets, [], "the removal takes the rows naming the country");
+  d.upsertPolity("Gamma", { name: "Gamma" });
+  const puppet = { id: "puppet-add:p-gamma", area: "map", kind: "puppet-add", key: "p-gamma", to: { id: "p-gamma", overlord: "Alpha", puppet: "Gamma", kind: "satellite", secrecy: "open", loyalty: 60, status: "active" } };
+  applyMapChange(puppet, ctx);
+  undoRemove();
+  assert.ok(state.doc.polities.Beta);
+  assert.deepEqual(state.doc.puppets.map((row) => row.id).sort(), ["p-beta", "p-gamma"]);
+  assert.equal(mapChangeStatus(puppet, ctx), "applied", "the later puppet change is still on the map");
 });
 
 test("cities, units, map features, puppets and groups: applied and taken back", () => {

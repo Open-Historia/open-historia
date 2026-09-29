@@ -16,6 +16,7 @@
 
 import { markerToFeature } from "./mapFeatures.js";
 import { newId } from "./useMapDocument.js";
+import { withoutPolities } from "./scenarioPuppets.js";
 import { cityTierOf, measureGeometry, sameShape, sameValue } from "../runtime/scenarioChanges.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
@@ -430,13 +431,19 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
       const key = owner(change.key);
       const saved = capturePolity(ctx, key);
       const regions = (api.queryRegions?.("", 100000) ?? []).filter((region) => clean(region.owner) === key || (region.claimants ?? []).includes(key));
-      const puppets = clone(ctx.doc?.puppets ?? []);
+      // Only the puppet rows the removal takes (removePolity drops the ones
+      // naming the country): Undo adds those back to the rows as they are
+      // then, so a puppet change accepted since stays.
+      const kept = new Set(withoutPolities(ctx.doc?.puppets, key));
+      const puppets = clone((ctx.doc?.puppets ?? []).filter((row) => !kept.has(row)));
       api.removeOwners([key]);
       d.removePolity(key);
       return () => {
         restorePolity(ctx, saved);
         for (const region of regions) api.setRegionAttrs([region.id], { owner: region.owner || null, claimants: region.claimants?.length ? region.claimants : null });
-        d.setPuppets(puppets);
+        if (puppets.length) {
+          d.setPuppets((rows) => [...rows, ...puppets.filter((row) => !rows.some((other) => (clean(row.id) ? clean(other.id) === clean(row.id) : sameValue(other, row))))]);
+        }
       };
     }
     case "polity-rename": {
