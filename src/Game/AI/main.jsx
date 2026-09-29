@@ -109,6 +109,7 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
+import { createConversationGeneration, removeEntry } from "./liveConversation.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 
@@ -3409,6 +3410,13 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 }
 
 let advisorHistory = [];
+// Which conversation the module histories hold. Loading, opening or clearing
+// one replaces its history, and bumps its count here: a reply that lands after
+// that belongs to a conversation that is no longer here, so it is returned to
+// its caller, which saves it with the thread it was asked in, and never written
+// into whichever history replaced it (liveConversation.js).
+const advisorConversation = createConversationGeneration();
+const diplomaticConversation = createConversationGeneration();
 const MAX_LIVE_CHAT_MESSAGES = 24;
 const RETAINED_LIVE_CHAT_MESSAGES = 18;
 
@@ -3440,23 +3448,28 @@ function compactConversationHistory(history) {
 // ahead of what the player typed; it goes no further than this history.
 export async function sendMessage(userMessage, options) {
     const { catchUp = "", ...opts } = options || {};
+    // The conversation this reply is for, and its history, taken before the
+    // first await (liveConversation.js).
+    const conversation = advisorConversation.current();
+    const priorHistory = advisorHistory;
     const { systemPrompt, lookups } = await buildAdvisorSystemPrompt();
-    advisorHistory.push({ role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] });
-    advisorHistory = compactConversationHistory(advisorHistory);
+    const asked = { role: "user", parts: [{ text: withCatchUp(userMessage, catchUp) }] };
+    const history = compactConversationHistory([...priorHistory, asked]);
+    if (advisorConversation.isCurrent(conversation)) advisorHistory = history;
 
     // Both halves of the exchange, in full, in detailed mode. The question is
     // logged BEFORE the call so it survives a crash or a hang inside it — the
     // case where knowing what was asked matters most.
     const startedAt = Date.now();
     logDebugEvent("advisor", `Player → advisor (${String(userMessage ?? "").length} chars).`, userMessage, { verbose: true });
-    logDebugEvent("advisor", "Advisor prompt assembled.", conversationShape(systemPrompt, advisorHistory), { verbose: true });
+    logDebugEvent("advisor", "Advisor prompt assembled.", conversationShape(systemPrompt, history), { verbose: true });
 
     try {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
-        advisorHistory.push({ role: "model", parts: [{ text: reply }] });
+        const reply = await callAI(systemPrompt, history, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
+        if (advisorConversation.isCurrent(conversation)) advisorHistory.push({ role: "model", parts: [{ text: reply }] });
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
         // never found, is only diagnosable against the text the model actually
@@ -3464,7 +3477,7 @@ export async function sendMessage(userMessage, options) {
         logDebugEvent("advisor", `Advisor → player (${String(reply ?? "").length} chars in ${elapsedSeconds(startedAt)}).`, reply, { verbose: true });
         return reply;
     } catch (err) {
-        advisorHistory.pop();
+        if (advisorConversation.isCurrent(conversation)) removeEntry(advisorHistory, asked);
         // Not verbose: an advisor turn that failed is reportable on its own, and
         // the message rolled back off the history here is why a retry looks the
         // way it does.
@@ -3474,6 +3487,7 @@ export async function sendMessage(userMessage, options) {
 }
 
 export function loadHistory(savedMessages) {
+    advisorConversation.replace();
     advisorHistory = savedMessages
     .filter((msg) => msg.role === "user" || msg.role === "advisor")
     .map((msg) => ({
@@ -3492,6 +3506,7 @@ export function loadHistory(savedMessages) {
 }
 
 export function startChat() {
+    advisorConversation.replace();
     advisorHistory = [];
     logDebugEvent("advisor", "Advisor chat started — history cleared.");
 }
@@ -3508,6 +3523,7 @@ let diplomaticMemorySummary = "";
 let diplomaticMemoryThroughTime = "";
 
 export function startDiplomaticChat() {
+    diplomaticConversation.replace();
     diplomaticHistory = [];
     diplomaticMemorySummary = "";
     diplomaticMemoryThroughTime = "";
@@ -3520,6 +3536,7 @@ export function loadDiplomaticHistory(savedMessages) {
     // The newest durable memory a reply carried stands in for everything
     // before it; the transcript is dated and attributed line by line.
     const memory = latestSavedDiplomaticMemory(saved);
+    diplomaticConversation.replace();
     diplomaticMemorySummary = memory?.summary || "";
     diplomaticMemoryThroughTime = memory?.time || "";
     diplomaticHistory = saved
@@ -3553,21 +3570,29 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
     // the panel and kept on the player's message (conversationCatchUp.js
     // buildThreadCatchUp); the leader reads it ahead of what the player typed.
     const { chatId = "", catchUp = "", ...opts } = options || {};
+    // The thread this reply is for, its history and the memory it was asked
+    // with, taken before the first await: the player may open another thread
+    // before the reply lands (liveConversation.js).
+    const conversation = diplomaticConversation.current();
+    const priorHistory = diplomaticHistory;
+    const priorMemory = diplomaticMemorySummary;
+    const priorMemoryTime = diplomaticMemoryThroughTime;
     const focusText = withCatchUp(playerMessage, catchUp);
     const freshPrompt = await buildDiplomaticSystemPrompt(countries, null, speakingAs, {
         chatId,
         decisionFocusText: focusText,
     });
 
-    diplomaticHistory.push({ role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] });
-    diplomaticHistory = compactConversationHistory(diplomaticHistory);
+    const asked = { role: "user", parts: [{ text: withCatchUp(playerMessage, catchUp) }] };
+    const history = compactConversationHistory([...priorHistory, asked]);
+    if (diplomaticConversation.isCurrent(conversation)) diplomaticHistory = history;
 
-    const turnInstruction = buildDiplomaticTurnInstruction({ speakingAs, priorMemory: diplomaticMemorySummary });
+    const turnInstruction = buildDiplomaticTurnInstruction({ speakingAs, priorMemory });
 
-    const memoryContext = diplomaticMemoryContextEntry(diplomaticMemorySummary, diplomaticMemoryThroughTime, formatDateReadable);
+    const memoryContext = diplomaticMemoryContextEntry(priorMemory, priorMemoryTime, formatDateReadable);
     const historyWithInstruction = [
         ...(memoryContext ? [memoryContext] : []),
-        ...diplomaticHistory,
+        ...history,
         { role: "user", parts: [{ text: turnInstruction }] },
     ];
 
@@ -3586,8 +3611,9 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
         const { reply, reaction, memorySummary: generatedMemorySummary } = parseDiplomaticEnvelope(raw);
         // A reply that dropped the memory line keeps the last one; the
         // thread never forgets what it knew because one answer was terse.
-        const memorySummary = generatedMemorySummary || diplomaticMemorySummary;
-        if (memorySummary) {
+        const memorySummary = generatedMemorySummary || priorMemory;
+        const stillOpen = diplomaticConversation.isCurrent(conversation);
+        if (memorySummary && stillOpen) {
             diplomaticMemorySummary = memorySummary;
             if (generatedMemorySummary) diplomaticMemoryThroughTime = opts?.messageTime || diplomaticMemoryThroughTime;
         }
@@ -3599,10 +3625,10 @@ export async function sendDiplomaticMessage(playerMessage, speakingAs, countries
             `${speakingAs} → player in ${elapsedSeconds(startedAt)}${reaction ? ` (reaction ${reaction})` : ""}.`,
             { reply, rawChars: String(raw ?? "").length, reaction: reaction || "(none)" },
             { verbose: true });
-        diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
+        if (stillOpen) diplomaticHistory.push({ role: "model", parts: [{ text: `[${speakingAs}]: ${reply}` }] });
         return { reply, reaction, memorySummary };
     } catch (err) {
-        diplomaticHistory.pop();
+        if (diplomaticConversation.isCurrent(conversation)) removeEntry(diplomaticHistory, asked);
         logDebugEvent("diplomacy", `${speakingAs} failed to reply after ${elapsedSeconds(startedAt)} — the message was rolled back off the history.`, err);
         throw err;
     }

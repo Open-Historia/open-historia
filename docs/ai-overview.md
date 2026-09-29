@@ -243,7 +243,7 @@ Every task entry point wraps itself in `beginSimulation()`/`endSimulation()` —
 
 ### B. Free‑form chat (advisor / diplomacy)
 
-`sendMessage` (`main.jsx`) and `sendDiplomaticMessage` (`main.jsx`) build a system prompt, push the user turn onto a module‑level history (`advisorHistory` / `diplomaticHistory`, compacted by `compactConversationHistory` at `main.jsx`), call `callAI` **without a `tool`** (plain text reply), and append the reply. On error the pushed user turn is popped so history isn't corrupted. `startChat`/`loadHistory`/`startDiplomaticChat`/`loadDiplomaticHistory` manage those histories. Diplomatic replies may carry a trailing `REACTION:<emoji>` line parsed off by `parseReaction` (`main.jsx`).
+`sendMessage` (`main.jsx`) and `sendDiplomaticMessage` (`main.jsx`) build a system prompt, push the user turn onto a module‑level history (`advisorHistory` / `diplomaticHistory`, compacted by `compactConversationHistory` at `main.jsx`), call `callAI` **without a `tool`** (plain text reply), and append the reply. On error the pushed user turn is taken back (that entry, not whatever is last) so history isn't corrupted. `startChat`/`loadHistory`/`startDiplomaticChat`/`loadDiplomaticHistory` manage those histories, and each of them retires every reply still in flight (`liveConversation.js`): a reply that lands after the player opened another thread, cleared the advisor or loaded another campaign is returned to its caller, which saves it with the thread it was asked in, but is never pushed onto the history that replaced it, and a diplomatic reply's memory summary never overwrites that thread's. Diplomatic replies may carry a trailing `REACTION:<emoji>` line parsed off by `parseReaction` (`main.jsx`).
 
 ---
 
