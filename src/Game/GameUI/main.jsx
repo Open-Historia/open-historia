@@ -32,6 +32,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { PLAYER_ACTIVITY_EVENTS, createPlayerActivity } from "../../runtime/playerActivity.js";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -296,20 +297,30 @@ const Main = ({
   // inbox unprompted. Everything that could break it is guarded inside
   // maybeSendIdleDiplomacy — it skips entirely while a time skip, game-master
   // command, or interactive event stage is in flight, never overlaps itself, and stays
-  // silent on any failure. Hidden tabs don't roll the dice.
+  // silent on any failure. Hidden tabs don't roll the dice, and neither does a
+  // window nobody has touched for ten minutes (runtime/playerActivity.js): each
+  // attempt is a background request, and a window left open while the player
+  // was away spent the day's cap on notes nobody was there to read.
   useEffect(() => {
     // The main menu owns Scenario Workshop / Map Editor as overlays while the
     // previously active campaign may still exist underneath. Idle diplomacy is
     // gameplay activity, not background app activity, so do not let a country
     // message the player while they are browsing/editing outside the campaign.
     if (hasNoGames || mainMenuOpen) return undefined;
+    const activity = createPlayerActivity();
+    const listenerOptions = { capture: true, passive: true };
+    for (const type of PLAYER_ACTIVITY_EVENTS) window.addEventListener(type, activity.note, listenerOptions);
     const iv = setInterval(() => {
       if (document.visibilityState !== "visible") return;
+      if (!activity.isPresent()) return;
       import("../AI/gameplay.js")
         .then(({ maybeSendIdleDiplomacy }) => maybeSendIdleDiplomacy())
         .catch(() => {});
     }, 60000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      for (const type of PLAYER_ACTIVITY_EVENTS) window.removeEventListener(type, activity.note, listenerOptions);
+    };
   }, [hasNoGames, mainMenuOpen]);
 
   // Spy reports, on the same rhythm and with the same guards: a roll each

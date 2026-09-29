@@ -56,3 +56,45 @@ export const keepDetectedEvents = (before, after) => {
       : unit)),
   };
 };
+
+// ---- A quiet world ---------------------------------------------------------
+// Most pulses answer with nothing, and on a world nothing has touched since
+// they are likely to again: each is still a request. So a pulse that came back
+// empty makes the next one on the SAME state half as likely, and each further
+// empty answer halves it again; any change — a turn, a pulse that moved
+// something, a new event, a new message in an open chat — or any answer with
+// something in it restores the full chance. The answer is sampled, so a repeat
+// on the same prompt can still produce a note: this backs off, it never stops.
+
+// The most halvings: at worst a pulse keeps a thirty-second of its chance.
+export const IDLE_PULSE_MAX_BACKOFF = 5;
+
+// What the pulse sees that could change its answer.
+export const idlePulseFingerprint = ({ round = 0, tick = 0, eventCount = 0, chats = [] } = {}) => [
+  Number(round) || 0,
+  Number(tick) || 0,
+  Number(eventCount) || 0,
+  ...(Array.isArray(chats) ? chats : []).map((chat) => {
+    const messages = Array.isArray(chat?.messages) ? chat.messages : [];
+    return `${clean(chat?.id)}:${clean(messages[messages.length - 1]?.id) || messages.length}`;
+  }).sort(),
+].join("|");
+
+export const createIdlePulseBackoff = ({ maxHalvings = IDLE_PULSE_MAX_BACKOFF } = {}) => {
+  let fingerprint = "";
+  let empties = 0;
+  return {
+    // The share of a roll that passed which goes ahead on this state.
+    share: (current) => (current && current === fingerprint ? 0.5 ** empties : 1),
+    // What the pulse on this state answered.
+    note: (current, empty) => {
+      if (!empty || !current) {
+        fingerprint = "";
+        empties = 0;
+        return;
+      }
+      empties = current === fingerprint ? Math.min(maxHalvings, empties + 1) : 1;
+      fingerprint = current;
+    },
+  };
+};

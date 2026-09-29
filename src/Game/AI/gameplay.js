@@ -325,7 +325,7 @@ import {
   idleDiplomacyPoliticalContextText,
   idleDiplomacySpeakerHasContext,
 } from "./idlePoliticalDiplomacyContext.js";
-import { idlePulseEvent, idlePulseUnitOps, keepDetectedEvents } from "./idlePulse.js";
+import { createIdlePulseBackoff, idlePulseEvent, idlePulseFingerprint, idlePulseUnitOps, keepDetectedEvents } from "./idlePulse.js";
 import {
   advanceInstitutionLifecycleCore,
   applyInstitutionLifecycleChatBatchCore,
@@ -16906,6 +16906,9 @@ export const maybeGeneratePregameHistory = async () => {
 // (requestBudget.js): the forces move when a note is being considered, which is
 // the same one request, and with the feature off the pulse does not run.
 let idleDiplomacyInFlight = false;
+// Empty answers on an unchanged world make the next pulse less likely
+// (idlePulse.js createIdlePulseBackoff). For this session only.
+const idlePulseBackoff = createIdlePulseBackoff();
 // Narrower than idleDiplomacyInFlight above: true only for the half of a pulse
 // that actually asks whether a polity would send a note (allowChat). A
 // movement-only pulse sets the in-flight guard but not this.
@@ -16997,11 +17000,20 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
+    const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
+    // The same world the last pulses answered empty on: a second roll, before
+    // anything is built or asked. A caller's own roll is taken as it is.
+    const fingerprint = idlePulseFingerprint({
+      round: bundle.game?.round,
+      tick: bundle.world?.idlePulseTick,
+      eventCount: normalizeArray(bundle.events).length,
+      chats: openChats,
+    });
+    if (chance == null && Math.random() >= idlePulseBackoff.share(fingerprint)) return null;
     const variables = {
       ...(await buildTemplateVariables(bundle, { lookups: true })),
       idleChatAllowed: allowChat ? "yes" : "no",
     };
-    const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));
     const institutionRoutingContext = allowChat
       ? buildIdleInstitutionRoutingContext(bundle.world, bundle.game.country)
       : "";
@@ -17077,6 +17089,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     // Only what the world may do: never the player's forces (idlePulse.js).
     // With nothing left there is nothing to apply and no sighting to report.
     const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), bundle.game?.country);
+    idlePulseBackoff.note(fingerprint, unitOps.length === 0 && !(allowChat && payload.chat));
     if (unitOps.length > 0 && !isSimulationBusy()) {
       // Placed by name, and kept off each other, like a turn's own ops.
       try {
