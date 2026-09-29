@@ -340,7 +340,14 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
-import { describeIntelligenceStanding, describeLeaderStanding, describeReputationStanding } from "./standingContext.js";
+import {
+  describeIntelligenceStanding,
+  describeLeaderStanding,
+  describeReputationStanding,
+  describeTerritorialRows,
+  describeTerritoryFor,
+  territorialControlRows,
+} from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import {
   getPoliticalProfile,
@@ -1508,38 +1515,10 @@ const perfNow = () =>
     ? performance.now()
     : Date.now();
 
+// The rows are standingContext.js's, which the advisor and the leaders read too.
 const buildTerritorialControlContext = async (worldLike, { maxRows = 80, viaLookups = false } = {}) => {
-  const world = normalizeWorldState(worldLike);
   const catalog = await loadRegionCatalog().catch(() => []);
-  const byId = new Map(catalog.map((region) => [region.id, region]));
-  const ids = new Set([
-    ...Object.keys(world.regionOwnershipOverrides || {}),
-    ...Object.keys(world.regionSovereigntyOverrides || {}),
-    ...Object.keys(world.regionClaimants || {}),
-  ]);
-
-  const rows = [];
-  for (const regionId of ids) {
-    const region = byId.get(regionId);
-    const baseOwner = normalizeString(region?.country || toCountryName(region?.countryCode) || "");
-    const controller = normalizeString(world.regionOwnershipOverrides?.[regionId]) || baseOwner;
-    const sovereign = normalizeString(world.regionSovereigntyOverrides?.[regionId]) || controller || baseOwner;
-    const claimants = normalizeArray(world.regionClaimants?.[regionId]).map(normalizeString).filter(Boolean);
-
-    if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
-
-    rows.push(
-      `- ${region?.name || regionId} (${regionId}): sovereign ${sovereign || "unknown"}; ` +
-      `controller ${controller || "unknown"}` +
-      (claimants.length ? `; active claimants/contenders ${claimants.join(", ")}` : ""),
-    );
-  }
-
-  return rows.length > 0
-    ? rows.slice(0, maxRows).join("\n") + (rows.length > maxRows
-      ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
-      : "")
-    : "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+  return describeTerritorialRows(territorialControlRows(normalizeWorldState(worldLike), catalog), { maxRows, viaLookups });
 };
 
 // Groups (runtime/groups.js) as the model reads them: each exact name, what it
@@ -12290,6 +12269,9 @@ export const runChatActionBatch = async ({
       // a one-to-one leader is told it too. No government's own figures here,
       // since every participant reads this one request.
       describeLeaderStanding(bundle.world, { player, speakers: aiParticipants }),
+      // The regions where any of them is the lawful owner, the holder or a
+      // claimant and those differ, as a one-to-one leader is told.
+      describeTerritoryFor(bundle.world, await loadRegionCatalog().catch(() => []), [player, ...aiParticipants]),
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
       institutionLifecyclePrompt,
       formalInstitutionPrompt,

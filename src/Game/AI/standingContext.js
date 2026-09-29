@@ -21,6 +21,7 @@
 
 import { buildCompactEconomicContext, normalizeCountryStatSheet, normalizeCountryStatsHistory } from "../../runtime/countryStats.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
+import { toCountryName } from "../../runtime/ownerNames.js";
 import { intelligenceOf } from "../../runtime/spycraft.js";
 
 const asText = (value) => String(value ?? "").trim();
@@ -204,5 +205,62 @@ export const describeLeaderStanding = (world, { player = "", speakers = [] } = {
     ...voices.map(line),
     "Reputation is how far the world takes a government at its word: aggression, atrocities and broken treaties lower it; aid and kept promises raise it. Let it weigh how much you trust an offer and what guarantees you ask for.",
     ...(sheet ? [`Your government's own figures: ${sheet}`] : []),
+  ].join("\n");
+};
+
+// ---- Occupied and contested regions ----------------------------------------------
+
+// The regions whose lawful owner (sovereign), holder on the ground
+// (controller) and claimants are not simply one country, from the world's
+// override ledgers and the region catalog's base owners.
+export const territorialControlRows = (world, catalog = []) => {
+  const byId = new Map((Array.isArray(catalog) ? catalog : []).map((region) => [region?.id, region]));
+  const ownership = asObject(world?.regionOwnershipOverrides);
+  const sovereignty = asObject(world?.regionSovereigntyOverrides);
+  const claims = asObject(world?.regionClaimants);
+  const ids = new Set([...Object.keys(ownership), ...Object.keys(sovereignty), ...Object.keys(claims)]);
+  const rows = [];
+  for (const regionId of ids) {
+    const region = byId.get(regionId);
+    const baseOwner = asText(region?.country || toCountryName(region?.countryCode) || "");
+    const controller = asText(ownership[regionId]) || baseOwner;
+    const sovereign = asText(sovereignty[regionId]) || controller || baseOwner;
+    const claimants = (Array.isArray(claims[regionId]) ? claims[regionId] : []).map(asText).filter(Boolean);
+    if (!claimants.length && controller.toLowerCase() === sovereign.toLowerCase()) continue;
+    rows.push({ regionId, name: asText(region?.name) || regionId, sovereign, controller, claimants });
+  }
+  return rows;
+};
+
+// The rows in which any of `polities` is sovereign, controller or claimant.
+export const territorialRowsInvolving = (rows, polities = []) => {
+  const names = new Set(polities.map(asText).filter(Boolean));
+  return rows.filter((row) => names.has(row.sovereign) || names.has(row.controller) || row.claimants.some((name) => names.has(name)));
+};
+
+export const NO_TERRITORIAL_ROWS = "No active occupation/control-vs-sovereignty differences or contested regions are currently recorded.";
+
+export const describeTerritorialRows = (rows, { maxRows = 80, viaLookups = false, empty = NO_TERRITORIAL_ROWS } = {}) => {
+  if (!rows.length) return empty;
+  const lines = rows.slice(0, maxRows).map((row) =>
+    `- ${row.name} (${row.regionId}): sovereign ${row.sovereign || "unknown"}; `
+    + `controller ${row.controller || "unknown"}`
+    + (row.claimants.length ? `; active claimants/contenders ${row.claimants.join(", ")}` : ""));
+  return lines.join("\n") + (rows.length > maxRows
+    ? `\n(+${rows.length - maxRows} more non-normal territorial states omitted${viaLookups ? "; contested_regions lists them all" : ""})`
+    : "");
+};
+
+// The advisor's and a leader's [Occupied and Contested Regions]: the rows that
+// involve the given polities, bounded. "" when there are none, so a world at
+// peace pays nothing.
+export const CONVERSATION_TERRITORIAL_ROWS = 24;
+export const describeTerritoryFor = (world, catalog, polities) => {
+  const rows = territorialRowsInvolving(territorialControlRows(world, catalog), polities);
+  if (!rows.length) return "";
+  return [
+    "[Occupied and Contested Regions]",
+    "Where the lawful owner (sovereign) and the holder on the ground (controller) differ, or others press a claim. Occupation is not annexation: a region held but not ceded still belongs to its sovereign.",
+    describeTerritorialRows(rows, { maxRows: CONVERSATION_TERRITORIAL_ROWS }),
   ].join("\n");
 };

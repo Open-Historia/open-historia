@@ -8,6 +8,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CONVERSATION_TERRITORIAL_ROWS,
+  NO_TERRITORIAL_ROWS,
   STAT_HISTORY_ROWS,
   describeIntelligenceStanding,
   describeLeaderStanding,
@@ -15,9 +17,13 @@ import {
   describeReputationStanding,
   describeStatHistory,
   describeStatSheet,
+  describeTerritorialRows,
+  describeTerritoryFor,
   otherRecordedReputations,
   recordedReputation,
   reputationOf,
+  territorialControlRows,
+  territorialRowsInvolving,
 } from "./standingContext.js";
 
 const PLAYER = "French Republic";
@@ -133,4 +139,52 @@ test("the advisor's guidance uses the sheet where it has a figure, and estimates
   const statistics = prompts.advisor.slice(prompts.advisor.indexOf("you may mention statistics"));
   assert.match(statistics, /^you may mention statistics\. Where \[Our Country's Figures\] gives a figure, use it as it stands and never contradict it/);
   assert.match(statistics, /For anything it does not give, use historical records/);
+});
+
+// ---- Occupied and contested regions ----------------------------------------------
+
+const CATALOG = [
+  { id: "UKR.11_1", name: "Crimea", country: "Ukraine" },
+  { id: "UKR.5_1", name: "Donetsk", country: "Ukraine" },
+  { id: "UKR.14_1", name: "Kyiv", country: "Ukraine" },
+  { id: "MDA.1_1", name: "Transnistria", country: "Moldova" },
+  { id: "GEO.1_1", name: "Abkhazia", country: "Georgia" },
+];
+const TERRITORY_WORLD = {
+  regionOwnershipOverrides: { "UKR.11_1": "Russian Federation", "UKR.5_1": "Russian Federation", "UKR.14_1": "Ukraine" },
+  // Held by Russia but lawfully Ukraine's (an occupation), and annexed with Ukraine's claim standing.
+  regionSovereigntyOverrides: { "UKR.11_1": "Ukraine", "UKR.5_1": "Russian Federation" },
+  regionClaimants: { "UKR.5_1": ["Ukraine"], "MDA.1_1": ["Transnistria"], "GEO.1_1": [] },
+};
+
+test("a region is listed where its lawful owner, its holder and its claimants are not one country", () => {
+  const rows = territorialControlRows(TERRITORY_WORLD, CATALOG);
+  assert.deepEqual(rows.map((row) => row.regionId).sort(), ["MDA.1_1", "UKR.11_1", "UKR.5_1"]);
+  const crimea = rows.find((row) => row.regionId === "UKR.11_1");
+  assert.deepEqual(crimea, { regionId: "UKR.11_1", name: "Crimea", sovereign: "Ukraine", controller: "Russian Federation", claimants: [] }, "occupied, not ceded");
+  assert.equal(describeTerritorialRows(rows.slice(0, 1)), "- Crimea (UKR.11_1): sovereign Ukraine; controller Russian Federation");
+  assert.match(describeTerritorialRows(rows, { maxRows: 1, viaLookups: true }), /\n\(\+2 more non-normal territorial states omitted; contested_regions lists them all\)$/);
+  assert.equal(describeTerritorialRows([]), NO_TERRITORIAL_ROWS);
+});
+
+test("a conversation is shown only the rows that involve its own side, exactly by name", () => {
+  const rows = territorialControlRows(TERRITORY_WORLD, CATALOG);
+  assert.deepEqual(territorialRowsInvolving(rows, ["Ukraine"]).map((row) => row.name).sort(), ["Crimea", "Donetsk"]);
+  assert.deepEqual(territorialRowsInvolving(rows, ["Transnistria"]).map((row) => row.name), ["Transnistria"], "a claimant counts");
+  assert.deepEqual(territorialRowsInvolving(rows, ["ukraine", "Russia"]), [], "names are exact keys: no folding, no aliases");
+
+  const advisor = describeTerritoryFor(TERRITORY_WORLD, CATALOG, ["Ukraine"]);
+  assert.match(advisor, /^\[Occupied and Contested Regions\]\n/);
+  assert.match(advisor, /Occupation is not annexation/);
+  assert.match(advisor, /- Donetsk \(UKR\.5_1\): sovereign Russian Federation; controller Russian Federation; active claimants\/contenders Ukraine/);
+  assert.doesNotMatch(advisor, /Transnistria/);
+  assert.equal(describeTerritoryFor(TERRITORY_WORLD, CATALOG, ["Georgia"]), "", "nothing to say, nothing said");
+  assert.equal(describeTerritoryFor({}, CATALOG, ["Ukraine"]), "");
+});
+
+test("a conversation's list is bounded", () => {
+  const many = Object.fromEntries(Array.from({ length: 40 }, (_unused, index) => [`R.${index}`, "Occupier"]));
+  const text = describeTerritoryFor({ regionOwnershipOverrides: many, regionSovereigntyOverrides: Object.fromEntries(Object.keys(many).map((id) => [id, "Homeland"])) }, Array.from({ length: 40 }, (_unused, index) => ({ id: `R.${index}`, name: `Region ${index}`, country: "Homeland" })), ["Homeland"]);
+  assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, CONVERSATION_TERRITORIAL_ROWS);
+  assert.match(text, /\(\+16 more non-normal territorial states omitted\)$/);
 });

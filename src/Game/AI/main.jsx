@@ -111,7 +111,7 @@ import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
-import { describeLeaderStanding, describeOurFigures } from "./standingContext.js";
+import { describeLeaderStanding, describeOurFigures, describeTerritoryFor } from "./standingContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -3178,6 +3178,14 @@ async function buildAdvisorSystemPrompt() {
         playerPolity: gameData?.country || "",
         chats: chatData,
     });
+    // The regions the player lawfully owns, holds or claims where those differ
+    // (standingContext.js): "is it ours or only occupied?" answered from the
+    // ledgers the map is drawn from. Empty in a world with no such region.
+    const advisorTerritory = describeTerritoryFor(
+        worldData,
+        await loadRegionCatalog().catch(() => []),
+        [gameData?.country || ""],
+    );
     const directives = [
         advisorPoliticalDiplomacy.text,
         // The government's own Stats sheet, its recent history, its reputation
@@ -3185,6 +3193,7 @@ async function buildAdvisorSystemPrompt() {
         // player sees in the Stats panel, from the world as the player has
         // seen it, so "how is our economy doing?" is answered from them.
         describeOurFigures(worldData, gameData?.country || ""),
+        advisorTerritory,
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
         ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
@@ -3331,6 +3340,12 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     // figures (standingContext.js): how far to take the player at its word,
     // and what its own country can afford.
     const standing = describeLeaderStanding(worldData, { player: playerCountry || gameData?.country || "", speakers: [speaker] });
+    // The regions where this leader's country or the player's is the lawful
+    // owner, the holder or a claimant and those differ: a claim to press, an
+    // occupation to protest. Empty when there are none.
+    const territory = speaker
+        ? describeTerritoryFor(worldData, await loadRegionCatalog().catch(() => []), [speaker, playerCountry || gameData?.country || ""])
+        : "";
 
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
@@ -3409,7 +3424,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${territory ? `\n\n${territory}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 let advisorHistory = [];
