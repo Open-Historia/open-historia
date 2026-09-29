@@ -160,6 +160,13 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                         </div>
                       );
                     }
+                    // A scenario's number is shown as TYPED, like its text: the
+                    // normalized value clamps and rounds, so each keystroke of
+                    // "60" into a 40..250 field read 40, then 400 → 250. The raw
+                    // text is kept while typing (the store normalizes on save)
+                    // and settles to the clamped value when the field is left.
+                    const typedNumber = isGame ? undefined : features?.[definition.key]?.[setting.key];
+                    const shownNumber = typeof typedNumber === "string" ? typedNumber : value;
                     return (
                       <div key={setting.key}>
                         <label style={styles.fieldLabelStyle}>{setting.label}</label>
@@ -170,13 +177,20 @@ const FeaturesSectionEditor = ({ kind, features, scenarioFeatures, onChange, sty
                             max={setting.max}
                             step={setting.step}
                             style={{ ...styles.inputStyle, width: "7rem" }}
-                            value={value}
+                            value={shownNumber}
                             placeholder={isGame ? String(base[definition.key][setting.key]) : ""}
                             onChange={(event) => {
                               const raw = event.target.value;
                               if (isGame && raw === "") { setFeature(definition.key, { [setting.key]: undefined }); return; }
+                              if (!isGame) { setFeature(definition.key, { [setting.key]: raw }); return; }
                               const next = Number(raw);
                               if (Number.isFinite(next)) setFeature(definition.key, { [setting.key]: next });
+                            }}
+                            onBlur={() => {
+                              // effective holds the setting normalized: clamped, rounded, a
+                              // blank back to the scenario's value or the default.
+                              if (!isGame && typeof typedNumber === "string") setFeature(definition.key, { [setting.key]: effective[definition.key][setting.key] });
+                              else if (overridden && effective[definition.key][setting.key] !== override[setting.key]) setFeature(definition.key, { [setting.key]: effective[definition.key][setting.key] });
                             }}
                           />
                           <span style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.8rem" }}>{setting.unit}</span>
