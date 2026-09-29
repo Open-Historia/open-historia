@@ -317,6 +317,7 @@ export const directGeneratedUnitOps = async ({
   game = {},
   world = {},
   analyzeBatch,
+  signal = null,
 } = {}) => {
   const sourceEvents = normalizeArray(events);
   const candidates = selectUnitDirectorCandidates(sourceEvents);
@@ -339,6 +340,8 @@ export const directGeneratedUnitOps = async ({
   try {
     analysis = await analyzeBatch(unitDirectorAnalyzerInput(candidates, units));
   } catch (error) {
+    // The player's Cancel is not a failed analysis: it must reach the skip.
+    if (signal?.aborted) throw error;
     console.warn("[unit director] analysis failed; preserving simulator unitOps unchanged.", error);
     return sourceEvents;
   }

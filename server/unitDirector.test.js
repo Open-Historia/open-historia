@@ -304,3 +304,20 @@ test("a power with units still gains none from an event that forms nothing", asy
   });
   assert.deepEqual(directed[0].impacts.unitOps, [], "a fleet that is merely moving does not duplicate itself");
 });
+
+test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    run([], {
+      signal: controller.signal,
+      analyzeBatch: async () => {
+        controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+        throw controller.signal.reason;
+      },
+    }),
+    (error) => error?.name === "AbortError",
+  );
+  // Any other failure still leaves the events as they were.
+  const { directed } = await run([], { analyzeBatch: async () => { throw new Error("model unavailable"); } });
+  assert.equal(directed, events);
+});

@@ -13980,6 +13980,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       events: merged.events,
       game: bundle.game,
       world: bundle.world,
+      signal,
       analyzeBatch: review
         ? async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } })
         : async (input) => {
