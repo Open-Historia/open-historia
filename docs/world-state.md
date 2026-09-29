@@ -216,7 +216,7 @@ Events gained `warId` and `combatants[]` for the same rule. Polity names inside 
 
 ### 2b-ter. Political actors, pressures and power
 
-Four more fields make up the Political World: who governs each polity and how its domestic politics move (`politicalActors`, with its clock `politicalSimulation`), how much each polity counts (`powerStatus`), and the international organisations it belongs to (`institutions`). With `agreements` (§2b-bis) and the canon context they are a scenario's **Politics** (`POLITICS_FIELDS`, `src/runtime/scenarioChanges.js`): what the Workshop's Politics tab generates, and what a suggested change to a community scenario is reviewed against, one country or one institution at a time ([game UI](game-ui.md)). `normalizeWorldState` normalizes all four on every apply. All are keyed by exact polity name, like the rest of the world.
+Four more fields make up the Political World: who governs each polity and how its domestic politics move (`politicalActors`, with its clock `politicalSimulation`), how much each polity counts (`powerStatus`), and the international organisations it belongs to (`institutions`). `politicalActors`, `powerStatus` and `institutions`, with `agreements` (§2b-bis) and `canonContext`, are the five fields of a scenario's **Politics** (`POLITICS_FIELDS`, `src/runtime/scenarioChanges.js`; the clock is campaign state and not among them): what the Workshop's Politics tab generates, and what a suggested change to a community scenario is reviewed against, one country or one institution at a time ([game UI](game-ui.md)). `normalizeWorldState` normalizes all four on every apply. All are keyed by exact polity name, like the rest of the world.
 
 | Field | Shape | Notes |
 |---|---|---|
