@@ -1143,7 +1143,7 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
                 </label>
               </div>
               <div style={{ fontSize: 10.8, color: "#fbbf24", lineHeight: 1.4 }}>
-                R1 uses a rectangular geographic fit. It is enough to import a complete province network, but exact control-point warping/alignment is the next importer pass for foreign projections.
+                The image is read as an equirectangular map, its rows spaced evenly in latitude between the north and south bounds, and the overlay is drawn the same way. An image in Web Mercator or another projection will not line up.
               </div>
             </div>
 

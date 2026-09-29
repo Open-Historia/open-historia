@@ -2254,13 +2254,15 @@ const OlMap = ({
         const north = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.north)));
         const south = Math.max(-85.05112878, Math.min(85.05112878, Number(bounds.south)));
         if (![west, east, north, south].every(Number.isFinite) || east <= west || north <= south) return false;
-        const sw = fromLonLat([west, south]);
-        const ne = fromLonLat([east, north]);
+        // In lon/lat, not Web Mercator: the importer (provinceRasterWorker.js
+        // mapRing) spaces the image's rows evenly in latitude, so the preview
+        // has to as well or the overlay sits up to twenty degrees off the
+        // provinces it will produce. OpenLayers reprojects it onto the map.
         const layer = importPreviewLayerRef.current;
         layer.setSource(new ImageStatic({
           url,
-          imageExtent: [sw[0], sw[1], ne[0], ne[1]],
-          projection: "EPSG:3857",
+          imageExtent: [west, south, east, north],
+          projection: "EPSG:4326",
         }));
         layer.setOpacity(Math.max(0.05, Math.min(0.95, Number(opacity) || 0.46)));
         layer.setVisible(true);
