@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { presenceFor } from "./discordPresence.js";
-import { normalizePresence } from "../../server/discordPresence.js";
+import { PRESENCE_GONE, PRESENCE_HEARTBEAT_MS, presenceFor } from "./discordPresence.js";
+import { normalizePresence, PRESENCE_STALE_MS } from "../../server/discordPresence.js";
 
 const game = { id: "g1", country: "FRA", currentDate: "2016-01-01" };
 
@@ -33,6 +33,13 @@ test("what the page sends is what the server accepts", () => {
   const sent = presenceFor({ activeGame: game, playerName: "France", scenarioName: "Modern Day" });
   assert.deepEqual(normalizePresence(JSON.parse(JSON.stringify(sent))), sent);
   assert.deepEqual(normalizePresence(presenceFor({})), { scene: "menu" });
+});
+
+test("the page's goodbye clears the activity, and its heartbeat outpaces the server's timeout", () => {
+  assert.equal(normalizePresence(JSON.parse(JSON.stringify(PRESENCE_GONE))), null);
+  // Two missed beats (a background tab's timers are throttled to a minute) must
+  // not take a player who is still playing off Discord.
+  assert.ok(PRESENCE_HEARTBEAT_MS * 2 < PRESENCE_STALE_MS);
 });
 
 test("the HUD reports it, and the server only takes it from this computer", () => {

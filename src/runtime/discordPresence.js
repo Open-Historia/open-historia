@@ -31,13 +31,44 @@ const onLocalServer = () => {
   }
 };
 
+// Said again this often while the page is open. The server takes the activity
+// down when the reports stop (PRESENCE_STALE_MS in server/discordPresence.js),
+// which is what clears it after a tab that closed without saying goodbye: the
+// downloadable local server keeps running when its tab is gone.
+export const PRESENCE_HEARTBEAT_MS = 60000;
+
+// The goodbye, sent as the page goes away: a scene the server does not know,
+// which it reads as nothing to show.
+export const PRESENCE_GONE = { scene: "none" };
+
+const postPresence = (body) => {
+  fetch("/api/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
+};
+
 export const useDiscordPresence = (presence) => {
   const body = JSON.stringify(presence);
   useEffect(() => {
     if (!onLocalServer()) return undefined;
-    const timer = setTimeout(() => {
-      fetch("/api/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body }).catch(() => {});
-    }, PRESENCE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    const timer = setTimeout(() => postPresence(body), PRESENCE_DEBOUNCE_MS);
+    const heartbeat = setInterval(() => postPresence(body), PRESENCE_HEARTBEAT_MS);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(heartbeat);
+    };
   }, [body]);
+
+  // A beacon, because an ordinary request started while the page unloads is
+  // cancelled with it.
+  useEffect(() => {
+    if (!onLocalServer() || typeof window === "undefined") return undefined;
+    const leave = () => {
+      try {
+        navigator.sendBeacon?.("/api/presence", new Blob([JSON.stringify(PRESENCE_GONE)], { type: "application/json" }));
+      } catch {
+        /* the server's staleness timeout clears it instead */
+      }
+    };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
+  }, []);
 };
