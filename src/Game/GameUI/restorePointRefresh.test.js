@@ -29,3 +29,13 @@ test("the Rollback count and the Intervene check both re-read on it", () => {
     assert.match(time, /useRestorePointReading\(loadRollbackSnapshotCount, 0, \[gameData\?\.round\]\)/);
     assert.match(time, /useRestorePointReading\(\s*async \(\) => Boolean\(await canInterveneInLastTurn\(\)\)/);
 });
+
+test("a restore point that could not be saved is said on the Events page, not only in the console", () => {
+    const from = gameplay.indexOf("const captureRollbackSnapshot = async");
+    const capture = gameplay.slice(from, gameplay.indexOf("\n};", from));
+    assert.match(capture, /return true;[\s\S]*catch[\s\S]*return false;/);
+    assert.match(gameplay, /const restorePointSaved = await captureRollbackSnapshot\(/);
+    assert.match(gameplay, /\r?\n {4}restorePointSaved,\r?\n/);
+    assert.match(time, /setRestorePointMissing\(result\.restorePointSaved === false\)/);
+    assert.match(time, /could not be saved as a restore point, so it cannot be rolled back/);
+});

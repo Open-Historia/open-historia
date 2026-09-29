@@ -1778,6 +1778,9 @@ const TimelineHistoryPanel = ({
     // refreshSpyIntercepts), with the retry that asks them again.
     agentReports = null,
     onRetryAgentReports = null,
+    // The newest turn's restore point could not be saved (a very large save,
+    // or storage full): there is no Rollback for it, and the player is told why.
+    restorePointMissing = false,
 }) => {
     // Category filter chips (ported from the abdulrahman-2005 fork): only the
     // categories present on this turn's events appear; null = no filter. Older
@@ -1865,6 +1868,22 @@ const TimelineHistoryPanel = ({
         title="Events"
         topOffset={topOffset}
         >
+        {restorePointMissing && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.24)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "12px",
+                color: "#fde68a",
+                fontSize: "0.76rem",
+                lineHeight: "1.5",
+                marginBottom: "0.75rem",
+                padding: "0.75rem 0.85rem",
+            }}
+            >
+            This turn could not be saved as a restore point, so it cannot be rolled back. The turn itself is saved. If this keeps happening, the save may be too large or the storage full.
+            </div>
+        )}
         {agentReports?.failed?.length > 0 && (
             <div
             style={{
@@ -2217,6 +2236,8 @@ const DateWidget = ({
     // Agents whose report failed after the turn was written (with Save AI
     // requests off each asks on its own, after the write): told, with a retry.
     const [agentReports, setAgentReports] = useState({ failed: [], state: "idle" });
+    // The newest turn could not be saved as a restore point (restorePointSaved).
+    const [restorePointMissing, setRestorePointMissing] = useState(false);
     const [isRetryingHeld, setIsRetryingHeld] = useState(false);
     // A turn held by an error, keeping the count when the same kind holds it again.
     const holdFrom = (heldError) => setHeld((current) => ({
@@ -2299,6 +2320,7 @@ const DateWidget = ({
         const handleRolledBack = () => {
             setFallbackWarning("");
             setAgentReports({ failed: [], state: "idle" });
+            setRestorePointMissing(false);
         };
         window.addEventListener("oh:rolled-back", handleRolledBack);
         return () => window.removeEventListener("oh:rolled-back", handleRolledBack);
@@ -2415,6 +2437,7 @@ const DateWidget = ({
         // left on screen would offer buttons with nothing behind them.
         setHeld(null);
         setAgentReports({ failed: [], state: "idle" });
+        setRestorePointMissing(false);
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2448,6 +2471,7 @@ const DateWidget = ({
             // was on screen, so it is read from the beginning.
             if (result.generation?.source !== "fallback") carryLiveReveal();
             setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
+            setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2579,6 +2603,7 @@ const DateWidget = ({
             if (kind === HELD_TURN.segment) carryLiveReveal();
             else setVisibleEventCount(1);
             setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
+            setRestorePointMissing(result.restorePointSaved === false);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -3249,6 +3274,7 @@ const DateWidget = ({
         warning={fallbackWarning || persistedFallbackWarning}
         agentReports={agentReports}
         onRetryAgentReports={retryFailedAgentReports}
+        restorePointMissing={restorePointMissing}
         />
 
         <div

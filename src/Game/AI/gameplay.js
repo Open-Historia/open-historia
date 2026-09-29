@@ -6887,6 +6887,8 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
 // a scenario or dragged through the 5s poll — capped so a long game can't grow it
 // without bound. Purely best-effort: a snapshot failure must never break a turn.
+// Returns whether it was saved, so the player can be told when this turn cannot
+// be rolled back.
 // `turn` is the journal of what the turn APPLIED (intervene.js journalTurn):
 // with the pre-turn state beside it, the turn can be applied again from any
 // point the player chooses — Intervene (interveneAfterEvent below).
@@ -6927,8 +6929,11 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
     // between), so the timeline counted its restore points on the new round
     // and found this one missing: no Rollback button until the next turn.
     if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:restore-point-saved"));
+    return true;
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
+    logDebugEvent("turn", "The turn's restore point could not be saved; this turn cannot be rolled back.", error, { problem: true });
+    return false;
   }
 };
 
@@ -8323,7 +8328,7 @@ const applySimulationResult = async ({
   // with what this turn applied beside it, in the order the reveal shows it, so
   // the player can stop the round part-way (Intervene). Only a time skip is
   // worth stopping: a resolved interactive event or a game-master command is one moment.
-  await captureRollbackSnapshot({
+  const restorePointSaved = await captureRollbackSnapshot({
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
     toDate: nextGame.gameDate || "",
@@ -8360,6 +8365,7 @@ const applySimulationResult = async ({
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
     agentReportsFailed,
+    restorePointSaved,
     world: nextWorld,
   };
 };
