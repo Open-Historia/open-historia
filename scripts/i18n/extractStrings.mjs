@@ -625,6 +625,8 @@ const MESSAGE_FILES = [
   "src/runtime/institutionalChannels.js", "src/runtime/institutionalGovernance.js",
   "src/runtime/institutionAuthoring.js", "src/runtime/politicalWorldCapability.js",
   "src/Game/GameUI/advisorInstitutionDrafts.js", "src/Game/GameUI/countryEditorPolitical.js",
+  // The GM tools' Puppet States editor: what it refuses with shows in the panel.
+  "src/Game/GameUI/puppetStatesTool.js",
 ];
 const JS_REGISTRY_FILES = [
   "src/Game/AI/gameplayPrompts.js", "src/Game/AI/promptGuidance.js", "src/Game/AI/providerConfig.js",

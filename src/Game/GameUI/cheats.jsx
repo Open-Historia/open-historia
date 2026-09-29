@@ -36,6 +36,10 @@ import {
     normalizeGroups,
 } from "../../runtime/groups.js";
 import { cityPopulationKey, hasPopulationByYear } from "../../runtime/cityPopulation.js";
+import { useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { PUPPET_COUP_LOYALTY, puppetKindLabel } from "../../runtime/puppets.js";
+import { PUPPET_KIND_OPTIONS, PUPPET_SECRECY_OPTIONS } from "../../Editor/scenarioPuppets.js";
+import { applyGmPuppetChange, gmPuppetRows } from "./puppetStatesTool.js";
 import { DIFFICULTY_LEVELS, normalizeDifficulty } from "../../runtime/difficulty.js";
 import { applyGameMasterPreview, consolidateHistoryNow, previewGameMasterCommand } from "../AI/gameplayLazy.js";
 import { HISTORY_CONSOLIDATION, countWords, describeHistoryConsolidation, planHistoryConsolidation } from "../AI/historyConsolidation.js";
@@ -92,6 +96,31 @@ const noteGmChange = async (kind, summary, step = null) => {
     }
 };
 
+// Every region `source` holds, handed to `owner`: the Annex Country tool's
+// transfer, which the Puppet States tool's Annex hands its land to as well.
+// Both sides of the comparison are in ONE namespace: `source` is an owner name,
+// and each region's effective owner is its override or its map country's name.
+// Returns how many regions moved.
+const transferWholeCountry = async (source, owner) => {
+    const world = await readWorldState({ force: true });
+    const overrides = { ...world.regionOwnershipOverrides };
+    const catalog = await loadRegionCatalog();
+    let count = 0;
+    for (const region of catalog) {
+        const code = String(region.countryCode || "");
+        const effective = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
+        if (effective === source) {
+            overrides[region.id] = owner;
+            count += 1;
+        }
+    }
+    for (const [regionId, code] of Object.entries(world.regionOwnershipOverrides)) {
+        if (code === source) overrides[regionId] = owner;
+    }
+    await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
+    return count;
+};
+
 const TOOLS = [
     { id: "master-ai", title: "GM Console", subtitle: "Master AI · AI-assisted world intervention and canonical changes", icon: "✦", badge: "AI" },
     { id: "reminders", title: "Simulation Reminders", subtitle: "Standing facts every AI in the game is told until you withdraw them — and what the next skip will hear", icon: "❖" },
@@ -104,6 +133,7 @@ const TOOLS = [
     { id: "add-country", title: "Add Country", subtitle: "Create a new polity for custom or fantasy campaigns", icon: "+", badge: "Advanced" },
     { id: "regions", title: "Region Inspector", subtitle: "Inspect control, sovereignty, claims, and region identity", icon: "▦" },
     { id: "groups", title: "Groups", subtitle: "Cartels, militias, outbreaks: groups that control an area without owning it, and what each is", icon: "⬡" },
+    { id: "puppets", title: "Puppet States", subtitle: "Protectorates, puppet states and client states: who answers to whom, how loyally, and ending it", icon: "⛓" },
     { id: "edit-feature", title: "Map Feature Editor", subtitle: "Inspect and edit runtime features and scenario cities", icon: "◉" },
     { id: "add-feature", title: "Add Map Feature", subtitle: "Place cities, HQs, landmarks, ports, and other world features", icon: "+" },
     { id: "clear-features", title: "Clear Map Features", subtitle: "Remove custom features or restore standard cities", icon: "⌫", badge: "Advanced" },
@@ -125,7 +155,7 @@ const TOOL_GROUPS = [
         title: "Countries & Territory",
         subtitle: "Edit political actors, borders, and individual regions.",
         icon: "◇",
-        tools: ["edit-country", "annex-country", "annex-regions", "regions", "groups", "add-country"],
+        tools: ["edit-country", "annex-country", "annex-regions", "regions", "groups", "puppets", "add-country"],
     },
     {
         id: "military",
@@ -317,6 +347,8 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
     const [clickMode, setClickMode] = useState(null);
     const clickHandlerRef = useRef(null);
     const isMobile = useIsMobile();
+    // The Puppet States tool exists only while the game has the ledger switched on.
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
 
     const refresh = async () => {
         try {
@@ -485,6 +517,7 @@ const CheatsPanel = ({ open, onClose, onOpenForces }) => {
 
                         const entry = TOOLS.find((candidate) => candidate.id === toolId);
                         if (!entry) return null;
+                        if (toolId === "puppets" && !puppetStatesOn) return null;
                         return (
                             <button
                             key={entry.id}
@@ -2989,6 +3022,269 @@ const GroupsView = ({ meta, header, busy, status, game, runBusy, beginClickMode,
     );
 };
 
+// The puppet ledger (world.puppets) by hand, at no AI request: every change is
+// one of the ledger's own verbs, run as the GM Console runs them
+// (puppetStatesTool.js), and noted for the next time skip. Annex ends the
+// arrangement, then hands the land over through the Annex Country transfer.
+const PUPPET_FORM_DEFAULTS = { overlord: "", puppet: "", kind: "satellite", secrecy: "open", loyalty: 50 };
+
+const PuppetStatesView = ({ meta, header, busy, status, game, polities, runBusy, setStatus }) => {
+    const puppetStatesOn = useActiveFeatures().puppetStates?.enabled !== false;
+    const [world, setWorld] = useState(null);
+    // null: the list; "": a new arrangement; otherwise the row being edited.
+    const [editing, setEditing] = useState(null);
+    const [form, setForm] = useState(PUPPET_FORM_DEFAULTS);
+    const [armed, setArmed] = useState("");
+
+    useEffect(() => {
+        readWorldState({ force: true })
+            .then((next) => setWorld(next ?? {}))
+            .catch(() => setWorld({}));
+        const onWorldUpdated = (event) => {
+            if (event?.detail?.world) setWorld(event.detail.world);
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        return () => window.removeEventListener("oh:world-updated", onWorldUpdated);
+    }, []);
+
+    const rows = useMemo(() => gmPuppetRows(world), [world]);
+    const keyOf = (row) => `${row.overlord}→${row.puppet}`;
+    const kindName = (kind) => capitalize(puppetKindLabel(kind || "client"));
+    const loyaltyNumber = (value) => (Number.isFinite(Number(value)) ? Math.max(0, Math.min(100, Math.round(Number(value)))) : 50);
+    const current = editing ? rows.live.find((row) => keyOf(row) === editing) ?? null : null;
+
+    const apply = async (change) => {
+        const latest = await readWorldState({ force: true });
+        // Only an install asks whether the puppet still holds land, and it asks
+        // of the regions this map renders, as the GM Console does.
+        let regionCatalog = [];
+        if (change.op === "install") {
+            const [{ filterToRenderedRegions }, catalog] = await Promise.all([
+                import("../AI/promptContext.js"),
+                loadRegionCatalog().catch(() => []),
+            ]);
+            regionCatalog = filterToRenderedRegions(catalog, latest);
+        }
+        const result = applyGmPuppetChange(latest, change, {
+            regionCatalog,
+            date: game?.gameDate || game?.startDate || "",
+            round: game?.round || 0,
+        });
+        if (result.error) throw new Error(result.error);
+        if (!result.summary) return false;
+        await writeWorldState(result.world);
+        setWorld(result.world);
+        await noteGmChange("puppets", result.summary);
+        return true;
+    };
+
+    const startNew = () => {
+        setEditing("");
+        setForm(PUPPET_FORM_DEFAULTS);
+        setArmed("");
+        setStatus("");
+    };
+    const openRow = (row) => {
+        setEditing(keyOf(row));
+        setForm({ overlord: row.overlord, puppet: row.puppet, kind: row.kind || "client", secrecy: row.secrecy === "covert" ? "covert" : "open", loyalty: loyaltyNumber(row.loyalty) });
+        setArmed("");
+        setStatus("");
+    };
+    const backToList = () => {
+        setEditing(null);
+        setArmed("");
+        setStatus("");
+    };
+
+    const save = () => runBusy(async () => {
+        if (editing === "") {
+            await apply({ op: "install", ...form });
+            setEditing(null);
+            const nameOf = (code) => polities.find((polity) => polity.code === code)?.name || code;
+            return `${nameOf(form.puppet)} now answers to ${nameOf(form.overlord)} as its ${puppetKindLabel(form.kind)}.`;
+        }
+        if (!current) throw new Error("That arrangement has ended since you opened it.");
+        const changed = await apply({ op: "edit", overlord: current.overlord, puppet: current.puppet, kind: form.kind, loyalty: form.loyalty });
+        return changed ? `Saved ${current.overlord}'s hold on ${current.puppet}.` : "Nothing to change.";
+    });
+
+    const reveal = () => runBusy(async () => {
+        await apply({ op: "reveal", overlord: current.overlord, puppet: current.puppet });
+        return `${current.overlord}'s hold on ${current.puppet} is public now.`;
+    });
+
+    const release = () => runBusy(async () => {
+        const { overlord, puppet } = current;
+        await apply({ op: "release", overlord, puppet });
+        setEditing(null);
+        setArmed("");
+        return `${puppet} is free of ${overlord}.`;
+    });
+
+    // The ledger first, then the land, through the Annex Country transfer.
+    const annex = () => runBusy(async () => {
+        const { overlord, puppet } = current;
+        await apply({ op: "annex", overlord, puppet });
+        setEditing(null);
+        setArmed("");
+        const count = await transferWholeCountry(puppet, overlord);
+        if (!count) return `${puppet} no longer answers to ${overlord} as a puppet, but no regions were found under its name: move its land with Annex Country.`;
+        await noteGmChange("territory", `Annexed the whole of ${puppet} into ${overlord} by hand (${count} regions).`);
+        return count === 1
+            ? `${puppet} annexed into ${overlord} (1 region). The map updates within a few seconds.`
+            : `${puppet} annexed into ${overlord} (${count} regions). The map updates within a few seconds.`;
+    });
+
+    const statusLine = status && (
+        <div style={{ color: status.startsWith("Failed") ? "#fca5a5" : "rgba(191,219,254,0.9)", fontSize: "0.76rem", marginTop: "0.6rem" }}>
+        {status}
+        </div>
+    );
+
+    if (!puppetStatesOn) {
+        return (
+            <>
+            {header(meta.title, meta.subtitle)}
+            <div style={{ color: "rgba(255,255,255,0.6)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+                Puppet states are switched off for this game. Turn them back on in the scenario or game editor (Features) to edit them here.
+            </div>
+            </>
+        );
+    }
+
+    const loyalty = loyaltyNumber(form.loyalty);
+    const rowButton = (row) => (
+        <button
+            key={keyOf(row)}
+            type="button"
+            className="oh-tap-row"
+            onClick={() => openRow(row)}
+            style={{ ...buttonStyle, alignItems: "flex-start", display: "flex", flexDirection: "column", gap: "0.15rem", justifyContent: "flex-start", textAlign: "left", width: "100%" }}
+        >
+            <span style={{ fontWeight: 750, overflowWrap: "anywhere" }}>{row.overlord} → {row.puppet}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.66rem", fontWeight: 500 }}>
+                {`${kindName(row.kind)} · ${row.secrecy === "covert" ? "Covert" : "Openly known"} · Loyalty ${loyaltyNumber(row.loyalty)}`}
+            </span>
+        </button>
+    );
+
+    return (
+        <>
+        {header(meta.title, meta.subtitle)}
+        <div style={{ overflowY: "auto", paddingRight: "0.08rem" }}>
+            <div style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.17)", borderRadius: 10, color: "#e4e4e7", fontSize: "0.68rem", lineHeight: 1.45, padding: "0.55rem 0.65rem" }}>
+                A puppet stays a separate country with its own land; its overlord directs it. The rules are the ledger's: one overlord each, no puppet holds puppets of its own, and a secret once public stays public. The next time skip is told of each change.
+            </div>
+
+            {editing === null && (
+                <>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.32rem", marginTop: "0.55rem" }}>
+                    {world === null ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>Loading…</div>
+                    ) : rows.live.length === 0 ? (
+                        <div style={{ color: "rgba(255,255,255,0.42)", fontSize: "0.7rem" }}>No country is anyone's puppet now.</div>
+                    ) : rows.live.map(rowButton)}
+                </div>
+                <button type="button" className="oh-tap-row" disabled={busy || world === null} onClick={startNew} style={{ ...primaryButtonStyle, marginTop: "0.55rem", width: "100%" }}>
+                    New puppet state
+                </button>
+                {rows.ended.length > 0 && (
+                    <details style={{ marginTop: "0.55rem" }}>
+                        <summary style={{ color: "rgba(255,255,255,0.55)", cursor: "pointer", fontSize: "0.7rem" }}>{`Ended arrangements (${rows.ended.length})`}</summary>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem" }}>
+                            {rows.ended.map((row, index) => (
+                                <div key={`${keyOf(row)}-${index}`} style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", overflowWrap: "anywhere" }}>
+                                    {`${row.overlord} → ${row.puppet} · ${capitalize(row.status)}${row.endedDate ? ` · ${row.endedDate}` : ""}`}
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
+                </>
+            )}
+
+            {editing !== null && (
+                <>
+                <button type="button" className="oh-tap-row" onClick={backToList} style={{ ...buttonStyle, marginTop: "0.55rem" }}>
+                    ← All puppet states
+                </button>
+                <div style={{ ...editorFieldStyle, marginTop: "0.55rem" }}>
+                    <div style={editorSectionLabelStyle}>{editing === "" ? "New puppet state" : `${form.overlord} → ${form.puppet}`}</div>
+                    {editing === "" && (
+                        <>
+                        <label style={labelStyle}>Overlord</label>
+                        <PolitySelect polities={polities} value={form.overlord} onChange={(overlord) => setForm({ ...form, overlord })} placeholder="Pick the overlord…" />
+                        <label style={labelStyle}>Puppet</label>
+                        <PolitySelect polities={polities} value={form.puppet} onChange={(puppet) => setForm({ ...form, puppet })} placeholder="Pick the puppet…" />
+                        </>
+                    )}
+                    <label style={labelStyle}>Kind</label>
+                    <select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })} style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}>
+                        {PUPPET_KIND_OPTIONS.map((option) => <option key={option.id} value={option.id} style={{ background: "#18181b", color: "#fff" }}>{option.label}</option>)}
+                    </select>
+                    {editing === "" && (
+                        <>
+                        <label style={labelStyle}>Known</label>
+                        <select value={form.secrecy} onChange={(event) => setForm({ ...form, secrecy: event.target.value })} style={{ ...inputStyle, colorScheme: "dark", cursor: "pointer" }}>
+                            {PUPPET_SECRECY_OPTIONS.map((option) => <option key={option.id} value={option.id} style={{ background: "#18181b", color: "#fff" }}>{option.label}</option>)}
+                        </select>
+                        </>
+                    )}
+                    <label style={labelStyle}>Loyalty</label>
+                    <div style={{ alignItems: "center", display: "flex", gap: "0.5rem" }}>
+                        <input type="range" min="0" max="100" value={loyalty} onChange={(event) => setForm({ ...form, loyalty: Number(event.target.value) })} style={{ flex: 1 }} aria-label="Loyalty" />
+                        <span style={{ fontSize: "0.76rem", textAlign: "right", width: "2rem" }}>{loyalty}</span>
+                    </div>
+                    {loyalty < PUPPET_COUP_LOYALTY && (
+                        <div style={{ color: "#fbbf24", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.3rem" }}>
+                            This low, the puppet starts plotting against its overlord.
+                        </div>
+                    )}
+                    {current?.secrecy === "covert" && (
+                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.68rem", lineHeight: 1.4, marginTop: "0.3rem" }}>
+                            Covert: only the two of them know, until someone's spies find out.
+                        </div>
+                    )}
+                    <button type="button" className="oh-tap-row" disabled={busy || (editing === "" && (!form.overlord || !form.puppet))} onClick={save} style={{ ...primaryButtonStyle, marginTop: "0.6rem", width: "100%" }}>
+                        {editing === "" ? "Make it a puppet state" : "Save"}
+                    </button>
+                </div>
+
+                {current && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.55rem" }}>
+                        {current.secrecy === "covert" && (
+                            <button type="button" className="oh-tap-row" disabled={busy} onClick={reveal} style={{ ...buttonStyle, width: "100%" }}>
+                                Make it public
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            className="oh-tap-row"
+                            disabled={busy}
+                            onClick={() => (armed === "release" ? release() : setArmed("release"))}
+                            style={{ ...buttonStyle, width: "100%" }}
+                        >
+                            {armed === "release" ? `Release ${current.puppet} — click again to confirm` : "Release"}
+                        </button>
+                        <button
+                            type="button"
+                            className="oh-tap-row"
+                            disabled={busy}
+                            onClick={() => (armed === "annex" ? annex() : setArmed("annex"))}
+                            style={{ ...buttonStyle, borderColor: "rgba(248,113,113,0.5)", color: "#fca5a5", width: "100%" }}
+                        >
+                            {armed === "annex" ? `Annex ${current.puppet} and all its land into ${current.overlord} — click again to confirm` : "Annex"}
+                        </button>
+                    </div>
+                )}
+                </>
+            )}
+            {statusLine}
+        </div>
+        </>
+    );
+};
+
 const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy, beginClickMode, endClickMode, setStatus, navigateTool, closePanel }) => {
     const meta = TOOLS.find((entry) => entry.id === tool);
     const [text, setText] = useState("");
@@ -3149,6 +3445,21 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                 game={game}
                 runBusy={runBusy}
                 beginClickMode={beginClickMode}
+                setStatus={setStatus}
+            />
+        );
+    }
+
+    if (tool === "puppets") {
+        return (
+            <PuppetStatesView
+                meta={meta}
+                header={header}
+                busy={busy}
+                status={status}
+                game={game}
+                polities={polities}
+                runBusy={runBusy}
                 setStatus={setStatus}
             />
         );
@@ -4244,20 +4555,7 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     || COUNTRY_NAMES[clickedGid0]
                                     || clickedGid0;
                                 if (!source || source === owner) return;
-                                const catalog = await loadRegionCatalog();
-                                let count = 0;
-                                for (const region of catalog) {
-                                    const code = String(region.countryCode || "");
-                                    const effective = overrides[region.id] ?? COUNTRY_NAMES[code] ?? code;
-                                    if (effective === source) {
-                                        overrides[region.id] = owner;
-                                        count += 1;
-                                    }
-                                }
-                                for (const [regionId, code] of Object.entries(world.regionOwnershipOverrides)) {
-                                    if (code === source) overrides[regionId] = owner;
-                                }
-                                await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
+                                const count = await transferWholeCountry(source, owner);
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
                                 setStatus(`${nameOf(source)} annexed into ${nameOf(owner)} (${count} regions). The map updates within a few seconds.`);
                             } else {
