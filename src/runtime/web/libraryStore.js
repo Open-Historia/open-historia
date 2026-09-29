@@ -839,6 +839,16 @@ const writeRuntimeScenarioGeojson = async (assetKey, value) => {
   return value;
 };
 
+// The world a runtime write resolves country references against: the game's
+// own, else its scenario's (server twin: activeWorld). With none, resolveOwnerRef
+// takes its legacy branch and turned a polity keyed exactly "USA" into the
+// registry's "United States", a country that world does not have.
+const runtimeWorldOf = async (activeGame) => {
+  if (activeGame.json?.world) return activeGame.json.world;
+  const scenario = await getScenario(readGameMeta(activeGame.id, activeGame.meta ?? {}).scenarioId);
+  return scenario?.json?.world ?? null;
+};
+
 const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) return writeRuntimeScenarioGeojson(assetKey, value);
   if (!JSON_ASSET_KEYS.includes(assetKey) && !OPTIONAL_JSON_ASSET_KEYS.includes(assetKey) && !RUNTIME_ONLY_JSON_ASSET_KEYS.includes(assetKey)) {
@@ -854,8 +864,8 @@ const writeRuntimeJsonAssetLocked = async (assetKey, value) => {
 
   let canonical = value;
   if (assetKey === "world") canonical = canonicalizeWorldCountryRefs(value);
-  else if (assetKey === "game") canonical = canonicalizeGameCountry(value);
-  else if (assetKey === "colors") canonical = canonicalizeColorKeys(value, activeGame.json?.world ?? null);
+  else if (assetKey === "game") canonical = canonicalizeGameCountry(value, await runtimeWorldOf(activeGame));
+  else if (assetKey === "colors") canonical = canonicalizeColorKeys(value, await runtimeWorldOf(activeGame));
 
   if (OPTIONAL_JSON_ASSET_KEYS.includes(assetKey)) activeGame[assetKey] = canonical;
   else if (assetKey === "snapshots") setGameSnapshots(activeGame, canonical);

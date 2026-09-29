@@ -347,6 +347,17 @@ test("Import & play points the game at the scenario it fetched", async () => {
   assert.equal((await games("PUT", imported, { scenarioId: "not-here" })).status, 400);
 });
 
+test("writing game.json keeps a polity key that looks like a stock country code", async () => {
+  await reset();
+  await newGame("USA campaign");
+  // The seed world has a polity keyed exactly "USA"; the stock registry calls USA "United States".
+  const saved = ok(await runtime("PUT", "game", { country: "USA", difficulty: "hard", gameDate: "2016-01-01" }));
+  assert.equal(saved.country, "USA");
+  assert.equal(ok(await runtime("GET", "game")).country, "USA");
+  ok(await runtime("PUT", "colors", { USA: [4, 5, 6] }));
+  assert.deepEqual(ok(await runtime("GET", "colors")), { USA: [4, 5, 6] });
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },
