@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildHistoricalTrackingCandidateRows,
   filterHistoricalTrackingCandidateRows,
+  historySamplesInRange,
 } from "./statsHistoricalTracking.js";
 
 const world = {
@@ -52,4 +53,20 @@ test("stock-map saves with no ownership override ledger do not mark undeclared c
   const stockWorld = { polityOverrides: {}, countryStats: { EST: {} }, regionOwnershipOverrides: {}, regionSovereigntyOverrides: {} };
   const { rows } = buildHistoricalTrackingCandidateRows({ world: stockWorld, currentCountry: "EST" });
   assert.ok(rows.some((row) => row.key));
+});
+
+test("the Advanced Statistics time range filters campaigns before 1970 and BC", () => {
+  const dates = (samples) => samples.map((sample) => sample.date);
+  const interwar = [{ date: "1930-01-01" }, { date: "1935-06-01" }, { date: "1936-03-01" }];
+  assert.deepEqual(dates(historySamplesInRange(interwar, "1y")), ["1935-06-01", "1936-03-01"]);
+  assert.deepEqual(dates(historySamplesInRange(interwar, "5y")), ["1935-06-01", "1936-03-01"]);
+  assert.deepEqual(dates(historySamplesInRange(interwar, "10y")), dates(interwar));
+  assert.deepEqual(dates(historySamplesInRange(interwar, "all")), dates(interwar));
+
+  const ancient = [{ date: "-0220-01-01" }, { date: "-0217-02-01" }, { date: "-0217-12-01" }];
+  assert.deepEqual(dates(historySamplesInRange(ancient, "1y")), ["-0217-02-01", "-0217-12-01"]);
+
+  const modern = [{ date: "2010-01-01" }, { date: "2016-01-01" }];
+  assert.deepEqual(dates(historySamplesInRange(modern, "5y")), ["2016-01-01"]);
+  assert.deepEqual(historySamplesInRange([{ date: "not a date" }], "1y"), [{ date: "not a date" }]);
 });

@@ -1,5 +1,6 @@
 /*! Open Historia — hot-path helpers for Advanced Stats historical tracking. */
 import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -108,4 +109,27 @@ export const filterHistoricalTrackingCandidateRows = (rows, search = "") => {
   const query = lower(search);
   if (!query) return Array.isArray(rows) ? rows : [];
   return (Array.isArray(rows) ? rows : []).filter((row) => String(row?.searchText || "").includes(query));
+};
+
+const HISTORY_RANGE_YEARS = Object.freeze({ "1y": 1, "5y": 5, "10y": 10 });
+
+// Advanced Statistics' time range: the samples within that many years of the
+// newest one. Counted in game days, which run negative before 1970 and BC: the
+// old reduce started at 0 and read every pre-1970 campaign as having no latest
+// date, so "1 year" filtered nothing there.
+export const historySamplesInRange = (samples, range = "all") => {
+  const list = Array.isArray(samples) ? samples : [];
+  const years = HISTORY_RANGE_YEARS[range];
+  if (!years) return list;
+  let latest = -Infinity;
+  for (const sample of list) {
+    const day = gameDateDayNumber(sample?.date);
+    if (Number.isFinite(day) && day > latest) latest = day;
+  }
+  if (!Number.isFinite(latest)) return list;
+  const cutoff = latest - years * 365.2425;
+  return list.filter((sample) => {
+    const day = gameDateDayNumber(sample?.date);
+    return Number.isFinite(day) && day >= cutoff;
+  });
 };

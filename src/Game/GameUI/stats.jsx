@@ -9,7 +9,7 @@ import { isPolityLandless, readGameData, readWorldState, readWorldStateView, wri
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
-import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows } from "./statsHistoricalTracking.js";
+import { buildHistoricalTrackingCandidateRows, filterHistoricalTrackingCandidateRows, historySamplesInRange } from "./statsHistoricalTracking.js";
 import { buildPlayerPoliticalKnowledgeView, buildPublicPoliticalView } from "../../runtime/politicalKnowledge.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
 import { livePuppetsFor, puppetKindLabel, puppetSummaryFor } from "../../runtime/puppets.js";
@@ -1034,10 +1034,7 @@ const AdvancedStatsModal = ({
 
     const selectedMetrics = metricKeys.map((key) => metricsByKey[key]).filter(Boolean);
     const selectedUnit = selectedMetrics[0]?.unit || "gdp";
-    const latestMs = samples.reduce((max, sample) => Math.max(max, historyDateMs(sample.date) || 0), 0);
-    const years = range === "1y" ? 1 : range === "5y" ? 5 : range === "10y" ? 10 : null;
-    const cutoff = years && latestMs ? latestMs - years * 365.2425 * 24 * 60 * 60 * 1000 : null;
-    const visibleSamples = cutoff ? samples.filter((sample) => historyDateMs(sample.date) >= cutoff) : samples;
+    const visibleSamples = historySamplesInRange(samples, range);
     const first = visibleSamples[0];
     const last = visibleSamples[visibleSamples.length - 1];
 
