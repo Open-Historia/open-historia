@@ -369,6 +369,7 @@ import {
 import { addGameDays, compareGameDates, diffGameDays, gameDateDayNumber, normalizeGameDate, parseGameDate } from "../../runtime/gameDates.js";
 import {
   NO_RESPONSE_BODY_NOTE,
+  assertNoTurnRunning,
   beginSimulation,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
@@ -15755,6 +15756,9 @@ export const applyGameMasterPreview = async (preview) => {
   if (!normalizeString(preview?.baseFingerprint)) {
     throw new Error("This preview carries no safety fingerprint. Generate a fresh preview before applying.");
   }
+  // A turn running or held writes back the world and events it read, and this
+  // transaction would be gone when it landed.
+  assertNoTurnRunning();
 
   beginSimulation();
   try {
