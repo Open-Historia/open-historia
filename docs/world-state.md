@@ -458,7 +458,7 @@ One store and one subscription list for all six mutable runtime documents: `game
 | `onRuntimeJsonUpdated` | | A same-tab write is authoritative on arrival: the store takes `event.detail.value` and marks that key fresh, so the next tick skips it. In an ordinary session almost every update arrives this way and costs no request. |
 | `isStaleGameRead` | | A read that comes back behind the published `(round, gameDate)` is refused, and the whole batch with it, since world and events belong to that same stale turn. `game` therefore rides along with every batch. This is the invariant that used to live in `time.jsx`'s `gameStampRef`. |
 | `onRolledBack` | | A rollback is the one write that legitimately moves the clock backwards, so `oh:rolled-back` (dispatched by `rollBackToSnapshot`) clears the stamp and re-reads. |
-| `onActiveGameChanged` | | Same reset as the map store: every document is dropped and re-read for the new save. |
+| `onActiveGameChanged` | | Same reset as the map store: every document is dropped and re-read for the new save. A read still in flight from the previous save is not joined: the switch bumps a generation, clears the pending reads, and a result from before the switch is dropped when it lands, so the old save's round never becomes the stamp the new save's reads are refused against. |
 | `primeRuntimeValue(key, value)` | | Publishes state the caller already holds (a finished turn, a restored bundle) without a round trip. `time.jsx` uses it where it used to call `setGameData` / `setEvents` / `setWorldState`. |
 | `refreshRuntimeState(keys)` | | An explicit read, for the moment a panel opens. |
 
