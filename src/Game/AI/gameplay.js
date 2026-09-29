@@ -7827,6 +7827,7 @@ const applySimulationResult = async ({
     console.warn("[stats auto] unexpected scheduler failure; the completed turn is preserved.", error);
   }
 
+  const lifecycleEventIds = [];
   // Native institution lifecycle clock: withdrawal notice periods and other
   // already-authorized dated lifecycle effects resolve without buying an AI
   // request. The lifecycle case itself is the authority; this never invents a
@@ -7838,6 +7839,21 @@ const applySimulationResult = async ({
       playerCountry: baseGame.country || "",
     });
     nextWorld = lifecycle.world;
+    // A departure that took effect this turn is on the timeline like any other,
+    // and like espionage's events is kept off the Intervene journal: the clock
+    // runs again when a round is replayed.
+    const known = new Set(nextEvents.map((event) => event?.id));
+    for (const event of lifecycle.events) {
+      const entry = normalizeEventEntry(event, freshEvents.length);
+      if (!entry || known.has(entry.id)) continue;
+      known.add(entry.id);
+      freshEvents.push(entry);
+      nextEvents.push(entry);
+      lifecycleEventIds.push(entry.id);
+    }
+    if (lifecycleEventIds.length) {
+      nextWorld = withLatestTurnEventIds(nextWorld, (ids) => [...ids, ...lifecycleEventIds]);
+    }
     if (lifecycle.applied.length) {
       logDebugEvent("turn", `Institution lifecycle: ${lifecycle.applied.length} dated lifecycle effect(s) resolved.`, lifecycle.applied, { verbose: true });
     }
@@ -7988,7 +8004,7 @@ const applySimulationResult = async ({
     turn: result.mode === "jump" || result.mode === "auto"
       ? journalTurn({
         events: freshEvents,
-        excludeEventIds: espionageEventIds,
+        excludeEventIds: [...espionageEventIds, ...lifecycleEventIds],
         warUpdates,
         relationUpdates,
         agreementUpdates,

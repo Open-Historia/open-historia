@@ -394,6 +394,50 @@ test("notice withdrawal remains membership until the canonical effective date an
   const due = advanceInstitutionLifecycleCore({ world: early.world, date: "2015-01-31", playerCountry: "Republic of Latvia" });
   assert.equal(due.world.institutions.byId[founded.institution.id].members.some((entry) => entry.polity === "Republic of Latvia"), false);
   assert.equal(due.applied.length, 1);
+  assert.equal(early.events.length, 0);
+  assert.equal(due.events.length, 1);
+  assert.equal(due.events[0].title, "Republic of Latvia Leaves Notice Union");
+  assert.equal(due.events[0].date, "2015-01-31");
+  assert.equal(due.events[0].playerRelated, true);
+});
+
+test("two withdrawal notices falling due in one skip both take effect", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Notice Union", minimumFoundingMembers: 1, accessionMode: "direct", withdrawalMode: "notice", withdrawalNoticeDays: 10 },
+  });
+  const id = founded.institution.id;
+  let state = founded;
+  for (const polity of ["Republic of Estonia", "Republic of Lithuania", "Republic of Poland"]) {
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: "Republic of Latvia", date: "2014-09-01", command: { type: "apply", institutionId: id, polity, authority: "npc" } });
+  }
+  for (const polity of ["Republic of Estonia", "Republic of Lithuania"]) {
+    state = applyInstitutionLifecycleCommandCore({ world: state.world, playerCountry: "Republic of Latvia", date: "2015-01-01", command: { type: "withdraw", institutionId: id, polity, authority: "npc" } });
+  }
+  const due = advanceInstitutionLifecycleCore({ world: state.world, date: "2015-03-01", playerCountry: "Republic of Latvia" });
+  const institution = due.world.institutions.byId[id];
+  assert.deepEqual(institution.members.map((entry) => entry.polity), ["Republic of Latvia", "Republic of Poland"]);
+  assert.equal(Object.values(institution.lifecycleCases).filter((entry) => entry.kind === "withdrawal" && entry.status === "resolved").length, 2);
+  assert.deepEqual(due.events.map((event) => event.title).sort(), ["Republic of Estonia Leaves Notice Union", "Republic of Lithuania Leaves Notice Union"]);
+  assert.equal(due.events.every((event) => event.date === "2015-01-11" && event.playerRelated === false), true);
+});
+
+test("a withdrawal notice counts its days on the game calendar, BC years included", async () => {
+  const { advanceInstitutionLifecycleCore } = await import("./institutionLifecycleCore.js");
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), playerCountry: "Republic of Latvia", date: "-0300-01-01",
+    command: { type: "found", name: "Ancient League", minimumFoundingMembers: 1, withdrawalMode: "notice", withdrawalNoticeDays: 30 },
+  });
+  const notice = applyInstitutionLifecycleCommandCore({
+    world: founded.world, playerCountry: "Republic of Latvia", date: "-0218-12-15",
+    command: { type: "withdraw", institutionId: founded.institution.id, polity: "Republic of Latvia", authority: "player" },
+  });
+  assert.equal(notice.lifecycleCase.effectiveDate, "-0217-01-14");
+  const early = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0217-01-13", playerCountry: "Republic of Latvia" });
+  assert.equal(early.applied.length, 0);
+  const due = advanceInstitutionLifecycleCore({ world: notice.world, date: "-0217-01-14", playerCountry: "Republic of Latvia" });
+  assert.equal(due.applied.length, 1);
 });
 
 

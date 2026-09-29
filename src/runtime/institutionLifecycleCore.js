@@ -21,6 +21,7 @@ import {
   resolveInstitutionRecord,
 } from "./institutions.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
+import { addGameDays, diffGameDays } from "./gameDates.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const lower = (value) => clean(value).toLocaleLowerCase();
@@ -816,9 +817,7 @@ export const applyInstitutionLifecycleCommandCore = ({
     }
     const noticeDays = mode === "notice" ? Number(baseInstitution.charter?.lifecycle?.withdrawal?.noticeDays || 0) : 0;
     if (noticeDays > 0) {
-      const effective = new Date(`${clean(date)}T00:00:00Z`);
-      if (!Number.isNaN(effective.getTime())) effective.setUTCDate(effective.getUTCDate() + noticeDays);
-      const effectiveDate = Number.isNaN(effective.getTime()) ? clean(date) : effective.toISOString().slice(0, 10);
+      const effectiveDate = addGameDays(date, noticeDays) || clean(date);
       const result = mutateInstitution(world, baseInstitution.id, (institution, localWorld) => {
         const lifecycleCase = setCase(institution, { id: lifecycleCaseId(institution.id, "withdrawal", polity, date), kind: "withdrawal", status: "pending", polity, initiatedBy: polity, requestedStatus: member.status, createdDate: date, updatedDate: date, effectiveDate, reason: clean(command.reason) }, localWorld);
         return { lifecycleCase };
@@ -1016,24 +1015,36 @@ export const applyInstitutionLifecycleChatBatchCore = ({
   return { world: nextWorld, chats: nextChats, events: nextEvents, applied, rejected };
 };
 
+// A notice period is over once the game has reached its effective date. A date
+// that is not a game date never falls due.
+const noticeHasRun = (effectiveDate, date) => {
+  const days = diffGameDays(effectiveDate, date);
+  return days !== null && days >= 0;
+};
+
 export const advanceInstitutionLifecycleCore = ({ world: worldInput = {}, date = "", playerCountry = "" } = {}) => {
   let world = clone(worldInput || {});
-  const institutions = normalizeInstitutions(world.institutions, world);
+  world = { ...world, institutions: normalizeInstitutions(world.institutions, world) };
+  const player = canonicalPolity(playerCountry, world);
   const applied = [];
-  for (const institution of Object.values(institutions.byId)) {
-    for (const lifecycleCase of institutionPendingLifecycleCases(institution)) {
-      if (lifecycleCase.kind !== "withdrawal" || !lifecycleCase.effectiveDate || clean(lifecycleCase.effectiveDate) > clean(date)) continue;
-      const result = applyInstitutionMembershipResolution({ world: { ...world, institutions }, institutionId: institution.id, op: "leave", polity: lifecycleCase.polity, date: lifecycleCase.effectiveDate, note: lifecycleCase.reason || "Withdrawal notice became effective." });
+  const events = [];
+  for (const institutionId of Object.keys(world.institutions.byId)) {
+    const due = institutionPendingLifecycleCases(world.institutions.byId[institutionId])
+      .filter((entry) => entry.kind === "withdrawal" && entry.effectiveDate && noticeHasRun(entry.effectiveDate, date));
+    for (const lifecycleCase of due) {
+      // Each withdrawal starts from the world the one before it left, so two
+      // notices falling due in one skip both take effect.
+      const result = applyInstitutionMembershipResolution({ world, institutionId, op: "leave", polity: lifecycleCase.polity, date: lifecycleCase.effectiveDate, note: lifecycleCase.reason || "Withdrawal notice became effective." });
       if (result.error) continue;
-      world = result.world;
-      const refreshed = resolveInstitutionRecord(world, institution.id);
+      const refreshed = result.world.institutions.byId[institutionId];
       const cases = { ...(refreshed.lifecycleCases || {}) };
       cases[lifecycleCase.id] = { ...lifecycleCase, status: "resolved", resolvedDate: lifecycleCase.effectiveDate, updatedDate: lifecycleCase.effectiveDate };
-      const nextInstitutions = normalizeInstitutions(world.institutions, world);
-      nextInstitutions.byId[institution.id] = normalizeInstitutionRecord({ ...refreshed, lifecycleCases: cases }, institution.id, world);
-      world = { ...world, institutions: nextInstitutions };
-      applied.push({ institutionId: institution.id, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
+      const institutions = { ...result.world.institutions, byId: { ...result.world.institutions.byId } };
+      institutions.byId[institutionId] = normalizeInstitutionRecord({ ...refreshed, lifecycleCases: cases }, institutionId, result.world);
+      world = { ...result.world, institutions };
+      applied.push({ institutionId, caseId: lifecycleCase.id, polity: lifecycleCase.polity, action: "withdrawn" });
+      events.push(lifecycleEvent({ institution: institutions.byId[institutionId], action: "left", polity: lifecycleCase.polity, actor: lifecycleCase.polity, date: lifecycleCase.effectiveDate, reason: lifecycleCase.reason, playerCountry: player }));
     }
   }
-  return { world, applied, playerCountry };
+  return { world, applied, events, playerCountry };
 };
