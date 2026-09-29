@@ -289,7 +289,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Same engine, but **stop early** at the first strategically notable / player-relevant / memorable event and set it `notable:true` (a notable event is preferred when the skip offers an interactive event).
 - **Prompt:** `tasks.autoJumpForward`. **Entry:** `simulateAutoJump({days=365, signal})` → `simulateTimelineJump(mode:"auto")` `gameplay.js`.
 - **Tool/schema:** `submit_jump_result` / `AUTO_JUMP_FORWARD_SCHEMA` (= `JUMP_FORWARD_SCHEMA`, `gameplaySchemas.js`).
-- **Validation:** same validator; in `auto` mode `stopDate` may be any date after origin and ≤ target (`validateTimelineDates` `153`); the event-count range is not strictly enforced.
+- **Validation:** same validator; in `auto` mode `stopDate` may be any date after origin and ≤ target (`validateTimelineDates` in `timelineDates.js`); the event-count range is not strictly enforced.
 
 ### 7.3 `actions` — strategic action suggestions
 - **Purpose:** Produce 6–9 "Topics of Concern," each with 2–5 concrete actions (kind `action`, or `chat` for outreach).

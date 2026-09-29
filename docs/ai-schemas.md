@@ -463,7 +463,7 @@ Key details:
 Every Layer-2 validator follows the same discipline. `strict = !finalAttempt`:
 
 - **Attempt 1 (strict):** return a **corrective error string** describing exactly what's wrong. This becomes the retry message; the model usually fixes its own answer. Shape problems (wrong event count, stray dates, unresolvable region names, bad ops) are all strict here.
-- **Attempt 2 (final = salvage):** **never reject a finished generation to the canned fallback over cosmetics.** Instead repair in place: `clampTimelineDates` pulls stray dates into the window (`gameplay.js:187`, `:1914`), unresolvable transfers/ops are dropped, duplicate unit ids are deleted so normalization re-mints them. A good story with sloppy dates beats canned events every time.
+- **Attempt 2 (final = salvage):** **never reject a finished generation to the canned fallback over cosmetics.** Instead repair in place: `clampTimelineDates` pulls stray dates into the window (`timelineDates.js`, called from the jump validator in `gameplay.js`), unresolvable transfers/ops are dropped, duplicate unit ids are deleted so normalization re-mints them. A good story with sloppy dates beats canned events every time.
 
 The jump validator (`:1897-1917`) is the canonical example: `const strict = !finalAttempt;` gates the event-count check, then `validateTimelineDates` (strict → return error; salvage → `clampTimelineDates`), then `validateGeneratedWorldChanges(..., { strictTransfers: strict })`. `pregameHistory` (`validatePregameEvents`, `:2013`) and `idleDiplomacy` follow the identical pattern.
 
