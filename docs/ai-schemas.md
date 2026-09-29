@@ -56,7 +56,7 @@ Diplomatic speaker routing is deliberately absent from this table: one-on-one th
 - **OpenAI-compatible** — `tools: [{ type: "function", function: { name, description, parameters: schema } }]` in `tool` mode; falls back to `response_format: { type: "json_schema", … }` and then `{ type: "json_object" }` on 400/422 (`main.jsx:605-650`). The schema is sent **verbatim, including `additionalProperties: false`**.
 - **Anthropic** — native `tool_use`; `extractAnthropicToolInput` reads `block.input`.
 
-The parsed arguments come back as `response.toolInput`. `runJsonTask` prefers that; if the model answered in prose (local models with no tool support), it falls back to `extractJsonPayload(rawText)` (`gameplay.js:460`).
+The parsed arguments come back as `response.toolInput`. `runJsonTask` prefers that; if the model answered in prose (local models with no tool support), it falls back to `extractJsonPayload(rawText)` (`gameplay.js:460`). The Political World generators (the v2 executor's temporal sentinel and exact-date verification, and the geopolitical jobs) read an answer the same way through `toolResponsePayload` (`src/Game/AI/toolResponsePayload.js`): the tool call when there is one, otherwise `rawText` parsed with `extractJsonPayload`, since every text-mode answer (`json_schema`, `json_object`, `text_json`, Gemini's streamed-text fallback, an Anthropic text answer) arrives with `toolInput: null`.
 
 ---
 

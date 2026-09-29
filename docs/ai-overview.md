@@ -25,6 +25,7 @@ This page documents the plumbing. For the prompt templates and how they are asse
 | `src/Game/AI/promptDedupe.js` | Skipping a call-time directive the template already carries, and collapsing a large block the prompt would otherwise send twice. |
 | `src/Game/AI/usageStats.js` | Token counts and time-to-first-byte, normalized across the three providers' reporting shapes. |
 | `src/Game/AI/jsonSalvage.js` | Tolerant parsing of a model's answer: think-block stripping, the answer sentinel, fenced and balanced-brace recovery. |
+| `src/Game/AI/toolResponsePayload.js` | The structured payload of a `callAI` answer: the tool call, or the text-mode answer parsed from `rawText`. Used by the Political World generators. |
 | `src/Game/AI/providerErrors.js` | Reading what a provider sent INSTEAD of an answer: busy vs rate-limited vs spent quota vs unusable (`classifyProviderFailure`), how often to retry each (`shouldRetryProviderFailure`), streaming refusals, and deliberation-instead-of-tool-call. |
 | `src/runtime/applicationReceipt.js` | What the engine dropped, withheld or changed in the simulator's last answer, carried on the newest turn record and rendered at the top of the next jump. See [the application receipt](#the-application-receipt-what-salvage-did-told-to-the-next-turn). |
 | `src/runtime/territoryBasis.js` | Why a region changes hands: the `basis` vocabulary, the screen that turns a `claim`-basis transfer into a claim, and the directive the jump is given. |
