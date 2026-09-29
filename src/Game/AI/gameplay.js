@@ -295,7 +295,7 @@ import {
   statSheetKeys,
 } from "../../runtime/statsSheet.js";
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
-import { difficultyDirective } from "../../runtime/difficulty.js";
+import { difficultyDirective, difficultyScopeForTask } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
 import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
@@ -1774,13 +1774,8 @@ export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty respons
 const taskIdleTimeoutMs = () =>
   (getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
 
-// Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
-// diplomacy reading, interactive events their own, everything else the simulation one.
-const difficultyScopeForTask = (taskKey) => {
-  if (taskKey === "idleDiplomacy") return "diplomacy";
-  if (String(taskKey || "").startsWith("interactive")) return "interactive";
-  return "simulation";
-};
+// Difficulty 2.0 carries one directive per scope; which one a task reads is
+// runtime/difficulty.js difficultyScopeForTask.
 
 // Telemetry: how much in-game time this task's prompt covers, from the round
 // dates the template variables carry. Null for tasks without a window.

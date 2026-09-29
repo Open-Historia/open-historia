@@ -204,6 +204,17 @@ const scopedDirectiveOf = (meta, scope) => {
   return meta.directives?.[normalizedScope] || meta.directives?.simulation || meta.directive;
 };
 
+// Which directive a gameplay task reads (gameplay.js appends it): the ones
+// where governments talk get the diplomacy reading — the idle outreach and the
+// group-chat batch, where leaders bargain exactly as a one-to-one leader does —
+// interactive events their own, everything else the simulation one.
+export const difficultyScopeForTask = (taskKey) => {
+  const key = String(taskKey ?? "").trim();
+  if (key === "idleDiplomacy" || key === "chatActions") return "diplomacy";
+  if (key.startsWith("interactive")) return "interactive";
+  return "simulation";
+};
+
 export const difficultyDirective = (value, scope = "simulation") => {
   const meta = difficultyMeta(value);
 

@@ -13,7 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import defaultPrompts from "../Game/AI/defaultPrompts.json" with { type: "json" };
-import { DIFFICULTY_LEVELS, difficultyDirective, difficultyMeta, difficultyPassage } from "./difficulty.js";
+import { DIFFICULTY_LEVELS, difficultyDirective, difficultyMeta, difficultyPassage, difficultyScopeForTask } from "./difficulty.js";
 import { buildDifficultyGuidance, renderTemplate, resolveHelperValues } from "../Game/AI/promptContext.js";
 
 const count = (text, needle) => text.split(needle).length - 1;
@@ -43,6 +43,20 @@ test("a time skip is told the simulation directive once", () => {
       assert.equal(count(prompt, level.directives.diplomacy), 0, `${task} ${level.id}`);
     }
   }
+});
+
+// The group-chat batch (gameplay.js runChatActionBatch, task chatActions) is
+// leaders bargaining, as a one-to-one leader does; it was appended the
+// simulation directive, so a group chat never felt the diplomacy difficulty.
+test("leaders in a group chat bargain by the diplomacy directive too", () => {
+  assert.equal(difficultyScopeForTask("chatActions"), "diplomacy");
+  assert.equal(difficultyScopeForTask("idleDiplomacy"), "diplomacy");
+  assert.equal(difficultyScopeForTask("interactiveCreation"), "interactive");
+  assert.equal(difficultyScopeForTask("interactiveExecutor"), "interactive");
+  assert.equal(difficultyScopeForTask("actions"), "simulation");
+  assert.equal(difficultyScopeForTask(""), "simulation");
+  const hard = difficultyMeta("hard").directives;
+  assert.ok(difficultyDirective("hard", difficultyScopeForTask("chatActions")).endsWith(hard.diplomacy));
 });
 
 test("the pre-2.0 difficulty paragraphs are gone", () => {
