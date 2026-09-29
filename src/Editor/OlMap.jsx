@@ -969,6 +969,7 @@ const OlMap = ({
           hit.setGeometry(unionGeoms([hit.getGeometry(), neighbor.getGeometry()]));
         } catch (e) {
           console.warn("[editor] dissolve failed:", e);
+          window.alert("The border between these two regions could not be removed. Select both, repair them in the Topology panel, then try again.");
           return;
         }
         regionSource.removeFeature(neighbor);
@@ -1858,6 +1859,7 @@ const OlMap = ({
           target.setGeometry(mergedGeom);
         } catch (e) {
           console.warn("[editor] merge failed:", e);
+          window.alert("These regions could not be merged. Repair them in the Topology panel, then try again.");
           return;
         }
         removed.forEach((f) => regionSource.removeFeature(f));
@@ -2442,13 +2444,13 @@ const OlMap = ({
       // Forget what the last save wrote, so the next one carries the whole map.
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
+      // Reads the whole map before it touches the one on screen, so a map that
+      // cannot be read throws with the current one still there (openDoc).
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
-        mapLoads += 1;
         const fmt = new GeoJSON();
-        regionSource.clear();
-        savedRegionHashes.clear();
+        let feats = [];
         if (fc && Array.isArray(fc.features)) {
-          const feats = fmt.readFeatures(fc, {
+          feats = fmt.readFeatures(fc, {
             dataProjection: "EPSG:4326",
             featureProjection: "EPSG:3857",
           });
@@ -2467,8 +2469,11 @@ const OlMap = ({
             }
             stampClaims(f);
           }
-          regionSource.addFeatures(feats);
         }
+        mapLoads += 1;
+        regionSource.clear();
+        savedRegionHashes.clear();
+        if (feats.length) regionSource.addFeatures(feats);
         regionLayer.changed();
         labelLayer.changed();
         notifyRegions({ loaded: true });

@@ -76,6 +76,27 @@ test("a failed save does not stop the follow-up, and the runner is free afterwar
   assert.equal(attempts, 3);
 });
 
+test("idle waits for the running save and the one queued behind it", async () => {
+  const gates = [deferred(), deferred()];
+  let attempts = 0;
+  const run = createSaveRunner(async () => {
+    await gates[attempts++].promise;
+    return true;
+  });
+  await run.idle();
+  run();
+  run().catch(() => {});
+  let idle = false;
+  const waiting = run.idle().then(() => { idle = true; });
+  gates[0].resolve();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(idle, false, "the queued save is still to come");
+  gates[1].reject(new Error("failed"));
+  await waiting;
+  assert.equal(idle, true);
+  assert.equal(attempts, 2);
+});
+
 test("automatic retries wait 5 s, 15 s and 60 s, then stop", () => {
   assert.deepEqual(SAVE_RETRY_DELAYS_MS, [5000, 15000, 60000]);
   assert.equal(saveRetryDelay(0), 5000);

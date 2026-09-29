@@ -543,7 +543,23 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     d.setSaveStatus("saved");
   };
 
-  const newDoc = (kind) => {
+  // New and Open replace the map on screen, and used to do it with no save and
+  // no question: edits in the autosave's two seconds were dropped, and after a
+  // failed save every unsaved change went with no prompt. They now settle the
+  // open map the way Close does, then wait for any save still writing it.
+  const settleBeforeReplacing = async (question) => {
+    const ok = await settleUnsavedWork({
+      status: dRef.current.saveStatus,
+      save: saveNow,
+      confirm: (text) => window.confirm(text),
+      question,
+    });
+    if (ok) await runSaveRef.current.idle();
+    return ok;
+  };
+
+  const newDoc = async (kind) => {
+    if (!(await settleBeforeReplacing("This map has changes that could not be saved. Start a new map and lose them?"))) return;
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
     else api?.reseedWorld();
@@ -552,7 +568,15 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     markLoaded(null);
   };
 
+  // Everything that can fail is done before anything on screen changes: the
+  // document is fetched, migrated and built, and OlMap.loadRegions reads the
+  // whole map before it clears the old one. A failed open used to leave the new
+  // document's fields over an emptied map while the saves still wrote to the
+  // old id, and said nothing.
   const openDoc = async (id) => {
+    let next;
+    let doc;
+    let background;
     try {
       const stored = await loadDocument(id);
       // Bring a pre-rename document forward before anything reads it. A document
@@ -562,7 +586,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       // ownerSchema marker, past the store's migration. No-op once migrated.
       const doc = migrateDocumentOwners(stored);
       const base = createDocument();
-      d.setDoc({
+      next = {
         id: doc.id,
         version: doc.version || 1,
         ownerSchema: doc.ownerSchema ?? OWNER_SCHEMA,
@@ -579,14 +603,25 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         units: Array.isArray(doc.units) ? doc.units : [],
         groups: doc.groups && typeof doc.groups === "object" ? doc.groups : {},
         puppets: Array.isArray(doc.puppets) ? doc.puppets : [],
-      });
-      api?.loadRegions(doc.regions);
-      setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
-      setCustomBgId(null);
-      markLoaded(doc.id);
+      };
+      background = rebuildPersistedBackground(doc.metadata?.customBackground);
     } catch (e) {
       console.warn("[editor] open failed:", e);
+      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      return;
     }
+    if (!(await settleBeforeReplacing("This map has changes that could not be saved. Open the other map and lose them?"))) return;
+    try {
+      api?.loadRegions(doc.regions);
+    } catch (e) {
+      console.warn("[editor] open failed:", e);
+      window.alert(`Could not open this map: ${e?.message || e}. Your current map is unchanged.`);
+      return;
+    }
+    d.setDoc(next);
+    setCustomBg(background);
+    setCustomBgId(null);
+    markLoaded(doc.id);
   };
 
   // Debounced autosave whenever the document is dirty.

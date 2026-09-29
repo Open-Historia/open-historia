@@ -32,6 +32,12 @@ export const createSaveRunner = (attempt) => {
     }
     return queued;
   };
+  // Resolves once no save is running or waiting. Opening or starting another
+  // map waits for this: a save landing after the swap would record the old
+  // map's regions as what the new one last wrote.
+  run.idle = async () => {
+    while (running || queued) await (queued || running).catch(() => {});
+  };
   return run;
 };
 

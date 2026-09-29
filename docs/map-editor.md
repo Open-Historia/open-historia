@@ -192,7 +192,7 @@ The strip sits in a band between the documents chip and the Save / Apply / Close
 | Edit vertices | `modify` | `Modify` + `Snap`. On `modifyend` sets `edited:true` on dragged features (`:963`). |
 | Move | `move` | `Translate` on the region layer. |
 | Delete | `delete` | Click removes a region (a city hit under the cursor wins). |
-| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one (`:428`). |
+| Delete border (dissolve) | `dissolve` | Click a region; probes neighbouring pixels for the region across the nearest border and unions the two into one (`:428`). A union that fails says so (repair the pair in the Topology panel first) instead of doing nothing. |
 | Paint owner | `paint` | Click stamps the current **Paint owner** value (a country NAME, trimmed, never case-folded) onto the clicked region (`:394`). A floating owner input + swatch appears at the top (`MapEditor.jsx:553`). |
 | City tool | `feature` | Click empty map → `onFeatureCreate` (drops a city + opens `CityPopup`); click a city → `onFeatureEdit`. Carries the underlying region's owner/regionId (`:410`). |
 | Unit tool | `unit` | Click empty map → `onUnitCreate` (drops a starting unit owned by the region's owner and opens `UnitPopup`); click a unit → `onUnitEdit`. The Delete tool removes a unit under the cursor. See §9b. |
@@ -218,7 +218,7 @@ Shown whenever ≥1 region is selected. Writes go straight through `api.setRegio
 | **Flag** | opens `FlagPicker` via `onOpenFlagPicker(owner)` | Renders current flag thumbnail. |
 | **Tags** | `setTags(owner, next)` | `TagField` with `TAG_SUGGESTIONS`; free vocabulary. |
 
-Footer buttons: **Clear country** (`owner:null`), **Merge** (≥2), **Duplicate** (`copyRegions`, a copy beside the original on this map), **Copy to clipboard** (§9c), **Zoom**, **Delete**.
+Footer buttons: **Clear country** (`owner:null`), **Merge** (≥2; a union that fails says so and suggests the Topology panel's repair), **Duplicate** (`copyRegions`, a copy beside the original on this map), **Copy to clipboard** (§9c), **Zoom**, **Delete**.
 
 Note the owner/colour/flag/tag edits are keyed to the *country name*, so editing one region's colour recolours the whole country everywhere.
 
@@ -399,6 +399,8 @@ Save robustness:
 - **Saves take turns** (`createSaveRunner`, `src/Editor/documentSaving.js`). A save asked for while one is running waits for it and then writes whatever is still unsaved, however many were asked for meanwhile, so two never write at once: the autosave and the hide flush used to run side by side, and with no document id yet each created a document. The id a create returns is in `docIdRef` before the save queued behind it runs.
 - **An edit made during a save stays unsaved.** Every change goes through `setSaveStatus("dirty")`, which counts it (`d.editCount()`); a save notes the count before it writes and calls the document saved only if the count has not moved. It used to set "saved" regardless, which hid the edit and cancelled the autosave the edit had armed.
 - **Close** saves first (`settleUnsavedWork`) and asks only if that save does not land. It goes by what `saveNow()` resolves to: reading React state after the await still said "saving", so a save that worked asked "could not be saved" anyway.
+- **New and Open** settle the open map the same way (`settleBeforeReplacing`), then wait for any save still writing it (`run.idle()`) before swapping. They used to replace the document at once: edits in the autosave's two seconds were dropped, and after a failed save everything unsaved went without a prompt.
+- **A failed Open changes nothing.** The document is fetched, migrated and built, and `OlMap.loadRegions` reads the whole map, before anything on screen is replaced; a failure says "Could not open this map: <reason>. Your current map is unchanged." It used to log and leave the new document's fields over an emptied map while the saves still wrote to the old id.
 
 ---
 
