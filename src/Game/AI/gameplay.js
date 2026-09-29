@@ -137,11 +137,11 @@ import {
   buildTurnReviewPrompt,
   buildTurnReviewTool,
   readTurnReviewAnswer,
-  reviewHeldError,
-  reviewNeedsRetry,
+  reviewFailure,
   remapBoardOps,
   shareRepeatedBlocks,
 } from "./turnReview.js";
+import { checksHeldError, checksHoldTurn, createTurnChecks } from "./turnChecks.js";
 import {
   describeDoubtedForPrompt,
   doubtedAwaitingFreshSource,
@@ -7288,6 +7288,10 @@ const applySimulationResult = async ({
   // parts of it instead of making a request each. Null otherwise.
   const review = projects?.review ?? null;
   const requests = projects?.requests ?? null;
+  // A time skip's checks (turnChecks.js); null for every other kind of turn.
+  const checks = projects?.checks ?? null;
+  let curatorCalls = 0;
+  const boardCheck = (ask) => (checks ? checks.run("board", ask) : ask());
 
   // One curator analysis for the round's candidates and for the breadth
   // repair's supplemental ones.
@@ -7300,8 +7304,8 @@ const applySimulationResult = async ({
       payload: review.parts.timeline ?? curatorUnavailable(candidates),
       generation: { source: review.parts.timeline ? "ai" : "fallback" },
     })
-    : (input) =>
-      runJsonTask("timelineCurator", {
+    : (input) => {
+      const ask = () => runJsonTask("timelineCurator", {
         lookups: buildTaskLookups({ world: baseWorld, events: baseEvents, chats: baseChats, game: baseGame }),
         fallback: () => curatorUnavailable(input.candidates),
         signal: projects?.signal,
@@ -7309,6 +7313,9 @@ const applySimulationResult = async ({
         variables: curatorVariables(input),
         ...jumpTaskOptions(requests, "review"),
       });
+      // Numbered: the breadth repair's supplemental events are curated too.
+      return checks ? checks.run(`timeline#${curatorCalls++}`, ask, fellBack) : ask();
+    };
 
   // The curator decides whether an event exists BEFORE impacts, chats, history
   // and persistence see it: the model judges each candidate against recent
@@ -7911,14 +7918,17 @@ const applySimulationResult = async ({
         // board does not move this turn; it never holds the turn, because the
         // only way to un-hold it would be another request.
         ? reviewedProjectOps({ review, visibleEvents: freshEvents, hiddenEvents: boardHiddenEvents, idMap: canonicalEventIdentity.idMap })
-        : await generateProjectOps(
+        // Kept with the turn's checks only so that retrying another check does
+        // not ask the board again; its own failure throws and holds the turn
+        // on the board (projectsHeld), as before.
+        : await boardCheck(() => generateProjectOps(
           // The LIVE world, not projects.bundle's pre-turn copy: the bundle was
           // read before the turn ran, so its board carries none of this turn's
           // impacts and none of the covert-operation sync just above.
           { ...projects.bundle, game: nextGame, world: worldWithImpacts },
           freshEvents,
           { signal: projects.signal, hiddenEvents: boardHiddenEvents, requests },
-        );
+        ));
       // The board was looked at this round, whatever it found (projects.js
       // boardPassReasons counts the quiet rounds from here).
       if (!skipped) worldWithImpacts = { ...worldWithImpacts, boardReviewedRound: nextGame.round };
@@ -8221,6 +8231,14 @@ const applySimulationResult = async ({
     chatsToWrite = nextChats;
   }
   for (const { from, to } of renamedPolities) chatsToWrite = renamePolityInChats(chatsToWrite, from, to);
+
+  // Every check a time skip made is in by now. One that failed holds the turn
+  // here, the last point where nothing is written, rather than landing it with
+  // that check's changes silently missing (turnChecks.js).
+  if (checksHoldTurn(checks)) {
+    logDebugEvent("turn", "Turn HELD: a check after the events failed, so nothing was written.", checks.failures());
+    throw checksHeldError(checks.failures());
+  }
 
   // Last moment before anything is persisted. Everything above is pure, so a
   // turn generated for a campaign the player has since left is simply lost here
@@ -14020,9 +14038,9 @@ const placeStructureOrders = async (payload, world, events, receipt = null) => {
 // placements are noted on `receipt` for the next turn. `sections` is a Scene's
 // list of checks, each also subject to its setting; a jump passes none and runs
 // the unit and territory Directors whatever the settings, as it always has.
-const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate = "", sections = null, receipt = null }) => {
+const directorAnalyzers = ({ bundle, review, signal, checks = null, requests = null, gameDate = "", sections = null, receipt = null }) => {
   const runs = (key) => !sections || (sections.includes(key) && requestSettings.reviewSection(key));
-  const asked = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
+  const ask = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
     lookups: buildTaskLookups(bundle),
     fallback,
     signal,
@@ -14030,30 +14048,41 @@ const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate =
     variables,
     ...jumpTaskOptions(requests, "review"),
   });
+  // Through the turn's checks when a time skip has them (turnChecks.js): a
+  // director that fell back holds the turn instead of leaving its changes out.
+  const asked = (key, taskKey, fallback, userMessage, variables) => (checks
+    ? checks.run(key, () => ask(taskKey, fallback, userMessage, variables), fellBack)
+    : ask(taskKey, fallback, userMessage, variables));
 
   const units = !runs("units") ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
-      : await asked("unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+      : await asked("units", "unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
     await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
     return answer;
   };
 
   const territory = !runs("territory") ? null : async (input) => (review
     ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
-    : asked("territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+    : asked("territory", "territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
 
   const structuresRun = sections ? runs("structures") : (review || requestSettings.reviewSection("structures"));
   const structures = !structuresRun ? null : async (input, events) => {
     const answer = review
       ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
-      : await asked("structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
+      : await asked("structures", "structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
         structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }));
     return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
   };
 
   return { units, territory, structures };
 };
+// Why a runJsonTask answer is the task's fallback rather than the model's, or
+// "" when the model answered (turnChecks.js failureOf).
+const fellBack = (answer) => (normalizeString(answer?.generation?.source) === "fallback"
+  ? normalizeString(answer.generation.fallbackReason) || "no usable answer"
+  : "");
+
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
   judgments: normalizeArray(candidates).map((event, index) => ({
@@ -14459,7 +14488,7 @@ const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state
   } catch (error) {
     if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new DOMException("Timeline jump cancelled.", "AbortError"));
     logDebugEvent("turn", "Queued-order outcome attribution failed; unanswered orders remain queued.", error, { problem: true });
-    return { plan, answer: null };
+    return { plan, answer: null, failed: error?.message || "the request failed" };
   } finally {
     idle.cancel();
   }
@@ -14513,17 +14542,17 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // about it, and again when the Directors run, because the order attribution
   // below may give an event its order only after the review.
   merged.events = markOrderedEvents(merged.events, context.bundle?.actions);
-  // A review the player chose to go without (retryPendingReviewJump) is taken
-  // as it came back, not asked again.
+  // Every check this finish asks, kept for the turn (turnChecks.js): a failed
+  // one holds the turn unwritten, and a retry asks only what failed.
+  const checks = state.checks ?? (state.checks = createTurnChecks());
   const review = state.requests?.saving
-    ? (state.acceptedReview ?? await runTurnReview({ context, merged, signal, state }))
+    ? await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure)
     : null;
-  // Nothing is written yet, so a review that did not come back holds the turn
-  // here, where everything a retry needs is in hand, rather than landing it
-  // with no unit moved, no ground taken and no board moved.
-  if (review && review !== state.acceptedReview && reviewNeedsRetry(review)) {
-    setPendingReviewJump({ context, state, review });
-    throw reviewHeldError(review);
+  // Held here rather than at the write when the one request is what failed:
+  // nothing after it has anything to go on.
+  if (checksHoldTurn(checks)) {
+    setPendingReviewJump({ context, state });
+    throw checksHeldError(checks.failures());
   }
 
   // A current order whose outcome event omitted actionIds gets one bounded
@@ -14531,7 +14560,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // legacy/non-saving mode asks only when needed. Native application accepts
   // exact ids/indexes only, then the normal curator sees the repaired actionIds
   // and protects a genuine order outcome from filler removal.
-  const standaloneActionReview = review ? null : await runStandaloneActionOutcomeReview({ context, merged, signal, state });
+  const standaloneActionReview = review ? null : await checks.run(
+    "actions",
+    () => runStandaloneActionOutcomeReview({ context, merged, signal, state }),
+    (answer) => answer?.failed || "",
+  );
   const actionPlan = review?.actionOutcomePlan ?? standaloneActionReview?.plan ?? null;
   const actionAnswer = review?.parts?.actions ?? standaloneActionReview?.answer ?? null;
   if (actionPlan && actionAnswer) {
@@ -14564,6 +14597,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       bundle,
       review,
       signal,
+      checks,
       requests: state.requests,
       gameDate: normalizeString(merged.stopDate) || context.targetDate,
       receipt: state.receipt,
@@ -14612,7 +14646,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // is where the arguments a retry needs are held.
   // `review` carries the turn review's answers (null when requests are not being
   // saved) and `requests` the skip's budget, for everything the apply still asks.
-  applyArgs.projects = { bundle, signal, review, requests: state.requests };
+  applyArgs.projects = { bundle, signal, review, requests: state.requests, checks };
   applyArgs.phases = state.phases;
   state.phases?.enter("applying");
   try {
@@ -14641,6 +14675,9 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
   } catch (error) {
     if (error?.projectsHeld) setPendingProjectsJump({ applyArgs });
+    // A check made inside the apply failed (the timeline clean-up): held by
+    // the checks, like the rest, so the same Retry and Continue answer it.
+    if (error?.reviewHeld) setPendingReviewJump({ context, state });
     throw error;
   }
 };
@@ -14840,20 +14877,22 @@ export const retryPendingJumpSegment = async ({ onEvents, onProgress, signal } =
   }
 };
 
-// Finish a turn held on its review (reviewHeldError). `withoutReview` takes the
-// turn as the failed review left it — every check leaves the turn as written,
-// as a failed review always did — and asks nothing. Otherwise the review alone
-// is asked again: the segments are in hand and are not regenerated. Re-holds
-// itself if the review fails again.
+// Finish a turn held on a failed check (turnChecks.js). `withoutReview` takes
+// the turn as the failed checks left it — each leaves the turn as written, as a
+// failed check always did — and asks nothing. Otherwise only the failed checks
+// are asked again: the segments are in hand and are not regenerated, and a
+// check that answered keeps its answer. Re-holds itself on another failure.
 export const retryPendingReviewJump = async ({ onProgress, signal, withoutReview = false } = {}) => {
   const held = getPendingReviewJump();
   if (!held) throw new Error("There is no turn waiting on its review.");
-  const { context, state, review } = held;
+  const { context, state } = held;
   beginSimulation();
   try {
     // Released before the attempt, so a turn can never be applied twice.
     setPendingReviewJump(null);
-    state.acceptedReview = withoutReview ? review : null;
+    // The checks that answered are given their answers back either way; the
+    // failed ones are asked again, or taken as they failed.
+    if (withoutReview) state.checks?.accept();
     // A fresh decision to spend, as a segment retry is: the held attempt spent
     // the budget's review request, and the apply still asks for its own.
     const spentSoFar = state.requests ?? { used: 0, refused: 0 };

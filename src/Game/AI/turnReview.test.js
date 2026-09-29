@@ -20,8 +20,7 @@ import {
     normalizeReviewJobs,
     readTurnReviewAnswer,
     remapBoardOps,
-    reviewHeldError,
-    reviewNeedsRetry,
+    reviewFailure,
     shareRepeatedBlocks,
 } from "./turnReview.js";
 
@@ -204,38 +203,31 @@ test("with nothing to map, nothing comes back", () => {
 
 // ---- A review that did not come back ------------------------------------------
 // It used to land the turn anyway, with nothing on the map moved for it and no
-// word to the player. These pin the cases that are not a judgment call; which
-// partial answers are worth holding a turn over is reviewNeedsRetry's to decide.
+// word to the player. A failure now holds the turn (turnChecks.js); a check
+// with nothing to change is not a failure.
 
 const review = (overrides = {}) => ({ asked: true, parts: {}, reasons: [], failure: null, missing: [], ...overrides });
 
-test("a review whose request failed holds the turn", () => {
-    const failed = review({ failure: new Error("503 The model is overloaded"), missing: ["units", "territory", "board"] });
-    assert.equal(Boolean(reviewNeedsRetry(failed)), true);
+test("a review whose request failed is a failure, and says why", () => {
+    const failed = review({ failure: new Error("503 The model is overloaded"), missing: ["units", "board"] });
+    assert.equal(reviewFailure(failed), "503 The model is overloaded");
 });
 
-test("a review that was never asked, or answered every job, does not hold the turn", () => {
-    assert.equal(Boolean(reviewNeedsRetry(review({ asked: false }))), false);
-    assert.equal(Boolean(reviewNeedsRetry(review({ parts: { units: {}, board: {} } }))), false);
+test("a review with a broken part is a failure, whichever job it was", () => {
+    assert.equal(reviewFailure(review({ missing: ["board"] })), "no usable answer for board");
+    assert.equal(reviewFailure(review({ missing: ["units", "territory"] })), "no usable answer for units, territory");
 });
 
-test("the held error is flagged for the UI and says what failed", () => {
-    const cause = new Error("The turn review timed out: the model stopped answering.");
-    const error = reviewHeldError(review({ failure: cause }));
-    assert.equal(error.reviewHeld, true);
-    assert.equal(error.cause, cause);
-    assert.match(error.message, /nothing has been saved yet/);
-    assert.match(error.message, /timed out/);
+test("a review never asked, or with every part usable, is not a failure", () => {
+    assert.equal(reviewFailure(review({ asked: false })), "");
+    // Nothing to change is an empty list in a present field: a usable part.
+    assert.equal(reviewFailure(review({ parts: { units: { eventOrders: [] }, board: { projectOps: [] } } })), "");
 });
 
-test("with no request error, the held error names the checks that came back empty", () => {
-    const error = reviewHeldError(review({ missing: ["units", "territory"] }));
-    assert.match(error.message, /no usable answer for units, territory/);
-    assert.equal(error.cause, null);
-});
-
-test("a map-moving job coming back empty holds the turn; the others fail open alone", () => {
-    assert.equal(reviewNeedsRetry(review({ missing: ["units"], parts: { board: {} } })), true);
-    assert.equal(reviewNeedsRetry(review({ missing: ["territory"] })), true);
-    assert.equal(reviewNeedsRetry(review({ missing: ["board", "timeline", "spies"], parts: { units: {} } })), false);
+test("every job's field is required, so a job with nothing to do still answers", () => {
+    const tool = buildTurnReviewTool([
+        { key: "units", title: "move the units", prompt: "u", schema: { type: "object" } },
+        { key: "board", title: "move the board", prompt: "b", schema: { type: "object" } },
+    ]);
+    assert.deepEqual(tool.schema.required, ["units", "board"]);
 });

@@ -1712,10 +1712,11 @@ const TimelineSkipPanel = ({
         )}
 
         {/* A HELD turn: the events are in hand and nothing is written, because
-            the review that moves the map with them (units, ground, structures,
-            the board, the agents' reports) did not come back. Before this the
-            turn landed anyway with none of that done and said nothing. Continue
-            takes it that way on purpose; Retry asks only the review again. */}
+            a check that moves the map with them (units, ground, structures, the
+            timeline, the board, the agents' reports) did not come back. Before
+            this the turn landed anyway with none of that done and said nothing.
+            Continue takes it that way on purpose; Retry asks only the failed
+            checks again. */}
         {reviewHeld && (
             <div
             style={{
@@ -2307,10 +2308,11 @@ const DateWidget = ({
     // How many times the failed segment has been retried for the jump currently
     // held — same reason as projectsRetries.
     const [segmentRetries, setSegmentRetries] = useState(0);
-    // A turn whose events are all in hand but whose turn review — the request
-    // that moves units, takes ground, builds structures and moves the board —
-    // did not come back. Nothing is written: the player retries the review,
-    // continues without it, or discards.
+    // A turn whose events are all in hand but one of whose checks — the turn
+    // review, or with Save AI requests off the unit, territory, structure,
+    // timeline or order check on its own — did not come back (AI/turnChecks.js).
+    // Nothing is written: the player retries the failed checks, continues
+    // without them, or discards.
     const [reviewHeld, setReviewHeld] = useState("");
     const [isRetryingReview, setIsRetryingReview] = useState(false);
     const [reviewRetries, setReviewRetries] = useState(0);
