@@ -1173,6 +1173,11 @@ const WorldMap = ({ isGlobe = false }) => {
       const [lng, lat] = hit.geometry?.coordinates ?? [event.lngLat.lng, event.lngLat.lat];
       const host = resolveRegionHit();
       const hostCountry = host?.owner || (host?.owner === "" ? "" : toCountryName(host?.gid0 ?? ""));
+      // The region under it, as a region click hands it over: the card's Region
+      // row opens that region's card (Selection/Features.jsx).
+      const hostRegion = host
+        ? { GID_0: hostCountry, COUNTRY: host.country, NAME_1: host.regionName, GID_1: host.regionId, gid0: host.gid0, owner: host.owner, lngLat: { lng, lat } }
+        : null;
       return hit.layer.id.startsWith("markers-shapes")
         ? {
           source: "marker",
@@ -1183,6 +1188,7 @@ const WorldMap = ({ isGlobe = false }) => {
           note: props.note || "",
           hostRegionId: host?.regionId || "",
           hostRegionName: host?.regionName || "",
+          hostRegion,
           lng,
           lat,
         }
@@ -1197,6 +1203,7 @@ const WorldMap = ({ isGlobe = false }) => {
           ownerCode: hostCountry,
           hostRegionId: host?.regionId || "",
           hostRegionName: host?.regionName || "",
+          hostRegion,
           lng,
           lat,
         };

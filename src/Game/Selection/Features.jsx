@@ -7,7 +7,7 @@ import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
-import { dismissRegionPopup } from "./Regions.jsx";
+import { dismissRegionPopup, onRegionSelected } from "./Regions.jsx";
 import { dismissUnitPopup } from "./Units.jsx";
 import { isSameFeatureSelection, useCardScreenPos } from "./mapCards.js";
 
@@ -18,7 +18,9 @@ let _dismiss = null;
 // Called by the map click dispatcher (Nations.jsx) when a city or a built
 // structure (world.markers) is clicked. The payload is everything the popup
 // shows — cities are stateless tile features, so it all rides the click:
-// { source: "city"|"marker", id?, name, kind?, population?, capital?, tier?, lng, lat }
+// { source: "city"|"marker", id?, name, kind?, population?, capital?, tier?, lng, lat,
+//   hostRegionName?, hostRegion? } — hostRegion is the region under it, as a
+//   region click hands it to onRegionSelected.
 export const onFeatureSelected = (payload) => {
   if (!_setSelection || !payload?.name) return;
 
@@ -232,6 +234,15 @@ const FeaturePopup = () => {
 
   const POPUP_WIDTH = 220;
 
+  // From a city or structure to the region under it, as a click on that
+  // region would open it (Nations.jsx hands over the region's selection).
+  const openHostRegion = () => {
+    const hostRegion = feature.hostRegion;
+    if (!hostRegion) return;
+    _dismiss?.();
+    onRegionSelected(hostRegion);
+  };
+
   return createPortal(
     <div
       key={animKey}
@@ -321,7 +332,25 @@ const FeaturePopup = () => {
           {!isCity && feature.updatedDate && feature.updatedDate !== feature.foundedAt ? (
             <DetailRow label="Last changed" value={feature.updatedDate} />
           ) : null}
-          <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
+          {/* The region it stands in, which leads on to that region's card;
+              coordinates only where there is none (a structure at sea). */}
+          {feature.hostRegionName ? (
+            <DetailRow
+              label="Region"
+              value={feature.hostRegion ? (
+                <button
+                  className="oh-tap-row"
+                  onClick={openHostRegion}
+                  title="Open the region's card"
+                  style={{ background: "none", border: "none", padding: 0, color: "#2bc1f3", cursor: "pointer", font: "inherit", textAlign: "right", textDecoration: "underline", wordBreak: "break-word" }}
+                >
+                  {feature.hostRegionName}
+                </button>
+              ) : feature.hostRegionName}
+            />
+          ) : (
+            <DetailRow label="Location" value={`${feature.lat.toFixed(2)}, ${feature.lng.toFixed(2)}`} />
+          )}
           {feature.note ? (
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,255,255,0.75)" }}>
               {feature.note}

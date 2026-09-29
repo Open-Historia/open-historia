@@ -336,6 +336,8 @@ The region card's control block (`regionControlStatus`) shows for a region that 
 
 The ⓘ beside the region's name (**Region info**) opens a section with the region's cities (with populations, capital and biggest first) and its neighbouring regions grouped by who holds them now. `Selection/regionInfo.js` answers the questions the AI's `region_info` lookup answers, from what the map already holds: the compact catalog the map primes (`getPrimedScenarioRegionCatalog`: declared adjacencies, else touching boxes; centroids) and the city rows it publishes for search (`getWorldPlaceIndex().cities`, with `world.cityRenames` applied). A city belongs to the region whose centre is nearest among those whose box holds it. No read and no request. A world whose map primes no catalog (stock tiles only) says it knows nothing more.
 
+The feature card (a city or a structure) names the **Region** it stands in. `featureAt` in `Nations.jsx` resolves the region under the glyph and hands it over as `hostRegionName` and `hostRegion` (the same selection a click on that region gives `onRegionSelected`); the row is a link that closes the feature card and opens the region's, which a tap beside a small dot on a phone rarely managed. Coordinates show only where there is no region (a structure at sea, or a place opened from search).
+
 ---
 
 ## 10. The decorative globe (`GlobeEffects.jsx`)
