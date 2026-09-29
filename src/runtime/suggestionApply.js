@@ -12,7 +12,7 @@
 
 import { normalizePackGuidance, PROMPT_MODEL_VERSION } from "../Game/AI/promptGuidance.js";
 import { normalizeFeatureSettings } from "../../server/gameFeatures.js";
-import { buildScenarioSnapshot, politicsEntries, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
+import { buildScenarioSnapshot, isDetailFieldPath, politicsEntries, POLITICS_FIELDS, POLITICS_LEDGER_KEYS, sameValue } from "./scenarioChanges.js";
 import { CANON_MODEL_VERSION } from "./scenarioCanon.js";
 
 const isRecord = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -126,6 +126,10 @@ export const buildDetailSave = (accepted, details) => {
 
   for (const change of Array.isArray(accepted) ? accepted : []) {
     if (change.area !== "details") continue;
+    // Reading a file already drops these (normalizeSuggestion); checked again
+    // here because each part becomes a key of the author's scenario.
+    if (change.kind === "field" && !isDetailFieldPath(change.path)) continue;
+    if (change.kind === "politics" && !POLITICS_FIELDS.includes(change.field)) continue;
     if (change.kind === "field") {
       const [area, key, setting] = change.path;
       if (area === "meta") patch[key] = change.to ?? "";

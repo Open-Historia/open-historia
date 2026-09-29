@@ -293,6 +293,25 @@ const GUIDANCE_PATHS = [
   ...["advisor", "leader"].flatMap((section) => (PROMPT_GUIDANCE[section] ?? []).map((seg) => `${section}.${seg.id}`)),
   ...Object.entries(PROMPT_GUIDANCE.tasks ?? {}).flatMap(([task, segments]) => segments.map((seg) => `tasks.${task}.${seg.id}`)),
 ];
+const GUIDANCE_PATH_SET = new Set(GUIDANCE_PATHS);
+
+// Whether a details field's path is one the diff below makes. A suggestion
+// file names its fields, and accepting one writes them as keys of the
+// author's scenario, so a file may name only these (normalizeSuggestion,
+// buildDetailSave): never the world whole, its storage or its provenance.
+export const isDetailFieldPath = (path) => {
+  if (!Array.isArray(path) || !path.every((part) => typeof part === "string")) return false;
+  const [area, key, setting] = path;
+  if (area === "meta") return path.length === 2 && META_FIELDS.includes(key);
+  if (area === "game") return path.length === 2 && GAME_FIELDS.includes(key);
+  if (area === "world") return path.length === 2 && WORLD_DETAIL_FIELDS.includes(key);
+  if (area === "features") {
+    const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === key);
+    return path.length === 3 && Boolean(definition) && (setting === "enabled" || definition.settings.some((entry) => entry.key === setting));
+  }
+  if (area === "prompts") return GUIDANCE_PATH_SET.has(path.slice(1).join("."));
+  return false;
+};
 
 const regionIdOf = (feature) => {
   const props = feature?.properties ?? {};
