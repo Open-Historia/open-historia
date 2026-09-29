@@ -8,7 +8,11 @@ const worker = fs.readFileSync(new URL("./polityBoundariesWorker.js", import.met
 const displayMesh = fs.readFileSync(new URL("./regionDisplayMesh.js", import.meta.url), "utf8");
 const displayMeshPolicy = fs.readFileSync(new URL("./regionDisplayMeshPolicy.js", import.meta.url), "utf8");
 const renderRepair = fs.readFileSync(new URL("./regionRenderRepair.js", import.meta.url), "utf8");
-const polityTextLayer = fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8");
+// The React component and the record sync it drives (polityTextSync.js).
+const polityTextLayer = [
+  fs.readFileSync(new URL("../labels/PolityTextLayer.jsx", import.meta.url), "utf8"),
+  fs.readFileSync(new URL("../labels/polityTextSync.js", import.meta.url), "utf8"),
+].join("\n");
 const polityTextCustomLayer = fs.readFileSync(new URL("../labels/polityTextCustomLayer.js", import.meta.url), "utf8");
 const polityTextPlacement = fs.readFileSync(new URL("../labels/polityTextPlacement.js", import.meta.url), "utf8");
 const polityTextRecords = fs.readFileSync(new URL("../labels/polityTextRecords.js", import.meta.url), "utf8");
@@ -310,7 +314,7 @@ test("mid-campaign PTR updates publish immediately, cancel stale solves, and ref
   assert.match(polityTextLayer, /onWorker\(worker, cancel\)/);
   assert.match(
     polityTextLayer,
-    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional\)/,
+    /if \(runtime\.layer && changedRecords\.length\) \{[\s\S]*optimizePlacement: false[\s\S]*publishPrepared\(provisional, changedKeys\)/,
   );
   assert.match(polityTextLayer, /placementTimeoutMs: initialMount \? 30000 : 4000/);
   assert.match(polityTextContinuity, /previousFingerprints\.get\(key\) !== fingerprint/);
