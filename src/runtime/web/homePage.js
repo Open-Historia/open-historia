@@ -6,6 +6,7 @@
 
 import { connectBestNode } from "./nodeConnect.js";
 import { CONNECT_DEADLINE_MS, isNativeApp } from "./nativeBoot.js";
+import { bootText, bootTranslated } from "./bootTexts.js";
 
 const ENTERED_KEY = "oh:entered";
 const FONTS_HREF = "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap";
@@ -49,7 +50,6 @@ const css = `
    * a 320px phone. */
   .oh-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--line2);border-radius:999px;
     white-space:nowrap;max-width:100%;font-size:clamp(.56rem,2.4vw,.82rem);color:var(--sepia);background:var(--marble2)}
-    .oh-badge b{color:#d4677a;font-weight:600}
     .oh-badge-icon{width:1.15em;height:1.15em;border-radius:3px;display:block;flex:none;object-fit:contain}
     .oh-logo{font-family:var(--display);font-weight:800;font-size:2.35rem;letter-spacing:.02em;line-height:1.05;margin:18px 0 0;color:var(--ink)}
     .oh-grad{background:var(--grad-gold);-webkit-background-clip:text;background-clip:text;color:transparent}
@@ -95,7 +95,6 @@ const css = `
       .oh-modal-box{max-width:520px;width:100%;background:var(--marble);border:1px solid var(--line2);border-top:4px solid var(--bronze);border-radius:12px;padding:24px 24px 20px;box-shadow:var(--shadow);text-align:left}
       .oh-modal-h{color:var(--ink);font-size:1.28rem;font-weight:700;margin:0 0 10px;font-family:var(--display);letter-spacing:.02em}
       .oh-modal-p{color:var(--sepia);font-size:.95rem;line-height:1.55;margin:0 0 11px}
-      .oh-modal-p b{color:var(--ink)}
       .oh-modal-p a{color:var(--bronze);text-decoration:underline}
       .oh-modal-acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
       .oh-modal-acts .oh-btn{flex:1 1 190px;margin:0;width:auto;display:flex;align-items:center;justify-content:center;text-align:center;text-decoration:none}
@@ -117,15 +116,15 @@ const css = `
         if (!connPanel) return;
         if (!c) {
           connPanel.replaceChildren(
-            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot" }), el("span", { className: "oh-conn-title", textContent: "Finding the nearest node…" })),
-                                    el("div", { className: "oh-conn-sub", textContent: "Locating the fastest community server with free capacity." }),
+            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot" }), el("span", { className: "oh-conn-title", textContent: bootText("homeFinding") })),
+                                    el("div", { className: "oh-conn-sub", textContent: bootText("homeFindingDetail") }),
           );
           return;
         }
         if (c.origin) {
           connPanel.replaceChildren(
-            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot origin" }), el("span", { className: "oh-conn-title", textContent: "Connected via the origin" })),
-                                    el("div", { className: "oh-conn-sub", textContent: "No community node is online right now — the world map streams from the project origin. You can play normally." }),
+            el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot origin" }), el("span", { className: "oh-conn-title", textContent: bootText("homeOrigin") })),
+                                    el("div", { className: "oh-conn-sub", textContent: bootText("homeOriginDetail") }),
           );
           return;
         }
@@ -133,12 +132,12 @@ const css = `
         connPanel.replaceChildren(
           // Anonymous node id only — never the operator's name — keeps hosters private.
           el("div", { className: "oh-conn-head" }, el("span", { className: "oh-dot ok" }),
-             el("span", { className: "oh-conn-title" }, "Connected to ", el("b", { textContent: c.id || "a node" }))),
+             el("span", { className: "oh-conn-title" }, bootText("homeConnectedTo"), " ", el("b", { textContent: c.id || "—" }))),
                                   el("div", { className: "oh-stats" },
-                                     statCell("Region", c.region || "—"),
-                                     statCell("Players", `${c.users}/${c.max}`)),
+                                     statCell(bootText("homeRegion"), c.region || "—"),
+                                     statCell(bootText("homePlayers"), `${c.users}/${c.max}`)),
                                   el("div", { className: "oh-bar" }, el("i", { style: `width:${pct}%` })),
-                                  el("div", { className: "oh-conn-sub", textContent: "The world map streams from this verified community node — every byte checksum-checked." }),
+                                  el("div", { className: "oh-conn-sub", textContent: bootText("homeNodeDetail") }),
         );
       };
 
@@ -178,23 +177,16 @@ const demoAcknowledged = () => {
         // dialog that traps someone who pressed Esc is worse than one that lets go.
         const onKey = (event) => { if (event.key === "Escape") close(); };
 
-        const go = el("button", { className: "oh-btn primary", textContent: "Play the demo anyway", onclick: close });
+        const go = el("button", { className: "oh-btn primary", textContent: bootText("demoPlay"), onclick: close });
         const modal = el("div", { className: "oh-modal" },
                          el("div", { className: "oh-modal-box" },
-                            el("h2", { className: "oh-modal-h", id: "oh-demo-h", textContent: "This is a demo of the game" }),
-                            el("p", { className: "oh-modal-p" },
-                               "Open Historia is meant to be played in the ",
-                               el("b", { textContent: "desktop app" }),
-                               ", which runs the world map from your own machine.",
-                            ),
-                            el("p", { className: "oh-modal-p" },
-                               "The browser version streams every map tile over the network, so expect ",
-                               el("b", { textContent: "noticeable lag" }),
-                               " — especially when zooming or panning. It is here to try the game, not to be the best way to play it.",
-                            ),
-                            el("p", { className: "oh-modal-p", textContent: "Either way, your games are saved on this device." }),
+                            el("h2", { className: "oh-modal-h", id: "oh-demo-h", textContent: bootText("demoTitle") }),
+                            // Whole sentences, each looked up whole: no emphasis inside them.
+                            el("p", { className: "oh-modal-p", textContent: bootText("demoDesktop") }),
+                            el("p", { className: "oh-modal-p", textContent: bootText("demoLag") }),
+                            el("p", { className: "oh-modal-p", textContent: bootText("demoSaved") }),
                             el("div", { className: "oh-modal-acts" },
-                               el("a", { className: "oh-btn ghost", href: "https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable", target: "_blank", rel: "noopener", textContent: "Get the desktop app" }),
+                               el("a", { className: "oh-btn ghost", href: "https://github.com/Open-Historia/open-historia/releases/tag/desktop-stable", target: "_blank", rel: "noopener", textContent: bootText("demoGetApp") }),
                                go,
                             ),
                          ),
@@ -202,6 +194,7 @@ const demoAcknowledged = () => {
         modal.setAttribute("role", "dialog");
         modal.setAttribute("aria-modal", "true");
         modal.setAttribute("aria-labelledby", "oh-demo-h");
+        if (bootTranslated()) modal.setAttribute("data-no-translate", "");
         document.addEventListener("keydown", onKey);
         document.body.append(modal);
         go.focus();
@@ -218,29 +211,31 @@ const demoAcknowledged = () => {
         renderConnection(null); // initial "finding…" state
         // Starts disabled: renderConnection enables it once a node (or the origin
         // fallback) is settled, so nobody can enter a half-connected session.
-        const play = el("button", { className: "oh-btn primary", textContent: "⚔  Enter Open Historia", onclick: () => showDemoNotice(enter) });
+        const play = el("button", { className: "oh-btn primary", textContent: `⚔  ${bootText("homeEnter")}`, onclick: () => showDemoNotice(enter) });
         play.disabled = true;
         playBtn = play;
         const foot = el("div", { className: "oh-foot" },
                         el("a", { href: "https://github.com/Open-Historia/open-historia", target: "_blank", rel: "noopener", textContent: "GitHub" }),
                         el("a", { href: "https://discord.gg/QaqAK7fQAg", target: "_blank", rel: "noopener", textContent: "Discord" }),
-                        el("a", { href: "https://github.com/Open-Historia/open-historia-node", target: "_blank", rel: "noopener", textContent: "Host a node" }),
+                        el("a", { href: "https://github.com/Open-Historia/open-historia-node", target: "_blank", rel: "noopener", textContent: bootText("homeHostNode") }),
         );
 
         const card = el("div", { className: "oh-card" },
                         el("span", { className: "oh-badge" },
                            el("img", { className: "oh-badge-icon", src: MARK_SRC, alt: "", width: 16, height: 16 }),
-                           "Free & open source · community-hosted alternative to ", el("b", { textContent: "Pax Historia" })),
+                           bootText("homeBadge")),
                         el("h1", { className: "oh-logo" }, "Open ", el("span", { className: "oh-grad", textContent: "Historia" })),
-                        el("p", { className: "oh-tag", textContent: "An AI-driven alternate-history strategy game. Lead any nation on a living world map and reshape history." }),
+                        el("p", { className: "oh-tag", textContent: bootText("homeTagline") }),
                         el("div", { className: "oh-rule" }),
                         connPanel,
                         el("div", { className: "oh-rule" }),
                         play,
-                        el("div", { className: "oh-trust", textContent: "Trust is in the checksum and the project signature — never in the node itself." }),
+                        el("div", { className: "oh-trust", textContent: bootText("homeTrust") }),
                         foot,
         );
         overlay = el("div", { className: "oh-home", id: "oh-home-root" }, card);
+        // Already in the player's language (index.js loaded the pack before this).
+        if (bootTranslated()) overlay.setAttribute("data-no-translate", "");
         document.body.append(overlay); // up immediately — no flash of the game behind
 
         // Connect to the best node in the background. Games live in this browser and

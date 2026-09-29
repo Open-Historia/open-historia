@@ -21,7 +21,9 @@ const shippedPackCache = new Map();
 // origin-rooted /lang/*.json is a 404 — and the catch below turns that into an
 // empty pack, so every language silently fell back to untranslated English with
 // no error. BASE_URL is "/" for the local server, so one path serves both builds.
-const loadShippedPack = async (code) => {
+// Exported for the first screens (index.js), which are drawn before the game's
+// translator runs and look their text up in the same pack.
+export const loadShippedPack = async (code) => {
   if (shippedPackCache.has(code)) return shippedPackCache.get(code);
   let pack = {};
   try {

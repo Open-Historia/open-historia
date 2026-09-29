@@ -261,7 +261,7 @@ A 20 s heartbeat re-selects a node if the current one goes draining/full/unreach
 
 ## 9. Home / connect screen (`homePage.js`)
 
-A full-screen parchment/Roman overlay injected over the already-mounted game on first entry per tab session (`sessionStorage["oh:entered"]`). Pure DOM (no React), scoped under `.oh-home`. It auto-connects the best node and renders live stats.
+A full-screen parchment/Roman overlay injected over the already-mounted game on first entry per tab session (`sessionStorage["oh:entered"]`). Pure DOM (no React), scoped under `.oh-home`. It auto-connects the best node and renders live stats. Its text, the demo notice's and the Android boot screen's come from `bootTexts.js`, looked up in the player's shipped language pack (see [i18n.md](i18n.md)).
 
 | Control | Behavior |
 |---|---|
@@ -321,6 +321,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | `src/runtime/web/retiredAccount.js` | one-time boot cleanup of a pre-removal sign-in |
 | `src/runtime/web/coverUrls.js` | covers as cached `blob:` object URLs |
 | `src/runtime/web/homePage.js` | entry/connect overlay |
+| `src/runtime/web/bootTexts.js` | the first screens' text, looked up in the player's language pack |
 | `src/runtime/web/contentTrust.js` | verified node-swarm content fetch |
 | `src/runtime/web/trust.js` | Ed25519 signed-manifest verification |
 | `src/runtime/web/nodeConnect.js` | node selection + heartbeat |

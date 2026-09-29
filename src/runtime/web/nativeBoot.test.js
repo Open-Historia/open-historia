@@ -74,6 +74,8 @@ test("showNativeBoot is inert without a document, and settling it is still safe"
   assert.equal(typeof boot.settle, "function");
   assert.doesNotThrow(() => boot.settle(null));
   assert.doesNotThrow(() => boot.settle({ origin: true }));
+  // index.js relabels it once the language pack has loaded.
+  assert.doesNotThrow(() => boot.relabel());
 });
 
 // The Android app since 2026-09 has the world inside the APK: its boot screen
