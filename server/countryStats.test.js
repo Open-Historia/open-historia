@@ -13,6 +13,7 @@ import {
   guardCountryStatContinuity,
   isCompleteCountryStatSheet,
   mergeCountryStatPatch,
+  mergeCountryStatsHistory,
   normalizeCountryStatSheet,
   normalizeCountryStatsTracking,
   parseStatNumber,
@@ -489,6 +490,29 @@ test("the drawn series runs to the current date without storing the extra point"
   assert.equal(stored.length, 1);
   assert.equal(withCurrentCountryStatSample(stored, { stability: 40 }, { date: "2014-01-01" }).length, 1);
   assert.equal(withCurrentCountryStatSample(stored, null, { date: "2016-01-01" }).length, 1);
+});
+
+test("samples recovered from rollback snapshots do not put unchanged copies back", () => {
+  const stored = {
+    Beta: [
+      { date: "2014-01-01", round: 1, stability: 40 },
+      { date: "2014-04-01", round: 4, stability: 35 },
+    ],
+  };
+  // One snapshot per turn: February and March read like January.
+  const recovered = {
+    Beta: [
+      { date: "2014-02-01", round: 2, stability: 40 },
+      { date: "2014-03-01", round: 3, stability: 40 },
+      { date: "2014-05-01", round: 5, stability: 30 },
+    ],
+  };
+  const merged = mergeCountryStatsHistory(stored, recovered);
+  assert.deepEqual(merged.Beta.map((sample) => [sample.date, sample.stability]), [
+    ["2014-01-01", 40],
+    ["2014-04-01", 35],
+    ["2014-05-01", 30],
+  ]);
 });
 
 test("tracking settings are bounded and the player joins the tracked list only with an interval", () => {

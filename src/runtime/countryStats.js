@@ -1300,12 +1300,19 @@ export const withCurrentCountryStatSample = (seriesInput, sheet, { date = "", ro
   return [...series, current];
 };
 
+// Merged series keep one sample per reading too: a sample that reads like the
+// one before it is dropped, as appendHistorySample would. Otherwise samples
+// recovered from rollback snapshots (one per turn) put back the unchanged
+// copies the stored history no longer keeps.
+const withoutRepeatedReadings = (series) => series.filter((sample, index) =>
+  index === 0 || historySampleValues(series[index - 1]) !== historySampleValues(sample));
+
 export const mergeCountryStatsHistory = (...values) => {
   let out = {};
   for (const value of values) {
     const normalized = normalizeCountryStatsHistory(value);
     for (const [polity, samples] of Object.entries(normalized)) {
-      out[polity] = normalizeHistorySeries([...(out[polity] || []), ...samples]);
+      out[polity] = withoutRepeatedReadings(normalizeHistorySeries([...(out[polity] || []), ...samples]));
     }
   }
   return out;
