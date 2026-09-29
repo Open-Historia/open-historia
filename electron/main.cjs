@@ -361,6 +361,22 @@ const missingAssets = () => {
   });
 };
 
+// The fetcher reports a file it could not get only on stderr ("[warn] could not
+// download ..."), and a packaged app shows no console, so each line goes to the
+// Desktop log a player sends with a report.
+const logFetcherStderr = (child, event) => {
+  let pending = "";
+  child.stderr.on("data", (chunk) => {
+    pending += chunk.toString();
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) logMain("warn", event, line.trim());
+  });
+  child.stderr.on("end", () => {
+    if (pending.trim()) logMain("warn", event, pending.trim());
+  });
+};
+
 // Runs the existing fetcher as a child process and turns its --progress lines
 // into window progress. ELECTRON_RUN_AS_NODE makes our own binary behave as
 // plain Node, so the player never needs Node installed.
@@ -371,6 +387,7 @@ const downloadMapData = (onProgress) =>
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
+    logFetcherStderr(child, "map.download");
     let buffer = "";
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString();
@@ -403,7 +420,7 @@ const verifyMapData = () => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr.on("data", (chunk) => console.warn(`[map-verify] ${String(chunk).trim()}`));
+  logFetcherStderr(child, "map.verify");
   child.on("error", () => {});
 };
 
@@ -412,13 +429,21 @@ const verifyMapData = () => {
 const createSetupWindow = () =>
   new BrowserWindow({
     width: 560,
-    height: 320,
+    height: 360,
     resizable: false,
     // No menu bar, no dev chrome — this is a setup dialog, not a browser.
     autoHideMenuBar: true,
     backgroundColor: "#131315",
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs") },
+  });
+
+// After a download that left files missing, the setup window offers "Try
+// again" or "Continue without the map"; resolves with "retry" or "continue".
+// Closing the window instead quits the app, as it always has.
+const waitForSetupChoice = () =>
+  new Promise((resolve) => {
+    ipcMain.handleOnce("setup:choice", (_event, choice) => resolve(choice === "retry" ? "retry" : "continue"));
   });
 
 // Electron builds NO context menu on its own — a right-click just does
@@ -644,11 +669,13 @@ const startServer = async () => {
 const boot = async () => {
   installAutoUpdater();
   relocateLegacyStockMap();
-  const pending = missingAssets();
-  if (pending.length) {
-    setupWindow = createSetupWindow();
-    await setupWindow.loadFile(path.join(__dirname, "setup.html"));
-    setupWindow.show();
+  let pending = missingAssets();
+  while (pending.length) {
+    if (!setupWindow) {
+      setupWindow = createSetupWindow();
+      await setupWindow.loadFile(path.join(__dirname, "setup.html"));
+      setupWindow.show();
+    }
     const totalBytes = pending.reduce((sum, asset) => sum + asset.bytes, 0);
     let doneBytes = 0;
     let currentAsset = "";
@@ -664,7 +691,22 @@ const boot = async () => {
         assetTotal: total,
       });
     });
-    setupWindow?.webContents.send("setup:done");
+    // The fetcher always exits 0 (it must never block a launch or an update),
+    // so whether the download worked is read off the disk. A player who hit a
+    // network blip used to be sent into a blank world with no word about it.
+    pending = missingAssets();
+    if (!pending.length) {
+      setupWindow?.webContents.send("setup:done");
+      break;
+    }
+    logMain("warn", "map.incomplete", `${pending.length} map file(s) still missing after the download.`, {
+      assets: pending.map((asset) => asset.asset),
+    });
+    setupWindow?.webContents.send("setup:failed", { missing: pending.length });
+    if ((await waitForSetupChoice()) !== "retry") {
+      setupWindow?.webContents.send("setup:done");
+      break;
+    }
   }
 
   await startServer();

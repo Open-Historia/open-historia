@@ -25,7 +25,7 @@ const MANIFEST = JSON.parse(fs.readFileSync(new URL("../scripts/map-assets.json"
 
 const source = fs.readFileSync(new URL("../electron/main.cjs", import.meta.url), "utf8");
 const start = source.indexOf("const assetTarget = (assetPath) => {");
-const end = source.indexOf("// Runs the existing fetcher as a child process");
+const end = source.indexOf("// The fetcher reports a file it could not get");
 assert.ok(start !== -1 && end > start, "could not find the map-data helpers in electron/main.cjs");
 const desktop = ({ assetsDir, dataDir, userRoot, manifestPath }) => new Function(
   "path", "fs", "ASSETS_DIR", "DATA_DIR", "USER_ROOT", "MANIFEST",
@@ -143,4 +143,75 @@ test("run as a script, it honours OH_ASSETS_DIR and OH_DATA_DIR and still exits 
   assert.match(run.stderr, /could not download regions-z8\.pmtiles|could not download regions\.pmtiles/);
   assert.match(run.stderr, /offline test/);
   assert.equal(fs.existsSync(path.join(layout.userRoot, "public")), false);
+});
+
+// A response that arrives in `parts` chunks, the way a real download does.
+const chunked = (text, parts) => {
+  const bytes = Buffer.from(text);
+  const size = Math.ceil(bytes.length / parts);
+  let at = 0;
+  return new Response(new ReadableStream({
+    pull(controller) {
+      if (at >= bytes.length) return controller.close();
+      controller.enqueue(new Uint8Array(bytes.subarray(at, at + size)));
+      at += size;
+    },
+  }));
+};
+
+test("--progress streams the file and reports it in the lines the setup window reads", async (t) => {
+  const dir = tempDir(t);
+  const text = "x".repeat(1000);
+  const asset = { path: "public/assets/regions.pmtiles", asset: "regions-z8.pmtiles", bytes: 1000, sha256: sha(text) };
+  const lines = [];
+  let clock = 0;
+  const result = await syncMapAssets({
+    manifest: { owner: "o", repo: "r", release: "map-data", assets: [asset] },
+    root: dir,
+    progress: true,
+    progressEveryMs: 250,
+    now: () => (clock += 100),
+    fetchImpl: async () => chunked(text, 20),
+    log: (line) => lines.push(line),
+    warn: () => {},
+  });
+  assert.equal(result.downloaded, 1);
+  assert.equal(fs.readFileSync(path.join(dir, "public", "assets", "regions.pmtiles"), "utf8"), text);
+
+  const reports = lines.filter((line) => line.startsWith("@progress ")).map((line) => JSON.parse(line.slice("@progress ".length)));
+  // The shape electron/main.cjs destructures: { asset, received, total }.
+  for (const report of reports) assert.deepEqual(Object.keys(report).sort(), ["asset", "received", "total"]);
+  assert.deepEqual(reports[0], { asset: "regions-z8.pmtiles", received: 0, total: 1000 });
+  assert.deepEqual(reports.at(-1), { asset: "regions-z8.pmtiles", received: 1000, total: 1000 });
+  const between = reports.slice(1, -1);
+  assert.ok(between.length > 0, "progress is reported while the file arrives");
+  assert.ok(between.length < 20, "throttled, not one line per chunk");
+  assert.ok(between.every((report, index) => index === 0 || report.received > between[index - 1].received));
+});
+
+test("without --progress no progress lines are printed", async (t) => {
+  const dir = tempDir(t);
+  const release = fakeRelease({ "public/assets/cities.pmtiles": "cities" });
+  const lines = [];
+  await syncMapAssets({ manifest: release.manifest, root: dir, fetchImpl: release.fetchImpl, log: (line) => lines.push(line), warn: () => {} });
+  assert.equal(lines.some((line) => line.startsWith("@progress")), false);
+});
+
+test("a download that fails its checksum leaves nothing behind and is reported", async (t) => {
+  const dir = tempDir(t);
+  const asset = { path: "public/assets/regions.pmtiles", asset: "regions.pmtiles", bytes: 5, sha256: sha("right") };
+  const warnings = [];
+  const lines = [];
+  const result = await syncMapAssets({
+    manifest: { owner: "o", repo: "r", release: "map-data", assets: [asset] },
+    root: dir,
+    progress: true,
+    fetchImpl: async () => new Response("wrong"),
+    log: (line) => lines.push(line),
+    warn: (line) => warnings.push(line),
+  });
+  assert.deepEqual([result.downloaded, result.failed], [0, 1]);
+  assert.deepEqual(fs.readdirSync(path.join(dir, "public", "assets")), []);
+  assert.match(warnings.join("\n"), /could not download regions\.pmtiles \(checksum mismatch\)/);
+  assert.equal(lines.some((line) => line.includes('"received":5')), false, "no finished line for a failed file");
 });
