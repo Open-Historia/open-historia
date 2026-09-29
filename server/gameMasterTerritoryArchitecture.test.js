@@ -28,7 +28,12 @@ test("GM Preview primes the compact scenario catalog from its one authoritative 
   const end = source.indexOf("// Without a catalog", start);
   assert.ok(start >= 0 && end > start);
   const branch = source.slice(start, end);
-  assert.match(branch, /readJson\(JSON_URLS\.regionsGeojson/);
+  // One read per validation pass, shared by both resolver calls and the
+  // placement gazetteer (createRenderedRegionsReader).
+  assert.match(branch, /await \(renderedRegions \?\? createRenderedRegionsReader\(\)\)\(\)/);
+  const readerStart = source.indexOf("const createRenderedRegionsReader");
+  assert.ok(readerStart >= 0);
+  assert.match(source.slice(readerStart, source.indexOf("const resolveRegionTransfers", readerStart)), /readJson\(JSON_URLS\.regionsGeojson/);
   assert.match(branch, /primeCustomRegionCatalog\(renderedRegionsGeojson/);
   assert.match(branch, /renderedCatalog\.length > 0\s*\? \[\]\s*:\s*await loadRegionCatalog/s,
     "stock/merged catalog work should be fallback-only when rendered scenario geography exists");
