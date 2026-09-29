@@ -340,6 +340,7 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
+import { describeIntelligenceStanding, describeReputationStanding } from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import {
   getPoliticalProfile,
@@ -573,25 +574,16 @@ const readStoredStatSheets = () => {
 };
 
 // International reputation the AI evolves each turn (world.internationalReputation),
-// surfaced to prompts. Falls back to the last stat sheet the player viewed, then a
-// neutral 50 — so it is never "unknown".
+// surfaced to prompts (standingContext.js): the player's, falling back to its
+// Stats sheet, then the last stat sheet the player viewed, then a neutral 50 — so
+// it is never "unknown" — and every other polity's the AI has recorded, which the
+// tasks writing polityChanges.reputation need to move from.
 const buildPlayerPolityReputationText = async (bundle) => {
   const playerCode = normalizeString(bundle.game.country);
-  if (!playerCode) {
-    return "No player polity is currently set.";
-  }
   const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
-  let reputation = Number(world.internationalReputation?.[playerCode]);
-  if (!Number.isFinite(reputation)) {
-    const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
-    reputation = Number(readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet?.indices?.internationalReputation);
-  }
-  if (!Number.isFinite(reputation)) {
-    reputation = 50;
-  }
-  const clamped = Math.max(0, Math.min(100, Math.round(reputation)));
-  const band = clamped >= 70 ? "well-regarded" : clamped >= 40 ? "mixed" : "poor";
-  return `International reputation: ${clamped}/100 (${band}).`;
+  const gameKey = normalizeString(bundle.game.id || bundle.game.name || "game");
+  const viewed = playerCode ? readStoredStatSheets()[`${gameKey}:${playerCode}`]?.sheet?.indices?.internationalReputation : null;
+  return describeReputationStanding(world, playerCode, { fallback: viewed });
 };
 
 // ---- Canonical war and diplomacy ledgers ------------------------------------
@@ -1601,32 +1593,9 @@ const buildGameMasterStorylineContext = (worldLike) => {
 // real saves not one event had ever set it, while reputation (which does get a
 // block like this) moved normally.
 //
-// Unrated is "ordinary", not "none": every polity runs a service whether or not
-// the AI has ever put a number on it (spycraft.js DEFAULT_INTELLIGENCE).
-const buildPlayerPolityIntelligenceText = (bundle) => {
-  const playerCode = normalizeString(bundle.game.country);
-  if (!playerCode) {
-    return "";
-  }
-  const world = bundle.world && typeof bundle.world === "object" ? bundle.world : {};
-  const rating = intelligenceOf(world, playerCode);
-  const band = rating >= 75 ? "formidable" : rating >= 55 ? "capable" : rating >= 35 ? "ordinary" : "weak";
-  const lines = [`${playerCode}'s intelligence service: ${rating}/100 (${band}).`];
-
-  // Only services the AI has actually rated. Every other polity is ordinary by
-  // definition, and listing two hundred identical defaults would bury the few
-  // that carry a real judgement.
-  const rated = Object.entries(world.intelligence ?? {})
-    .map(([code, value]) => [normalizeString(code), Number(value)])
-    .filter(([code, value]) => code && code !== playerCode && Number.isFinite(value))
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 8);
-  if (rated.length > 0) {
-    lines.push(`Other rated services: ${rated.map(([code, value]) => `${code} ${Math.round(value)}/100`).join(", ")}.`);
-  }
-
-  return lines.join("\n");
-};
+// The text is standingContext.js's, which the advisor reads too.
+const buildPlayerPolityIntelligenceText = (bundle) =>
+  describeIntelligenceStanding(bundle.world && typeof bundle.world === "object" ? bundle.world : {}, normalizeString(bundle.game.country));
 
 const gameMasterPoliticalActorReferenceContext = (worldLike, request = "", playerPolity = "") => {
   const world = normalizeWorldState(worldLike);
