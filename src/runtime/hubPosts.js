@@ -29,6 +29,16 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export const hubPostUrl = (postId) => `${HUB_URL}/issues/${Number(postId)}`;
 
+// The post a player means by what they pasted into Link my post: its address
+// (a comment's #anchor, a trailing slash or a ?query after the number are
+// fine) or its bare number. null for anything else.
+export const postIdFromInput = (value) => {
+  const text = String(value ?? "").trim();
+  const match = /\/issues\/(\d+)(?=[/?#]|$)/.exec(text) || /^#?(\d+)$/.exec(text);
+  const postId = match ? Number(match[1]) : 0;
+  return Number.isSafeInteger(postId) && postId > 0 ? postId : null;
+};
+
 // First GitHub-hosted .json (release asset, attachment or raw) link in an issue
 // body = the bundle. Release links come first in official posts so imports go
 // through the download-counted URL; the raw mirror below it serves old clients.

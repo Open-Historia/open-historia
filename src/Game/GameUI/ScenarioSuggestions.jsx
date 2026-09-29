@@ -25,7 +25,7 @@ import {
 } from "../../runtime/library.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
-import { downloadHubBundle, downloadHubFile, hubPostUrl } from "../../runtime/hubPosts.js";
+import { downloadHubBundle, downloadHubFile, hubPostUrl, postIdFromInput } from "../../runtime/hubPosts.js";
 import { buildScenarioSnapshot, changedPathsOf, countChanges, diffScenarioBundles } from "../../runtime/scenarioChanges.js";
 import {
   buildSuggestion,
@@ -860,6 +860,7 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
   const touch = useTouchPrimary();
   const [postInput, setPostInput] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
+  const [linkError, setLinkError] = useState("");
   const [showReviewed, setShowReviewed] = useState(false);
   const fileRef = useRef(null);
   if (!scenario) return null;
@@ -877,12 +878,15 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
   }, new Map())].sort((a, b) => b[1].length - a[1].length);
   const blocked = published?.blocked ?? [];
   const linkPost = () => {
-    const match = /(?:issues\/)?#?(\d{1,7})\s*$/.exec(postInput.trim());
-    if (match) {
-      onLinkPost?.(Number(match[1]));
-      setPostInput("");
-      setLinkOpen(false);
+    const postId = postIdFromInput(postInput);
+    if (!postId) {
+      setLinkError("That is not a post's address or number.");
+      return;
     }
+    onLinkPost?.(postId);
+    setPostInput("");
+    setLinkError("");
+    setLinkOpen(false);
   };
   return (
     <div style={{ ...cardStyle, display: "grid", gap: "0.8rem" }}>
@@ -997,12 +1001,13 @@ export const ScenarioCommunityCard = ({ scenario, busy, onSuggest, onUnlink, onR
               <input
                 style={{ ...inputStyle, flex: "1 1 14rem", width: "auto" }}
                 value={postInput}
-                onChange={(event) => setPostInput(event.target.value)}
+                onChange={(event) => { setPostInput(event.target.value); setLinkError(""); }}
                 onKeyDown={(event) => { if (event.key === "Enter") linkPost(); }}
                 placeholder="The post's address, or its number"
               />
               <button type="button" className="oh-tap-row" onClick={linkPost} style={tapFit(primaryButtonStyle, touch)}>Link</button>
-              <button type="button" className="oh-tap-row" onClick={() => setLinkOpen(false)} style={tapFit(buttonStyle, touch)}>Cancel</button>
+              <button type="button" className="oh-tap-row" onClick={() => { setLinkOpen(false); setLinkError(""); }} style={tapFit(buttonStyle, touch)}>Cancel</button>
+              {linkError ? <div style={{ ...quietTextStyle, color: "#fecaca", flexBasis: "100%" }}>{linkError}</div> : null}
             </div>
           ) : (
             <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>

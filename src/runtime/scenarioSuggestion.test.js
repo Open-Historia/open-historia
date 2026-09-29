@@ -14,7 +14,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parsePost, parseSuggestionComment, refreshPublishedRecord } from "./hubPosts.js";
+import { parsePost, parseSuggestionComment, postIdFromInput, refreshPublishedRecord } from "./hubPosts.js";
 import {
   KNOWN_KINDS,
   SUGGESTION_SCHEMA,
@@ -189,4 +189,19 @@ test("every kind of change has a line in the comment", () => {
   }
   const comment = buildSuggestionComment({ id: "sug-1", note: "", changes: [{ id: "institutionLogos", area: "details", kind: "institutionLogos" }] });
   assert.match(comment, /^- Institution logos changed$/m);
+});
+
+test("Link my post reads the post's number from its address, however it was copied", () => {
+  const post = "https://github.com/Open-Historia/Open-historia-scenarios/issues/412";
+  assert.equal(postIdFromInput(post), 412);
+  assert.equal(postIdFromInput(`${post}#issuecomment-2345678901`), 412, "a comment's anchor is not the post's number");
+  assert.equal(postIdFromInput(`${post}/`), 412);
+  assert.equal(postIdFromInput(`${post}?utm_source=x`), 412);
+  assert.equal(postIdFromInput(`  ${post}  `), 412);
+  assert.equal(postIdFromInput("412"), 412);
+  assert.equal(postIdFromInput("#412"), 412);
+  assert.equal(postIdFromInput(""), null);
+  assert.equal(postIdFromInput("my post"), null);
+  assert.equal(postIdFromInput("0"), null);
+  assert.equal(postIdFromInput(`${post}abc`), null);
 });
