@@ -179,7 +179,7 @@ const KIND_LABELS = Object.freeze({
   territory: "territory",
   groups: "groups",
   puppets: "puppet states",
-  polity:"country editor",
+  polity: "country editor",
   stats: "statistics",
   feature: "map features",
   timeline: "event editor",
