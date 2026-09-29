@@ -227,6 +227,10 @@ Heavy map tiles never touch IndexedDB by default; they stream from the network. 
 3. For each candidate node (connected node first, then a per-asset rotation): `GET <node>/oh/v1/content/<sha256>`, reject on wrong byte length, **recompute SHA-256 and compare** — a tampered node is skipped with a warning.
 4. Return the verified `ArrayBuffer`, or `null` so the caller uses the canonical origin.
 
+### Where the manifest comes from
+
+`public/content-manifest.json` describes the files the **website** fetches by release-asset name through the Worker's `/content` proxy, listed in `scripts/map-assets.web.json` (the full `regions.pmtiles` / `countries.pmtiles`, `cities.pmtiles`, and the web-sized seeds). It is not the desktop list (`scripts/map-assets.json`), whose files differ in size. `node scripts/build-content-manifest.mjs` rebuilds it from the web list; when nothing changed it leaves the file byte-for-byte alone (the signature stays valid), otherwise it drops `keyid`/`issued`/`expires` and prints the `sign-release.mjs --stamp` command to run. `scripts/populate-node.mjs` fills a node from the same list, reading the files by release name from `OH_NODE_SOURCE_DIR` (default `public/assets`). `server/contentManifest.test.js` fails when the web list and the committed manifest drift apart, or when two lists give one release asset different bytes.
+
 ### Node directory: signed control doc + live addresses
 
 `loadDirectoryNodes()` (`contentTrust.js:88`) combines two sources:
