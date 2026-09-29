@@ -74,7 +74,12 @@ export const buildInstitutionDrafts = (raw, problems = []) => {
       reason: clean(entry.reason).slice(0, 1200),
     };
   }).filter(Boolean);
-  if (drafts.length > MAX_DRAFTS) problems.push(`only the first ${MAX_DRAFTS} usable entries get a button; ${drafts.length - MAX_DRAFTS} more were left out`);
+  if (drafts.length > MAX_DRAFTS) {
+    const extra = drafts.length - MAX_DRAFTS;
+    problems.push(extra === 1
+      ? `only the first ${MAX_DRAFTS} usable entries get a button; 1 more was left out`
+      : `only the first ${MAX_DRAFTS} usable entries get a button; ${extra} more were left out`);
+  }
   return drafts.slice(0, MAX_DRAFTS);
 };
 

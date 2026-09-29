@@ -176,7 +176,7 @@ test("an institution draft of an unknown type, or past the eighth, is reported",
   assert.equal(drafts.length, 8);
   assert.match(problems[0], /entry 1 had the type "dissolve"/);
   assert.match(problems[1], /entry 2 had the choice "maybe"/);
-  assert.match(problems[2], /only the first 8 usable entries get a button; 1 more were left out/);
+  assert.match(problems[2], /only the first 8 usable entries get a button; 1 more was left out/);
 });
 
 // ── parseAdvisorReply ────────────────────────────────────────────────────────
