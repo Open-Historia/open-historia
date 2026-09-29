@@ -77,6 +77,15 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | DELETE | `/api/games/:gameId` | Soft-delete a game to `.trash` | `server/server.js:427` |
 | DELETE | `/api/games/:gameId/assets/:assetKey` | Remove one game upload asset | `server/server.js:435` |
 
+### Trash (loopback only)
+| Method | Path | Purpose | Handler |
+| --- | --- | --- | --- |
+| GET | `/api/trash` | What delete moved to `.trash`: `{ entries: [{ entry, kind, id, name, scenarioId?, deletedAt, bytes }] }`, newest first (`listTrash`) | `server/server.js` |
+| POST | `/api/trash/:entry/restore` | Put one entry back under its old id, or the next free one if that id was reused; → `{ id, kind, library }` (`restoreFromTrash`) | `server/server.js` |
+| DELETE | `/api/trash` | Delete every entry for good; → `{ removed, bytes }` (`emptyTrash`) | `server/server.js` |
+
+A 403 from anywhere but the machine running the server. Nothing in the app calls these yet: the library has no Recently deleted shelf, nothing purges old entries, and the web store still deletes records outright (`idbDelete`).
+
 ### Runtime (what the running game polls)
 | Method | Path | Purpose | Handler |
 | --- | --- | --- | --- |
@@ -157,7 +166,7 @@ server/data/
   lang/<code>.json               # runtime-saved translations (survive app updates)
   hub-cache/<sha256>.body|.type  # cached hub bundle downloads
   import-pings/<sha256>          # one-per-scenario import telemetry markers
-  .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games (recoverable by hand)
+  .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games, each with a .deleted.json marker (/api/trash)
 ```
 
 Key path constants live at `server/libraryStore.js:19-35`: `SCENARIOS_DIR`, `GAMES_DIR`, `SCENARIO_MANIFEST_PATH`, `GAME_MANIFEST_PATH`, `DATA_ASSETS_DIR`, plus the read-only source roots `DIST_DIR`/`PUBLIC_DIR` and `PMTILES_ASSETS_DIR = public/assets`.
@@ -316,7 +325,7 @@ export const DATA_DIR = process.env.OH_DATA_DIR
   : path.join(__dirname, "data");   // server/data
 ```
 
-Every store imports this one constant, so a single env var relocates **all** writable state. Desktop and Termux leave it unset and use `server/data` (byte-identical to how they've always worked). The **embedded Android server** runs `server.js` in-process via `nodejs-mobile`, where the `server/data` shipped inside the APK is **read-only**; the app sets `OH_DATA_DIR` to a writable sandbox path, seeds first-run defaults there, and downloads PMTiles into `OH_DATA_DIR/assets` (which `resolveRuntimeBinaryAsset` prefers over the read-only shipped copies). Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged over* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root, and an updated pack replaces the older AI translations of the strings it covers.
+Every store imports this one constant, so a single env var relocates **all** writable state. The standalone local server and Termux leave it unset and use `server/data`. The desktop app (`electron/main.cjs`) sets it to `<userData>/server/data`, so a desktop install's saves — and its `.trash` — live there, not under `server/data`. The **embedded Android server** runs `server.js` in-process via `nodejs-mobile`, where the `server/data` shipped inside the APK is **read-only**; the app sets `OH_DATA_DIR` to a writable sandbox path, seeds first-run defaults there, and downloads PMTiles into `OH_DATA_DIR/assets` (which `resolveRuntimeBinaryAsset` prefers over the read-only shipped copies). Shipped-but-updatable content (`dist|public/lang/*.json`) stays under the app root and is *merged over* the writable `DATA_DIR/lang/*.json`, so runtime translations survive app updates that overwrite the app root, and an updated pack replaces the older AI translations of the strings it covers.
 
 ### Environment variables
 | Var | Default | Effect |

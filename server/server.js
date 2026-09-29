@@ -12,6 +12,7 @@ import {
   createScenario,
   deleteGame,
   deleteScenario,
+  emptyTrash,
   ensureGameStore,
   ensureScenarioStore,
   exportGameBundle,
@@ -23,6 +24,8 @@ import {
   getScenarioDetails,
   importGameBundle,
   importScenarioBundle,
+  listTrash,
+  restoreFromTrash,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
@@ -818,6 +821,42 @@ app.delete("/api/games/:gameId", (req, res) => {
     res.json(deleteGame(req.params.gameId));
   } catch (error) {
     sendError(res, 400, error);
+  }
+});
+
+// What delete moved to .trash: listed, restored and emptied from this machine
+// only. The trash holds whole saves, and restoring or destroying them is for
+// the person at the computer, not for whoever else is on the network.
+const refuseRemoteTrash = (req, res) => {
+  if (isLoopbackAddress(req.socket?.remoteAddress)) return false;
+  sendError(res, 403, new Error("Only the machine running the server can use its trash."));
+  return true;
+};
+
+app.get("/api/trash", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json({ entries: listTrash() });
+  } catch (error) {
+    sendError(res, 500, error);
+  }
+});
+
+app.post("/api/trash/:entry/restore", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json(restoreFromTrash(req.params.entry));
+  } catch (error) {
+    sendError(res, 400, error);
+  }
+});
+
+app.delete("/api/trash", (req, res) => {
+  if (refuseRemoteTrash(req, res)) return;
+  try {
+    res.json(emptyTrash());
+  } catch (error) {
+    sendError(res, 500, error);
   }
 });
 

@@ -2540,9 +2540,12 @@ const updateGame = (
   return getGameDetails(gameId);
 };
 
-// Soft-delete: move a scenario/game directory into server/data/.trash instead
+// Soft-delete: move a scenario/game directory into <data dir>/.trash instead
 // of unlinking it, so an accidental delete (or, before the traversal fix, a
-// malicious one) is recoverable — the user can restore or empty .trash by hand.
+// malicious one) is recoverable. On desktop the data dir is
+// <userData>/server/data (OH_DATA_DIR), so .trash sits there. listTrash,
+// restoreFromTrash and emptyTrash below are how it is listed, restored and
+// emptied; before them only someone who knew the folder layout could.
 const TRASH_DIR = path.join(SERVER_DATA_DIR, ".trash");
 
 // Synchronous pause for the retry loops below — the delete handler is sync
@@ -2570,6 +2573,7 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       fs.renameSync(sourceDir, dest);
+      markTrashEntry(dest, kind, id);
       return;
     } catch (error) {
       if (!["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) throw error;
@@ -2586,6 +2590,7 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
   try {
     fs.cpSync(sourceDir, dest, { recursive: true });
     fs.rmSync(sourceDir, { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+    markTrashEntry(dest, kind, id);
   } catch (error) {
     throw new Error(
       `Windows is blocking the delete of "${id}" — another program holds its files open ` +
@@ -2593,6 +2598,116 @@ const moveDirectoryToTrash = (sourceDir, kind, id) => {
         `then delete again. (${error?.code || renameError?.code || "EPERM"})`,
     );
   }
+};
+
+// What was deleted and when, beside it in its trash entry: the entry's own name
+// is a sanitised id with a collision suffix, and a directory's mtime is not the
+// time it was moved.
+const TRASH_MARKER_FILE = ".deleted.json";
+const TRASH_KINDS = new Set(["scenario", "game"]);
+
+const markTrashEntry = (dest, kind, id) => {
+  try {
+    fs.writeFileSync(
+      path.join(dest, TRASH_MARKER_FILE),
+      JSON.stringify({ deletedAt: new Date().toISOString(), id: String(id), kind }),
+      "utf-8",
+    );
+  } catch {
+    // Best effort: an unmarked entry is still listed, from its name and mtime.
+  }
+};
+
+const directoryBytes = (dir) => {
+  let total = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const target = path.join(dir, entry.name);
+    if (entry.isDirectory()) total += directoryBytes(target);
+    else if (entry.isFile()) total += fs.statSync(target).size;
+  }
+  return total;
+};
+
+const describeTrashEntry = (entry) => {
+  const dir = path.join(TRASH_DIR, entry);
+  const marker = readJsonFile(path.join(dir, TRASH_MARKER_FILE), null);
+  const kind = TRASH_KINDS.has(marker?.kind) ? marker.kind : entry.split("-")[0];
+  if (!TRASH_KINDS.has(kind)) return null;
+  const id = String(marker?.id ?? "").trim() || entry.slice(kind.length + 1);
+  const meta = readJsonFile(path.join(dir, kind === "game" ? "game-instance.json" : "scenario.json"), {});
+  return {
+    bytes: directoryBytes(dir),
+    deletedAt: String(marker?.deletedAt ?? "").trim() || fs.statSync(dir).mtime.toISOString(),
+    entry,
+    id,
+    kind,
+    name: String(meta?.name ?? "").trim() || id,
+    ...(kind === "game" ? { scenarioId: String(meta?.scenarioId ?? "").trim() || DEFAULT_SCENARIO_ID } : {}),
+  };
+};
+
+// Everything in .trash, most recently deleted first.
+const listTrash = () => {
+  if (!fs.existsSync(TRASH_DIR)) return [];
+  return fs
+    .readdirSync(TRASH_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => describeTrashEntry(entry.name))
+    .filter(Boolean)
+    .sort((left, right) => right.deletedAt.localeCompare(left.deletedAt));
+};
+
+// Puts one entry back under its old id, or the next free one if that id has
+// been taken since. A restored game whose scenario is gone lists and plays the
+// way any such game does.
+const restoreFromTrash = (entry) => {
+  const source = resolveWithinDirectory(TRASH_DIR, String(entry ?? ""), "trash entry");
+  const described = fs.existsSync(source) ? describeTrashEntry(path.basename(source)) : null;
+  if (!described) throw new Error(`Not in the trash: ${entry}`);
+
+  const { kind } = described;
+  if (kind === "game") ensureGameStore();
+  else ensureScenarioStore();
+  const id = ensureUniqueId(described.id, kind);
+  const target = kind === "game" ? getGameDirectory(id) : getScenarioDirectory(id);
+
+  // The same short retry moveDirectoryToTrash makes for a handle held open.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(source, target);
+      break;
+    } catch (error) {
+      if (attempt >= 3 || !["EPERM", "EACCES", "EBUSY", "ENOTEMPTY"].includes(error?.code)) throw error;
+      sleepMsSync(150);
+    }
+  }
+  removeFileIfPresent(path.join(target, TRASH_MARKER_FILE));
+
+  if (kind === "game") {
+    invalidateOwnerSchemaCache("game", id);
+    gameFiguresCache.delete(id);
+    const manifest = getGameManifest();
+    manifest.order = [id, ...resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter((other) => other !== id)];
+    saveGameManifest(manifest);
+  } else {
+    invalidateOwnerSchemaCache("scenario", id);
+    const manifest = getScenarioManifest();
+    manifest.order = [id, ...resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter((other) => other !== id)];
+    saveScenarioManifest(manifest);
+  }
+  invalidateCatalogs();
+  return { id, kind, library: getLibraryCatalog() };
+};
+
+// Deletes everything in .trash for good.
+const emptyTrash = () => {
+  const entries = listTrash();
+  let bytes = 0;
+  for (const described of entries) {
+    fs.rmSync(path.join(TRASH_DIR, described.entry), { recursive: true, force: true, maxRetries: 6, retryDelay: 150 });
+    bytes += described.bytes;
+  }
+  return { bytes, removed: entries.length };
 };
 
 const deleteScenario = (scenarioId) => {
@@ -4096,6 +4211,7 @@ export {
   createScenario,
   deleteGame,
   deleteScenario,
+  emptyTrash,
   ensureGameStore,
   ensureScenarioStore,
   exportGameBundle,
@@ -4107,6 +4223,8 @@ export {
   getScenarioDetails,
   importGameBundle,
   importScenarioBundle,
+  listTrash,
+  restoreFromTrash,
   updateScenarioFromBundle,
   readGameSnapshots,
   readRuntimeJsonAsset,
