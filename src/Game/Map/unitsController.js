@@ -87,6 +87,16 @@ export const setInteractionMode = (next) => {
 };
 export const clearInteractionMode = () => setInteractionMode({ kind: "idle" });
 
+// A placement armed in one save belongs to that save: left armed, the first
+// click on the next map deployed the other save's unit there — an air wing in
+// 1200 AD — past that scenario's allowed types.
+const onActiveGameChanged = () => {
+  if (interactionMode.kind !== "idle") clearInteractionMode();
+};
+if (typeof window !== "undefined") {
+  window.addEventListener("oh:active-game-changed", onActiveGameChanged);
+}
+
 const sameUnits = (a, b) => {
   if (a === b) return true;
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
@@ -272,7 +282,11 @@ export const startUnitsSync = () => {
     if (stopped) return;
     stopped = true;
     syncRefCount = Math.max(0, syncRefCount - 1);
-    if (syncRefCount === 0) uninstallUnitSync();
+    if (syncRefCount === 0) {
+      uninstallUnitSync();
+      // No map left to take the placement's click.
+      if (interactionMode.kind !== "idle") clearInteractionMode();
+    }
   };
 };
 
@@ -388,6 +402,7 @@ export const placeUnitAdmin = async (unitId, lng, lat) => {
 // What the player is told when an order could not be written: the map and the
 // AI's picture of the war would drift apart without a word.
 export const ORDER_NOT_SAVED = "The order could not be saved; the next time skip would not see it. Try again.";
+export const UNIT_TYPE_NOT_ALLOWED = "This scenario does not allow that kind of unit.";
 
 // unitRevert records how to undo the order if the player deletes the queued
 // action before the next jump (#368): without it, a manual move stayed on the
@@ -487,6 +502,9 @@ export const deployUnit = async ({ type, strength, name, composition, lng, lat }
     status: "pending",
   });
   if (!unit) return { ok: false, error: ORDER_NOT_SAVED };
+  // The scenario's allowed types (no air wing in 1200), whoever asks: the
+  // Forces panel offers only those, but the advisor names its own.
+  if (allowedUnitTypes && !allowedUnitTypes.includes(unit.type)) return { ok: false, error: UNIT_TYPE_NOT_ALLOWED };
   const text =
     `Deploy request: ${name || type} (${type}, strength ${strength}% of establishment` +
     `${composition ? `, ${composition}` : ""}, owner ${playerCode || "PLAYER"}) at ` +

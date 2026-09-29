@@ -22,6 +22,9 @@ import {
   revertUnitOrder,
   startUnitsSync,
   getPlayerCode,
+  UNIT_TYPE_NOT_ALLOWED,
+  getInteractionMode,
+  setInteractionMode,
 } from "./unitsController.js";
 
 // The local server's JSON routes, in memory, with a switch to fail a write.
@@ -48,15 +51,17 @@ const savedUnits = () => read("world")?.units ?? [];
 const savedActions = () => read("actions") ?? [];
 
 let started = false;
+let stopSync = () => {};
 const reset = async () => {
   failing.clear();
   store.set("game", JSON.stringify({ country: "United Kingdom", round: 3, gameDate: "1940-06-01" }));
-  store.set("world", JSON.stringify({ units: [fleet] }));
+  // A scenario with no air power: the list is read when the map starts.
+  store.set("world", JSON.stringify({ units: [fleet], allowedUnitTypes: ["infantry", "armor", "naval", "artillery", "garrison"] }));
   store.set("actions", JSON.stringify([]));
   if (!started) {
     started = true;
     setRuntimeAssetEndpoints({ token: "units-controller" });
-    startUnitsSync();
+    stopSync = startUnitsSync();
     for (let tries = 0; tries < 100 && !(getPlayerCode() && getUnitById("fleet-1")); tries += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -133,4 +138,18 @@ test("a request for orders says whether it was saved", async () => {
   failing.add("actions");
   assert.equal(await requestUnitOrders("fleet-1", "Return to Scapa Flow"), false);
   assert.equal(savedActions().length, 1);
+});
+
+test("a deploy of a type the scenario does not allow is refused, whoever asks", async () => {
+  await reset();
+  assert.deepEqual(await deployUnit({ ...deployment, type: "air", name: "1st Air Wing" }), { ok: false, error: UNIT_TYPE_NOT_ALLOWED });
+  assert.deepEqual(savedActions(), []);
+  assert.equal(savedUnits().some((entry) => entry.name === "1st Air Wing"), false);
+});
+
+// Last: it stops the controller's sync.
+test("a placement left armed ends with the map", () => {
+  setInteractionMode({ kind: "deploy", params: deployment });
+  stopSync();
+  assert.equal(getInteractionMode().kind, "idle");
 });

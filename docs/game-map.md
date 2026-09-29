@@ -309,7 +309,7 @@ Status drives styling — **pending** (player-requested, not yet AI-confirmed) u
 
 ### Controller — `unitsController.js`
 
-A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | admin-place`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to.
+A module-level store, separate from `useWorldState` but with the same 5s cadence (`startUnitsSync`). It holds `units`, `playerCode`, `round`, `gameDate`, `allowedUnitTypes`, and an `interactionMode` (`idle | deploy | admin-place`), plus a `subscribeUnits` pub/sub the map/popups/Forces panel listen to. The mode goes back to `idle` when the active game changes (`oh:active-game-changed`) and when the last map stops its sync: a placement armed in one save used to deploy there on the first click in the next. `deployUnit` also refuses a type outside the scenario's `allowedUnitTypes` ("This scenario does not allow that kind of unit."), for the advisor's deployments as much as the Forces panel's.
 
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
