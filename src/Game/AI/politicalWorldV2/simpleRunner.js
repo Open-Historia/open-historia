@@ -165,16 +165,16 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
     next.stages.institutionDiscovery = "complete";
     clearAttempts(next, task.type, []);
   } else if (task.type === "institution-membership-resolution") {
-    const institutionId = clean(task?.payload?.institutionId || task?.targets?.[0]);
+    // One institution, or several batched into one call; each resolves or
+    // counts an attempt on its own.
+    const institutionIds = uniqueClean(taskTargets(task).length ? taskTargets(task) : [task?.payload?.institutionId]);
     const unresolvedIds = new Set(array(result?.unresolvedInstitutionIds).map(clean).filter(Boolean));
-    if (institutionId && unresolvedIds.has(institutionId)) {
-      bumpAttempts(next, task.type, [institutionId]);
-    } else if (institutionId) {
-      const resolved = new Set(array(next.membership.resolvedInstitutionIds).map(clean).filter(Boolean));
-      resolved.add(institutionId);
-      next.membership.resolvedInstitutionIds = [...resolved];
-      clearAttempts(next, task.type, [institutionId]);
-    }
+    const accepted = institutionIds.filter((id) => !unresolvedIds.has(id));
+    const resolved = new Set(array(next.membership.resolvedInstitutionIds).map(clean).filter(Boolean));
+    for (const id of accepted) resolved.add(id);
+    next.membership.resolvedInstitutionIds = [...resolved];
+    clearAttempts(next, task.type, accepted);
+    if (institutionIds.length > accepted.length) bumpAttempts(next, task.type, institutionIds.filter((id) => unresolvedIds.has(id)));
   } else if (task.type === "institution-governance") {
     next.stages.institutionGovernance = "complete";
     clearAttempts(next, task.type, []);

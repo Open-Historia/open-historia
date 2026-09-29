@@ -82,6 +82,31 @@ test("one uncovered institution creates exactly one institution-centric membersh
   assert.deepEqual(task.targets, ["pact"]);
 });
 
+test("smaller institutions share a membership call; a global body and a retry go alone", () => {
+  const checkpoint = base();
+  checkpoint.coverage["political-actor"] = ["A", "B", "C"];
+  checkpoint.coverage["governing-alignment"] = ["A", "B", "C"];
+  checkpoint.stages.institutionDiscovery = "complete";
+  checkpoint.stagedWorld.institutions.byId.aa = { id: "aa", name: "World Body", kind: "international_organization", foundedDate: "1945-10-24", members: {} };
+  const regional = Array.from({ length: 8 }, (_, index) => `r${index + 1}`);
+  for (const id of regional) checkpoint.stagedWorld.institutions.byId[id] = { id, name: `Pact ${id}`, kind: "regional_bloc", foundedDate: "2000-01-01", members: {} };
+
+  let task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["aa"]);
+  assert.deepEqual(task.payload, { institutionId: "aa" });
+  // 1 global body + 8 regional in batches of 6.
+  assert.equal(summarizePoliticalWorldV2Worklist({ checkpoint, inputs }).total, 3);
+
+  checkpoint.membership.resolvedInstitutionIds = ["aa"];
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, regional.slice(0, 6));
+  assert.deepEqual(task.payload, { institutionIds: regional.slice(0, 6) });
+
+  checkpoint.attempts["institution-membership-resolution:r1"] = 1;
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["r1"], "an institution dropped from a batch is retried on its own");
+});
+
 test("exhausted actor targets are deferred instead of blocking later polities", () => {
   const checkpoint = base();
   checkpoint.attempts = {

@@ -23,6 +23,7 @@ export const SIMPLE_V2_BATCH = Object.freeze({
   landscapeBackfill: 48,
   governingAlignment: 48,
   governingAlignmentRetry: 6,
+  institutionMembers: 6,
   powerEvidence: 24,
   temporalSentinel: 12,
   historicalVerification: 4,
@@ -139,6 +140,32 @@ export const derivePoliticalWorldV2MembershipSurface = (checkpoint) => {
   };
 };
 
+// Membership: a large global body (kind international_organization) keeps a
+// call of its own, and so does any institution on its retry. Other
+// institutions on their first try share a call, SIMPLE_V2_BATCH.institutionMembers
+// at a time, which sends the scenario context and polity vocabulary once.
+const MEMBERSHIP_KIND = "institution-membership-resolution";
+const institutionKinds = (checkpoint) => {
+  const world = checkpoint?.stagedWorld || {};
+  return Object.fromEntries(Object.values(normalizeInstitutions(world?.institutions, world).byId)
+    .map((institution) => [clean(institution?.id), clean(institution?.kind)]));
+};
+const membershipBatchable = (checkpoint, kinds, id) => (
+  kinds[id] !== "international_organization" && politicalWorldV2AttemptCount(checkpoint, MEMBERSHIP_KIND, id) === 0
+);
+const membershipTaskTargets = (checkpoint, unresolvedIds) => {
+  const open = array(unresolvedIds).filter((id) => !politicalWorldV2TargetExhausted(checkpoint, MEMBERSHIP_KIND, id));
+  if (!open.length) return [];
+  const kinds = institutionKinds(checkpoint);
+  if (!membershipBatchable(checkpoint, kinds, open[0])) return [open[0]];
+  return open.filter((id) => membershipBatchable(checkpoint, kinds, id)).slice(0, SIMPLE_V2_BATCH.institutionMembers);
+};
+const membershipCallCount = (checkpoint, openIds) => {
+  const kinds = institutionKinds(checkpoint);
+  const batchable = array(openIds).filter((id) => membershipBatchable(checkpoint, kinds, id)).length;
+  return chunkCount(batchable, SIMPLE_V2_BATCH.institutionMembers) + (array(openIds).length - batchable);
+};
+
 const firstBatch = (targets, normalSize, retrySize, checkpoint, kind) => {
   if (!targets.length) return [];
   const firstAttempt = politicalWorldV2AttemptCount(checkpoint, kind, targets[0]);
@@ -189,14 +216,14 @@ export const deriveNextPoliticalWorldV2Task = ({ checkpoint, inputs } = {}) => {
 
   const membership = derivePoliticalWorldV2MembershipSurface(checkpoint);
   if (!institutionChainBlocked && membership.unresolvedInstitutionIds.length) {
-    const institutionId = membership.unresolvedInstitutionIds.find((id) => !politicalWorldV2TargetExhausted(checkpoint, "institution-membership-resolution", id));
-    if (institutionId) {
+    const targets = membershipTaskTargets(checkpoint, membership.unresolvedInstitutionIds);
+    if (targets.length) {
       return {
-        id: `simple:membership:${institutionId}`,
+        id: `simple:membership:${targets.join("|")}`,
         type: "institution-membership-resolution",
         stage: "institutions",
-        targets: [institutionId],
-        payload: { institutionId },
+        targets,
+        payload: targets.length === 1 ? { institutionId: targets[0] } : { institutionIds: targets },
       };
     }
     institutionChainBlocked = true;
@@ -300,7 +327,7 @@ export const summarizePoliticalWorldV2Worklist = ({ checkpoint, inputs } = {}) =
       if (!politicalWorldV2TargetExhausted(checkpoint, "institution-discovery", "global")) pending += 1;
       else institutionChainBlocked = true;
     } else if (membership.unresolvedInstitutionIds.length) {
-      if (membershipRetryable.length) pending += membershipRetryable.length;
+      if (membershipRetryable.length) pending += membershipCallCount(checkpoint, membershipRetryable);
       else institutionChainBlocked = true;
     } else if (checkpoint?.stages?.institutionGovernance !== "complete") {
       if (!politicalWorldV2TargetExhausted(checkpoint, "institution-governance", "global")) pending += 1;
@@ -363,9 +390,9 @@ const estimatePoliticalWorldV2CallsRemaining = ({ checkpoint, expected, actorCal
     else calls += 1;
   }
   if (institutionsOpen) {
-    const membershipOpen = membership.unresolvedInstitutionIds.filter((id) => !exhausted("institution-membership-resolution", id)).length;
-    if (membership.unresolvedInstitutionIds.length && !membershipOpen) institutionsOpen = false;
-    calls += membershipOpen;
+    const membershipOpen = membership.unresolvedInstitutionIds.filter((id) => !exhausted("institution-membership-resolution", id));
+    if (membership.unresolvedInstitutionIds.length && !membershipOpen.length) institutionsOpen = false;
+    calls += membershipCallCount(checkpoint, membershipOpen);
   }
   if (institutionsOpen && checkpoint?.stages?.institutionGovernance !== "complete") {
     if (exhausted("institution-governance")) institutionsOpen = false;

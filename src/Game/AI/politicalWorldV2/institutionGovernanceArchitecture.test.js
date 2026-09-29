@@ -13,7 +13,7 @@ const [executor, worklist, checkpoint, quality, rebase, generator] = await Promi
 ]);
 
 test("PWv2 schedules one global institution-governance stage after membership and before agreements", () => {
-  const membership = worklist.indexOf("const institutionId = membership.unresolvedInstitutionIds.find");
+  const membership = worklist.indexOf("const targets = membershipTaskTargets(checkpoint, membership.unresolvedInstitutionIds)");
   const governance = worklist.indexOf('stages?.institutionGovernance !== "complete"', membership);
   const agreements = worklist.indexOf('stages?.agreements !== "complete"', governance);
   assert.ok(membership >= 0 && governance > membership && agreements > governance);

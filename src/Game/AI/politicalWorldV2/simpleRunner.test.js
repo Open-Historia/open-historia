@@ -450,6 +450,35 @@ test("one prime minister leading two countries is sent back for one focused re-c
   assert.equal(result.status, "complete");
 });
 
+test("a batched membership call keeps every complete list and retries only what was dropped", async () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.stages.institutionDiscovery = "complete";
+  for (const id of ["p1", "p2", "p3"]) {
+    checkpoint.stagedWorld.institutions.byId[id] = { id, name: `Pact ${id}`, kind: "security_alliance", foundedDate: "2000-01-01", members: {} };
+  }
+  const prompts = [];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 1,
+    callModel: async (_system, history, options) => {
+      prompts.push({ tool: options?.tool?.name, text: String(history?.at(-1)?.parts?.[0]?.text ?? "") });
+      return { toolInput: { institutionsJson: JSON.stringify([
+        { institutionId: "p1", members: [{ polityKey: "A", status: "member", role: "leader" }, { polityKey: "B", status: "member", role: "member" }] },
+        { institutionId: "p2", members: [] },
+        // p3 left out: its list may have been trimmed, so it is asked again alone.
+      ]) } };
+    },
+  });
+  assert.equal(prompts.length, 1);
+  assert.equal(prompts[0].tool, "submit_geopolitical_institutions_members");
+  assert.equal(prompts[0].text.split("Active polity vocabulary").length - 1, 1, "the vocabulary is sent once");
+  assert.deepEqual([...result.membership.resolvedInstitutionIds].sort(), ["p1", "p2"]);
+  assert.deepEqual(result.stagedWorld.institutions.byId.p1.members.map((member) => member.polity).sort(), ["A", "B"]);
+  assert.equal(result.attempts["institution-membership-resolution:p3"], 1);
+  assert.ok(result.warnings.some((warning) => /Pact p3: left out of the answer/.test(warning)));
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

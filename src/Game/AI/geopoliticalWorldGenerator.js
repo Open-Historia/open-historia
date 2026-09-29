@@ -131,6 +131,13 @@ export const GEOPOLITICAL_INSTITUTION_MEMBERS_TOOL = shallowTool(
   ["membersJson"],
 );
 
+export const GEOPOLITICAL_INSTITUTIONS_MEMBERS_TOOL = shallowTool(
+  "submit_geopolitical_institutions_members",
+  "Submit the complete exact-date positive member set for each of several fixed canonical institutions. Omitted active polities are treated as non-members of that institution only.",
+  { institutionsJson: { type: "string", description: "JSON array text: exactly one entry per listed institution, each with institutionId and members[] (positive members only: polityKey, status, role, joinedDate, note)." } },
+  ["institutionsJson"],
+);
+
 export const GEOPOLITICAL_AGREEMENTS_TOOL = shallowTool(
   "submit_geopolitical_agreements",
   "Submit strategically important active formal agreements not already represented by institution membership.",
@@ -447,6 +454,31 @@ ${allPolityKeys.join(" | ").slice(0, 20000)}
 membersJson = [{"polityKey":"EXACT active polity key","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":"brief/blank"}]. Return [] if this institution truly has no positive members among the active polities.`,
 });
 
+const institutionMembersLine = (institution) => `[${institution.id}] ${institution.name}${institution.shortName ? ` (${institution.shortName})` : ""} | ${institution.kind}${institution.foundedDate ? ` | founded ${institution.foundedDate}` : ""}${institution.dissolvedDate ? ` | dissolved ${institution.dissolvedDate}` : ""}${lineageSummary(institution) ? ` | predecessor continuity: ${lineageSummary(institution)}` : ""}
+Already staged positive members (preserve these unless scenario canon itself says otherwise): ${existingInstitutionMembers(institution).join(" | ") || "(none)"}`;
+
+const buildInstitutionMembersBatchPrompt = ({ scenarioDate, historyAuthority = null, institutions, scenarioContext, allPolityKeys }) => ({
+  systemPrompt: `You resolve the COMPLETE positive formal membership set for EACH of the ${institutions.length} canonical institutions listed below in OpenHistoria.
+
+${geopoliticalHistoryAuthorityBlock(historyAuthority, scenarioDate)} Structured scenario canon outranks external/reference material.
+
+UNIVERSE RULE: resolve only the institutions supplied below and only against the supplied active polity vocabulary. The scenario may be historical, alternate-history, future, or fictional. Do not import other institutions or another universe.
+
+OUTPUT SEMANTICS: for each listed institution return ONLY its positive members/participants/observers/etc. on ${scenarioDate}. Every active polity omitted from an institution's members is interpreted as a NON-MEMBER of that institution on this date, so completeness matters for every institution separately. Return exactly one entry for EVERY listed institution id, with members [] when it truly has no positive members among the active polities. Do not omit a real member just because the exact accession date is uncertain; leave joinedDate blank instead.
+
+status must be ${INSTITUTION_MEMBER_STATUSES.join(" | ")}; role leader|leading-member|member. No prose outside the tool.`,
+  userMessage: `Scenario context:
+${clean(scenarioContext).slice(0, 5000) || "(none)"}
+
+Canonical institutions (${institutions.length}):
+${institutions.map((institution, index) => `${index + 1}. ${institutionMembersLine(institution)}`).join("\n\n")}
+
+Active polity vocabulary (${allPolityKeys.length}):
+${allPolityKeys.join(" | ").slice(0, 20000)}
+
+institutionsJson = [{"institutionId":"EXACT id from the list above","members":[{"polityKey":"EXACT active polity key","status":"member","role":"member","joinedDate":"YYYY-MM-DD or blank","note":"brief/blank"}]}], one entry per listed institution.`,
+});
+
 const buildMembershipPrompt = ({ scenarioDate, historyAuthority = null, batch, world, scenarioContext, catalog, recovery = false }) => {
   if (recovery) {
     return {
@@ -757,27 +789,43 @@ export const generateGeopoliticalInstitutionMembersJob = async ({
     signal,
     logLabel: `geopolitical institution members ${institution.id}`,
   });
-  // A bad answer is an ordinary failed result, never a throw: the v2 runner
-  // counts the attempt, so the bounded retry and deferral move past an
-  // institution the model keeps answering wrongly instead of paying for the
-  // same call on every Resume.
-  const failed = (reason) => ({
+  const resolved = resolveInstitutionMemberRows({
+    institution,
+    field: source.membersJson ?? source.members,
+    world,
+    allowedByLower,
+    catalogById,
+    catalogByToken,
+    scenarioDate,
+    warnings,
+  });
+  return {
     schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION,
     phase: "institution-membership-resolution",
     institutionId: institution.id,
-    records: [],
-    acceptedInstitutionIds: [],
-    unresolvedInstitutionIds: [institution.id],
-    warnings: [...warnings, `${institution.name}: ${reason}`],
-    returned: 0,
-  });
-  const field = source.membersJson ?? source.members;
-  if (field == null) return failed("the answer carried no membersJson; nothing was recorded.");
+    records: resolved.ok ? resolved.records : [],
+    acceptedInstitutionIds: resolved.ok ? [institution.id] : [],
+    unresolvedInstitutionIds: resolved.ok ? [] : [institution.id],
+    warnings,
+    returned: resolved.returned,
+  };
+};
+
+// One institution's positive-member rows. A bad answer is an ordinary failed
+// result, never a throw: the v2 runner counts the attempt, so the bounded retry
+// and deferral move past an institution the model keeps answering wrongly
+// instead of paying for the same call on every Resume.
+const resolveInstitutionMemberRows = ({ institution, field, world, allowedByLower, catalogById, catalogByToken, scenarioDate, warnings }) => {
+  const failed = (reason) => {
+    warnings.push(`${institution.name}: ${reason}`);
+    return { ok: false, records: [], returned: 0 };
+  };
+  if (field == null) return failed("the answer carried no member list; nothing was recorded.");
   let rows;
   try {
     rows = parseArrayText(field);
   } catch (error) {
-    return failed(`membersJson could not be read (${clean(error?.message || error)}); nothing was recorded.`);
+    return failed(`the member list could not be read (${clean(error?.message || error)}); nothing was recorded.`);
   }
   const records = [];
   const seen = new Set();
@@ -815,16 +863,89 @@ export const generateGeopoliticalInstitutionMembersJob = async ({
   if (invalidRows) {
     return failed(`institution-centric membership result contained ${invalidRows} invalid row(s); refusing incomplete positive-member canon.`);
   }
-  return {
+  return { ok: true, records, returned: rows.length };
+};
+
+// Several smaller institutions in one request: the polity vocabulary and the
+// scenario context are sent once instead of once per institution. Every
+// listed institution must come back with its own list (empty when it has no
+// members); one that is missing, duplicated or unreadable stays unresolved and
+// is retried alone, while the others are kept.
+export const generateGeopoliticalInstitutionMembersBatchJob = async ({
+  scenarioDate,
+  historyAuthority = null,
+  institutionIds = [],
+  polities = [],
+  world = {},
+  scenarioContext = "",
+  callModel = callAI,
+  signal,
+} = {}) => {
+  const allPolityKeys = geopoliticalJobPolityKeys(polities);
+  const allowedByLower = new Map(allPolityKeys.map((key) => [lower(key), key]));
+  const byId = normalizeInstitutions(world?.institutions, world).byId;
+  const requestedIds = [...new Set(array(institutionIds).map(clean).filter(Boolean))];
+  const institutions = requestedIds.map((id) => byId[id]).filter((institution) => institution?.id);
+  const warnings = [];
+  const result = (records, accepted) => ({
     schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION,
     phase: "institution-membership-resolution",
-    institutionId: institution.id,
     records,
-    acceptedInstitutionIds: [institution.id],
-    unresolvedInstitutionIds: [],
+    acceptedInstitutionIds: accepted,
+    unresolvedInstitutionIds: requestedIds.filter((id) => !accepted.includes(id)),
     warnings,
-    returned: rows.length,
-  };
+  });
+  if (!institutions.length) return result([], []);
+
+  const catalogById = new Map(institutions.map((institution) => [institution.id, institution]));
+  const catalogByToken = buildCatalogIdentityIndex(institutions);
+  const prompt = buildInstitutionMembersBatchPrompt({ scenarioDate, historyAuthority, institutions, scenarioContext, allPolityKeys });
+  const source = await callTool({
+    callModel,
+    ...prompt,
+    tool: GEOPOLITICAL_INSTITUTIONS_MEMBERS_TOOL,
+    signal,
+    logLabel: `geopolitical institution members ${institutions.map((institution) => institution.id).join(",")}`,
+  });
+  let entries;
+  try {
+    entries = parseArrayText(source.institutionsJson ?? source.institutions);
+  } catch (error) {
+    warnings.push(`Institution member lists could not be read (${clean(error?.message || error)}); nothing was recorded.`);
+    return result([], []);
+  }
+  const entryById = new Map();
+  const duplicated = new Set();
+  for (const entry of entries) {
+    const rawId = clean(entry?.institutionId || entry?.id);
+    const institution = catalogById.get(rawId) || catalogByToken.get(slug(rawId)) || null;
+    if (!institution) continue;
+    if (entryById.has(institution.id)) duplicated.add(institution.id);
+    else entryById.set(institution.id, entry);
+  }
+  const records = [];
+  const accepted = [];
+  for (const institution of institutions) {
+    const entry = entryById.get(institution.id);
+    if (!entry || duplicated.has(institution.id)) {
+      warnings.push(`${institution.name}: ${entry ? "answered twice" : "left out of the answer"}; it will be asked again on its own.`);
+      continue;
+    }
+    const resolved = resolveInstitutionMemberRows({
+      institution,
+      field: entry.members ?? entry.membersJson,
+      world,
+      allowedByLower,
+      catalogById,
+      catalogByToken,
+      scenarioDate,
+      warnings,
+    });
+    if (!resolved.ok) continue;
+    records.push(...resolved.records);
+    accepted.push(institution.id);
+  }
+  return result(records, accepted);
 };
 
 export const generateGeopoliticalPowerEvidenceJob = async ({

@@ -10,6 +10,7 @@ import {
   generateGeopoliticalAgreementsJob,
   generateGeopoliticalInstitutionCatalogJob,
   generateGeopoliticalInstitutionGovernanceJob,
+  generateGeopoliticalInstitutionMembersBatchJob,
   generateGeopoliticalInstitutionMembersJob,
   generateGeopoliticalMembershipJob,
   generateGeopoliticalPowerEvidenceJob,
@@ -265,6 +266,24 @@ export const createPoliticalWorldV2Executor = ({
         activeInstitutionIds,
         referenceCoveredInstitutionIds: activeInstitutionIds.filter((id) => covered.has(id)),
         uncoveredInstitutionIds,
+        acceptedPolities: [],
+        unresolvedPolities: [],
+      };
+    }
+
+    if (job.type === "institution-membership-resolution" && array(job?.targets).length > 1) {
+      return {
+        kind: job.type,
+        ...(await generateGeopoliticalInstitutionMembersBatchJob({
+          scenarioDate,
+          historyAuthority: inputs?.historyAuthority || null,
+          institutionIds: job.targets,
+          polities: allPolities,
+          world: stagedWorld,
+          scenarioContext: inputs?.scenarioContext,
+          callModel: trackedCallModel,
+          signal,
+        })),
         acceptedPolities: [],
         unresolvedPolities: [],
       };
