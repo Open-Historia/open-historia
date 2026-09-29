@@ -572,6 +572,7 @@ const Main = ({
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizeEnd={handleAdvisorResizeEnd}
+            mapRef={mapRef}
           />
         )}
       </Suspense>

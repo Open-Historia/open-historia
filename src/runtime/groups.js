@@ -253,6 +253,29 @@ export const playerGroupKey = (world, playerName) => {
   return Object.keys(normalizeGroups(world?.groups)).find((key) => fold(key) === wanted) ?? "";
 };
 
+// The groups holding ground in a polity's regions, for its Politics view: each
+// group's record with the regions of that polity it controls, most first.
+// `ownerOf(regionId)` is the region's current owner. A polity that is itself a
+// group (the player leading one, playerGroupKey) owns no land, so its own group
+// comes first with its whole area, `own: true`, even while that area is empty.
+export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) => {
+  const wanted = fold(polity);
+  if (!wanted) return [];
+  const groups = normalizeGroups(world?.groups);
+  const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
+  const own = playerGroupKey(world, polity);
+  const rows = Object.keys(groups).map((name) => ({
+    ...groups[name],
+    own: name === own,
+    regionIds: name === own
+      ? areas[name] ?? []
+      : (areas[name] ?? []).filter((regionId) => fold(ownerOf(regionId)) === wanted),
+  }));
+  return rows
+    .filter((row) => row.own || row.regionIds.length)
+    .sort((a, b) => Number(b.own) - Number(a.own) || b.regionIds.length - a.regionIds.length || a.name.localeCompare(b.name));
+};
+
 // What every task that concerns the player is told when the player leads a group.
 // Empty for a country, so nothing changes for anyone else.
 export const describePlayerGroupForPrompt = (world, playerName, { regionName = (id) => id, maxRegions = 12 } = {}) => {

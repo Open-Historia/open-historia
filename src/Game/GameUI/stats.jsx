@@ -4,7 +4,10 @@ import { APP_HEIGHT, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrima
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
-import { JSON_URLS, getNationFlags, getNationTags, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags, getNationTags, getPrimedScenarioRegionCatalog, readJson, reportPerfOperation } from "../../runtime/assets.js";
+import { useActiveFeatures } from "../../runtime/gameFeatures.js";
+import { groupsOnTerritory } from "../../runtime/groups.js";
+import { extendBounds } from "./eventFocus.js";
 import { isPolityLandless, readGameData, readWorldState, readWorldStateView, writeWorldState } from "../../runtime/gameState.js";
 import { useLibraryState } from "../../runtime/library.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
@@ -435,6 +438,75 @@ const DiplomacyMetric = ({ label, value, tone = "#e7e7e9" }) => (
     <div data-no-translate style={{ color: tone, fontSize: "1rem", fontWeight: 900, marginTop: "0.2rem" }}>{value}</div>
     </div>
 );
+
+// The groups holding ground on this country's regions (runtime/groups.js
+// groupsOnTerritory), or, for a player leading a group, that group's own area.
+// A row flies the map to the regions it counts. Not shown while groups are
+// switched off for this game.
+const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
+    const groupsOn = useActiveFeatures().groups?.enabled !== false;
+    const rows = useMemo(() => {
+        if (!groupsOn || !world || !targetCountry) return [];
+        const catalog = new Map((getPrimedScenarioRegionCatalog() ?? []).map((entry) => [entry.id, entry]));
+        const ownerOf = (regionId) => world.regionOwnershipOverrides?.[regionId] || catalog.get(regionId)?.country || "";
+        return groupsOnTerritory(world, targetCountry, { ownerOf }).map((row) => {
+            let bounds = null;
+            for (const regionId of row.regionIds) {
+                const entry = catalog.get(regionId);
+                const box = entry?.bounds
+                    ?? (Number.isFinite(entry?.lng) && Number.isFinite(entry?.lat) ? [[entry.lng, entry.lat], [entry.lng, entry.lat]] : null);
+                bounds = extendBounds(bounds, box);
+            }
+            return { ...row, bounds };
+        });
+    }, [groupsOn, world, targetCountry]);
+
+    const show = useCallback((bounds) => {
+        const map = mapRef?.current?.getMap?.() ?? mapRef?.current;
+        if (!bounds || !map?.fitBounds) return;
+        try {
+            map.fitBounds(bounds, { duration: 1400, essential: true, maxZoom: 6.8, padding: 48 });
+        } catch {
+            // A camera that cannot fit (a canvas too small for the padding) stays where it is.
+        }
+    }, [mapRef]);
+
+    if (!rows.length) return null;
+
+    return (
+        <>
+        <div style={sectionTitleStyle}>{isPlayer ? "👥 Groups on our territory" : "👥 Groups on its territory"}</div>
+        <div style={{ ...cardStyle, padding: 0, overflow: "hidden" }}>
+        {rows.map((row, index) => {
+            const count = row.regionIds.length;
+            const held = count === 0 ? "Controls no area yet" : count === 1 ? "Controls 1 region" : `Controls ${count} regions`;
+            const canShow = Boolean(row.bounds);
+            return (
+                <button
+                key={row.name}
+                type="button"
+                className="oh-tap-row"
+                disabled={!canShow}
+                onClick={() => show(row.bounds)}
+                title={canShow ? "Show on the map" : undefined}
+                style={{ alignItems: "flex-start", background: "none", border: "none", borderTop: index ? "1px solid rgba(255,255,255,0.07)" : "none", color: "inherit", cursor: canShow ? "pointer" : "default", display: "flex", gap: "0.55rem", padding: "0.55rem 0.65rem", textAlign: "left", width: "100%" }}
+                >
+                <span aria-hidden="true" style={{ background: row.color, borderRadius: "2px", boxShadow: "0 0 0 1px rgba(0,0,0,0.55)", flexShrink: 0, height: "10px", marginTop: "0.2rem", width: "10px" }} />
+                <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ color: "rgba(255,255,255,0.88)", display: "block", fontSize: "0.74rem", fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.name}</span>
+                <span style={{ color: "rgba(255,255,255,0.45)", display: "block", fontSize: "0.62rem", marginTop: "0.12rem" }}>{held}</span>
+                {row.description && (
+                    <span style={{ WebkitBoxOrient: "vertical", WebkitLineClamp: 2, color: "rgba(255,255,255,0.38)", display: "-webkit-box", fontSize: "0.62rem", lineHeight: 1.4, marginTop: "0.2rem", overflow: "hidden" }}>{row.description}</span>
+                )}
+                </span>
+                {row.own && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                </button>
+            );
+        })}
+        </div>
+        </>
+    );
+};
 
 const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
     const diplomacy = useMemo(() => {
@@ -1410,7 +1482,7 @@ const HistoricalTrackingModal = ({
     );
 };
 
-const StatsPaneBody = ({ active }) => {
+const StatsPaneBody = ({ active, mapRef }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
@@ -2151,6 +2223,9 @@ const StatsPaneBody = ({ active }) => {
                     institutions={worldSnapshot ? institutionPortfolioForPolity(worldSnapshot, targetCountry, { viewerPolity: player.code }) : []}
                 />
             )}
+            {statsView === "politics" && (
+                <GroupsOnTerritory world={worldSnapshot} targetCountry={targetCountry} isPlayer={Boolean(player.code) && targetCountry === player.code} mapRef={mapRef} />
+            )}
 
             {statsView === "economy" && statSheetDefinitionError && (
                 <div style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", fontSize: "0.8rem", marginTop: "1rem", padding: "0.7rem 0.8rem" }}>
@@ -2382,11 +2457,11 @@ const reportStatsRender = (id, phase, actualDuration) => {
     reportPerfOperation(`React ${id} ${phase}`, Number(actualDuration) || 0, { warnAt: 30 });
 };
 
-const StatsPane = memo(function StatsPane({ active }) {
+const StatsPane = memo(function StatsPane({ active, mapRef }) {
     if (!active) return null;
     return (
         <React.Profiler id="StatsPane" onRender={reportStatsRender}>
-            <StatsPaneBody active />
+            <StatsPaneBody active mapRef={mapRef} />
         </React.Profiler>
     );
 });

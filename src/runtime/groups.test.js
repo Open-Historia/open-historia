@@ -16,6 +16,7 @@ import {
   defaultGroupColor,
   describeGroupsForPrompt,
   findGroupKey,
+  groupsOnTerritory,
   normalizeGroupAreas,
   normalizeGroupColor,
   normalizeGroupOp,
@@ -195,4 +196,30 @@ test("the jump and the Game Master can write groupOps, and the jump schema stays
   assert.ok(JSON.stringify(jumpSchema).includes("groupOps"));
   assert.ok(JSON.stringify(GAME_MASTER_SCHEMA).includes("groupOps") || JSON.stringify(GAME_MASTER_SCHEMA).includes("eventsJson"),
     "the GM carries events (and so their impacts) in its transaction");
+});
+
+test("a country's Politics view lists the groups on its regions, most first", () => {
+  const world = {
+    groups: { Cartel: { description: "Runs the border towns." }, Militia: {}, Exiles: {} },
+    groupAreas: { m1: "Cartel", m2: "Cartel", m3: "Militia", g1: "Militia", g2: "Exiles" },
+  };
+  const owners = { m1: "Mexico", m2: "Mexico", m3: "Mexico", g1: "Guatemala", g2: "Guatemala" };
+  const rows = groupsOnTerritory(world, "Mexico", { ownerOf: (id) => owners[id] });
+  assert.deepEqual(rows.map((row) => [row.name, row.regionIds]), [["Cartel", ["m1", "m2"]], ["Militia", ["m3"]]],
+    "only the regions Mexico owns count; a group elsewhere is not listed");
+  assert.equal(rows[0].description, "Runs the border towns.");
+  assert.ok(rows[0].color, "the group's own colour for its swatch");
+  assert.deepEqual(groupsOnTerritory(world, "Belize", { ownerOf: (id) => owners[id] }), []);
+});
+
+test("a polity that is a group sees its own area first, even an empty one", () => {
+  const world = {
+    polityOverrides: { "Cartel del Norte": { name: "Cartel del Norte" } },
+    groups: { "Cartel del Norte": {}, Horde: {} },
+    groupAreas: { r1: "Cartel del Norte", r2: "Horde" },
+  };
+  const rows = groupsOnTerritory(world, "Cartel del Norte", { ownerOf: () => "Mexico" });
+  assert.deepEqual(rows.map((row) => [row.name, row.own, row.regionIds]), [["Cartel del Norte", true, ["r1"]]]);
+  const empty = groupsOnTerritory({ ...world, groupAreas: {} }, "Cartel del Norte");
+  assert.deepEqual(empty.map((row) => [row.name, row.regionIds]), [["Cartel del Norte", []]]);
 });
