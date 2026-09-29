@@ -43,6 +43,7 @@ import DocumentsMenu from "./DocumentsMenu.jsx";
 import CityPopup from "./CityPopup.jsx";
 import MarkerPopup from "./MarkerPopup.jsx";
 import { isMapFeature, markerToFeature, newMapFeature } from "./mapFeatures.js";
+import { removeRowStep } from "./documentUndo.js";
 import SearchBar from "./SearchBar.jsx";
 import BasemapPicker from "./BasemapPicker.jsx";
 import FlagPicker from "./FlagPicker.jsx";
@@ -816,9 +817,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         onFeatureEdit={({ id, pixel }) => setCityPopup({ id, x: pixel[0], y: pixel[1], isNew: false })}
         onFeatureRemove={(id) => {
-          d.setFeatures((list) => list.filter((f) => f.id !== id));
+          const step = removeRowStep(d.features, d.setFeatures, id);
           d.setSaveStatus("dirty");
           setCityPopup((p) => (p?.id === id ? null : p));
+          return step;
         }}
         onUnitCreate={({ pixel, ...partial }) => {
           const id = newId("unit");
@@ -827,8 +829,9 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         }}
         onUnitEdit={({ id, pixel }) => setUnitPopup({ id, x: pixel[0], y: pixel[1], isNew: false })}
         onUnitRemove={(id) => {
-          d.setUnits((list) => list.filter((u) => u.id !== id));
+          const step = removeRowStep(d.units, d.setUnits, id);
           setUnitPopup((p) => (p?.id === id ? null : p));
+          return step;
         }}
         onHistory={setHistory}
         onReady={setApi}

@@ -890,14 +890,17 @@ const OlMap = ({
       );
       if (tool === "delete") {
         // Deleting works on units and cities too — a point hit wins over the region under it.
+        // The document removes them and hands back the undo step (documentUndo.js).
         const unitHit = unitAtPixel(evt.pixel);
         if (unitHit) {
-          onUnitRemoveRef.current?.(unitHit.getId());
+          const cmd = onUnitRemoveRef.current?.(unitHit.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         const point = pointAtPixel(evt.pixel);
         if (point) {
-          onFeatureRemoveRef.current?.(point.getId());
+          const cmd = onFeatureRemoveRef.current?.(point.getId());
+          if (cmd) pushCmd(cmd);
           return;
         }
         deleteFeature(hit);
@@ -2167,19 +2170,25 @@ const OlMap = ({
         return ids;
       },
       // A group renamed (to a name) or erased (to null) across the whole map, as
-      // ONE undo step. Returns how many regions it touched.
-      retagGroup: (from, to = null) => {
+      // ONE undo step. `record` is the document's side ({ redo, undo }:
+      // documentUndo.js), run now and with every undo and redo, so the group's
+      // registry entry follows its regions. Returns how many regions it touched.
+      retagGroup: (from, to = null, record = null) => {
         const key = String(from || "").trim();
         if (!key) return 0;
         const touched = regionSource.getFeatures().filter((f) => String(f.get("group") || "").trim() === key);
-        if (!touched.length) return 0;
+        if (!touched.length && !record) return 0;
         const apply = (value) => {
           touched.forEach((f) => f.set("group", value || null));
           regionLayer.changed();
           notifyRegions();
         };
         apply(to);
-        pushCmd({ undo: () => apply(key), redo: () => apply(to) });
+        record?.redo();
+        pushCmd({
+          undo: () => { apply(key); record?.undo(); },
+          redo: () => { apply(to); record?.redo(); },
+        });
         return touched.length;
       },
       selectOwner: (ownerKey, { zoom = false } = {}) => {
