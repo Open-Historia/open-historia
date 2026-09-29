@@ -18,6 +18,7 @@ Related pages: [World state](world-state.md) · [Game state](world-state.md) · 
 | Country tags | `src/runtime/countryTags.js` | tag normalization + author-vs-live resolution | editor, game, server, `promptContext.js` |
 | Country labels | `src/runtime/countryLabels.js` | map country-label GeoJSON (curved + point) | `src/Game/Map/Nations.jsx` |
 | Community flags | `src/runtime/communityFlags.js` | hub-hosted shared flags & flag packs | `src/Editor/FlagPicker.jsx` |
+| Hub issue lists | `src/runtime/hubIssues.js` | the hub repo's constants (`HUB_OWNER`, `HUB_REPO`, `HUB_URL`, `HUB_API`) and its open issues by label, every page (`Link: rel="next"`, at most `MAX_HUB_PAGES` = 10 pages of 100), cached five minutes and shared by every caller, callers at the same moment included (`fetchHubIssues`, `fetchHubScenarioIssues`, `fetchHubPages`) | `hubPosts.js`, `communityBasemaps.js`, `communityFlags.js` |
 | Hub posts | `src/runtime/hubPosts.js` | reading the community hub: scenario posts (`Scenario-Key`), a post's comments, the suggestions among them (`refreshPublishedRecord`), file downloads through `/api/hub/file` | `communityHub.jsx`, `libraryBar.jsx`, `ScenarioSuggestions.jsx` |
 | Suggested changes | `src/runtime/scenarioChanges.js` (the diff), `scenarioSuggestion.js` (the `.zip` and the comment), `suggestionApply.js` (accepting a change outside the map), `suggestionSections.js` | what a player changed in a community scenario, carried to its author and applied change by change ([game-ui.md §4.8](game-ui.md#48-suggested-changes)) | `ScenarioSuggestions.jsx`, `src/Editor/suggestionReview.js` |
 | Map settings | `src/runtime/mapSettings.js` | localStorage map/AI toggles | map + settings components |
@@ -273,16 +274,16 @@ Reads flags shared by other players **straight from the hub repo's GitHub Issues
 
 | Constant | Value |
 |---|---|
-| Hub repo | `Open-Historia/Open-historia-scenarios` |
-| `HUB_API_FLAGS` | issues `?state=open&labels=flag&per_page=100` (label must exist in the repo or GitHub drops it) |
-| `HUB_API_SCENARIOS` | issues `?state=open&labels=scenario` — scanned for scenario posts carrying flags |
-| `CACHE_TTL_MS` | 5 min in-memory cache |
+| Hub repo | `Open-Historia/Open-historia-scenarios` (`hubIssues.js`) |
+| Flag posts | `fetchHubIssues("flag")`: issues labelled `flag` (label must exist in the repo or GitHub drops it), every page |
+| Scenario posts | `fetchHubScenarioIssues()` — scanned for scenario posts carrying flags; the same cached list the Community tab and the basemap browser read |
+| Cache | 5 min, in `hubIssues.js`, per label |
 
 | Export | Purpose |
 |---|---|
-| `fetchCommunityFlags({ force })` | Fetches both endpoints (scenarios best-effort), parses, filters to installable, caches. Returns `[...dedicatedFlagPosts, ...scenarioFlagPacks]` |
+| `fetchCommunityFlags({ force })` | Reads both lists (scenarios best-effort), parses, filters to installable. Returns `[...dedicatedFlagPosts, ...scenarioFlagPacks]` |
 | `flagPostInstallable(post)` | True if a payload can be extracted: `imageUrl` for a flag post, `packUrl` for a scenario pack |
-| `loadCommunityFlagDataUrl(post)` | Downloads a flag image **through the hub proxy** (`/api/hub/file?url=`, since GitHub attachments send no CORS) and returns a chunked base64 `data:` URL |
+| `loadCommunityFlagDataUrl(post)` | Downloads a flag image **through the hub proxy** (`/api/hub/file?url=`, since GitHub attachments send no CORS) and returns a `data:` URL (base64 in chunks, `bundleFiles.js` `bytesToBase64`) |
 | `loadCommunityFlagPack(post)` | Downloads a scenario bundle via the proxy, finds `scenario.json` (zip or bare JSON), returns custom `{ code, dataUrl }` flags from `assets.flags` (flagcdn/built-in URLs skipped) |
 | `communityFlagsHubUrl()` | Link to the filtered hub issue list |
 | `openFlagPublishForm({name, author, code})` | Opens the prefilled `flag.yml` issue form in a new tab (image left for the user to drag in) |

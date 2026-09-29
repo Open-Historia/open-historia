@@ -17,13 +17,9 @@ import {
   resolveScenarioBundleBackground,
 } from "./communityBasemaps.js";
 import { normalizeHubKey, normalizeHubPublished, normalizeHubSuggestionRef } from "../../server/hubProvenance.js";
+import { HUB_API, HUB_URL, fetchHubPages, fetchHubScenarioIssues } from "./hubIssues.js";
 
-// The one and only hub. Not configurable by design.
-export const HUB_OWNER = "Open-Historia";
-export const HUB_REPO = "Open-historia-scenarios";
-export const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_ISSUES = `${HUB_API}/issues?state=open&labels=scenario&per_page=100`;
+export { HUB_OWNER, HUB_REPO, HUB_URL } from "./hubIssues.js";
 export const HUB_NEW_POST_URL = `${HUB_URL}/issues/new?template=scenario.yml`;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -46,8 +42,6 @@ const COVER_IMAGE_PATTERN =
 // which is how an install recognises the post as the one its player made.
 export const SCENARIO_KEY_LINE = "Scenario-Key";
 const SCENARIO_KEY_PATTERN = /^\s*Scenario-Key:\s*([A-Za-z0-9-]{8,64})\s*$/im;
-
-let hubCache = { at: 0, posts: null };
 
 // Self-hosted import counts (keyed by hub issue number), read back through the
 // server proxy from our own counter Worker. Unlike GitHub's release download
@@ -125,30 +119,28 @@ export const parsePost = (issue, importsById) => {
 };
 
 // Exported so the translator can pre-translate the Community tab's posts.
+// The issue list is the one every hub screen shares (hubIssues.js), every page
+// of it; the posts made of it, with their import counts, are kept as long as
+// that list is.
+let hubCache = { issues: null, posts: null };
 export const fetchHubPosts = async ({ force = false } = {}) => {
-  if (!force && hubCache.posts && Date.now() - hubCache.at < CACHE_TTL_MS) {
-    return hubCache.posts;
-  }
-  const [response, importsById] = await Promise.all([
-    fetch(HUB_API_ISSUES, { headers: { Accept: "application/vnd.github+json" } }),
-    fetchImportCounts(),
-  ]);
-  if (!response.ok) {
+  const issues = await fetchHubScenarioIssues({ force }).catch((error) => {
+    if (error?.status === undefined) throw error;
     throw new Error(
-      response.status === 403
+      error.status === 403
         ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the Scenario Hub (HTTP ${response.status}).`,
+        : `Could not reach the Scenario Hub (HTTP ${error.status}).`,
     );
-  }
-  const issues = await response.json();
-  const posts = (Array.isArray(issues) ? issues : [])
-    .filter((issue) => !issue.pull_request)
+  });
+  if (hubCache.issues === issues) return hubCache.posts;
+  const importsById = await fetchImportCounts();
+  const posts = issues
     .map((issue) => parsePost(issue, importsById))
     // The parser already decides whether a post has an importable scenario
     // bundle. Do not surface malformed or misfiled "scenario" issues whose
     // Import button would otherwise be disabled.
     .filter((post) => Boolean(post.bundleUrl));
-  hubCache = { at: Date.now(), posts };
+  hubCache = { issues, posts };
   return posts;
 };
 
@@ -237,22 +229,20 @@ export const parseSuggestionComment = (comment, postId) => {
 
 const commentCache = new Map(); // postId -> { at, comments }
 
+// Every page of a post's comments. A page that fails fails the read, so the
+// caller never records a comment count it has not read all of.
 export const fetchPostComments = async (postId, { force = false } = {}) => {
   const id = Number(postId);
   const cached = commentCache.get(id);
   if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.comments;
-  const response = await fetch(`${HUB_API}/issues/${id}/comments?per_page=100`, {
-    headers: { Accept: "application/vnd.github+json" },
-  });
-  if (!response.ok) {
+  const list = await fetchHubPages(`${HUB_API}/issues/${id}/comments?per_page=100`).catch((error) => {
+    if (error?.status === undefined) throw error;
     throw new Error(
-      response.status === 403
+      error.status === 403
         ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not read the post's comments (HTTP ${response.status}).`,
+        : `Could not read the post's comments (HTTP ${error.status}).`,
     );
-  }
-  const comments = await response.json();
-  const list = Array.isArray(comments) ? comments : [];
+  });
   commentCache.set(id, { at: Date.now(), comments: list });
   return list;
 };
@@ -275,7 +265,7 @@ export const refreshPublishedRecord = async (published, posts, { fetchComments =
   let fetchedAny = false;
   for (const postId of postIds) {
     const post = byId.get(postId);
-    if (!post) continue; // closed, or past the first hundred: keep what we had
+    if (!post) continue; // closed, or past every page read: keep what we had
     const count = Number(post.comments) || 0;
     if (count === (commentCounts[postId] ?? 0)) continue;
     const comments = await fetchComments(postId);

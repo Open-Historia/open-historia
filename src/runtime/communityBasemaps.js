@@ -11,6 +11,8 @@
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
 import { unzipBundle, zipBundle } from "./bundleZip.js";
+import { bytesToBase64 } from "./bundleFiles.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues } from "./hubIssues.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -18,18 +20,13 @@ import { saveBlobToDisk } from "./saveFile.js";
 const utf8ToBase64 = (str) => btoa(unescape(encodeURIComponent(str)));
 const base64ToUtf8 = (b64) => decodeURIComponent(escape(atob(b64)));
 
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
-const HUB_API_BASEMAPS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=basemap&per_page=100`;
-// Scenario posts are scanned too: one shipped as a .zip carries a custom basemap,
-// which we surface in the basemap browser so a basemap shared via a scenario is
-// usable on its own without a second upload.
-const HUB_API_SCENARIOS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
+// Basemap posts are the hub's issues labelled "basemap". Scenario posts are
+// scanned too: one shipped as a .zip carries a custom basemap, which we surface
+// in the basemap browser so a basemap shared via a scenario is usable on its
+// own without a second upload. Both lists are hubIssues.js's, cached and shared
+// with the other hub screens.
 const SCENARIO_ZIP_PATTERN =
   /https:\/\/github\.com\/(?:[^\s)<>"']+\/releases\/download\/[^\s)<>"']+\.zip|user-attachments\/files\/[^\s)<>"']+\.zip)/i;
-const CACHE_TTL_MS = 5 * 60 * 1000;
-
 // A non-image data file linked in an issue body: an old .basemap.json bundle or a
 // new vector's .geojson attachment. Inline images (the new image payload/cover)
 // are NOT matched here — they live in coverImageUrl instead.
@@ -39,8 +36,6 @@ const COVER_IMAGE_PATTERN = /!\[[^\]]*\]\((https:\/\/[^\s)]+)\)|<img[^>]+src=["'
 const HASH_PATTERN = /Basemap-Hash:\s*([a-f0-9]{16,64})/i;
 const KIND_PATTERN = /Basemap-Kind:\s*(image|vector)/i;
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
-
-let cache = { at: 0, posts: null };
 
 // ---- data URL <-> bytes ---------------------------------------------------
 const MIME_TO_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/svg+xml": "svg" };
@@ -62,13 +57,6 @@ const base64ToBytes = (b64) => {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
   return bytes;
-};
-
-const bytesToBase64 = (bytes) => {
-  let bin = "";
-  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  for (let i = 0; i < arr.length; i += 1) bin += String.fromCharCode(arr[i]);
-  return btoa(bin);
 };
 
 const dataUrlToBytes = (dataUrl) => {
@@ -155,31 +143,21 @@ export const basemapPostInstallable = (post) =>
   Boolean(post?.fromScenario || post?.bundleUrl || (post?.kind === "image" && post?.coverImageUrl));
 
 export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
-  if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
-  const headers = { Accept: "application/vnd.github+json" };
   // Dedicated basemap posts, plus scenario posts (scanned so their basemaps show up
   // here too). The scenarios call is best-effort — a failure just hides those.
-  const [bmRes, scRes] = await Promise.all([
-    fetch(HUB_API_BASEMAPS, { headers }),
-    fetch(HUB_API_SCENARIOS, { headers }).catch(() => null),
+  const [bmIssues, scIssues] = await Promise.all([
+    fetchHubIssues("basemap", { force }).catch((error) => {
+      if (error?.status === undefined) throw error;
+      throw new Error(
+        error.status === 403
+          ? "GitHub rate limit reached — try again in a few minutes."
+          : `Could not reach the basemap hub (HTTP ${error.status}).`,
+      );
+    }),
+    fetchHubScenarioIssues({ force }).catch(() => []),
   ]);
-  if (!bmRes.ok) {
-    throw new Error(
-      bmRes.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the basemap hub (HTTP ${bmRes.status}).`,
-    );
-  }
-  const bmIssues = await bmRes.json();
-  const dedicated = (Array.isArray(bmIssues) ? bmIssues : []).filter((i) => !i.pull_request).map(parseBasemapPost);
-  let fromScenarios = [];
-  if (scRes && scRes.ok) {
-    const scIssues = await scRes.json().catch(() => []);
-    fromScenarios = (Array.isArray(scIssues) ? scIssues : [])
-      .filter((i) => !i.pull_request)
-      .map(parseScenarioAsBasemap)
-      .filter(Boolean);
-  }
+  const dedicated = bmIssues.map(parseBasemapPost);
+  const fromScenarios = scIssues.map(parseScenarioAsBasemap).filter(Boolean);
   // A basemap that also exists as a dedicated post is shown once (prefer the
   // dedicated post — real cover image, cheaper install). Scenario-carried basemaps
   // without a hash can't be deduped, so they always appear.
@@ -190,7 +168,6 @@ export const fetchCommunityBasemaps = async ({ force = false } = {}) => {
     if (s.contentHash) seen.add(s.contentHash);
     posts.push(s);
   }
-  cache = { at: Date.now(), posts };
   return posts;
 };
 

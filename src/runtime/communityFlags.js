@@ -11,21 +11,16 @@
 // Kept free of React/OpenLayers deps so the editor and the game can both use it.
 
 import { unzipBundle, looksLikeZip } from "./bundleZip.js";
+import { bytesToBase64 } from "./bundleFiles.js";
+import { HUB_URL, fetchHubIssues, fetchHubScenarioIssues } from "./hubIssues.js";
 
-const HUB_OWNER = "Open-Historia";
-const HUB_REPO = "Open-historia-scenarios";
-const HUB_URL = `https://github.com/${HUB_OWNER}/${HUB_REPO}`;
 // `labels=flag` is a contract with .github/ISSUE_TEMPLATE/flag.yml. The label must
 // EXIST in the repo — GitHub silently drops a label an issue form tries to apply if
 // it hasn't been created, and the post then never appears here.
-const HUB_API_FLAGS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=flag&per_page=100`;
 // Scenario posts are scanned too: one whose publish stamped a Flags-Count tag
 // carries custom flags in its bundle, and surfaces here as an installable flag
 // pack — the same trick communityBasemaps.js uses for scenario-carried basemaps.
-const HUB_API_SCENARIOS = `https://api.github.com/repos/${HUB_OWNER}/${HUB_REPO}/issues?state=open&labels=scenario&per_page=100`;
-
-const CACHE_TTL_MS = 5 * 60 * 1000;
-let cache = { at: 0, posts: null };
+// Both lists are hubIssues.js's, cached and shared with the other hub screens.
 
 const OFFICIAL_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -108,40 +103,23 @@ export const flagPostInstallable = (post) =>
   Boolean(post?.fromScenario ? post?.packUrl : post?.imageUrl);
 
 export const fetchCommunityFlags = async ({ force = false } = {}) => {
-  if (!force && cache.posts && Date.now() - cache.at < CACHE_TTL_MS) return cache.posts;
-
   // Dedicated flag posts, plus scenario posts (scanned so flags shared inside
   // scenarios show up here too). The scenarios call is best-effort — a failure
   // just hides the packs, exactly like the basemap browser.
-  const headers = { Accept: "application/vnd.github+json" };
-  const [res, scRes] = await Promise.all([
-    fetch(HUB_API_FLAGS, { headers }),
-    fetch(HUB_API_SCENARIOS, { headers }).catch(() => null),
+  const [issues, scIssues] = await Promise.all([
+    fetchHubIssues("flag", { force }).catch((error) => {
+      if (error?.status === undefined) throw error;
+      throw new Error(
+        error.status === 403
+          ? "GitHub rate limit reached — try again in a few minutes."
+          : `Could not reach the flag hub (HTTP ${error.status}).`,
+      );
+    }),
+    fetchHubScenarioIssues({ force }).catch(() => []),
   ]);
-  if (!res.ok) {
-    throw new Error(
-      res.status === 403
-        ? "GitHub rate limit reached — try again in a few minutes."
-        : `Could not reach the flag hub (HTTP ${res.status}).`,
-    );
-  }
-  const issues = await res.json();
-  const dedicated = (Array.isArray(issues) ? issues : [])
-    .filter((i) => !i.pull_request) // the issues endpoint returns PRs too
-    .map(parseFlagPost)
-    .filter(flagPostInstallable);
-  let packs = [];
-  if (scRes && scRes.ok) {
-    const scIssues = await scRes.json().catch(() => []);
-    packs = (Array.isArray(scIssues) ? scIssues : [])
-      .filter((i) => !i.pull_request)
-      .map(parseScenarioAsFlagPack)
-      .filter(Boolean);
-  }
-  const posts = [...dedicated, ...packs];
-
-  cache = { at: Date.now(), posts };
-  return posts;
+  const dedicated = issues.map(parseFlagPost).filter(flagPostInstallable);
+  const packs = scIssues.map(parseScenarioAsFlagPack).filter(Boolean);
+  return [...dedicated, ...packs];
 };
 
 // GitHub attachments send no CORS headers, so the bytes have to come through the
@@ -156,13 +134,7 @@ export const loadCommunityFlagDataUrl = async (post) => {
   const buf = await r.arrayBuffer();
   const ctype = (r.headers.get("content-type") || "").split(";")[0].trim();
   const mime = ctype.startsWith("image/") ? ctype : "image/png";
-  let binary = "";
-  const view = new Uint8Array(buf);
-  const chunk = 0x8000; // chunked: String.fromCharCode(...huge) overflows the stack
-  for (let i = 0; i < view.length; i += chunk) {
-    binary += String.fromCharCode(...view.subarray(i, i + chunk));
-  }
-  return `data:${mime};base64,${btoa(binary)}`;
+  return `data:${mime};base64,${bytesToBase64(new Uint8Array(buf))}`;
 };
 
 // Resolve a scenario flag pack to its flags: download the bundle through the
