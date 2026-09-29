@@ -4,6 +4,7 @@ import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat, institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycle.js";
 import { collectActiveScenarioPolityKeys } from "../../runtime/scenarioPolities.js";
 import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
+import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import {
   buildInstitutionDiplomacyView,
   buildPublicInstitutionDiplomacyView,
@@ -501,7 +502,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
       const proposalId = clean(result?.proposal?.id);
       if (!proposalId) throw new Error("The proposal was created but its canonical id was not returned.");
       if (mode === "vote") {
-        result = await commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() });
+        result = await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() }), { institutionId, proposalId, expectedGameId: expectedGameId() });
         adopt(result);
       }
       setProposalTitle("");
@@ -529,7 +530,7 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     setBusy(`submit:${proposalId}`);
     setError("");
     try {
-      const result = await commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() });
+      const result = await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({ institutionId, proposalId, playerCountry, date: gameDate, expectedGameId: expectedGameId() }), { institutionId, proposalId, expectedGameId: expectedGameId() });
       adopt(result);
       try {
         await onRequestCouncilTurn?.({ institutionId, proposalId, kind: "vote", playerComment, source: "call-vote" });

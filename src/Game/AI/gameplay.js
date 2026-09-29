@@ -308,7 +308,8 @@ import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js"
 import { applyChatActionBatch, describeChatActionFeedback } from "./chatActions.js";
 import { partitionInstitutionChatActions } from "./institutionChatActions.js";
 import { parseInstitutionLifecycleResponsesJson, partitionInstitutionLifecycleChatActions } from "./institutionLifecycleChatActions.js";
-import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement } from "../../runtime/institutionalGovernance.js";
+import { applyInstitutionalChatGovernanceBatch, commitInstitutionalChatGovernanceBatch, commitInstitutionalDiplomaticReply, commitInstitutionBallotSettlement, commitInstitutionGovernanceCommand } from "../../runtime/institutionalGovernance.js";
+import { commitWithVotingRuleBackfill, isVotingRuleUnspecified } from "./institutionGovernanceRetry.js";
 import {
   autonomousInstitutionBallotDirective,
   collectAutonomousInstitutionBallotWork,
@@ -12410,6 +12411,34 @@ export const runChatActionBatch = async ({
         cursors: nextCursors,
         expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
       });
+    // An AI sponsor's submit refused only for want of a charter voting rule
+    // gets the one-time rule backfill and one more try
+    // (institutionGovernanceRetry.js). Never in an evaluation's dry run.
+    const stalledSubmit = evaluation?.dryRun
+      ? null
+      : normalizeArray(committedInstitution.rejected).find((entry) => entry?.action?.type === "institution_submit_proposal" && isVotingRuleUnspecified(entry));
+    if (stalledSubmit?.command) {
+      const expectedGameId = normalizeString(bundle.game?.id || bundle.game?.gameId);
+      try {
+        const retried = await commitWithVotingRuleBackfill(() => commitInstitutionGovernanceCommand({
+          institutionId: stored.institutionId,
+          playerCountry: player,
+          date: turnTime,
+          command: stalledSubmit.command,
+          expectedGameId,
+        }), { institutionId: stored.institutionId, proposalId: stalledSubmit.command.proposalId, expectedGameId });
+        committedInstitution = {
+          ...committedInstitution,
+          world: retried.world,
+          institution: retried.institution || committedInstitution.institution,
+          channel: retried.channel || committedInstitution.channel,
+          applied: [...normalizeArray(committedInstitution.applied), { action: stalledSubmit.action, command: stalledSubmit.command, proposal: retried.proposal || null }],
+          rejected: normalizeArray(committedInstitution.rejected).filter((entry) => entry !== stalledSubmit),
+        };
+      } catch (error) {
+        stalledSubmit.reason = normalizeString(error?.message || error) || stalledSubmit.reason;
+      }
+    }
     formalRejected = committedInstitution.rejected || [];
   } else if (stored.lifecycleInstitutionId && lifecycleActions.length) {
     if (evaluation?.dryRun) {

@@ -16,6 +16,7 @@ import { buildInstitutionDrafts, institutionDraftButtonLabel } from "./advisorIn
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
+import { commitWithVotingRuleBackfill } from "../AI/institutionGovernanceRetry.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -1416,13 +1417,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                     },
                 });
             } else if (draft.type === "submit-proposal") {
-                await commitInstitutionalPlayerVoteRequest({
+                await commitWithVotingRuleBackfill(() => commitInstitutionalPlayerVoteRequest({
                     institutionId: draft.institutionId,
                     proposalId: draft.proposalId,
                     playerCountry,
                     date,
                     expectedGameId,
-                });
+                }), { institutionId: draft.institutionId, proposalId: draft.proposalId, expectedGameId });
             } else if (draft.type === "vote") {
                 await commitInstitutionGovernanceCommand({
                     institutionId: draft.institutionId,

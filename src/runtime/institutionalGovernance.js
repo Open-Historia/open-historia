@@ -85,7 +85,7 @@ export const INSTITUTION_GOVERNANCE_ERROR_CODES = Object.freeze({
   VOTING_RULE_UNSPECIFIED: "institution-voting-rule-unspecified",
 });
 
-const governanceError = (message, code) => Object.assign(new Error(message), { code });
+const governanceError = (message, code, detail = {}) => Object.assign(new Error(message), { code, ...detail });
 
 const memberByPolity = (institution, polity) => list(institution?.members)
   .find((member) => lower(member?.polity) === lower(polity));
@@ -435,6 +435,7 @@ export const openInstitutionProposalVoting = ({
     throw governanceError(
       `${institution.name} has no canonical voting rule for proposal type ${proposal.type}.`,
       INSTITUTION_GOVERNANCE_ERROR_CODES.VOTING_RULE_UNSPECIFIED,
+      { institutionId: institution.id, institutionName: institution.name },
     );
   }
   const eligibleVoters = institutionEligibleVoters(institution, rule);
@@ -1431,7 +1432,7 @@ export const applyInstitutionalChatGovernanceBatch = ({
       events = result.events;
       applied.push({ action, command, proposal: result.proposal || null, ballot: result.ballot || null, outcome: result.outcome || null });
     } catch (error) {
-      rejected.push({ action, reason: clean(error?.message || error) || "formal institutional action was refused" });
+      rejected.push({ action, command, reason: clean(error?.message || error) || "formal institutional action was refused", ...(error?.code ? { code: error.code } : {}) });
     }
   }
 
