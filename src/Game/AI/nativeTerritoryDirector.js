@@ -66,7 +66,6 @@ const hasTerritorialContent = (event) => {
   return (
     normalizeArray(impacts.regionTransfers).length > 0 ||
     normalizeArray(impacts.regionControlOps).length > 0 ||
-    normalizeArray(impacts.unitOps).some((op) => op?.op === "attack") ||
     TERRITORIAL_EVENT_PATTERN.test(eventText(event))
   );
 };

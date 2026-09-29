@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   activeWarIdsForPolity,
   applyWarUpdates,
+  bindWarUpdatesToEvents,
   buildCanonicalWarContext,
   decodeWarUpdates,
   eventNarratesHardCombat,
@@ -132,6 +133,26 @@ test("fighting tagged with a ceasefire war's id resumes that war", () => {
   const withRecord = { ...battle("war-france-germany-1914"), warUpdates: "war-france-germany-1914~resume~~~1~The truce collapses" };
   assert.equal(reconcileCombatWarState(withRecord, { world: truce }).resumed, 0);
   assert.equal(decodeWarUpdates(withRecord.warUpdates).length, 1);
+});
+
+// A record that already crossed a segment or hidden-pass boundary carries
+// stable eventIds; its eventIndexes point into the answer it came from, not
+// the combined batch it is bound against now. Reading them again rebinds the
+// record to an unrelated event — the ground BugReport1's dropped wars grew in.
+test("binding keeps a record's existing event ids over its pass-local indexes", () => {
+  const events = [
+    { id: "turn-event-1", date: "1915-01-01", title: "Unrelated", description: "", kind: "politics" },
+    { id: "turn-event-2", date: "1915-01-02", title: "Also unrelated", description: "", kind: "politics" },
+  ];
+  const [carried] = bindWarUpdatesToEvents([{ id: "w", op: "start", actors: ["A"], opponents: ["B"], eventIds: ["segment-1-event-4"], eventIndexes: [0] }], events);
+  assert.deepEqual(carried.eventIds, ["segment-1-event-4"], "the stable id wins");
+
+  const [fresh] = bindWarUpdatesToEvents("w~start~A~B~2,2,1~Declaration", events);
+  assert.deepEqual(fresh.eventIds, ["turn-event-2", "turn-event-1"], "indexes resolve against this batch, once each, in order");
+
+  const many = Array.from({ length: 30 }, (_, index) => `event-${index}`);
+  const [capped] = bindWarUpdatesToEvents([{ id: "w", op: "start", eventIds: [...many, many[0]] }], events);
+  assert.deepEqual(capped.eventIds, many.slice(0, 24), "de-duplicated and capped at 24");
 });
 
 test("a readiness event naming two allies is not combat and creates no war", () => {

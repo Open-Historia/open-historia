@@ -11,8 +11,6 @@ import { normalizeEvents, normalizeWorldState } from "../../runtime/gameState.js
 import { toCountryName } from "../../runtime/ownerNames.js";
 import { compareGameDates, parseGameDate } from "../../runtime/gameDates.js";
 
-export const WAR_LEDGER_VERSION = "0.1.4-adversarial-war-start";
-
 const WAR_UPDATE_SEPARATOR = "~";
 const MAX_WAR_UPDATES_PER_PASS = 16;
 const MAX_WARS = 64;
@@ -475,41 +473,6 @@ const eventSupportsNewWarStart = (event) => {
   );
 };
 
-const eventHasHardCombat = (event) => {
-  const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : {};
-  if (normalizeArray(impacts.unitOps).some((op) => normalizeString(op?.op).toLowerCase() === "attack")) return true;
-  return eventNarratesHardCombat(event);
-};
-
-// Integration guard for Native Unit Director and other post-processors.
-// Remove only unsupported attack ops. Other unit mutations are left alone.
-export const stripUnsupportedUnitAttackOps = (events = []) => {
-  const dropped = [];
-
-  normalizeArray(events).forEach((event, eventIndex) => {
-    const impacts = event?.impacts && typeof event.impacts === "object" ? event.impacts : null;
-    if (!impacts || !Array.isArray(impacts.unitOps) || eventNarratesHardCombat(event)) return;
-
-    const kept = [];
-    impacts.unitOps.forEach((op, opIndex) => {
-      if (normalizeString(op?.op).toLowerCase() !== "attack") {
-        kept.push(op);
-        return;
-      }
-      dropped.push({
-        eventIndex,
-        opIndex,
-        title: normalizeString(event?.title),
-        unitId: normalizeString(op?.unitId),
-        targetUnitId: normalizeString(op?.targetUnitId),
-      });
-    });
-    impacts.unitOps = kept;
-  });
-
-  return dropped;
-};
-
 const eventTransitionExpectation = (event) => {
   const title = normalizeString(event?.title);
   if (WAR_START_RE.test(title)) return new Set(["start", "join-a", "join-b", "resume"]);
@@ -633,7 +596,7 @@ const validateBoundWarBatch = ({ events, updates, world, requireUpdateLinks = tr
       return `Event "${normalizeString(event.title)}" references warId ${warId}, but no such canonical war exists at that point in the timeline.`;
     }
 
-    if (eventHasHardCombat(event)) {
+    if (eventNarratesHardCombat(event)) {
       if (!warId) {
         return `Combat event "${normalizeString(event.title)}" has no event.warId. Battles, invasions, offensives, bombardments, active fronts and unit attacks require an active canonical war.`;
       }
@@ -775,7 +738,7 @@ export const reconcileCombatWarState = (candidate, { world = {} } = {}) => {
     const event = events[index];
     if (!event || typeof event !== "object" || Array.isArray(event)) continue;
 
-    const hardCombat = eventHasHardCombat(event);
+    const hardCombat = eventNarratesHardCombat(event);
     if (!hardCombat) {
       const explicitWarId = normalizeString(event.warId);
       const matchingUpdate = explicitWarId
