@@ -19,7 +19,7 @@ import { buildForcePostureText } from "./forcePosture.js";
 import { describePlayerGroupForPrompt } from "../../runtime/groups.js";
 import { STALE_ROUNDS, describeTimeline, deriveProjectFlags, isPlayerProject } from "../../runtime/projects.js";
 import { buildTerritoryIndex } from "./territoryOutlines.js";
-import { compareGameDates, compareGameDatesNewestFirst, formatGameDateReadable } from "../../runtime/gameDates.js";
+import { compareGameDates, compareGameDatesNewestFirst, diffGameDays, formatGameDateReadable, isGameDate } from "../../runtime/gameDates.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -162,16 +162,15 @@ const buildLedgerActorSet = (world) => {
   return actors;
 };
 
-const daysBetweenIso = (from, to) => {
-  const start = dayjs(from);
-  const end = dayjs(to);
-  return start.isValid() && end.isValid() ? end.diff(start, "day") : 0;
-};
+// An event whose date cannot be read has an unknown age: it ranks as if half a
+// year old, neither brand new nor forgotten.
+const UNKNOWN_AGE_RECENCY = 0.5;
 
 const rankEvent = (event, { ledgerActors, currentDate }) => {
-  const date = normalizeString(event?.date);
-  const recencyDays = currentDate && date ? Math.max(0, daysBetweenIso(date, currentDate)) : 0;
-  const recencyScore = 1 / (1 + recencyDays / 180);
+  // Days through runtime/gameDates.js: dayjs reads -0218 as AD 218, which made
+  // every earlier BC year look newer than this one.
+  const ageDays = isGameDate(currentDate) ? diffGameDays(event?.date, currentDate) : 0;
+  const recencyScore = ageDays === null ? UNKNOWN_AGE_RECENCY : 1 / (1 + Math.max(0, ageDays) / 180);
   const importanceScore = normalizeLower(event?.importance) === "major" ? 1 : 0.4;
   const involved = normalizeArray(event?.impacts?.regionTransfers)
     .flatMap((transfer) => [transfer?.fromCode, transfer?.toCode])
