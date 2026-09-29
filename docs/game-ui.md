@@ -468,7 +468,7 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 | State | Controls | Calls |
 |---|---|---|
 | On offer | the event's title, date and description; *Your angle (optional)*; **Play it out** and **Let it pass**, the cost said beside them; a note, and **Play it out** off, while the reveal is unfinished | `createInteractive({ eventId, angle })`, `declineInteractiveOffer()` (then the panel closes) |
-| A scene | title, premise, *Your angle*, each move played (**↶ Take back**), the scene's current text, the offered choices and an own-move box with **Play**, **End the scene** (off with no move played) and **Set aside** | `advanceActiveInteractive`, `rewindActiveInteractive({ beatIndex })`, `endActiveInteractive`, `setAsideActiveInteractive` |
+| A scene | title, premise, *Your angle*, each move played (**↶ Take back**), the scene's current text, the offered choices and an own-move box with **Play**, **End the scene** (off with no move played) and **Set aside** (two presses once a move is played: the second press reads "You've played N moves — set it aside anyway?", and lapses after 4 s on a touch screen) | `advanceActiveInteractive`, `rewindActiveInteractive({ beatIndex })`, `endActiveInteractive`, `setAsideActiveInteractive` |
 | Finished | *The scene is over and written into the record* with **See it on the timeline** | — |
 | Nothing | *No interactive event is waiting*, and when one comes | — |
 
