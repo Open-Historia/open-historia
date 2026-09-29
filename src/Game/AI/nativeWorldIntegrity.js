@@ -2218,11 +2218,12 @@ export const bindWorldEventAuthorityRefs = (candidate, {
       if (!isPlayer) return next;
 
       if (authority === "player-order") {
-        const resolved = resolveUniqueSemanticAuthority(eventWithAgency, actionRecords, {
+        const semantic = resolveUniqueSemanticAuthority(eventWithAgency, actionRecords, {
           playerCanonical,
           threshold: 0.34,
           margin: 0.1,
         });
+        const resolved = semantic.match ? semantic : citedCurrentOrder(eventWithAgency, actionRecords) || semantic;
         next.authorityRef = resolved.match?.id || "";
         if (resolved.match) {
           boundActionIds.push(resolved.match.id);
@@ -2528,8 +2529,45 @@ const rawAgencyClaimsPlayerSovereignty = (rawAgency, resolver, playerCanonical) 
   return principalKind === "polity" && resolver.equivalent(rawAgency.principal, playerCanonical);
 };
 
-const nativeDomesticAgency = (event, playerCanonical, authority) => ({
-  principal: nativeSubjectLabel(event) || `${playerCanonical} domestic process`,
+// Whether a name is one of the world's polities, by any of its names. Such a
+// principal is a government, which no non-sovereign authority may stand for.
+const namesKnownPolity = (resolver, value) => {
+  const name = normalizeString(value).toLowerCase();
+  return Boolean(name) && resolver.records.some((record) =>
+    [record.canonical, ...normalizeArray(record.aliases)]
+      .some((alias) => normalizeString(alias).toLowerCase() === name));
+};
+
+// The domestic body or process a player's own event is about. The title's
+// subject is the natural label ("Latvian State Border Guard"), but a title that
+// opens with the country itself ("Poland Arrests Smuggling Ring") would make the
+// government the principal, and the agency check rightly refuses that. Such an
+// event is named after what the text shows acting instead: the police, the
+// protests.
+const nativeDomesticPrincipal = (event, playerCanonical, authority, resolver) => {
+  const label = nativeSubjectLabel(event);
+  if (label && !namesKnownPolity(resolver, label)) return label;
+  const fullText = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
+  const pattern = authority === "delegated-routine" ? DELEGATED_DOMESTIC_ACTOR_RE : ENDOGENOUS_DOMESTIC_PROCESS_RE;
+  const cue = normalizeString(pattern.exec(fullText)?.[0]).toLowerCase();
+  return cue ? `${playerCanonical} ${cue}` : `${playerCanonical} domestic process`;
+};
+
+// A queued order the event itself cites in impacts.actionIds, when the event
+// makes no fresh sovereign choice: the player's own government carrying out
+// what the player asked for ("Poland Launches Anti-Mafia Operation" answering
+// "Crack down on organised crime"). Citing an order never authorizes a treaty,
+// a war or any other sovereign act; those still need the semantic match.
+const citedCurrentOrder = (event, actionRecords) => {
+  if (eventCrossesFreshSovereignPolicyBoundary(event)) return null;
+  const cited = new Set(normalizeArray(event?.impacts?.actionIds).map(normalizeString).filter(Boolean));
+  const matches = normalizeArray(actionRecords).filter((entry) => cited.has(entry.id));
+  if (matches.length !== 1) return null;
+  return { match: { ...matches[0], score: 1 }, scored: [], reason: "cited-current-order" };
+};
+
+const nativeDomesticAgency = (event, playerCanonical, authority, resolver) => ({
+  principal: nativeDomesticPrincipal(event, playerCanonical, authority, resolver),
   principalKind: authority === "delegated-routine" ? "domestic-actor" : "domestic-process",
   sovereignPolity: "",
   authority,
@@ -2583,6 +2621,7 @@ const deriveNativeEventAgency = (event, {
       threshold: 0.34,
       margin: 0.1,
     });
+    if (!actionMatch.match) actionMatch = citedCurrentOrder(event, actionRecords) || actionMatch;
     commitmentMatch = resolveUniqueSemanticAuthority(event, commitmentRecords, {
       playerCanonical,
       threshold: 0.28,
@@ -2686,10 +2725,10 @@ const deriveNativeEventAgency = (event, {
   if (subjectPolity) {
     if (playerCanonical && resolver.equivalent(subjectPolity, playerCanonical)) {
       if (!crossesSovereign && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
-        return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine") };
+        return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
       }
       if (!crossesSovereign && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
-        return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic") };
+        return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
       }
       return { agency: null, reason: crossesSovereign ? "player-fresh-sovereign-choice-without-authority" : "player-event-not-safely-classifiable", source: "native-unresolved-player" };
     }
@@ -2750,10 +2789,10 @@ const deriveNativeEventAgency = (event, {
   }
 
   if (playerMentioned && !crossesSovereign && DELEGATED_DOMESTIC_ACTOR_RE.test(fullText)) {
-    return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine") };
+    return { source: "native-player-delegated", reason: "bounded-domestic-actor", agency: nativeDomesticAgency(event, playerCanonical, "delegated-routine", resolver) };
   }
   if (playerMentioned && !crossesSovereign && ENDOGENOUS_DOMESTIC_PROCESS_RE.test(fullText)) {
-    return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic") };
+    return { source: "native-player-endogenous", reason: "endogenous-domestic-process", agency: nativeDomesticAgency(event, playerCanonical, "endogenous-domestic", resolver) };
   }
   if (playerMentioned && crossesSovereign) {
     return { agency: null, reason: "player-fresh-sovereign-choice-without-authority", source: "native-unresolved-player" };
@@ -2803,10 +2842,7 @@ const nonSovereignPlayerActivityReason = (event, agency, { world = {}, resolver,
   if (!jurisdiction) return `${authority} jurisdictionPolity does not resolve to a canonical polity`;
   const principalKind = normalizeString(agency?.principalKind).toLowerCase();
   const principal = normalizeString(agency?.principal);
-  const knownPolityPrincipal = resolver.records.some((record) =>
-    [record.canonical, ...normalizeArray(record.aliases)]
-      .some((name) => normalizeString(name).toLowerCase() === principal.toLowerCase()));
-  if (principalKind === "polity" || knownPolityPrincipal) {
+  if (principalKind === "polity" || namesKnownPolity(resolver, principal)) {
     return `${authority} cannot relabel a sovereign polity/government principal as non-sovereign activity`;
   }
   if (authority === "delegated-routine" && !["domestic-actor", "organization", "person", "institution"].includes(principalKind)) {
@@ -2985,11 +3021,7 @@ const eventAgencyAuthorityReason = (event, {
     // Own-right discretion is not confined to sovereign governments. Membership
     // in a collective institution is NOT a fresh choice by every member state.
     // Conversely, relabeling a known government as a private actor grants nothing.
-    const principalKey = normalizeString(agency.principal).toLowerCase();
-    const knownPolity = resolver.records.some((record) =>
-      [record.canonical, ...normalizeArray(record.aliases)]
-        .some((name) => normalizeString(name).toLowerCase() === principalKey));
-    if (agency.principalKind === "polity" || knownPolity) {
+    if (agency.principalKind === "polity" || namesKnownPolity(resolver, agency.principal)) {
       return `${agency.authority} authority for a polity requires at least one sovereignActors row`;
     }
     if (agency.principalKind === "exogenous-process") {
