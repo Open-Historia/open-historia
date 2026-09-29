@@ -19,6 +19,12 @@ test("a code-like name also goes in as the Flag-Code hint; a longer name is not 
   assert.equal(technicalOf(flagPublishQuery({ polity: "Two\nLines" })), "Flag-Polity: Two Lines");
 });
 
+test("an old My flags code hint goes in as Flag-Code only, never as the polity's name", () => {
+  assert.equal(technicalOf(flagPublishQuery({ code: "DEU" })), "Flag-Code: DEU");
+  assert.equal(technicalOf(flagPublishQuery({ code: "HOLY ROMAN E" })), "");
+  assert.equal(technicalOf(flagPublishQuery({ polity: "Holy Roman Empire", code: "HOLY ROMAN E" })), "Flag-Polity: Holy Roman Empire");
+});
+
 test("a shared flag is saved under its name with its image type's extension", () => {
   assert.equal(flagFileName("Holy Roman Empire flag", "data:image/png;base64,AAAA"), "holy-roman-empire-flag.png");
   assert.equal(flagFileName("Kuizltan", "data:image/jpeg;base64,AAAA"), "kuizltan.jpg");

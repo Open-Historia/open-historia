@@ -214,11 +214,15 @@ export const communityFlagsHubUrl = () =>
 // The prefilled issue form's query. `polity` is the name the flag is for: it goes
 // in exactly, as Flag-Polity, and as the Flag-Code hint only when it already is a
 // short code-like token ("DEU", "Kuizltan") — a longer name used to arrive cut
-// down to its first word ("HOLY").
-export const flagPublishQuery = ({ name = "", author = "", polity = "" } = {}) => {
+// down to its first word ("HOLY"). `code` is only for a flag that has no polity
+// name, just an old code hint (a My flags entry saved before the library kept
+// the name): it goes in as Flag-Code when it is a code-like token, never as
+// Flag-Polity.
+export const flagPublishQuery = ({ name = "", author = "", polity = "", code = "" } = {}) => {
   const exact = String(polity || "").replace(/[\r\n]+/g, " ").trim();
+  const hint = exact || String(code || "").trim();
   const technical = [
-    CODE_TOKEN.test(exact) ? `Flag-Code: ${exact.toUpperCase()}` : "",
+    CODE_TOKEN.test(hint) ? `Flag-Code: ${hint.toUpperCase()}` : "",
     exact ? `Flag-Polity: ${exact}` : "",
   ].filter(Boolean).join("\n");
   return [
@@ -261,10 +265,10 @@ export const flagDataUrlToBlob = (dataUrl) => {
 // flags): save it as a file first, the way publishBasemap does, so the author has
 // something to drag into the form, then open the form. Returns the file's name
 // for the "drag it in" note.
-export const publishFlag = async ({ name = "", author = "", polity = "", dataUrl } = {}) => {
+export const publishFlag = async ({ name = "", author = "", polity = "", code = "", dataUrl } = {}) => {
   const blob = flagDataUrlToBlob(dataUrl);
   const fileName = flagFileName(name || polity, dataUrl);
   await saveBlobToDisk(blob, fileName);
-  openFlagPublishForm({ name, author, polity });
+  openFlagPublishForm({ name, author, polity, code });
   return { fileName };
 };

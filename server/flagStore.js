@@ -37,6 +37,10 @@ const hashOf = (dataUrl) => crypto.createHash("sha256").update(String(dataUrl)).
 const slug = (raw, fallback = "flag") =>
   String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
 
+// A polity name is an exact key: kept as given, never cut short. One too long
+// to be a name is dropped rather than truncated into a different one.
+const exactPolity = (value) => (typeof value === "string" && value.length <= 200 ? value : "");
+
 export const listFlags = () => readAll();
 
 // A flag is a 256px PNG — tens of kilobytes. The only check used to be that the
@@ -78,6 +82,9 @@ export const createFlag = (body = {}) => {
     id,
     name: String(body.name || body.code || "Flag").slice(0, 80),
     code: String(body.code || "").toUpperCase().slice(0, 12),
+    // The polity the flag is for, exactly as the map names it: `code` above is
+    // only an upper-cased 12-character hint, which sharing must not send on.
+    polity: exactPolity(body.polity),
     author: String(body.author || "").slice(0, 80),
     dataUrl,
     contentHash,

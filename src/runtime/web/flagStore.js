@@ -20,6 +20,9 @@ import { sha256Hex } from "../sha256.js";
 const slug = (raw, fallback = "flag") =>
   String(raw ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || fallback;
 
+// Same rule as server/flagStore.js: a polity name is kept exactly, or dropped.
+const exactPolity = (value) => (typeof value === "string" && value.length <= 200 ? value : "");
+
 const jsonResponse = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -46,6 +49,7 @@ const createFlag = async (body = {}) => {
     id,
     name: String(body.name || body.code || "Flag").slice(0, 80),
     code: String(body.code || "").toUpperCase().slice(0, 12),
+    polity: exactPolity(body.polity),
     author: String(body.author || "").slice(0, 80),
     dataUrl,
     contentHash,

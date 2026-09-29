@@ -242,6 +242,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
         await saveFlag({
           name: file.name?.replace(/\.[^.]+$/, "") || ownerCode || "Flag",
           code: ownerCode || "",
+          polity: ownerCode || "",
           author,
           dataUrl,
         });
@@ -257,10 +258,12 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
 
   // Share a flag that only exists inside the app: save it as a file, open the
   // hub's form, and say what to do with the file — the basemap picker's flow.
-  // `polity` goes to the form exactly (Flag-Polity).
-  const handlePublish = async ({ name, polity, dataUrl, author: by }) => {
+  // `polity` goes to the form exactly (Flag-Polity). A My flags entry saved
+  // before the library kept `polity` has only its upper-cased `code` hint,
+  // which is never sent as the polity's name.
+  const handlePublish = async ({ name, polity, code, dataUrl, author: by }) => {
     try {
-      const { fileName } = await publishFlag({ name, polity, dataUrl, author: by || author });
+      const { fileName } = await publishFlag({ name, polity, code, dataUrl, author: by || author });
       window.alert(`"${fileName}" was downloaded. On the GitHub page that opened, drag that file into the flag image box, then submit.`);
     } catch (e) {
       window.alert(`Could not prepare that flag for sharing: ${e?.message || e}`);
@@ -281,9 +284,11 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
       try {
         await saveFlag({
           name: post.title || post.polity || post.code || "Flag",
-          // The exact polity name when the post has one (Flag-Polity); older
-          // posts only carry the upper-cased Flag-Code hint.
+          // `code` is the library's upper-cased 12-character hint; the exact
+          // polity name (Flag-Polity) is kept in `polity`. Older posts only
+          // carry the Flag-Code hint.
           code: post.polity || post.code || "",
+          polity: post.polity || "",
           author: post.author || "",
           dataUrl,
           source: { community: true, url: post.url || null },
@@ -315,6 +320,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
           await saveFlag({
             name: flag.code || post.title,
             code: flag.code || "",
+            polity: flag.code || "",
             author: post.author || "",
             dataUrl: flag.dataUrl,
             source: { community: true, url: post.url || null },
@@ -420,7 +426,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                   <div style={rowTitle}>My flags</div>
                   <div style={{ ...grid, marginBottom: "1rem" }}>
                     {mine
-                      .filter((f) => !q || `${f.name} ${f.code}`.toLowerCase().includes(q))
+                      .filter((f) => !q || `${f.name} ${f.code} ${f.polity || ""}`.toLowerCase().includes(q))
                       .map((f) => (
                         <FlagCard
                           key={f.id}
@@ -429,7 +435,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                           imageUrl={f.dataUrl}
                           active={currentFlag === f.dataUrl}
                           onClick={() => pick(f.dataUrl)}
-                          onPublish={isDataUrl(f.dataUrl) ? () => handlePublish({ name: f.name, polity: f.code || "", dataUrl: f.dataUrl, author: f.author }) : undefined}
+                          onPublish={isDataUrl(f.dataUrl) ? () => handlePublish({ name: f.name, polity: f.polity || "", code: f.code || "", dataUrl: f.dataUrl, author: f.author }) : undefined}
                           onDelete={async () => { await deleteFlag(f.id).catch(() => {}); refreshMine(); }}
                         />
                       ))}
