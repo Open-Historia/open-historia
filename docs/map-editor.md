@@ -470,7 +470,7 @@ When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`)
 
 ## 21. Document migration (`documentMigration.js`)
 
-`migrateDocumentOwners(doc)` runs on every **open** (`MapEditor.openDoc`, `:245`). A doc is legacy while `ownerSchema < OWNER_SCHEMA`. Migration rekeys `colorOverrides`/`flags`/`tags` and every region `owner` from GADM code → name via `COUNTRY_NAMES` (`rekeyOwnerMap`), strips region `country`, and stamps `ownerSchema = OWNER_SCHEMA`. It lives in the editor (not the store) because a document is the one path where legacy owners can enter a scenario already wearing a "migrated" badge (an applied doc inherits the target's `ownerSchema`, so the store's migration would never run). No-op once migrated — safe to call every open.
+`migrateDocumentOwners(doc)` runs on every **open** (`MapEditor.openDoc`, `:245`). A doc is legacy while `ownerSchema < OWNER_SCHEMA`. Migration rekeys `colorOverrides`/`flags`/`tags` and every region `owner` from GADM code → name via `COUNTRY_NAMES` (`rekeyOwnerMap`), strips region `country`, and stamps `ownerSchema = OWNER_SCHEMA`. It lives in the editor (not the store) because a document is the one path where legacy owners can enter a scenario already wearing a "migrated" badge (an applied doc inherits the target's `ownerSchema`, so the store's migration would never run). No-op once migrated — safe to call every open. `polities`, `units`, `groups` and `puppets` are deliberately not re-keyed: they were added to documents after `createDocument` began stamping `ownerSchema`, so any document carrying them is name-keyed already. `documentMigration.test.js` pins all of this.
 
 ---
 
