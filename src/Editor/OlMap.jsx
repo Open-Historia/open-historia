@@ -2479,17 +2479,19 @@ const OlMap = ({
         notifyRegions({ loaded: true });
       },
       // Both reseeds resolve once the world is on the map, so the Workshop can
-      // wait for it (MapEditor's hydration keeps Save disabled until then).
+      // wait for it (MapEditor's hydration keeps Save disabled until then): true
+      // when it landed, false when a newer load had replaced it first.
       reseedWorld: () => {
         const load = ++mapLoads;
         return loadSeedFeatures().then((feats) => {
-          if (load !== mapLoads) return;
+          if (load !== mapLoads) return false;
           regionSource.clear();
         savedRegionHashes.clear();
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
           notifyRegions({ loaded: true });
+          return true;
         });
       },
       // Seed the modern world, then stamp a scenario's ownership overrides on
@@ -2498,7 +2500,7 @@ const OlMap = ({
       reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
         const load = ++mapLoads;
         return loadSeedFeatures().then((feats) => {
-          if (load !== mapLoads) return;
+          if (load !== mapLoads) return false;
           regionSource.clear();
         savedRegionHashes.clear();
           const stampClaims = claimStamper(claimOverrides);
@@ -2511,6 +2513,7 @@ const OlMap = ({
           regionLayer.changed();
           labelLayer.changed();
           notifyRegions({ loaded: true });
+          return true;
         });
       },
       undo: () => doUndo(),

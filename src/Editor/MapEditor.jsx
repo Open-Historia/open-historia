@@ -558,11 +558,22 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     return ok;
   };
 
+  // Loading the stock world is not an edit, but an edit made while it was still
+  // downloading was saved with the map as it stood then: once the world is on
+  // the map, it is written again.
+  const writeAgainOnceLoaded = (loading) => {
+    const editsAtStart = d.editCount();
+    return Promise.resolve(loading).then((applied) => {
+      if (applied && d.editCount() !== editsAtStart) d.setSaveStatus("dirty");
+      return applied;
+    });
+  };
+
   const newDoc = async (kind) => {
     if (!(await settleBeforeReplacing("This map has changes that could not be saved. Start a new map and lose them?"))) return;
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
-    else api?.reseedWorld();
+    else writeAgainOnceLoaded(api?.reseedWorld());
     setCustomBg(null);
     setCustomBgId(null);
     markLoaded(null);
@@ -768,7 +779,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // arrives seconds later: Save and Apply wait for it (hydrated, below).
     const mapLoaded = initialMap.regions
       ? api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null)
-      : api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
+      : writeAgainOnceLoaded(api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null));
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
