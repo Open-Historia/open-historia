@@ -1978,8 +1978,12 @@ export const buildPromptContext = async (bundle, {
           normalizeArray(entry.countries).map((country) => normalizeString(country?.name))),
       ].filter(Boolean);
       let territories = null;
+      // With no unit on the map there is nothing to place. On a hand-drawn
+      // world the index reads the scenario's whole regions file, which is never
+      // cached, so it is not read for a readout that will not use it.
+      const placed = normalizeArray(world.units).some((unit) => Number.isFinite(unit?.lng) && Number.isFinite(unit?.lat));
       try {
-        territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
+        if (placed) territories = await buildTerritoryIndex(world, { owners: [...new Set(owners)] });
       } catch (error) {
         // Border proximity is colour on top; never let it break a prompt build.
         console.warn("[ai] force posture fell back to positions only:", error);
