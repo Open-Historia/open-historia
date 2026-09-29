@@ -13,14 +13,21 @@ const functionBody = (name) => {
   return next === -1 ? gameplaySource.slice(start) : gameplaySource.slice(start, next);
 };
 
-test("Round-Zero publication uses one guarded canonical mutation instead of independent event/world writes", () => {
+test("Round-Zero publication recompiles the semantic candidate inside one guarded canonical mutation", () => {
   const body = functionBody("maybeGeneratePregameHistory");
   assert.match(body, /const campaignId = activeCampaignId\(\)/);
   assert.match(body, /mutateCanonicalTurnState\(\(current\) =>/);
+  assert.match(body, /const currentWorld = normalizeWorldState\(current\.world\)/);
+  assert.match(body, /compilePregameBootstrapCandidate\(\{/);
+  assert.match(body, /candidate: buildPregameSemanticCandidate\(payload\)/);
+  assert.match(body, /eventIdsByRef: eventRefs\.map/);
+  assert.match(body, /compilation\.projectedWorld/);
   assert.match(body, /expectedGameId: campaignId/);
-  assert.match(body, /Round-Zero canonical .* conservation failed/);
   assert.doesNotMatch(body, /writeEventsState\(bootstrapEvents/);
   assert.doesNotMatch(body, /writeWorldState\(bootstrapWorld/);
+  assert.doesNotMatch(body, /applyWarUpdates\(/);
+  assert.doesNotMatch(body, /applyDiplomaticUpdates\(/);
+  assert.doesNotMatch(body, /applyWorldStorylineUpdates\(/);
 });
 
 test("Round-Zero can preserve an unknown storyline start date without changing normal-turn behavior", () => {
@@ -58,9 +65,14 @@ test("Round-Zero can preserve an unknown storyline start date without changing n
   assert.equal(ordinary.world.storylines[0].startedDate, "2021-07-18");
 });
 
-test("Round-Zero validates conservation before and after native war mirrors", () => {
-  assert.match(gameplaySource, /pregameCanonicalReceipt: sourceCounts/);
-  assert.match(gameplaySource, /pregameCanonicalConservationError\(candidate\)/);
-  assert.match(gameplaySource, /pregameCanonicalConservationError\(candidate, \{ includeNativeMirrors: true \}\)/);
-  assert.match(gameplaySource, /silent truncation is forbidden/);
+test("Round-Zero semantic compiler owns conservation and native-derived war mirrors", () => {
+  const body = functionBody("maybeGeneratePregameHistory");
+  assert.match(gameplaySource, /compilePregameBootstrapCandidate/);
+  assert.doesNotMatch(gameplaySource, /expandCanonicalUpdateEnvelope/);
+  assert.doesNotMatch(gameplaySource, /ensurePregameWarStorylineMirrors/);
+  assert.doesNotMatch(gameplaySource, /pregameCanonicalReceipt/);
+  assert.match(body, /normalizeArray\(compilation\?\.receipt\?\.facts\)/);
+  assert.match(body, /normalizeArray\(compilation\?\.receipt\?\.derived\)/);
+  assert.match(body, /normalizeString\(entry\?\.kind\) === "war-storyline"/);
+  assert.match(body, /pregameBootstrapContractVersion: PREGAME_BOOTSTRAP_CONTRACT_VERSION/);
 });

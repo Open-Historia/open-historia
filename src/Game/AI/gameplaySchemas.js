@@ -1381,115 +1381,110 @@ const pregameEventSchema = {
   type: "object",
   description: "One dated historical event from BEFORE the game's start date.",
   properties: {
+    ref: nonEmptyTextSchema("Candidate-local event ref such as e1. Native code binds this to the persisted event id and never stores the ref."),
     date: textSchema("Date the event occurred, strictly before the game start date."),
     title: textSchema("Concise event headline."),
     description: textSchema("Specific narrative description and its consequences."),
     importance: textSchema("Importance label, normally minor or major."),
     kind: textSchema("Event category, such as world, player, diplomacy, or military."),
     tags: eventTagsSchema,
-    warId: textSchema(
-      "Optional canonical war id when this pre-game event clearly depicts a war transition listed in canonicalUpdates. Omit or leave blank when no such provenance link is clear.",
-    ),
   },
-  required: ["date", "title", "description"],
+  required: ["ref", "date", "title", "description"],
   additionalProperties: false,
 };
 
-// The pre-game bootstrap answers with ONE flat envelope for every canonical
-// ledger it seeds (wars, relations, agreements) instead of three mini-languages:
-// function-calling in "any" mode is sensitive to schema depth, so the transport
-// is deliberately flat. Before this internal schema runs, Round-Zero normalization
-// fills ONLY fields that the declared kind cannot semantically use; fields that
-// establish the actual canonical fact remain mandatory and fail closed when absent.
-// gameplay.js (expandCanonicalUpdateEnvelope) then dispatches each item to the
-// ledger its "kind" names.
-const PREGAME_CANONICAL_UPDATE_KINDS = [
-  "relation",
-  "storyline:active",
-  "storyline:dormant",
-  "war:start",
-  "war:join-a",
-  "war:join-b",
-  "war:leave",
-  "war:ceasefire",
-  "war:resume",
-  "war:end",
-  "agreement:start",
-  "puppet:open",
-  "puppet:covert",
+// The provider transport stays deliberately shallow, but the JSON text inside
+// canonicalUpdatesJson is now a semantic Round-Zero baseline candidate rather
+// than a replay of normal-turn lifecycle operations. Persistent ids, operation
+// verbs, event indexes and other engine bookkeeping are intentionally absent;
+// pregameBootstrapCompiler.js owns identity and persisted shapes.
+const PREGAME_SEMANTIC_FACT_KINDS = ["war", "relation", "agreement", "storyline", "puppet"];
+const PREGAME_AGREEMENT_TYPES = [
+  "alliance",
+  "mutual_defense",
+  "guarantee",
+  "non_aggression",
+  "friendship_consultation",
+  "trade_economic",
+  "military_cooperation",
+  "military_access",
+  "neutrality",
+  "peace_settlement",
+  "other",
 ];
 
-const canonicalUpdateSchema = {
+const pregameWarAssessmentSchema = {
+  type: "object",
+  description: "Optional scheduler-facing assessment native code merges into the derived war storyline mirror.",
+  properties: {
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    state: textSchema("What is currently true about the conflict and why it remains unresolved."),
+  },
+  additionalProperties: false,
+};
+
+const pregameCanonicalFactSchema = {
   type: "object",
   description:
-    "One canonical-state fact already true on the start date. Semantic fields for the declared kind are mandatory; native Round-Zero normalization supplies neutral values only for fields that kind does not use.",
+    "One semantic Day-One fact. ref and sourceEventRefs are candidate-local only; native code owns every persistent id and lifecycle operation.",
   properties: {
-    kind: {
-      type: "string",
-      enum: PREGAME_CANONICAL_UPDATE_KINDS,
-      description:
-        "Semantic kind code for the canonical Round-One ledger this item belongs to.",
-    },
-    id: { type: "string", description: "Stable storyline/war/agreement id, or empty for a relation." },
-    polities: {
+    ref: nonEmptyTextSchema("Candidate-local fact ref such as f1. Never a persistent canonical id."),
+    kind: { type: "string", enum: PREGAME_SEMANTIC_FACT_KINDS },
+    sourceEventRefs: {
       type: "array",
-      description:
-        "Primary polities. Relation: exactly [A,B]. Storyline: participants. War: actors / side A. Agreement: parties. Puppet: exactly [overlord, puppet].",
-      items: { type: "string" },
+      maxItems: 16,
+      items: nonEmptyTextSchema("Candidate-local pre-game event ref such as e2."),
+      description: "Optional provenance refs to events in this same answer.",
     },
-    opponents: {
-      type: "array",
-      description: "War opponents / side B; empty for non-war items.",
-      items: { type: "string" },
-    },
-    score: {
-      type: "integer",
-      description: "Relation absolute score -100..100. Puppet: its loyalty to its overlord, 0-100. 0 for other items. The engine clamps it and derives the status.",
-    },
-    pressure: {
-      type: "integer",
-      description: "Storyline pressure 0-100 (unresolved stakes); 0 for other kinds.",
-    },
-    momentum: {
-      type: "integer",
-      description: "Storyline momentum 0-100 (current rate of change); 0 for other kinds.",
-    },
-    date: {
-      type: "string",
-      description: "Storyline start date or war transition date YYYY-MM-DD when known; empty when unknown or irrelevant.",
-    },
-    category: {
-      type: "string",
-      description: "Storyline process kind (war, crisis, revolution, diplomacy, politics, economy) or agreement type (alliance, mutual_defense, guarantee, non_aggression, friendship_consultation, trade_economic, military_cooperation, military_access, neutrality, peace_settlement, other), or puppet kind (protectorate, satellite, client); otherwise empty.",
-    },
-    title: {
-      type: "string",
-      description: "Agreement or storyline title when relevant; otherwise empty.",
-    },
-    detail: {
-      type: "string",
-      description: "Relation summary, war note, agreement terms, or storyline state (what is true now and why the process is unresolved).",
-    },
+
+    // War baseline.
+    title: textSchema("Human-readable title for a war, agreement or storyline when that family uses it."),
+    status: textSchema("War: active|ceasefire. Storyline: active|dormant."),
+    sideA: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    sideB: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    startedDate: textSchema("Known start date YYYY-MM-DD, or blank when genuinely unknown."),
+    note: textSchema("War baseline note."),
+    assessment: pregameWarAssessmentSchema,
+
+    // Relation baseline.
+    a: textSchema("First current canonical polity name for a bilateral relation."),
+    b: textSchema("Second current canonical polity name for a bilateral relation."),
+    score: { type: "integer", minimum: -100, maximum: 100 },
+    summary: textSchema("Bilateral political-climate summary."),
+
+    // Agreement baseline. Guarantee and military-access roles are directional.
+    type: { type: "string", enum: PREGAME_AGREEMENT_TYPES },
+    parties: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical signatory polity name.") },
+    guarantor: textSchema("Guarantee issuer."),
+    beneficiary: textSchema("Guarantee beneficiary."),
+    grantor: textSchema("Military-access grantor."),
+    grantee: textSchema("Military-access grantee."),
+    reciprocal: { type: "boolean" },
+    terms: textSchema("Substantive agreement terms."),
+
+    // Non-war persistent process.
+    processKind: textSchema("Non-war process kind such as crisis, insurgency, diplomacy, politics or economy."),
+    participants: { type: "array", maxItems: 12, items: nonEmptyTextSchema("Current canonical polity name.") },
+    pressure: { type: "integer", minimum: 0, maximum: 100 },
+    momentum: { type: "integer", minimum: 0, maximum: 100 },
+    state: textSchema("What is currently true and why this non-war process remains unresolved."),
+    distinctFromWarRef: textSchema("Candidate-local war ref only when this independently justified process could otherwise look like that war."),
+
+    // Puppet/subordination baseline.
+    overlord: textSchema("Current canonical overlord polity name."),
+    puppet: textSchema("Current canonical subordinate polity name."),
+    puppetKind: { type: "string", enum: ["protectorate", "satellite", "client"] },
+    loyalty: { type: "integer", minimum: 0, maximum: 100 },
+    secrecy: { type: "string", enum: ["open", "covert"] },
   },
-  required: [
-    "kind",
-    "id",
-    "polities",
-    "opponents",
-    "score",
-    "pressure",
-    "momentum",
-    "date",
-    "category",
-    "title",
-    "detail",
-  ],
+  required: ["ref", "kind"],
   additionalProperties: false,
 };
 
 export const PREGAME_HISTORY_SCHEMA = {
   type: "object",
-  description: "The pre-game backstory: the events that led up to the start of the campaign.",
+  description: "The pre-game backstory plus semantic Day-One baseline facts compiled natively into canonical state.",
   properties: {
     events: {
       type: "array",
@@ -1502,9 +1497,9 @@ export const PREGAME_HISTORY_SCHEMA = {
     canonicalUpdates: {
       type: "array",
       description:
-        "Wars, bilateral relations and formal agreements ALREADY TRUE on the start date. Empty array only when no such Day-1 state exists. The engine dispatches and binds every item.",
+        "Semantic Day-One baseline facts. Persistent ids and lifecycle operations are forbidden; native code compiles these facts into the canonical ledgers.",
       maxItems: 32,
-      items: canonicalUpdateSchema,
+      items: pregameCanonicalFactSchema,
     },
   },
   required: ["events", "summary", "canonicalUpdates"],
@@ -1517,7 +1512,7 @@ export const PREGAME_HISTORY_TRANSPORT_SCHEMA = {
   properties: {
     eventsJson: textSchema("JSON array text for chronological pre-game event objects. Must contain at least one event."),
     summary: textSchema("One-paragraph summary of the era leading into the start date."),
-    canonicalUpdatesJson: textSchema("JSON array text for Day-One canonical-state facts. Use [] only when no qualifying state exists."),
+    canonicalUpdatesJson: textSchema("JSON array text for semantic Day-One baseline facts. Use [] only when no qualifying state exists; never put persistent ids or lifecycle operations in these facts."),
   },
   required: ["eventsJson", "summary", "canonicalUpdatesJson"],
   additionalProperties: false,
@@ -1586,12 +1581,29 @@ export const decodePregameHistoryTransportPayload = (value) => {
   };
 };
 
+
+const clonePregameTransportEntry = (entry) => {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  return {
+    ...entry,
+    ...(Array.isArray(entry.tags) ? { tags: [...entry.tags] } : {}),
+    ...(Array.isArray(entry.sourceEventRefs) ? { sourceEventRefs: [...entry.sourceEventRefs] } : {}),
+    ...(Array.isArray(entry.sideA) ? { sideA: [...entry.sideA] } : {}),
+    ...(Array.isArray(entry.sideB) ? { sideB: [...entry.sideB] } : {}),
+    ...(Array.isArray(entry.parties) ? { parties: [...entry.parties] } : {}),
+    ...(Array.isArray(entry.participants) ? { participants: [...entry.participants] } : {}),
+    ...(entry.assessment && typeof entry.assessment === "object" && !Array.isArray(entry.assessment)
+      ? { assessment: { ...entry.assessment } }
+      : {}),
+  };
+};
+
 export const mergePregameHistoryTransportSections = (payload, preserved = {}) => {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const next = { ...payload };
-  if (Array.isArray(preserved.events)) next.events = preserved.events.map((entry) => ({ ...entry }));
+  if (Array.isArray(preserved.events)) next.events = preserved.events.map(clonePregameTransportEntry);
   if (Array.isArray(preserved.canonicalUpdates)) {
-    next.canonicalUpdates = preserved.canonicalUpdates.map((entry) => ({ ...entry }));
+    next.canonicalUpdates = preserved.canonicalUpdates.map(clonePregameTransportEntry);
   }
   if (Object.prototype.hasOwnProperty.call(preserved, "summary")) next.summary = String(preserved.summary ?? "").trim();
   return next;
@@ -3856,72 +3868,11 @@ const normalizeCountryStatSheetShape = (value) => {
   return { ...value, statsSchemaVersion: 1 };
 };
 
-// Round Zero persists only agreements that are already standing on Day One. A
-// provider can omit that one deterministic discriminator and return bare
-// `agreement` even though the contract asks for `agreement:start`. Recover only
-// that unambiguous omission before schema validation. Explicit lifecycle kinds
-// remain untouched so `agreement:end`, `agreement:suspend`, etc. still fail the
-// strict Round-Zero validator instead of being silently accepted.
-const withPregameNeutralDefaults = (entry, defaults) => {
-  let changed = false;
-  const candidate = { ...entry };
-  for (const [field, neutral] of Object.entries(defaults)) {
-    if (candidate[field] !== undefined && candidate[field] !== null) continue;
-    candidate[field] = Array.isArray(neutral) ? [...neutral] : neutral;
-    changed = true;
-  }
-  return { candidate, changed };
-};
-
-// The provider-facing pregame transport deliberately carries the canonical
-// envelope as JSON TEXT. That keeps the tool schema shallow, but it also means a
-// model can reasonably omit padding fields which are irrelevant to the declared
-// kind. Normalize only those semantically impossible fields here. Never invent a
-// belligerent, relation score, storyline pressure, agreement type, party, id, or
-// other fact that changes Day-One canon merely to make an item validate.
-const normalizePregameCanonicalUpdate = (entry) => {
-  if (!isPlainRecord(entry)) return { entry, changed: false };
-  const rawKind = String(entry.kind ?? "").trim();
-  const kind = rawKind.toLowerCase() === "agreement" ? "agreement:start" : rawKind;
-  const family = kind.toLowerCase().split(":")[0];
-  let candidate = kind === rawKind ? entry : { ...entry, kind };
-  let changed = kind !== rawKind;
-
-  const defaultsByFamily = {
-    relation: {
-      id: "", opponents: [], pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "",
-    },
-    storyline: {
-      opponents: [], score: 0, date: "",
-    },
-    war: {
-      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "",
-    },
-    agreement: {
-      opponents: [], score: 0, pressure: 0, momentum: 0, date: "", detail: "",
-    },
-    puppet: {
-      id: "", opponents: [], pressure: 0, momentum: 0, date: "", title: "", detail: "",
-    },
-  };
-  const defaults = defaultsByFamily[family];
-  if (!defaults) return { entry: candidate, changed };
-  const normalized = withPregameNeutralDefaults(candidate, defaults);
-  candidate = normalized.candidate;
-  changed = changed || normalized.changed;
-  return { entry: candidate, changed };
-};
-
-const normalizePregameHistoryShape = (value) => {
-  if (!isPlainRecord(value) || !Array.isArray(value.canonicalUpdates)) return value;
-  let changed = false;
-  const canonicalUpdates = value.canonicalUpdates.map((entry) => {
-    const normalized = normalizePregameCanonicalUpdate(entry);
-    changed = changed || normalized.changed;
-    return normalized.entry;
-  });
-  return changed ? { ...value, canonicalUpdates } : value;
-};
+// Round-Zero semantic facts are already expressed in the compiler contract.
+// Do not adapt lifecycle verbs, invent padding, or otherwise normalize meaning
+// before the native compiler sees it. Legacy lifecycle-shaped answers remain
+// visible to schema validation and are rejected rather than silently migrated.
+const normalizePregameHistoryShape = (value) => value;
 
 // Corrective retries may freeze independently valid historical cards even when
 // the overall Round-Zero answer fails schema validation in canonical state. Do
@@ -3933,10 +3884,7 @@ export const extractPregameHistoryStableRetrySections = (value, { includeCanonic
   const sections = {};
   if (Array.isArray(value.events)) {
     const error = validateAgainstSchema(PREGAME_HISTORY_SCHEMA.properties.events, value.events, "$.events");
-    if (!error) sections.events = value.events.map((entry) => ({
-      ...entry,
-      ...(Array.isArray(entry?.tags) ? { tags: [...entry.tags] } : {}),
-    }));
+    if (!error) sections.events = value.events.map(clonePregameTransportEntry);
   }
   if (includeCanonical && Array.isArray(value.canonicalUpdates)) {
     const error = validateAgainstSchema(
@@ -3944,7 +3892,7 @@ export const extractPregameHistoryStableRetrySections = (value, { includeCanonic
       value.canonicalUpdates,
       "$.canonicalUpdates",
     );
-    if (!error) sections.canonicalUpdates = value.canonicalUpdates.map((entry) => ({ ...entry }));
+    if (!error) sections.canonicalUpdates = value.canonicalUpdates.map(clonePregameTransportEntry);
   }
   const summary = String(value.summary ?? "").trim();
   if (summary) sections.summary = summary;

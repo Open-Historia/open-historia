@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   GAMEPLAY_TOOLS,
   decodePregameHistoryTransportPayload,
@@ -8,8 +9,46 @@ import {
   normalizeGameplayPayload,
   validateGameplayPayload,
 } from "./gameplaySchemas.js";
+import {
+  PREGAME_BOOTSTRAP_CONTRACT_VERSION,
+  compilePregameBootstrapCandidate,
+} from "./pregameBootstrapCompiler.js";
 
-test("pregame history uses a shallow provider transport while native validation stays structured", () => {
+const event = (overrides = {}) => ({
+  ref: "e1",
+  date: "2020-11-18",
+  title: "Federal fracture",
+  description: "Federal command fractures before the campaign begins.",
+  ...overrides,
+});
+
+const warFact = (overrides = {}) => ({
+  ref: "f1",
+  kind: "war",
+  title: "The Constitutional War",
+  status: "active",
+  sideA: ["Alpha"],
+  sideB: ["Beta"],
+  startedDate: "2020-11-18",
+  note: "Open conflict remains active on Day One.",
+  sourceEventRefs: ["e1"],
+  ...overrides,
+});
+
+const world = () => ({
+  polityOverrides: {
+    Alpha: { displayName: "Alpha", status: "active" },
+    Beta: { displayName: "Beta", status: "active" },
+    Gamma: { displayName: "Gamma", status: "active" },
+  },
+  wars: [],
+  relations: [],
+  agreements: [],
+  puppets: [],
+  storylines: [],
+});
+
+test("pregame history keeps the shallow provider transport but carries semantic baseline facts", () => {
   const transport = GAMEPLAY_TOOLS.pregameHistory.schema;
   assert.equal(transport.properties.eventsJson.type, "string");
   assert.equal(transport.properties.canonicalUpdatesJson.type, "string");
@@ -17,173 +56,63 @@ test("pregame history uses a shallow provider transport while native validation 
   assert.equal(transport.properties.canonicalUpdates, undefined);
 
   const decoded = decodePregameHistoryTransportPayload({
-    eventsJson: JSON.stringify([{ date: "1911-01-01", title: "Alliance tested", description: "A concrete pre-game event establishes the setting." }]),
-    summary: "The pre-game balance takes shape.",
-    canonicalUpdatesJson: JSON.stringify([{
-      kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 50,
-      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Friendly relations.",
-    }]),
+    eventsJson: JSON.stringify([event()]),
+    summary: "The opening balance takes shape.",
+    canonicalUpdatesJson: JSON.stringify([warFact()]),
   });
   assert.equal(decoded.error, "");
   assert.equal(validateGameplayPayload("pregameHistory", decoded.payload).valid, true);
+  assert.equal(decoded.payload.canonicalUpdates[0].kind, "war");
+  assert.equal(Object.prototype.hasOwnProperty.call(decoded.payload.canonicalUpdates[0], "id"), false);
 });
 
-test("pregame normalization recovers only a bare standing agreement discriminator", () => {
-  const transport = (kind) => ({
-    eventsJson: JSON.stringify([{
-      date: "2004-03-29",
-      title: "Latvia enters NATO",
-      description: "Latvia joins the North Atlantic Treaty before the campaign begins.",
-    }]),
-    summary: "Latvia enters the campaign with an existing collective-defense commitment.",
-    canonicalUpdatesJson: JSON.stringify([{
-      kind,
-      id: "agreement-nato-latvia-usa",
-      polities: ["Republic of Latvia", "United States of America"],
-      opponents: [],
-      score: 0,
-      pressure: 0,
-      momentum: 0,
-      date: "2004-03-29",
-      category: "mutual_defense",
-      title: "North Atlantic Treaty Organization (NATO) Alliance",
-      detail: "Mutual defense commitments and collective security guarantees under the North Atlantic Treaty Organization.",
-    }]),
-  });
-
-  const decodedBare = decodePregameHistoryTransportPayload(transport("agreement"));
-  assert.equal(decodedBare.error, "");
-  assert.equal(decodedBare.payload.canonicalUpdates[0].kind, "agreement");
-
-  const normalizedBare = normalizeGameplayPayload("pregameHistory", decodedBare.payload);
-  assert.equal(normalizedBare.canonicalUpdates[0].kind, "agreement:start");
-  assert.equal(validateGameplayPayload("pregameHistory", normalizedBare).valid, true);
-
-  const decodedExplicitEnd = decodePregameHistoryTransportPayload(transport("agreement:end"));
-  const normalizedExplicitEnd = normalizeGameplayPayload("pregameHistory", decodedExplicitEnd.payload);
-  assert.equal(
-    normalizedExplicitEnd.canonicalUpdates[0].kind,
-    "agreement:end",
-    "explicit invalid lifecycle operations must remain visible to the strict Round-Zero validator",
-  );
-});
-
-
-test("Round-Zero fills only semantically irrelevant flat-envelope padding", () => {
-  const decoded = decodePregameHistoryTransportPayload({
-    eventsJson: JSON.stringify([{
-      date: "2020-11-18",
-      title: "Washington D.C. Clashes and Military Fracture",
-      description: "Federal command fractures as the civil war deepens before the campaign start.",
-    }]),
-    summary: "The United States enters Round One in civil war.",
-    canonicalUpdatesJson: JSON.stringify([
-      {
-        kind: "war:start",
-        id: "war-us-civil-war-acg",
-        polities: ["Union of America"],
-        opponents: ["American Constitutional Government"],
-        date: "2020-11-18",
-        detail: "The conflict remains active at Round One.",
-      },
-      {
-        kind: "storyline:active",
-        id: "storyline-second-american-civil-war",
-        polities: ["Union of America", "American Constitutional Government"],
-        pressure: 95,
-        momentum: 60,
-        date: "2020-11-03",
-        category: "crisis",
-        title: "The Second American Civil War",
-        detail: "Federal authority remains fractured and the conflict unresolved.",
-      },
-    ]),
-  });
-  assert.equal(decoded.error, "");
-  const normalized = normalizeGameplayPayload("pregameHistory", decoded.payload);
-  assert.deepEqual(
-    {
-      score: normalized.canonicalUpdates[0].score,
-      pressure: normalized.canonicalUpdates[0].pressure,
-      momentum: normalized.canonicalUpdates[0].momentum,
-      category: normalized.canonicalUpdates[0].category,
-      title: normalized.canonicalUpdates[0].title,
-    },
-    { score: 0, pressure: 0, momentum: 0, category: "", title: "" },
-  );
-  assert.deepEqual(normalized.canonicalUpdates[1].opponents, []);
-  assert.equal(normalized.canonicalUpdates[1].score, 0);
-  assert.equal(validateGameplayPayload("pregameHistory", normalized).valid, true);
-});
-
-test("Round-Zero never invents semantic canonical fields just to satisfy the flat envelope", () => {
-  const base = {
-    events: [{ date: "2020-11-18", title: "Civil war", description: "The conflict is active." }],
-    summary: "A fractured country enters Round One.",
-  };
-
-  const missingWarOpponent = normalizeGameplayPayload("pregameHistory", {
-    ...base,
-    canonicalUpdates: [{
-      kind: "war:start", id: "war-us-civil-war-acg", polities: ["Union of America"],
-      date: "2020-11-18", detail: "Active conflict.",
-    }],
-  });
-  assert.equal(Object.prototype.hasOwnProperty.call(missingWarOpponent.canonicalUpdates[0], "opponents"), false);
-  assert.match(validateGameplayPayload("pregameHistory", missingWarOpponent).error, /opponents is required/);
-
-  const missingRelationScore = normalizeGameplayPayload("pregameHistory", {
-    ...base,
-    canonicalUpdates: [{ kind: "relation", polities: ["A", "B"], detail: "Hostile relations." }],
-  });
-  assert.equal(Object.prototype.hasOwnProperty.call(missingRelationScore.canonicalUpdates[0], "score"), false);
-  assert.match(validateGameplayPayload("pregameHistory", missingRelationScore).error, /score is required/);
-
-  const missingStorylinePressure = normalizeGameplayPayload("pregameHistory", {
-    ...base,
-    canonicalUpdates: [{
-      kind: "storyline:active", id: "storyline-crisis", polities: ["A", "B"], momentum: 40,
-      category: "crisis", title: "Crisis", detail: "Still unresolved.",
-    }],
-  });
-  assert.equal(Object.prototype.hasOwnProperty.call(missingStorylinePressure.canonicalUpdates[0], "pressure"), false);
-  assert.match(validateGameplayPayload("pregameHistory", missingStorylinePressure).error, /pressure is required/);
-});
-
-test("Round-Zero rejects unknown canonical kinds instead of silently dropping them during expansion", () => {
+test("legacy lifecycle-shaped Round-Zero facts are rejected instead of silently adapted", () => {
   const candidate = normalizeGameplayPayload("pregameHistory", {
-    events: [{ date: "2020-11-18", title: "Crisis", description: "The crisis is active." }],
-    summary: "A crisis shapes the opening world.",
+    events: [event()],
+    summary: "Legacy answer.",
     canonicalUpdates: [{
-      kind: "mystery:active", id: "mystery", polities: ["A"], opponents: [], score: 0,
-      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "",
+      ref: "f1",
+      kind: "war:start",
+      id: "war-model-owned",
+      polities: ["Alpha"],
+      opponents: ["Beta"],
     }],
   });
   const verdict = validateGameplayPayload("pregameHistory", candidate);
   assert.equal(verdict.valid, false);
-  assert.match(verdict.error, /canonicalUpdates\[0\]\.kind/);
+  assert.match(verdict.error, /canonicalUpdates\[0\]\.kind|must be one of/);
+  assert.equal(candidate.canonicalUpdates[0].kind, "war:start");
+  assert.equal(candidate.canonicalUpdates[0].id, "war-model-owned");
+});
+
+test("semantic provider contract rejects model-owned persistent bookkeeping fields", () => {
+  const candidate = {
+    events: [event()],
+    summary: "Bad bookkeeping.",
+    canonicalUpdates: [{ ...warFact(), id: "war-model-owned" }],
+  };
+  const verdict = validateGameplayPayload("pregameHistory", candidate);
+  assert.equal(verdict.valid, false);
+  assert.match(verdict.error, /additional property.*id|id.*not allowed/i);
 });
 
 test("pregame transport fails closed without erasing independently valid sibling sections", () => {
-  const canonicalUpdates = [{
-    kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
-    pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Working relationship.",
-  }];
+  const facts = [warFact({ sourceEventRefs: [] })];
   const decoded = decodePregameHistoryTransportPayload({
     eventsJson: "not json",
     summary: "x",
-    canonicalUpdatesJson: JSON.stringify(canonicalUpdates),
+    canonicalUpdatesJson: JSON.stringify(facts),
   });
   assert.match(decoded.error, /eventsJson must contain valid JSON array text/);
   assert.equal(decoded.payload.events, null);
-  assert.deepEqual(decoded.payload.canonicalUpdates, canonicalUpdates);
-  assert.deepEqual(decoded.validSections.canonicalUpdates, canonicalUpdates);
+  assert.deepEqual(decoded.payload.canonicalUpdates, facts);
+  assert.deepEqual(decoded.validSections.canonicalUpdates, facts);
   assert.equal(decoded.validSections.summary, "x");
   assert.equal(Object.prototype.hasOwnProperty.call(decoded.validSections, "events"), false);
 });
 
 test("pregame transport distinguishes a missing canonical section from explicit empty state", () => {
-  const eventText = JSON.stringify([{ date: "2020-01-01", title: "Opening", description: "History." }]);
+  const eventText = JSON.stringify([event()]);
   const missing = decodePregameHistoryTransportPayload({ eventsJson: eventText, summary: "x" });
   assert.match(missing.error, /canonicalUpdatesJson is required/);
   assert.equal(missing.payload.canonicalUpdates, null);
@@ -197,117 +126,140 @@ test("pregame transport distinguishes a missing canonical section from explicit 
   assert.deepEqual(explicitEmpty.payload.canonicalUpdates, []);
 });
 
-test("pregame schema correction freezes validated history but not merely shape-valid canonical state", () => {
-  const candidate = normalizeGameplayPayload("pregameHistory", {
-    events: [{ date: "2020-11-18", title: "Stable history", description: "This event is already valid." }],
+test("pregame schema correction freezes validated event refs but not invalid canonical facts", () => {
+  const candidate = {
+    events: [event({ ref: "stable-e1" })],
     summary: "The historical interpretation is already valid.",
     canonicalUpdates: [{
-      // The live Fire Rises failure used the wrong discriminator and therefore
-      // failed schema validation even though its six events were valid.
-      type: "war:start", id: "war-x", polities: ["A"], opponents: ["B"],
-      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "x",
+      ref: "bad-fact",
+      type: "war",
+      title: "Missing discriminator",
+      status: "active",
+      sideA: ["Alpha"],
+      sideB: ["Beta"],
     }],
-  });
+  };
   const verdict = validateGameplayPayload("pregameHistory", candidate);
   assert.equal(verdict.valid, false);
   assert.match(verdict.error, /kind is required/);
 
   const stable = extractPregameHistoryStableRetrySections(candidate);
   assert.equal(stable.events.length, 1);
-  assert.equal(stable.events[0].title, "Stable history");
+  assert.equal(stable.events[0].ref, "stable-e1");
   assert.equal(stable.summary, "The historical interpretation is already valid.");
   assert.equal(Object.prototype.hasOwnProperty.call(stable, "canonicalUpdates"), false);
 
   const transportStable = extractPregameHistoryStableRetrySections({
-    events: [{ date: "2020-11-18", title: "Stable history", description: "This event is already valid." }],
+    events: [event()],
     summary: "Stable.",
-    canonicalUpdates: [{
-      kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
-      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Working relationship.",
-    }],
+    canonicalUpdates: [warFact({ sourceEventRefs: [] })],
   }, { includeCanonical: true });
-  assert.equal(transportStable.canonicalUpdates.length, 1, "schema-valid canonical sibling may be frozen for transport-only repair");
+  assert.equal(transportStable.canonicalUpdates.length, 1);
 });
 
-test("pregame corrective merge preserves valid first-attempt sections", () => {
+test("pregame corrective merge preserves nested candidate-local reference arrays by value", () => {
   const preserved = {
     summary: "Original interpretation.",
-    canonicalUpdates: [{ kind: "war:start", id: "war-a", polities: ["A"], opponents: ["B"] }],
+    canonicalUpdates: [warFact({ sourceEventRefs: ["e1", "e2"] })],
   };
   const retry = {
-    events: [{ date: "2020-01-02", title: "Corrected JSON", description: "The repaired event array." }],
+    events: [event({ ref: "e2" })],
     summary: "Regenerated interpretation.",
-    canonicalUpdates: [{ kind: "war:start", id: "war-b", polities: ["C"], opponents: ["D"] }],
+    canonicalUpdates: [warFact({ ref: "f2", sourceEventRefs: [] })],
   };
   const merged = mergePregameHistoryTransportSections(retry, preserved);
-  assert.equal(merged.events[0].title, "Corrected JSON");
   assert.equal(merged.summary, "Original interpretation.");
-  assert.equal(merged.canonicalUpdates[0].id, "war-a");
-  assert.notEqual(merged.canonicalUpdates, preserved.canonicalUpdates, "the retry must not mutate the preserved snapshot by alias");
+  assert.deepEqual(merged.canonicalUpdates[0].sourceEventRefs, ["e1", "e2"]);
+  assert.notEqual(merged.canonicalUpdates[0], preserved.canonicalUpdates[0]);
+  assert.notEqual(merged.canonicalUpdates[0].sourceEventRefs, preserved.canonicalUpdates[0].sourceEventRefs);
 });
 
-test("canonicalUpdates is required by the internal pregame contract", () => {
+test("canonicalUpdates remains required by the internal semantic pregame contract", () => {
   const validation = validateGameplayPayload("pregameHistory", {
-    events: [{ date: "1911-01-01", title: "x", description: "y" }],
+    events: [event()],
     summary: "z",
   });
   assert.equal(validation.valid, false);
   assert.match(validation.error, /canonicalUpdates/);
 });
 
-test("pregame schema treats war linkage as optional provenance and accepts a war transition date", () => {
-  const internal = validateGameplayPayload("pregameHistory", {
-    events: [{ date: "2021-01-01", title: "Federal crisis deepens", description: "The historical record does not duplicate an opaque war id." }],
-    summary: "The conflict is already active when play begins.",
-    canonicalUpdates: [{
-      kind: "war:start",
-      id: "sec-us-civil-war-apla",
-      polities: ["Union of America"],
-      opponents: ["American People's Liberation Army"],
-      score: 0,
-      pressure: 0,
-      momentum: 0,
-      date: "2021-04-10",
-      category: "",
-      title: "",
-      detail: "The war remains active at Round One.",
-    }],
+test("candidate-local event provenance compiles to native persisted ids", () => {
+  const payload = {
+    events: [event()],
+    summary: "The conflict is already active.",
+    canonicalUpdates: [warFact()],
+  };
+  assert.equal(validateGameplayPayload("pregameHistory", payload).valid, true);
+
+  const compiled = compilePregameBootstrapCandidate({
+    candidate: {
+      contractVersion: PREGAME_BOOTSTRAP_CONTRACT_VERSION,
+      facts: payload.canonicalUpdates,
+    },
+    world: world(),
+    eventIdsByRef: new Map([["e1", "pregame-1"]]),
+    startDate: "2021-07-18",
+    round: 1,
   });
-  assert.equal(internal.valid, true);
+  assert.equal(compiled.ok, true, compiled.error);
+  assert.equal(compiled.projectedWorld.wars.length, 1);
+  assert.deepEqual(compiled.projectedWorld.wars[0].sourceEventIds, ["pregame-1"]);
+  assert.equal(compiled.projectedWorld.wars[0].id.startsWith("war-r0v1-"), true);
+  assert.equal(compiled.receipt.derived.length, 1, "native compiler must create the war scheduler mirror");
 });
 
-test("native pregame directive teaches the shallow transport field names", async () => {
-  const { readFile } = await import("node:fs/promises");
+test("pregame event ref is mandatory because canonical provenance binds through it", () => {
+  const payload = {
+    events: [{ date: "2020-11-18", title: "No ref", description: "Invalid candidate event." }],
+    summary: "x",
+    canonicalUpdates: [],
+  };
+  const verdict = validateGameplayPayload("pregameHistory", payload);
+  assert.equal(verdict.valid, false);
+  assert.match(verdict.error, /events\[0\]\.ref is required/);
+});
+
+test("native pregame directive and publication path use the semantic compiler, not lifecycle replay", async () => {
   const source = await readFile(new URL("./gameplay.js", import.meta.url), "utf8");
-  assert.match(source, /PROVIDER TRANSPORT[\s\S]*eventsJson[\s\S]*canonicalUpdatesJson/);
-  assert.match(source, /Do not return events or canonicalUpdates as direct top-level tool fields/);
-  assert.match(source, /canonical war does NOT require a filler event solely for linkage/);
-  assert.match(source, /validatePregameWarBootstrap\(\{/);
-  assert.match(source, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
-  assert.match(source, /response\?\.toolInput \?\? parsed \?\? null/);
-  assert.match(source, /transport-syntax correction only/);
-  assert.match(source, /extractPregameHistoryStableRetrySections\(stableSource/);
-  assert.match(source, /corrective attempt preserved stable Round-Zero sections/);
-  assert.match(source, /engine has frozen the validated historical events/);
-  assert.match(source, /Round-Zero canonical .* processing would be lossy/);
+  assert.match(source, /Round-Zero World Bootstrap Contract v1/);
+  assert.match(source, /eventsJson[\s\S]*canonicalUpdatesJson/);
+  assert.match(source, /NEVER invent or output persistent war\/agreement\/storyline ids/);
+  assert.match(source, /kind="war"[\s\S]*status=active\|ceasefire/);
+  assert.match(source, /compilePregameBootstrapCandidate\(\{/);
+  assert.match(source, /candidate: buildPregameSemanticCandidate\(payload\)/);
+  assert.match(source, /world: currentWorld/);
+  assert.match(source, /eventIdsByRef: eventRefs\.map/);
+  assert.match(source, /pregameBootstrapContractVersion: PREGAME_BOOTSTRAP_CONTRACT_VERSION/);
   assert.match(source, /mutateCanonicalTurnState\(\(current\) =>/);
-  assert.match(source, /preserveUnknownStartedDate: true/);
-  assert.match(source, /updates: warUpdates,\s*events: bootstrapEvents,[\s\S]{0,220}stopDate: ""/);
-  assert.doesNotMatch(source, /must link to a real pre-game event/);
+  assert.match(source, /protectedPathPrefixes: taskKey === "pregameHistory" \? \["\$\.canonicalUpdates"\] : \[\]/);
+
+  const start = source.indexOf("export const maybeGeneratePregameHistory");
+  const end = source.indexOf("// ---- Idle diplomacy drip", start);
+  const pregamePath = source.slice(start, end);
+  assert.doesNotMatch(pregamePath, /applyWarUpdates\(/);
+  assert.doesNotMatch(pregamePath, /applyDiplomaticUpdates\(/);
+  assert.doesNotMatch(pregamePath, /applyWorldStorylineUpdates\(/);
+  assert.doesNotMatch(pregamePath, /bindWarUpdatesToEvents\(/);
+  assert.doesNotMatch(pregamePath, /ensurePregameWarStorylineMirrors/);
+  assert.doesNotMatch(source, /expandCanonicalUpdateEnvelope/);
 });
 
-test("schema-invalid canonical retry cannot replace independently validated historical events", () => {
-  const first = normalizeGameplayPayload("pregameHistory", {
+test("schema-invalid semantic retry cannot replace independently validated historical events", () => {
+  const first = {
     events: [
-      { date: "2020-03-09", title: "Market crash", description: "A valid first-attempt event." },
-      { date: "2020-11-03", title: "Contested election", description: "Another valid first-attempt event." },
+      event({ ref: "e1", date: "2020-03-09", title: "Market crash", description: "A valid first-attempt event." }),
+      event({ ref: "e2", date: "2020-11-03", title: "Contested election", description: "Another valid first-attempt event." }),
     ],
     summary: "Stable first interpretation.",
     canonicalUpdates: [{
-      type: "war:start", id: "war-x", polities: ["A"], opponents: ["B"],
-      score: 0, pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "invalid discriminator",
+      ref: "f1",
+      type: "war",
+      title: "Invalid discriminator",
+      status: "active",
+      sideA: ["Alpha"],
+      sideB: ["Beta"],
     }],
-  });
+  };
   const verdict = validateGameplayPayload("pregameHistory", first);
   assert.equal(verdict.valid, false);
   assert.match(verdict.error, /kind is required/);
@@ -317,14 +269,11 @@ test("schema-invalid canonical retry cannot replace independently validated hist
   assert.equal(frozen.summary, first.summary);
   assert.equal(Object.prototype.hasOwnProperty.call(frozen, "canonicalUpdates"), false);
 
-  const retry = normalizeGameplayPayload("pregameHistory", {
-    events: [{ date: "2020-06-15", title: "Regenerated history", description: "This must not replace validated history." }],
-    summary: "A different interpretation that must not replace the frozen summary.",
-    canonicalUpdates: [{
-      kind: "relation", id: "", polities: ["A", "B"], opponents: [], score: 25,
-      pressure: 0, momentum: 0, date: "", category: "", title: "", detail: "Corrected canon.",
-    }],
-  });
+  const retry = {
+    events: [event({ ref: "e9", date: "2020-06-15", title: "Regenerated history" })],
+    summary: "A different interpretation.",
+    canonicalUpdates: [{ ref: "r1", kind: "relation", a: "Alpha", b: "Beta", score: 25, summary: "Corrected canon." }],
+  };
   const corrected = mergePregameHistoryTransportSections(retry, frozen);
   assert.deepEqual(corrected.events, first.events);
   assert.equal(corrected.summary, first.summary);
