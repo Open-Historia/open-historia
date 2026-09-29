@@ -198,6 +198,7 @@ import {
   applyEventImpactsToWorld,
   applyProjectOpsToWorld,
   confirmResolvedDeployments,
+  lastUnitMoveDates,
   linkStructuresToProjects,
   enforceUnitVolume,
   readInterceptsState,
@@ -7186,11 +7187,11 @@ const applySimulationResult = async ({
   // Advance every standing order the model did NOT touch across the whole jump,
   // and drift the patrols. This is what keeps a fleet crossing an ocean moving
   // turn after turn, and a squadron visibly working its station, with none of it
-  // having to come back from the model. Units the model DID move are skipped:
-  // they already stepped once per event against that event's own budget, and
-  // advancing them again here would move them twice for the same elapsed time.
-  const movedThisTurn = freshEvents.flatMap((event) =>
-    normalizeArray(event.impacts?.unitOps).map((op) => op.unitId || op.unit?.id).filter(Boolean));
+  // having to come back from the model. Units the model DID move already
+  // stepped once per event against that event's own budget, so they advance
+  // only by the days after their last move; a unit that merely took losses or
+  // reinforcements was not moved and advances like any other.
+  const movedThisTurn = lastUnitMoveDates(freshEvents, baseGame.gameDate);
   // A deployment the player asked for and this skip resolved without removing
   // it has been accepted (gameState.js confirmResolvedDeployments). Only when the
   // skip resolved the planned actions: a scene or a check that leaves them
@@ -7208,7 +7209,7 @@ const applySimulationResult = async ({
         fromDate: baseGame.gameDate,
         toDate: nextGame.gameDate,
         round: nextGame.round,
-        skipUnitIds: movedThisTurn,
+        movedAt: movedThisTurn,
       },
     ), result.clearActions ? plannedActionSnapshot : []),
     { playerCode: baseGame.country },

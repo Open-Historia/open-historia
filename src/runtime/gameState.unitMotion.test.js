@@ -18,6 +18,7 @@ import {
   clearStaleUnitMotion,
   confirmResolvedDeployments,
   enforceUnitVolume,
+  lastUnitMoveDates,
   normalizePendingUnitOrders,
   normalizeUnits,
   normalizeWorldState,
@@ -328,6 +329,67 @@ test("an expired order is dropped and the unit stands down", () => {
   assert.equal(next.pendingUnitOrders.length, 0);
   assert.equal(next.units[0].posture, "");
   assert.equal(next.units[0].status, "idle");
+});
+
+// A fleet on a standing move order far from its destination.
+const crossing = () => ({
+  units: normalizeUnits([unit({ type: "naval", lng: 0, lat: 1 })]),
+  pendingUnitOrders: normalizePendingUnitOrders([
+    { id: "o1", unitId: "unit-1", kind: "move", toLng: 80, toLat: 1 },
+  ]),
+});
+const coveredKm = (world) => haversineKm(1, 0, world.units[0].lat, world.units[0].lng);
+
+test("only a move or a spawn counts as moving a unit, dated by its last event", () => {
+  const moved = lastUnitMoveDates([
+    { date: "2024-01-03", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "strength", unitId: "b" }] } },
+    { date: "2024-01-20", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "remove", unitId: "c" }] } },
+    { date: "2024-01-10", impacts: { unitOps: [{ op: "move", unitId: "a" }, { op: "spawn", unit: { id: "d" } }] } },
+    { impacts: { unitOps: [{ op: "move", unitId: "e" }] } },
+  ], "2024-01-01");
+  assert.deepEqual(Object.fromEntries(moved), { a: "2024-01-20", d: "2024-01-10", e: "2024-01-01" });
+});
+
+test("a unit that only took losses keeps advancing on its standing order", () => {
+  const movedAt = lastUnitMoveDates([
+    { date: "2024-01-05", impacts: { unitOps: [{ op: "strength", unitId: "unit-1", strength: 80 }] } },
+  ], "2024-01-01");
+  const next = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3, movedAt });
+  const full = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-02-01", round: 3 });
+  assert.ok(coveredKm(next) > 0, "attrition must not freeze the fleet for the whole jump");
+  assert.equal(coveredKm(next), coveredKm(full));
+});
+
+test("a unit an event moved is credited only the days after its last move", () => {
+  const whole = advanceStandingOrders(crossing(), { fromDate: "2024-01-01", toDate: "2024-01-04", round: 3 });
+  const late = advanceStandingOrders(crossing(), {
+    fromDate: "2024-01-01", toDate: "2024-01-04", round: 3, movedAt: new Map([["unit-1", "2024-01-03"]]),
+  });
+  assert.equal(whole.pendingUnitOrders.length, 1, "the fixture must not arrive, or the ratio means nothing");
+  const ratio = coveredKm(late) / coveredKm(whole);
+  assert.ok(Math.abs(ratio - 1 / 3) < 0.02, `one of three days, got ${ratio}`);
+  assert.equal(late.pendingUnitOrders.length, 1);
+});
+
+test("a unit moved on the period's last day is not advanced again", () => {
+  const world = crossing();
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-01-31", round: 3, movedAt: { "unit-1": "2024-01-31" },
+  });
+  assert.equal(next.units[0].lng, world.units[0].lng);
+});
+
+test("a moved unit's order still expires on schedule", () => {
+  const world = {
+    units: normalizeUnits([unit({ type: "naval", lng: -30, lat: 50, posture: "patrol" })]),
+    pendingUnitOrders: normalizePendingUnitOrders([
+      { id: "o1", unitId: "unit-1", kind: "patrol", toLng: -30, toLat: 50, radiusKm: 250, untilRound: 5 },
+    ]),
+  };
+  const next = advanceStandingOrders(world, {
+    fromDate: "2024-01-01", toDate: "2024-02-01", round: 6, movedAt: { "unit-1": "2024-02-01" },
+  });
+  assert.equal(next.pendingUnitOrders.length, 0);
 });
 
 test("advanceStandingOrders is a no-op when nothing has a standing order", () => {
