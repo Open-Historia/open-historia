@@ -53,6 +53,7 @@ import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
 import { newId } from "./useMapDocument.js";
 import { mergeRegionFeatures, trackMove } from "./shapeEdits.js";
+import { resolvePastedIds } from "./regionClipboard.js";
 import {
   unionGeoms,
   translatedClone,
@@ -1973,13 +1974,14 @@ const OlMap = ({
           }
         }
 
-        const taken = new Set(regionSource.getFeatures().map((f) => String(f.getId())));
+        const ids = resolvePastedIds(
+          pasted.map((f) => f.getId() ?? f.get("id") ?? null),
+          regionSource.getFeatures().map((f) => f.getId()),
+          () => newId(),
+        );
         const added = [];
-        for (const f of pasted) {
-          const wanted = f.getId() != null ? String(f.getId()) : f.get("id") != null ? String(f.get("id")) : null;
-          let id = wanted && !taken.has(wanted) ? wanted : newId();
-          while (taken.has(id)) id = newId();
-          taken.add(id);
+        pasted.forEach((f, index) => {
+          const id = ids[index];
           f.setId(id);
           f.set("id", id);
           if (f.get("typeId") == null) f.set("typeId", defaultTypeIdRef.current || "land");
@@ -1988,7 +1990,7 @@ const OlMap = ({
           f.set("edited", true);
           regionSource.addFeature(f);
           added.push(f);
-        }
+        });
 
         const entries = [...carved.values()];
         const restore = (entry) => {

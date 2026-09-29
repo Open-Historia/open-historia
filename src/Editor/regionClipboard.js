@@ -117,19 +117,19 @@ export const planClipboardMerge = (payload, { polities = {}, colors = {}, flags 
 
 // Ids for pasted regions: a region keeps its id when the target has no region
 // by that id (a stock-world id keeps its tile linkage), otherwise it gets a
-// fresh one. `taken` is the set of ids on the target once the carving is done,
-// so a region the paste removed entirely frees its id for its replacement.
+// fresh one. `taken` is the ids on the target once the carving is done, so a
+// region the paste removed entirely frees its id for its replacement. One id
+// per incoming region, in order: two pasted regions with the same id (or none)
+// still get one each. OlMap.pasteRegions uses it.
 export const resolvePastedIds = (ids, taken, mint) => {
   const used = new Set([...taken].map((id) => String(id)));
-  const out = new Map();
-  for (const id of ids) {
+  return [...ids].map((id) => {
     const wanted = id == null ? null : String(id);
     let next = wanted && !used.has(wanted) ? wanted : String(mint());
     while (used.has(next)) next = String(mint());
     used.add(next);
-    out.set(id, next);
-  }
-  return out;
+    return next;
+  });
 };
 
 // A summary for the panel: how many regions, from where, whose they are.

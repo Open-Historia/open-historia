@@ -132,11 +132,15 @@ test("a pasted region keeps a free id and gets a fresh one for a taken id", () =
   let n = 0;
   const mint = () => `reg_new${(n += 1)}`;
   const ids = resolvePastedIds(["FRA.1_1", "FRA.2_1", null, "reg_new1"], new Set(["FRA.2_1", "reg_new1"]), mint);
-  assert.equal(ids.get("FRA.1_1"), "FRA.1_1");
-  assert.equal(ids.get("FRA.2_1"), "reg_new2", "taken, and reg_new1 was taken too");
-  assert.equal(ids.get(null), "reg_new3");
-  assert.equal(ids.get("reg_new1"), "reg_new4");
-  assert.equal(new Set(ids.values()).size, 4, "all distinct");
+  assert.deepEqual(ids, ["FRA.1_1", "reg_new2", "reg_new3", "reg_new4"], "reg_new1 was taken too");
+});
+
+test("pasted regions sharing an id, or with none, each get their own", () => {
+  let n = 0;
+  const mint = () => `reg_${(n += 1)}`;
+  const ids = resolvePastedIds(["ITA.1_1", "ITA.1_1", null, undefined, 7], ["reg_1"], mint);
+  assert.deepEqual(ids, ["ITA.1_1", "reg_2", "reg_3", "reg_4", "7"], "the first keeps the id, numbers become strings");
+  assert.equal(new Set(ids).size, ids.length);
 });
 
 test("the panel summary counts regions per owner", () => {
