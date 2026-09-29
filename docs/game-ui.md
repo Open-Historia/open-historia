@@ -312,7 +312,7 @@ Shows player country + formatted date (`«` opens Events history, `»` opens the
 | Fixed jumps (6h…1yr) | `runJump(days, "jump")` → `simulateTimelineJump` | `src/Game/AI/gameplay.js` |
 | Custom amount + unit | same, arbitrary days | — |
 | **Auto-jump** | `runJump(365, "auto")` → `simulateAutoJump` (AI picks how far) | — |
-| **↩ Undo last turn** | `runUndo()` → `rollBackToSnapshot(0)`; `undoCount` from `loadRollbackSnapshots` — the Spies file goes back with the turn | rollback snapshots |
+| **↩ Undo last turn** | `runUndo()` → `rollBackToSnapshot(0)`; `undoCount` is `undoableTurns` over the restore-point index (`loadRollbackSnapshotIndex`, `runtime/turnCommit.js`): the unbroken run of restore points back from the last turn, so a turn that saved none disables Undo rather than letting it take two turns back — the engine refuses such an undo too (*The last turn has no restore point.*). A turn written without its restore point says so in the Events panel's warning (*This turn was saved, but its restore point was not, so it cannot be undone.*). The Spies file goes back with the turn | rollback snapshots |
 | Cancel (during load) | `cancelJump()` aborts the in-flight `AbortController` | — |
 
 On success it swaps to the **history panel** with `visibleEventCount = 1`. Fallback generations surface a warning banner.

@@ -301,8 +301,8 @@ import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
-import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
-import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit } from "../../runtime/turnCommit.js";
+import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
+import { HELD_TURN_STALE_NOTE, heldTurnOutdated, mergeActionsAtCommit, restorePointProblem, restorePointsFor } from "../../runtime/turnCommit.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -4167,6 +4167,11 @@ const activeCampaignId = () => {
   }
 };
 
+// Still the campaign `campaignId` stamped at a turn's read. Checked before each
+// write a turn makes after its commit: those go through the runtime endpoints,
+// which follow whichever campaign is open.
+const stillCampaign = (campaignId) => !campaignChanged(campaignId, activeCampaignId());
+
 // activeSimulations, pendingProjectsJump and pendingJumpSegment moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
 // this module. Reached through the accessors below; see that file for why.
@@ -6613,7 +6618,22 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // Persist the PRE-turn state so the cheats menu's "Roll back turn" can restore it.
 // A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
 // a scenario or dragged through the 5s poll — capped so a long game can't grow it
-// without bound. Purely best-effort: a snapshot failure must never break a turn.
+// without bound. A snapshot failure must never break a turn, but it is not
+// silent either: this returns whether the restore point was saved, and the turn
+// tells the player when it was not.
+//
+// Captured BEFORE the turn's commit, not after it: the steps after the commit
+// (spy reports, stolen papers, notices) take a while, and a turn whose app was
+// closed or killed in that time had no restore point, so the next Undo went
+// back two turns. It records the campaign it belongs to, and the round it was
+// taken on (the turn's starting round), which rollBackToSnapshot checks.
+//
+// The list is read without a default. A list that failed to read is not an
+// empty one, and writing [this one] over it would throw the other restore
+// points away; so a read failure other than "no file yet" saves nothing.
+// Restore points at or past this round are left out: they belong to a turn
+// that never landed (runtime/turnCommit.js restorePointsFor).
+//
 // `turn` is the journal of what the turn APPLIED (intervene.js journalTurn):
 // with the pre-turn state beside it, the turn can be applied again from any
 // point the player chooses — Intervene (interveneAfterEvent below).
@@ -6621,15 +6641,22 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // into it (sealed, as stored): an undone turn takes its agents' reports and the
 // documents they stole with it. A snapshot captured before this carried none,
 // and restoring one keeps today's file, less the copies of undone documents.
-const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors, intercepts = null, turn = null }) => {
+const captureRollbackSnapshot = async ({ campaignId = "", round, fromDate, toDate, game, world, events, actions, chat, colors, intercepts = null, turn = null }) => {
   try {
     // Read shared and written without the defensive copies: the older restore
     // points only move along in a new array, never change (see
     // loadRollbackSnapshots). Each copy was the whole archive, every turn.
-    const prior = await readJson(JSON_URLS.snapshots, { defaultValue: [], force: true, clone: false }).catch(() => []);
-    const list = Array.isArray(prior) ? prior : [];
+    let prior;
+    try {
+      prior = await readJson(JSON_URLS.snapshots, { force: true, clone: false });
+    } catch (error) {
+      if (!/HTTP 404\b/.test(String(error?.message))) throw error;
+      prior = [];
+    }
+    const list = restorePointsFor(Array.isArray(prior) ? prior : [], { round });
     const snapshot = {
       id: `snap-${round}-${Date.now()}`,
+      ...(campaignId ? { campaignId } : {}),
       round,
       fromDate,
       toDate,
@@ -6645,13 +6672,18 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
       },
       ...(turn ? { turn: cloneValue(turn) } : {}),
     };
+    // The read and the copies above took a moment: the list is this campaign's.
+    assertCampaignUnchanged(campaignId, activeCampaignId(), "restore point");
     await writeJson(JSON_URLS.snapshots, [snapshot, ...list].slice(0, MAX_ROLLBACK_SNAPSHOTS), {
       cacheClone: false,
       cloneResult: false,
       echo: false,
     });
+    return true;
   } catch (error) {
     console.warn("[rollback] snapshot capture failed:", error);
+    logDebugEvent("warn", "[turn] The turn's restore point could not be saved; it cannot be undone.", { round, reason: error?.message || String(error) });
+    return false;
   }
 };
 
@@ -6681,12 +6713,22 @@ export const loadRollbackSnapshots = async () => {
 // its own real-time timer) could read chat.json mid-rollback, then write its own
 // read-modify-write back AFTER this function's restore, resurrecting the
 // pre-rollback chat history with its own new note landed on top.
+//
+// Refused, with NO_RESTORE_POINT_NOTE, when the restore point is not the start
+// of the turn `index + 1` turns ago in this campaign (runtime/turnCommit.js): a
+// turn in between that saved none would otherwise be taken back with it, and a
+// restore point filed into the wrong save would write another campaign over
+// this one.
 export const rollBackToSnapshot = async (index = 0) => {
   beginSimulation();
   try {
-    const snapshots = await loadRollbackSnapshots();
+    const campaignId = activeCampaignId();
+    const game = await readJson(JSON_URLS.game, { force: true });
+    const snapshots = restorePointsFor(await loadRollbackSnapshots(), { round: game?.round || 1 });
     const snap = snapshots[index];
     if (!snap) return null;
+    const problem = restorePointProblem(snapshots, { round: game?.round || 1, campaignId, index });
+    if (problem) throw new Error(problem);
     // A copy of the one restore point: what it restores becomes live state.
     const s = cloneValue(snap.state ?? {}) ?? {};
     // The player's standing goal is theirs, not the turn's (runtime/playerGoal.js):
@@ -6707,7 +6749,7 @@ export const rollBackToSnapshot = async (index = 0) => {
       chats: s.chat ?? [],
       colors: s.colors ?? {},
     }, {
-      expectedGameId: activeCampaignId(),
+      expectedGameId: campaignId,
     });
     // The agents' file as it stood before the turn — the traffic and the stolen
     // copies the turn filed go with it. Either way, a copy of a document the
@@ -6747,8 +6789,12 @@ export const rollBackToSnapshot = async (index = 0) => {
 
 // Whether the last turn can be stopped part-way: a time skip whose journal the
 // newest snapshot carries, with more than one event in it.
+// Only a restore point Undo would accept: Intervene rolls back to it first.
 export const canInterveneInLastTurn = async () => {
-  const snapshots = await loadRollbackSnapshots();
+  const game = await readJson(JSON_URLS.game, { force: true }).catch(() => null);
+  const round = game?.round || 1;
+  const snapshots = restorePointsFor(await loadRollbackSnapshots(), { round });
+  if (restorePointProblem(snapshots, { round, campaignId: activeCampaignId() })) return false;
   return normalizeArray(snapshots[0]?.turn?.events).length > 1;
 };
 
@@ -6763,7 +6809,9 @@ export const canInterveneInLastTurn = async () => {
 export const interveneAfterEvent = async (keptCount) => {
   beginSimulation();
   try {
-    const snapshots = await loadRollbackSnapshots();
+    // The restore point rollBackToSnapshot(0) will restore, which checks it.
+    const game = await readJson(JSON_URLS.game, { force: true });
+    const snapshots = restorePointsFor(await loadRollbackSnapshots(), { round: game?.round || 1 });
     const snap = snapshots[0];
     // A copy: the kept events are applied again below.
     const journal = cloneValue(snap?.turn);
@@ -7953,62 +8001,20 @@ const applySimulationResult = async ({
     unseenEvents.markTurnUnseen(normalizeArray(nextWorld.simulationHistory?.[0]?.eventIds));
   }
 
-  // Publish the complete canonical turn as ONE generation. Desktop persists the
-  // six domains behind a recovery journal; web mode updates its single game
-  // record transactionally. Client caches switch generation before listeners
-  // are notified, so no observer can see a hybrid turn.
-  await writeCanonicalTurnState({
-    actions: actionsToWrite,
-    chats: chatsToWrite,
-    events: nextEvents,
-    game: nextGame,
-    colors: nextColors,
-    world: nextWorld,
-  }, {
-    expectedGameId: campaignId,
-  });
-
-  // Flags are presentation data rather than turn authority. A polity rename may
-  // update them, but a failed emblem write must not roll back an otherwise valid
-  // canonical generation.
-  if (renamedFlags) {
-    try {
-      await writeJson(JSON_URLS.flags, renamedFlags, { pretty: true });
-    } catch (error) {
-      console.warn("[turn] renamed flags could not be persisted; canonical turn remains committed.", error);
-    }
-  }
-
-  // The turn's new state is now persisted. Web-mode encrypted sync listens for this
-  // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
-  // where nothing listens. Firing here — the single choke point every turn type runs
-  // through (jump, auto-jump, interactive event, game-master) — means the sync's full scan
-  // sees the committed round.
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
-
-  // The agents' file before this turn files anything into it, kept with the
-  // restore point below so an undo takes the turn's reports and stolen copies
-  // back with everything else.
+  // The restore point: the state this turn is about to replace, with what the
+  // turn applied beside it, in the order the reveal shows it, so the player can
+  // stop the round part-way (Intervene). Only a time skip is worth stopping: a
+  // resolved interactive event or a game-master command is one moment.
+  // Saved BEFORE the commit, so no turn is on disk without one: it used to be
+  // saved last, after the spy reports, and a turn whose app closed in between
+  // had none, so the next Undo went back two turns. A turn whose restore point
+  // cannot be saved is still written, and says so (restorePointSaved).
+  // The agents' file goes in as it stands before the turn files anything into
+  // it, so an undo takes the turn's reports and stolen copies back with
+  // everything else.
   const baseIntercepts = await readInterceptsState({ force: true }).catch(() => null);
-
-  // Spies report on the world the turn just produced. Awaited so the reports are
-  // there when the player opens the Spy tab, but never allowed to fail the turn.
-  // While requests are being saved the reports came with the turn review, in its
-  // one request, and are only filed here; a turn with no review (a resolved
-  // interactive event, a game-master command) waits for the next skip's. Otherwise each
-  // agent makes its own request, as before.
-  if (review) await fileReviewedAgentReports(review);
-  else if (!savingRequests()) await refreshSpyIntercepts();
-  // And what the player's agents stole this turn, beside their traffic.
-  await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId });
-  // And the advisor flags each new paper in its conversation.
-  await postDocumentNotices(reportDeliveries, { lastEventId: lastTurnEventId, date: nextGame.gameDate });
-
-  // Snapshot the state we just replaced so it can be rolled back to (best-effort),
-  // with what this turn applied beside it, in the order the reveal shows it, so
-  // the player can stop the round part-way (Intervene). Only a time skip is
-  // worth stopping: a resolved interactive event or a game-master command is one moment.
-  await captureRollbackSnapshot({
+  const restorePointSaved = await captureRollbackSnapshot({
+    campaignId,
     round: baseGame.round || 1,
     fromDate: baseGame.gameDate || baseGame.startDate || "",
     toDate: nextGame.gameDate || "",
@@ -8036,6 +8042,61 @@ const applySimulationResult = async ({
       })
       : null,
   });
+  // Saving it took a moment. A restore point left behind by a turn refused
+  // here is one round ahead of its campaign, and never offered
+  // (runtime/turnCommit.js restorePointsFor).
+  assertCampaignUnchanged(campaignId, activeCampaignId());
+
+  // Publish the complete canonical turn as ONE generation. Desktop persists the
+  // six domains behind a recovery journal; web mode updates its single game
+  // record transactionally. Client caches switch generation before listeners
+  // are notified, so no observer can see a hybrid turn.
+  await writeCanonicalTurnState({
+    actions: actionsToWrite,
+    chats: chatsToWrite,
+    events: nextEvents,
+    game: nextGame,
+    colors: nextColors,
+    world: nextWorld,
+  }, {
+    expectedGameId: campaignId,
+  });
+
+  // From here on every write goes to whichever campaign is open, and the steps
+  // below take a while (a spy's report is a request of its own). One that finds
+  // another campaign open stops, rather than filing this campaign's flags,
+  // reports and notices into it.
+
+  // Flags are presentation data rather than turn authority. A polity rename may
+  // update them, but a failed emblem write must not roll back an otherwise valid
+  // canonical generation.
+  if (renamedFlags && stillCampaign(campaignId)) {
+    try {
+      await writeJson(JSON_URLS.flags, renamedFlags, { pretty: true });
+    } catch (error) {
+      console.warn("[turn] renamed flags could not be persisted; canonical turn remains committed.", error);
+    }
+  }
+
+  // The turn's new state is now persisted. Web-mode encrypted sync listens for this
+  // to back up the turn (replacing a fixed 20s poll); it is a no-op in desktop mode
+  // where nothing listens. Firing here — the single choke point every turn type runs
+  // through (jump, auto-jump, interactive event, game-master) — means the sync's full scan
+  // sees the committed round.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("oh:turn-complete"));
+
+  // Spies report on the world the turn just produced. Awaited so the reports are
+  // there when the player opens the Spy tab, but never allowed to fail the turn.
+  // While requests are being saved the reports came with the turn review, in its
+  // one request, and are only filed here; a turn with no review (a resolved
+  // interactive event, a game-master command) waits for the next skip's. Otherwise each
+  // agent makes its own request, as before.
+  if (review) await fileReviewedAgentReports(review, { campaignId });
+  else if (!savingRequests()) await refreshSpyIntercepts({ campaignId });
+  // And what the player's agents stole this turn, beside their traffic.
+  await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId, campaignId });
+  // And the advisor flags each new paper in its conversation.
+  await postDocumentNotices(reportDeliveries, { lastEventId: lastTurnEventId, date: nextGame.gameDate, campaignId });
 
   return {
     actions: actionsToWrite,
@@ -8044,6 +8105,8 @@ const applySimulationResult = async ({
     events: nextEvents,
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
+    // False when the turn was written without a restore point (time.jsx says so).
+    restorePointSaved,
     world: nextWorld,
   };
 };
@@ -10908,8 +10971,9 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
 };
 
 // `bundle` is the campaign the report is filed INTO: its date and round stamp the
-// entry, and its seal closes it.
-const storeSpyReport = async (bundle, spy, payload) => {
+// entry, and its seal closes it. `campaignId`, when the report comes after a
+// turn's commit, is that campaign's id: the report is not filed into another.
+const storeSpyReport = async (bundle, spy, payload, { campaignId = "" } = {}) => {
   const name = normalizeString(spy?.target);
   const reportId = newSpyReportId();
   const exchanges = normalizeArray(payload?.exchanges)
@@ -10957,6 +11021,7 @@ const storeSpyReport = async (bundle, spy, payload) => {
     exchanges: [...stolen, ...sealed],
     ...(sealedPoliticalAssessment ? { politicalAssessment: sealedPoliticalAssessment } : {}),
   };
+  assertCampaignUnchanged(campaignId, activeCampaignId(), "report");
   await writeInterceptsState({ ...current, [name]: entry });
   return entry;
 };
@@ -10967,9 +11032,9 @@ const STOLEN_DOCUMENTS_KEPT = 8;
 // among each agent's intercepts — sealed like the rest, and decoded in the Spies
 // tab only as far as the player's service can read the target's. Filing one
 // twice files it once (its id comes from the report). Never costs the turn.
-const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "" }) => {
+const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "", campaignId = "" }) => {
   const stolen = normalizeArray(deliveries).filter((delivery) => delivery?.channel === "intelligence");
-  if (!stolen.length) return;
+  if (!stolen.length || !stillCampaign(campaignId)) return;
   try {
     const seal = isSeal(world?.spySeal) ? world.spySeal : await ensureSpySeal();
     const current = normalizeIntercepts(await readInterceptsState({ force: true }));
@@ -10984,6 +11049,7 @@ const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "" }
       const traffic = entry.exchanges.filter((existing) => !isDocumentExchange(existing));
       next[key] = { ...entry, exchanges: [await sealExchange(seal, exchange), ...documents].slice(0, STOLEN_DOCUMENTS_KEPT).concat(traffic) };
     }
+    assertCampaignUnchanged(campaignId, activeCampaignId(), "report");
     await writeInterceptsState(next);
   } catch (error) {
     console.warn("[spycraft] a stolen document could not be filed:", error?.message || error);
@@ -10994,14 +11060,15 @@ const fileStolenDocuments = async (deliveries, { world, game, lastEventId = "" }
 // (reportDelivery.js documentNotices), appended to its conversation; the panel
 // merges them in whenever the file changes. One per paper, so re-applying a turn
 // (Intervene) posts nothing twice. Never costs the turn.
-const postDocumentNotices = async (deliveries, { lastEventId = "", date = "" } = {}) => {
+const postDocumentNotices = async (deliveries, { lastEventId = "", date = "", campaignId = "" } = {}) => {
   const notices = documentNotices(deliveries, { lastEventId, date });
-  if (!notices.length) return;
+  if (!notices.length || !stillCampaign(campaignId)) return;
   try {
     const stored = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
     const list = Array.isArray(stored) ? stored : [];
     const posted = new Set(list.filter((message) => message?.role === "notice").map((message) => message.id));
     const fresh = notices.filter((notice) => !posted.has(notice.id));
+    assertCampaignUnchanged(campaignId, activeCampaignId(), "notice");
     if (fresh.length) await writeJson(JSON_URLS.advisor, [...list, ...fresh]);
   } catch (error) {
     console.warn("[advisor] a new paper could not be flagged:", error?.message || error);
@@ -11014,7 +11081,7 @@ const playersAgentIn = (bundle, target) => {
     entry.owner === player && entry.target === target && (entry.status === "active" || entry.status === "turned"));
 };
 
-export const gatherIntelligence = async (target, { signal, requestKind } = {}) => {
+export const gatherIntelligence = async (target, { signal, requestKind, campaignId = "" } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
   const bundle = await readGameStateBundle({ force: true });
@@ -11028,7 +11095,7 @@ export const gatherIntelligence = async (target, { signal, requestKind } = {}) =
     variables: prepared.variables,
     ...(requestKind ? { requestKind } : {}),
   });
-  return storeSpyReport(bundle, spy, payload);
+  return storeSpyReport(bundle, spy, payload, { campaignId });
 };
 
 // Everything the player's agents have brought back, opened — for the simulator
@@ -11102,8 +11169,12 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
   }
 };
 
-export const refreshSpyIntercepts = async () => {
-  if (!isActiveFeatureEnabled("espionage")) return;
+// `campaignId`: the campaign whose turn just landed. The agents report one at a
+// time, a request each; once another campaign is open the rest stay silent
+// rather than spend requests on, and file reports into, a campaign that is not
+// theirs.
+export const refreshSpyIntercepts = async ({ campaignId = "" } = {}) => {
+  if (!isActiveFeatureEnabled("espionage") || !stillCampaign(campaignId)) return;
   let world;
   try {
     world = normalizeWorldState(await readWorldState({ force: true }));
@@ -11112,8 +11183,9 @@ export const refreshSpyIntercepts = async () => {
   }
   const player = normalizeString((await readGameData()).country);
   for (const spy of activeSpies(world, player)) {
+    if (!stillCampaign(campaignId)) return;
     try {
-      await gatherIntelligence(spy.target);
+      await gatherIntelligence(spy.target, { campaignId });
     } catch (error) {
       console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
     }
@@ -13978,8 +14050,8 @@ const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state
 // The agents' reports the review carried, filed once the turn is written — and
 // only for agents who are still in place after it: one caught this turn did not
 // get a report out.
-const fileReviewedAgentReports = async (review) => {
-  if (!review?.agentReports?.length) return;
+const fileReviewedAgentReports = async (review, { campaignId = "" } = {}) => {
+  if (!review?.agentReports?.length || !stillCampaign(campaignId)) return;
   let world;
   try {
     world = normalizeWorldState(await readWorldState({ force: true }));
@@ -13992,7 +14064,7 @@ const fileReviewedAgentReports = async (review) => {
     const payload = review.parts[key];
     if (!payload || !stillActive.has(spy.target)) continue;
     try {
-      await storeSpyReport({ ...bundle, world }, spy, payload);
+      await storeSpyReport({ ...bundle, world }, spy, payload, { campaignId });
     } catch (error) {
       console.warn(`[spycraft] the report from ${spy.target} could not be filed:`, error?.message || error);
     }

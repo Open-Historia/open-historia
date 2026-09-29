@@ -1,7 +1,10 @@
-/*! Open Historia — what a turn's commit keeps © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+/*! Open Historia — what a turn's commit keeps, and which restore points are real © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // A turn reads the campaign when it starts and writes it back minutes later.
 // What that write keeps of what happened meanwhile lives here, apart from the
-// simulation, so it can be tested without loading it.
+// simulation, so it can be tested without loading it, and so do the rules for
+// which restore points the turns left behind may be restored.
+import { campaignChanged } from "./campaignGuard.js";
+
 const idOf = (entry) => String(entry?.id ?? "").trim();
 
 // The queued orders a turn writes. The turn settles the orders it READ, but the
@@ -42,3 +45,55 @@ export const HELD_TURN_STALE_NOTE = "The campaign has changed since this turn wa
 
 export const heldTurnOutdated = (storedGame, baseGame) =>
   Number(storedGame?.round || 1) !== Number(baseGame?.round || 1);
+
+// Restore points (gameplay.js captureRollbackSnapshot), newest first. Each
+// records the round its turn STARTED on, and a turn always moves the round on
+// by one, so the newest real one is one round behind the game, the next two
+// behind, and so on. One at or past the current round belongs to a turn that
+// never landed (its write failed after the restore point was saved) and is left
+// out. A restore point with no round (never written without one, but the file
+// is the player's) cannot be checked and is taken on trust.
+const roundOf = (value) => {
+  const round = Number(value);
+  return Number.isFinite(round) ? round : null;
+};
+
+export const restorePointsFor = (snapshots, { round } = {}) => {
+  const list = Array.isArray(snapshots) ? snapshots : [];
+  const current = roundOf(round);
+  if (current === null) return list;
+  return list.filter((snapshot) => {
+    const at = roundOf(snapshot?.round);
+    return at === null || at < current;
+  });
+};
+
+export const NO_RESTORE_POINT_NOTE = "The last turn has no restore point.";
+
+// Said with the turn when its restore point could not be saved, so the player
+// hears it now rather than when an Undo is refused.
+export const RESTORE_POINT_NOT_SAVED_NOTE = "This turn was saved, but its restore point was not, so it cannot be undone.";
+
+// Why the restore point at `index` of restorePointsFor's list may not be
+// restored, or "" when it may: it is not the start of the turn `index + 1`
+// turns ago (a turn in between saved none, so restoring it would take back
+// more turns than the player asked), or it was captured in another campaign.
+export const restorePointProblem = (snapshots, { round, campaignId = "", index = 0 } = {}) => {
+  const snapshot = Array.isArray(snapshots) ? snapshots[index] : null;
+  if (!snapshot) return NO_RESTORE_POINT_NOTE;
+  if (campaignChanged(snapshot.campaignId, campaignId)) return NO_RESTORE_POINT_NOTE;
+  const current = roundOf(round);
+  const at = roundOf(snapshot.round);
+  if (current !== null && at !== null && at !== (current || 1) - 1 - index) return NO_RESTORE_POINT_NOTE;
+  return "";
+};
+
+// How many turns can be undone one after another from where the game stands:
+// the unbroken run of restore points from the last turn back. Counts the index
+// entries (the server's projection, id/round/dates only) as well as the list.
+export const undoableTurns = (snapshots, { round, campaignId = "" } = {}) => {
+  const list = restorePointsFor(snapshots, { round });
+  let count = 0;
+  while (count < list.length && !restorePointProblem(list, { round, campaignId, index: count })) count += 1;
+  return count;
+};

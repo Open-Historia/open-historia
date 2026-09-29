@@ -13,8 +13,9 @@ import {
     getPrimedScenarioRegionCatalog,
     loadCountryNames,
     loadRegionCatalog,
-    loadRollbackSnapshotCount,
+    loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
+import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
 import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
@@ -2127,6 +2128,12 @@ const DateWidget = ({
     });
     const [error, setError] = useState("");
     const [fallbackWarning, setFallbackWarning] = useState("");
+    // A turn written without its restore point (AI/gameplay.js
+    // captureRollbackSnapshot) cannot be undone; said with the turn, beside a
+    // fallback's warning when there is none.
+    const warnIfNoRestorePoint = (result) => {
+        if (result?.restorePointSaved === false) setFallbackWarning((current) => current || RESTORE_POINT_NOT_SAVED_NOTE);
+    };
     // A turn that is generated and valid but NOT written, because the Projects &
     // Operations board could not be brought in step with it. Set means a turn is
     // waiting: the player retries just the board, or discards and runs the turn
@@ -2398,6 +2405,7 @@ const DateWidget = ({
                     source: result.generation?.source || "ai",
                 });
             }
+            warnIfNoRestorePoint(result);
             // What the turn actually DID to the world, in detailed mode. This is
             // the entry that answers the most common report there is — "the
             // event said my army took the province but the border never moved" —
@@ -2482,6 +2490,7 @@ const DateWidget = ({
         jumpAbortRef.current = controller;
         try {
             const result = await retryPendingProjectsJump({ signal: controller.signal });
+            warnIfNoRestorePoint(result);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2541,6 +2550,7 @@ const DateWidget = ({
                 onEvents: live ? showStreamedEvents : undefined,
             });
             carryLiveReveal();
+            warnIfNoRestorePoint(result);
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2614,11 +2624,15 @@ const DateWidget = ({
 
     // How many turns can be undone (a restore point is captured at the start of
     // each turn). Re-checked whenever the round changes — after a jump or undo.
+    // A turn's restore point is saved before the turn is written, so it is there
+    // by the time the new round is. Only the unbroken run back from the last
+    // turn counts (runtime/turnCommit.js): past a turn that saved none, an Undo
+    // would take back more than one turn, and the engine refuses it.
     useEffect(() => {
         let active = true;
         // The index, not the snapshots: the full list carries every prior world.
-        loadRollbackSnapshotCount().then((count) => {
-            if (active) setUndoCount(count);
+        loadRollbackSnapshotIndex().then((entries) => {
+            if (active) setUndoCount(undoableTurns(entries, { round: gameData?.round || 1 }));
         });
         return () => { active = false; };
     }, [gameData?.round]);
@@ -2692,6 +2706,7 @@ const DateWidget = ({
                     kept: result.kept,
                     dropped: result.dropped,
                 });
+                warnIfNoRestorePoint(result.bundle);
                 setGameData(result.bundle.game);
                 setEvents(result.bundle.events);
                 setWorldState(result.bundle.world);

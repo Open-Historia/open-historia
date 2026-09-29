@@ -1737,8 +1737,6 @@ export const loadRollbackSnapshotIndex = async () => {
   return Array.isArray(data?.entries) ? data.entries : [];
 };
 
-export const loadRollbackSnapshotCount = async () => (await loadRollbackSnapshotIndex()).length;
-
 export const loadRegionCatalog = async ({ force = false } = {}) => {
   // Keyed on BOTH sources: switching games/scenarios (new runtime token) must
   // refresh the custom-region names merged in below.

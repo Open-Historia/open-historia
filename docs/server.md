@@ -172,7 +172,7 @@ Defined at `server/libraryStore.js:240-324`. These maps drive every read/write/s
 | `STORAGE_JSON_ASSET_FILES` | `actions`,`advisor`,`chat`,`events` → `storage/*.json` | Array-shaped |
 | `JSON_ASSET_FILES` | CORE ∪ STORAGE | Copied into every new scenario/game |
 | `OPTIONAL_JSON_ASSET_FILES` | `colors`,`flags`,`tags` → `*.json` | Static author data kept **out** of the 5 s `world.json` poll |
-| `RUNTIME_ONLY_JSON_ASSET_FILES` | `snapshots`→`storage/snapshots.json` | Roll-back points (each a pre-turn `state` and, for a time skip, the `turn` journal Intervene re-applies from — `src/Game/AI/intervene.js`); never copied/exported |
+| `RUNTIME_ONLY_JSON_ASSET_FILES` | `snapshots`→`storage/snapshots.json` | Roll-back points (each a pre-turn `state`, the `round` the turn started on, the `campaignId` it was captured in and, for a time skip, the `turn` journal Intervene re-applies from — `src/Game/AI/intervene.js`); never copied/exported |
 | `PMTILES_ASSET_FILES` | `cities`,`countries`,`regions` → `*.pmtiles` | Per-scenario binary map overrides |
 | `SCENARIO_GEOJSON_ASSET_FILES` | `regionsGeojson`→`regions.geojson`, `citiesGeojson`→`cities.geojson`, `backgroundData`→`background.json` | Custom map geometry; always embedded in bundles |
 | `*_IMAGE_ASSET_FILES` | `cover`→`cover-image.bin` | Content type recorded in meta |
