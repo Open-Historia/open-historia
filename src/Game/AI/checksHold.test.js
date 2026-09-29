@@ -149,3 +149,11 @@ test("a board retry that a check then holds hands the turn to the checks", () =>
     const retry = body(gameplay, "export const retryPendingProjectsJump = async");
     assert.match(retry, /error\?\.heldKind === HELD_TURN\.checks && heldProjectsJump\.context[\s\S]*holdTurn\(HELD_TURN\.checks, \{ context: heldProjectsJump\.context, state: heldProjectsJump\.state \}\)/);
 });
+
+test("a canned turn's checks never hold it: the fallback page and its Rollback do instead", () => {
+    const finish = body(gameplay, "const finishTimelineJump = async");
+    const created = finish.indexOf("createTurnChecks()");
+    const accepted = finish.indexOf('=== "fallback") checks.accept();');
+    const firstHold = finish.indexOf("checksHoldTurn(checks)");
+    assert.ok(created > -1 && accepted > created && firstHold > accepted);
+});

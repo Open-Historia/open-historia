@@ -14548,6 +14548,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // Every check this finish asks, kept for the turn (turnChecks.js): a failed
   // one holds the turn unwritten, and a retry asks only what failed.
   const checks = state.checks ?? (state.checks = createTurnChecks());
+  // A canned turn already told the player the model is not answering, and the
+  // fallback page offers Rollback. Its checks still run (the model may be back),
+  // but one that fails lands the turn as written rather than holding a turn the
+  // player has no reason to retry.
+  if (normalizeString(state.generation?.source) === "fallback") checks.accept();
   const review = state.requests?.saving
     ? await checks.run("review", () => runTurnReview({ context, merged, signal, state }), reviewFailure)
     : null;
