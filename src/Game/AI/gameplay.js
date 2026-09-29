@@ -374,6 +374,7 @@ import {
   discardPendingProjectsJump,
   discardParkedTurn,
   endSimulation,
+  getParkedTurn,
   getPendingJumpSegment,
   getPendingProjectsJump,
   isSimulationBusy,
@@ -3933,13 +3934,19 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
 // campaign. One whose campaign has moved on since its read is dropped, as a
 // held turn would be (heldTurnIsStale).
 export const applyParkedTurn = async ({ signal } = {}) => {
-  const parked = takeParkedTurn();
+  // Left on the shelf while the round is checked: a parked turn keeps its
+  // campaign busy, so nothing else writes into it during that read.
+  const parked = getParkedTurn();
   if (!parked) return null;
   const { applyArgs } = parked;
   if (await heldTurnIsStale(applyArgs.baseGame)) {
+    discardParkedTurn();
     logDebugEvent("turn", "The kept skip was discarded: its campaign moved on while another was open.");
     throw new Error(HELD_TURN_STALE_NOTE);
   }
+  // Taken and marked busy in one step. Another call got there first when it is
+  // no longer on the shelf, and the turn is applied once.
+  if (takeParkedTurn() !== parked) return null;
   beginSimulation();
   try {
     applyArgs.projects = { ...applyArgs.projects, signal };
