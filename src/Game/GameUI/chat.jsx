@@ -4445,13 +4445,11 @@ const Chat = ({ hovered, setHovered, isOpen, onToggle }) => {
                     top: `calc(4.35rem + ${SAFE_TOP})`,
                     left: "auto",
                     // Advisor and Stats share the same resizable right drawer,
-                    // and the toasts were meant to sit left of it: the drawer
-                    // was to publish its live width as this variable. Nothing
-                    // sets it on this line (the setter was in advisor.jsx on the
-                    // Continuum checkpoint and never came across), so it is 0
-                    // and the toasts sit at the right edge, over an open drawer.
-                    // On a phone the drawer is the whole screen, with nothing
-                    // beside it, so there the offset is left out.
+                    // and the toasts sit left of it: main.jsx sets this
+                    // variable to the drawer's live width while it is open,
+                    // and to 0 while it is shut. On a phone the drawer is the
+                    // whole screen, with nothing beside it, so there the
+                    // offset is left out.
                     right: isMobile
                         ? `calc(0.75rem + ${SAFE_RIGHT})`
                         : `calc(var(--oh-right-drawer-safe-offset, 0px) + 0.75rem + ${SAFE_RIGHT})`,

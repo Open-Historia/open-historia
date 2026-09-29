@@ -446,6 +446,16 @@ const Main = ({
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
   const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
+  // The diplomacy toasts (chat.jsx) sit left of the open drawer rather than
+  // over the reply the player is reading in it; following the width variable
+  // keeps them there through a drag. Not on a phone, where the drawer is the
+  // whole screen.
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty(
+      "--oh-right-drawer-safe-offset",
+      rightDrawerOpen && !isMobile ? `var(${ADVISOR_WIDTH_VAR}, 0px)` : "0px",
+    );
+  }, [rightDrawerOpen, isMobile]);
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
