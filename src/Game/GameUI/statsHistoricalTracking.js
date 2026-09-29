@@ -39,11 +39,14 @@ export const buildHistoricalTrackingIndex = (world = {}) => {
   // hundred distinct owner tokens. Resolve each DISTINCT owner through the
   // prebuilt identity index once so old/aliased saves preserve the same
   // landless semantics without paying resolver cost per region or candidate.
-  const landed = new Set(
+  // Every distinct land-holding polity, by its canonical key.
+  const landedOwners = [...new Map(
     [...new Set([...Object.values(ownership), ...Object.values(sovereignty)].map(clean).filter(Boolean))]
-      .map((owner) => lower(resolveWithIndex(owner, world, identityIndex)))
-      .filter(Boolean),
-  );
+      .map((owner) => resolveWithIndex(owner, world, identityIndex))
+      .filter(Boolean)
+      .map((owner) => [lower(owner), owner]),
+  ).values()];
+  const landed = new Set(landedOwners.map(lower));
   const declared = new Map(
     (identityIndex?.declared || []).map((entry) => [lower(entry?.canonical), entry]),
   );
@@ -71,16 +74,24 @@ export const buildHistoricalTrackingIndex = (world = {}) => {
     return true;
   };
 
-  return { identityIndex, canonicalKey, displayName, isLandless };
+  return { identityIndex, canonicalKey, displayName, isLandless, landedOwners, hasOwnershipOverrides };
 };
 
 // `index`: the caller's buildHistoricalTrackingIndex(world) when it already has
 // one (the Stats pane builds one per world snapshot), so it is not built twice.
+// `stockNames`: the stock map's country names, offered when the save has no
+// ownership ledger (a stock-map game), where the land holders are exactly those.
+//
+// Every polity holding land is a candidate, not only those already opened in
+// Stats: a rival the player never inspected can be picked directly. A row with
+// no sheet yet shows "baseline needed"; tracking one costs nothing until its
+// first sheet exists.
 export const buildHistoricalTrackingCandidateRows = ({
   world = {},
   playerCountry = "",
   currentCountry = "",
   index: providedIndex = null,
+  stockNames = [],
 } = {}) => {
   const index = providedIndex || buildHistoricalTrackingIndex(world);
   const collected = new Map();
@@ -101,6 +112,8 @@ export const buildHistoricalTrackingCandidateRows = ({
   add(currentCountry);
   Object.keys(world?.countryStats || {}).forEach(add);
   Object.keys(world?.polityOverrides || {}).forEach(add);
+  (index.landedOwners || []).forEach(add);
+  if (!index.hasOwnershipOverrides && Array.isArray(stockNames)) stockNames.forEach(add);
 
   return {
     index,

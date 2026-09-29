@@ -1169,6 +1169,8 @@ const AdvancedStatsModal = ({
     );
 };
 
+const STOCK_COUNTRY_NAMES = Object.values(COUNTRY_NAMES);
+
 const HistoricalTrackingModal = ({
     open,
     onClose,
@@ -1210,6 +1212,7 @@ const HistoricalTrackingModal = ({
         playerCountry,
         currentCountry,
         index: identity,
+        stockNames: STOCK_COUNTRY_NAMES,
     }), [world, identity, playerCountry, currentCountry]);
     const candidateRows = trackingCandidates.rows;
 

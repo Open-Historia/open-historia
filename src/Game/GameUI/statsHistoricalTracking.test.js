@@ -89,3 +89,18 @@ test("the Stats pane's one identity index serves Diplomacy names and the trackin
   assert.ok(lookups > 0);
   assert.ok(rows.some((row) => row.key === "Republic of Latvia"));
 });
+
+test("every land-holding polity can be tracked, not only those already opened in Stats", () => {
+  const ledgerWorld = {
+    polityOverrides: {},
+    countryStats: {},
+    regionOwnershipOverrides: { A_1: "Kingdom of Aragon", A_2: "Kingdom of Aragon", C_1: "Crown of Castile" },
+    regionSovereigntyOverrides: { N_1: "Kingdom of Navarre" },
+  };
+  const { rows } = buildHistoricalTrackingCandidateRows({ world: ledgerWorld, stockNames: ["France"] });
+  assert.deepEqual(rows.map((row) => row.key), ["Crown of Castile", "Kingdom of Aragon", "Kingdom of Navarre"]);
+
+  const stockWorld = { polityOverrides: {}, countryStats: {}, regionOwnershipOverrides: {}, regionSovereigntyOverrides: {} };
+  const stock = buildHistoricalTrackingCandidateRows({ world: stockWorld, playerCountry: "France", stockNames: ["France", "Germany", "Spain"] });
+  assert.deepEqual(stock.rows.map((row) => row.key), ["France", "Germany", "Spain"]);
+});
