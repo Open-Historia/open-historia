@@ -273,6 +273,22 @@ test("halfway between two places is halfway", () => {
     assert.deepEqual([mid.lng, mid.lat], [34, 49.6]);
 });
 
+test("halfway between two places across the date line stays in the Pacific", () => {
+    const islands = [{ name: "Fiji", point: [178, -18] }, { name: "Samoa", point: [-172, -13.8] }];
+    const pacific = {
+        find: (name) => {
+            const island = islands.find((entry) => fold(entry.name) === fold(name));
+            return island ? { kind: "city", name: island.name, point: island.point } : null;
+        },
+        regionAt: () => null,
+        findRegionId: () => null,
+    };
+    for (const phrase of ["between Fiji and Samoa", "between Samoa and Fiji"]) {
+        const mid = resolvePlacement(phrase, pacific);
+        assert.deepEqual([mid.lng, mid.lat], [-177, -15.9], phrase);
+    }
+});
+
 test("coordinates are taken as given, and say which region they fall in", () => {
     const point = place("[35.5, 49.5]");
     assert.deepEqual([point.lng, point.lat, point.regionId, point.how], [35.5, 49.5, "el-s", "coordinates"]);
