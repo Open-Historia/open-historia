@@ -755,8 +755,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       }
       d.mergeColors(polityColors);
     }
-    if (initialMap.regions) api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
-    else api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
+    // A scenario with no regions file of its own opens on the stock world, which
+    // arrives seconds later: Save and Apply wait for it (hydrated, below).
+    const mapLoaded = initialMap.regions
+      ? api.loadRegions(initialMap.regions, initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null)
+      : api.reseedWorldWithOwners(initialMap.ownershipOverrides || {}, initialMap.claimOverrides || null);
     // Restore the scenario's custom map background so re-opening its map editor
     // shows the uploaded map, not a blank basemap. It's marked persisted, so the
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
@@ -764,7 +767,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     setCustomBgId(null);
     markLoaded(null);
     setScenarioDirty(false);
-    setHydrated(true);
+    Promise.resolve(mapLoaded).then(
+      () => setHydrated(true),
+      // Save stays disabled: writing a half-loaded map would replace the scenario's.
+      (e) => console.warn("[editor] the scenario's map did not load:", e),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, initialMap]);
 
@@ -848,9 +855,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         features={d.features}
         onSelectionChange={d.setSelection}
         onRegionCount={d.setRegionCount}
-        onRegionsChanged={(count) => {
+        onRegionsChanged={(count, { loaded = false } = {}) => {
           d.setRegionCount(count);
-          d.setSaveStatus("dirty");
+          // A map being opened is not an edit (OlMap notifyRegions).
+          if (!loaded) d.setSaveStatus("dirty");
           setRegionEpoch((n) => n + 1);
         }}
         onFeatureCreate={({ pixel, mapFeature = false, ...partial }) => {

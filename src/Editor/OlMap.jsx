@@ -573,9 +573,13 @@ const OlMap = ({
     groupOutlineTimerRef.current = window.setTimeout(() => rebuildGroupOutlinesRef.current?.(), 350);
   };
 
-  const notifyRegions = () => {
+  // `loaded`: the regions were replaced because a map was opened, not edited,
+  // so nothing in them is unsaved (MapEditor's onRegionsChanged). A seed that
+  // lands seconds after the Workshop opened used to mark the map dirty and
+  // autosave the whole world as a new document.
+  const notifyRegions = ({ loaded = false } = {}) => {
     const n = regionSourceRef.current?.getFeatures().length ?? 0;
-    onRegionsChangedRef.current?.(n);
+    onRegionsChangedRef.current?.(n, { loaded });
     scheduleGroupOutlines();
   };
 
@@ -613,6 +617,9 @@ const OlMap = ({
     // save can carry only what has moved (serializeRegionChanges below). Empty
     // means the next save is a full one, which is what a fresh load leaves it as.
     const savedRegionHashes = new globalThis.Map();
+    // Bumped by every whole-map load. A seed still downloading when another map
+    // is loaded finds it moved on and is dropped, instead of landing over it.
+    let mapLoads = 0;
     const getZoom = (res) => mapRef.current?.getView().getZoomForResolution(res) ?? 3;
 
     // VectorImage, not Vector: the regions are ~3,662 separate filled+stroked
@@ -2436,6 +2443,7 @@ const OlMap = ({
       // Used when the store says it could not apply a difference.
       forgetSavedRegions: () => savedRegionHashes.clear(),
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
+        mapLoads += 1;
         const fmt = new GeoJSON();
         regionSource.clear();
         savedRegionHashes.clear();
@@ -2463,23 +2471,29 @@ const OlMap = ({
         }
         regionLayer.changed();
         labelLayer.changed();
-        notifyRegions();
+        notifyRegions({ loaded: true });
       },
+      // Both reseeds resolve once the world is on the map, so the Workshop can
+      // wait for it (MapEditor's hydration keeps Save disabled until then).
       reseedWorld: () => {
-        loadSeedFeatures().then((feats) => {
+        const load = ++mapLoads;
+        return loadSeedFeatures().then((feats) => {
+          if (load !== mapLoads) return;
           regionSource.clear();
         savedRegionHashes.clear();
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
         });
       },
       // Seed the modern world, then stamp a scenario's ownership overrides on
       // top — how a scenario WITHOUT custom geometry opens in the editor (its
       // tier-1 map is exactly "stock world + these overrides").
       reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
-        loadSeedFeatures().then((feats) => {
+        const load = ++mapLoads;
+        return loadSeedFeatures().then((feats) => {
+          if (load !== mapLoads) return;
           regionSource.clear();
         savedRegionHashes.clear();
           const stampClaims = claimStamper(claimOverrides);
@@ -2491,7 +2505,7 @@ const OlMap = ({
           regionSource.addFeatures(feats);
           regionLayer.changed();
           labelLayer.changed();
-          notifyRegions();
+          notifyRegions({ loaded: true });
         });
       },
       undo: () => doUndo(),

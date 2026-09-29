@@ -69,7 +69,7 @@ Two stores, split by weight (`src/Editor/useMapDocument.js:6`):
 - **Document state** (React, in `useMapDocument`) — metadata, region `types`, point `features` (cities), `colorOverrides`, `flags`, `tags`. Cheap, serialisable, the source of truth for everything except geometry.
 - **Region geometry** (OpenLayers `VectorSource`, in `OlMap`) — ~3,662 filled/stroked polygons, far too heavy for React state. Materialised into the document only on **save/export** via `api.serializeRegions()`.
 
-`MapEditor` receives the imperative region API through `OlMap`'s `onReady={setApi}` callback (`src/Editor/MapEditor.jsx:453`). Panels never touch the map directly; they call `api.*` methods, which mutate OL features and call `layer.changed()` to restyle. Region mutations fire `onRegionsChanged` → `setSaveStatus("dirty")` → debounced autosave.
+`MapEditor` receives the imperative region API through `OlMap`'s `onReady={setApi}` callback (`src/Editor/MapEditor.jsx:453`). Panels never touch the map directly; they call `api.*` methods, which mutate OL features and call `layer.changed()` to restyle. Region mutations fire `onRegionsChanged` → `setSaveStatus("dirty")` → debounced autosave. A whole map being loaded (`loadRegions`, `reseedWorld`, `reseedWorldWithOwners`) fires it with `{ loaded: true }`, which is not an edit and does not dirty the document.
 
 ```
 DocumentsMenu / BottomBar ─┐
@@ -168,8 +168,8 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `serializeRegions()` | Region geometry → GeoJSON FC (EPSG:4326, 5 decimals). Used on save/export. |
 | `loadRegions(fc)` | Replace the source from a FeatureCollection (ids pulled from `properties.id`). |
 | `applyRegionPatch({ upsert, remove, withAttributes })` | Puts in regions (GeoJSON features in EPSG:4326) and takes others out, as **one** undo step. An existing region gets the new geometry, and its attributes too with `withAttributes`. A new one is added marked `edited`. Used when a suggested border change is accepted (§25). |
-| `reseedWorld()` | Load the stock world seed fresh. |
-| `reseedWorldWithOwners(overrides)` | Load stock world, then stamp `{regionId: ownerName}` overrides — how a tier-1 scenario opens. |
+| `reseedWorld()` | Load the stock world seed fresh. Resolves once it is on the map; a newer load in the meantime wins and the seed is dropped. |
+| `reseedWorldWithOwners(overrides)` | Load stock world, then stamp `{regionId: ownerName}` overrides — how a tier-1 scenario opens. Resolves once it is on the map, like `reseedWorld`. |
 | `undo()` / `redo()` | Drive the command stack. |
 | `restyle()` | Force `layer.changed()`. |
 
@@ -462,6 +462,7 @@ The `null`-means-clear contract is why hydration (§20) must reload the scenario
 
 When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`) fetches the scenario's `regionsGeojson`, `citiesGeojson`, `colors`, `flags`, `tags`, and (if any) `backgroundData`, assembling `mapEditorSeed` = `{ name, author, ownershipOverrides, regions, cities, colors, flags, tags, background, basemap }`. `MapEditor`'s hydrate effect (`:339`, runs once) builds the base document, restores flags/tags/background/basemap, maps cities → features, then:
 - `api.loadRegions(initialMap.regions)` if the scenario has custom geometry, **else** `api.reseedWorldWithOwners(initialMap.ownershipOverrides)` (stock world + overrides = its tier-1 map).
+- `hydrated` (which enables Save, Save & Exit and Apply & Play) is set only once the map is on it; the stock world arrives seconds after the Workshop opens. Loading it is not an edit: it used to mark the map dirty when it landed, so closing without an edit asked about unsaved changes, and the autosave wrote the whole stock world as a new "Scenario Map" document on every open.
 
 `scenarioMode` forces `seedKind="deferred"` so `OlMap` doesn't auto-seed the default world under the scenario's map.
 
