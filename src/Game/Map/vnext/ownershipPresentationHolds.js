@@ -170,11 +170,13 @@ export const createOwnershipPresentationState = ({ onHoldsChanged = () => {} } =
     return "released";
   };
 
-  // Geometry changed or the map went away: nothing queued survives.
+  // Geometry changed or the map went away: nothing queued survives. The holds
+  // go before the entries are forgotten, so a sweep already playing is marked
+  // too and its end cannot take a later change's hold.
   const reset = ({ releaseHolds = true } = {}) => {
+    if (releaseHolds) releaseAll();
     queue = [];
     byRevision.clear();
-    if (releaseHolds) releaseAll();
   };
 
   return {

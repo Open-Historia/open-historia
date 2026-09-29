@@ -191,3 +191,14 @@ test("a geometry change or teardown drops every queued sweep", () => {
   assert.equal(state.holds.size, 0);
   assert.equal(state.nextTransition(), null);
 });
+
+test("a sweep already playing when the geometry changes takes no later hold when it ends", () => {
+  const { state } = setup();
+  state.hold(["r1"]);
+  state.addTransition({ revision: 1, transitionData: SWEEP, changedRegionIds: ["r1"] });
+  const sweep = state.nextTransition();
+  state.reset();
+  state.hold(["r1"]); // a change on the new geometry
+  assert.equal(state.finishTransition(sweep), "released");
+  assert.equal(state.holds.get("r1"), 1);
+});
