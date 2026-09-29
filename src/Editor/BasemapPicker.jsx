@@ -176,6 +176,9 @@ const BasemapPicker = ({
   const [communityError, setCommunityError] = useState(null);
   const [communityLoaded, setCommunityLoaded] = useState(false);
   const [busyId, setBusyId] = useState(null);
+  // What the last upload came to when it is not simply "saved": a session-only
+  // raster, or a library that would not take it ({ tone, text }).
+  const [notice, setNotice] = useState(null);
 
   const refresh = () => {
     setLoading(true);
@@ -196,6 +199,7 @@ const BasemapPicker = ({
 
   useEffect(() => {
     if (open) refresh();
+    setNotice(null);
   }, [open]);
 
   useEffect(() => {
@@ -207,9 +211,15 @@ const BasemapPicker = ({
   const handleUpload = async (file) => {
     if (!file) return;
     setBusy(true);
+    setNotice(null);
     try {
-      await onUpload(file);
+      const result = await onUpload(file);
       refresh();
+      if (result?.sessionOnly) {
+        setNotice({ tone: "warn", text: "This GeoTIFF or PMTiles background is on the map for this session only. It is not saved with the map or added to your basemaps, and the game does not show it." });
+      } else if (result?.libraryError) {
+        setNotice({ tone: "error", text: "The basemap is on the map, but it could not be saved to your basemaps, so it will not be here to reuse." });
+      }
     } catch (e) {
       window.alert(`Could not add that basemap: ${e?.message || e}`);
     } finally {
@@ -256,7 +266,7 @@ const BasemapPicker = ({
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
           <div style={{ flex: 1 }} />
-          <label style={uploadBtn}>
+          <label style={uploadBtn} title="A map image (PNG, JPG, SVG) or a vector map (GeoJSON, KML, KMZ, Shapefile) is saved to your basemaps. GeoTIFF and PMTiles files are shown for the current session only.">
             {busy ? "Uploading…" : "⬆ Upload basemap"}
             <input
               type="file"
@@ -273,6 +283,9 @@ const BasemapPicker = ({
         </div>
 
         <div style={bodyBox}>
+          {notice && (
+            <div role="status" style={{ ...dim, color: notice.tone === "error" ? "#fecaca" : "#fde68a", paddingTop: 0 }}>{notice.text}</div>
+          )}
           {tab === "mine" ? (
             <>
               <div style={{ marginBottom: "1.3rem" }}>
@@ -295,7 +308,7 @@ const BasemapPicker = ({
                 {loading ? (
                   <div style={dim}>Loading…</div>
                 ) : mine.length === 0 ? (
-                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image (it stays here so you can reuse it on any map).</div>
+                  <div style={dim}>No uploaded basemaps yet — use “⬆ Upload basemap” to add your own map image or vector map (it stays here so you can reuse it on any map). GeoTIFF and PMTiles files are shown for the current session only.</div>
                 ) : (
                   <div style={rowScroll}>
                     {mine.map((bm) => (

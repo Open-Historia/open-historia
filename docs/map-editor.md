@@ -348,7 +348,7 @@ Uploaded via the **Basemap: …** button (bottom bar) → `BasemapPicker` overla
 | `.pmtiles` | `raster` | **no** |
 | `.png`/`.jpg`/`.svg` | `image` (data URL, stretched across the world) | yes |
 
-Heavy parsers (`shpjs`, `jszip`) are dynamically imported so they only load on demand. Persistable backgrounds (`vector`/`image`) are saved into `doc.metadata.customBackground` and rebuilt on open via `rebuildPersistedBackground(saved, {persisted})` — the `persisted` flag stops a restored background from re-dirtying the doc on load. In the game, a custom background **replaces Earth** and forces `world.customRegions` on (so the stock political overlay is hidden).
+GeoTIFF/PMTiles are not saved with the map, not added to Your basemaps and not shown by the game; `uploadBasemap` answers `{ sessionOnly: true }` for them and the picker says so, and it answers `{ libraryError }` when an image or vector basemap is on the map but the library would not take it, which the picker also shows (it used to go only to the console). The Upload button's tooltip and the empty Your basemaps shelf say which formats are kept. Heavy parsers (`shpjs`, `jszip`) are dynamically imported so they only load on demand. Persistable backgrounds (`vector`/`image`) are saved into `doc.metadata.customBackground` and rebuilt on open via `rebuildPersistedBackground(saved, {persisted})` — the `persisted` flag stops a restored background from re-dirtying the doc on load. In the game, a custom background **replaces Earth** and forces `world.customRegions` on (so the stock political overlay is hidden).
 
 ---
 

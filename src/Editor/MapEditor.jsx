@@ -249,22 +249,29 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
 
   // Upload a new basemap: apply it now AND save it to the library for reuse.
+  // Answers what the picker then tells the author, both of which used to go
+  // unsaid: { sessionOnly: true } for a GeoTIFF or PMTiles background, which is
+  // on the map for this session only (not saved with the map, not added to the
+  // library, not shown by the game), and { libraryError } when the library
+  // would not take it — it is on the map either way.
   const uploadBasemap = async (file) => {
-    if (!file) return;
+    if (!file) return null;
     const bg = await loadBackgroundFile(file);
     setCustomBg(bg); // applies immediately (image / vector / raster)
     const normalized = normalizeBackground(bg);
     if (!normalized) {
       setCustomBgId(null); // raster (GeoTIFF/PMTiles) is session-only reference, not saved
-      return;
+      return { sessionOnly: true };
     }
     const name = file.name ? file.name.replace(/\.[^.]+$/, "") : "Custom basemap";
     try {
       const meta = await addBackgroundToLibrary(normalized, name, { author: d.author || "" });
       setCustomBgId(meta?.id || null);
+      return { saved: true };
     } catch (e) {
       console.warn("[editor] save basemap to library failed:", e);
       setCustomBgId(null);
+      return { libraryError: e?.message || String(e) };
     }
   };
 
