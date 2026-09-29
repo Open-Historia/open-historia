@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Source, Layer } from "react-map-gl/maplibre";
 import { getNationColors } from "../../runtime/assets.js";
 import { useWorldState } from "./useWorldState.js";
+import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
 import {
   getMarkerPresentation,
   MARKER_VISIBILITY_TIER,
@@ -36,12 +37,9 @@ const markerStatusOpacity = (status) => ({
 }[normalizeMarkerStatus(status)]);
 
 
-const ownerColorString = (colorMap, code) => {
-  const rgb = colorMap[String(code ?? "").trim()];
-  if (Array.isArray(rgb)) return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-  // Unowned / unknown-owner structures read as neutral parchment, not an error.
-  return "rgb(226, 222, 205)";
-};
+// Unowned structures read as neutral parchment, not an error. An owned one
+// takes its owner's colour exactly as the territory shows it (ownerColors.js).
+const UNOWNED_MARKER_COLOR = "rgb(226, 222, 205)";
 
 // World.markers — structures founded during play (cities, military bases,
 // bunkers, missile silos, embassies…). Rendered in the visual language of the
@@ -72,14 +70,35 @@ const V_NEXT_TIER_LAYERS = [
 ];
 
 const MarkersLayer = () => {
-  const { markers } = useWorldState();
+  const { markers, polityOverrides } = useWorldState();
   const [colorMap, setColorMap] = useState({});
 
+  // Re-read when colors.json is written (assets.js drops its cached palette
+  // first) and when another game opens, as Units.jsx does.
   useEffect(() => {
-    getNationColors()
-      .then(setColorMap)
-      .catch((error) => console.error("Failed to load colors for markers:", error));
+    let cancelled = false;
+    let generation = 0;
+    const refresh = () => {
+      const current = ++generation;
+      getNationColors()
+        .then((next) => {
+          if (!cancelled && current === generation) setColorMap(next);
+        })
+        .catch((error) => console.error("Failed to load colors for markers:", error));
+    };
+    refresh();
+    window.addEventListener("oh:colors-updated", refresh);
+    window.addEventListener("oh:active-game-changed", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("oh:colors-updated", refresh);
+      window.removeEventListener("oh:active-game-changed", refresh);
+    };
   }, []);
+  const resolveOwnerRgb = useMemo(
+    () => createOwnerRgbResolver(colorMap, polityOverrides),
+    [colorMap, polityOverrides],
+  );
 
   const data = useMemo(() => {
     if (!markers.length) return EMPTY_FEATURE_COLLECTION;
@@ -111,12 +130,12 @@ const MarkersLayer = () => {
               sortKey: presentation.sortKey,
               visibilityTier: presentation.visibilityTier,
               glyph: presentation.glyph,
-              rgb: ownerColorString(colorMap, marker.ownerCode),
+              rgb: ownerDisplayCss(resolveOwnerRgb, marker.ownerCode, UNOWNED_MARKER_COLOR),
             },
           };
         }),
     };
-  }, [markers, colorMap]);
+  }, [markers, resolveOwnerRgb]);
 
   return (
     <Source id="markers-source" type="geojson" data={data}>

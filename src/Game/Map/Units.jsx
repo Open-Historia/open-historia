@@ -19,6 +19,7 @@ import { getNationColors, getNationFlags } from "../../runtime/assets.js";
 import { subscribeUnits, getUnits, getPendingUnitOrders, startUnitsSync } from "./unitsController.js";
 import { resolveUnitFlagUrl, syncUnitFlagIcons } from "./unitFlagIcons.js";
 import { useWorldState } from "./useWorldState.js";
+import { createOwnerRgbResolver, ownerDisplayCss } from "./ownerColors.js";
 
 const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
@@ -111,17 +112,9 @@ const TYPE_GLYPH = {
   garrison: "C",
 };
 
-const ownerColorString = (colorMap, code) => {
-  const rgb = colorMap[code];
-  if (Array.isArray(rgb)) return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-  const normalized = String(code ?? "").toUpperCase();
-  if (normalized.length < 2) return "rgb(120, 120, 120)";
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const a = Math.max(0, alphabet.indexOf(normalized[0]));
-  const b = Math.max(0, alphabet.indexOf(normalized[1]));
-  const c = Math.max(0, alphabet.indexOf(normalized[normalized.length - 1]));
-  return `rgb(${72 + a * 5}, ${72 + c * 5}, ${72 + b * 5})`;
-};
+// A counter takes its owner's colour exactly as the territory shows it
+// (ownerColors.js); a unit with no owner is grey.
+const UNOWNED_UNIT_COLOR = "rgb(120, 120, 120)";
 
 // A geodesic circle for a patrol's station. Generated in JS rather than leaning
 // on a circle layer's radius, which is measured in screen pixels and would grow
@@ -178,13 +171,18 @@ const Units = () => {
   // Scenario polities carry their own flags, and a custom-era country usually
   // resolves to no ISO flag at all — so this is the only flag it will ever have.
   const { polityOverrides } = useWorldState();
+  const resolveOwnerRgb = useMemo(
+    () => createOwnerRgbResolver(colorMap, polityOverrides),
+    [colorMap, polityOverrides],
+  );
 
   // Everything the tween needs, kept out of React state so a frame costs a
   // setData call and nothing else.
   const fromRef = useRef(new Map()); // unitId -> {lng, lat} at the start of the tween
   const toRef = useRef(new Map()); // unitId -> {lng, lat} target
   const unitsRef = useRef([]);
-  const colorRef = useRef({});
+  // The owner colour resolver the tween paints with.
+  const ownerRgbRef = useRef(resolveOwnerRgb);
   const rafRef = useRef(0);
   const startedRef = useRef(0);
   // ownerCode -> flag icon id, for owners whose flag is on the map right now.
@@ -207,9 +205,7 @@ const Units = () => {
       getNationColors()
         .then((next) => {
           if (cancelled || generation !== colorGeneration) return;
-          colorRef.current = next;
           setColorMap(next);
-          if (!rafRef.current) flagRefreshRef.current();
         })
         .catch((error) => console.error("Failed to load colors for units:", error));
     };
@@ -257,6 +253,13 @@ const Units = () => {
       window.removeEventListener("oh:active-game-changed", onActiveGameChanged);
     };
   }, []);
+
+  // A new palette or registry colour repaints a settled map; a tween already
+  // reads the ref every frame.
+  useEffect(() => {
+    ownerRgbRef.current = resolveOwnerRgb;
+    if (!rafRef.current) flagRefreshRef.current();
+  }, [resolveOwnerRgb]);
 
   useEffect(() => {
     flagSourcesRef.current = { ...flagSourcesRef.current, polities: polityOverrides ?? {} };
@@ -311,7 +314,7 @@ const Units = () => {
               // or has no flag at all — falls back to the type glyph.
               flagIcon: flagIconsRef.current[unit.ownerCode] ?? "",
               label: shortUnitLabel(unit.name),
-              rgb: ownerColorString(colorRef.current, unit.ownerCode),
+              rgb: ownerDisplayCss(ownerRgbRef.current, unit.ownerCode, UNOWNED_UNIT_COLOR),
             },
           };
         }),
@@ -445,7 +448,7 @@ const Units = () => {
     for (const order of orders) {
       const unit = units.get(order.unitId);
       if (!unit || !Number.isFinite(unit.lng) || !Number.isFinite(unit.lat)) continue;
-      const rgb = ownerColorString(colorMap, unit.ownerCode);
+      const rgb = ownerDisplayCss(resolveOwnerRgb, unit.ownerCode, UNOWNED_UNIT_COLOR);
 
       if (order.kind === "patrol" && order.radiusKm > 0) {
         features.push({
@@ -465,7 +468,7 @@ const Units = () => {
       });
     }
     return features.length ? { type: "FeatureCollection", features } : EMPTY_FEATURE_COLLECTION;
-  }, [orders, colorMap]);
+  }, [orders, resolveOwnerRgb]);
 
   return (
     <>

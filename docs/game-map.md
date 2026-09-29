@@ -182,8 +182,9 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 
 ## 5. Owner colouring — the single resolver
 
-There is **one** owner→rgb resolver, `resolveOwnerRgb(owner)` (`Nations.jsx:727`), used by every paint path (region fills, stripes, and — via `ownerColorCss` — labels). Owners are **names now** (`"Russia"`, `"Roman Empire"`), not GADM codes. Resolution order:
+There is **one** owner→rgb resolver, `createOwnerRgbResolver(colorMap, polityOverrides)` in `ownerColors.js`, used by every paint path: region fills, stripes and labels (`Nations.jsx`, as `resolveOwnerRgb` / `ownerColorCss`), unit counters with their heading lines and patrol rings (`Units.jsx`), and built structures (`MarkersLayer.jsx`). Units and structures take the territory's display colour (`ownerDisplayCss`, which applies `normalizePoliticalRgb`), so an army reads as the same polity as the land around it. Owners are **names now** (`"Russia"`, `"Roman Empire"`), not GADM codes. Resolution order:
 
+0. `toCountryName(owner)` — a code (`"ESP"`, from an old save, a cheat edit or a transfer override) becomes the name the palette is keyed by.
 1. `colorMap[owner]` — exact hit in `colors.json` (loaded by `getNationColors`).
 2. `parseColorToRgb(polityOverrides[owner].color)` — the live polity registry from `world.json` (stores CSS strings; `colors.json` stores `[r,g,b]` triplets, so `parseColorToRgb` bridges the two namespaces).
 3. Case/diacritic/punctuation-folded match (`ownerFoldKey`) against `colorMap` keys, then against `polityOverrides` keys **and their `aliases`**.
@@ -195,7 +196,7 @@ The two-namespace merge is the whole point: a polity can be correctly *named* by
 
 ### Palette live-reload
 
-`colors.json` can be rewritten mid-game (every AI turn, or the faction creator writing the player's colour). `getNationColors` memoizes on the scenario token and won't see a runtime write, so the asset layer dispatches a `oh:colors-updated` window event on write; `Nations.jsx` listens (`colorsEpoch`) and re-reads. `shallowEqualColors` guards against swapping in a fresh object with identical contents, which would needlessly rebuild every MapLibre match expression.
+`colors.json` can be rewritten mid-game (every AI turn, or the faction creator writing the player's colour). `getNationColors` memoizes on the scenario token and won't see a runtime write, so the asset layer dispatches a `oh:colors-updated` window event on write; `Nations.jsx` (`colorsEpoch`), `Units.jsx` and `MarkersLayer.jsx` listen, and re-read on `oh:active-game-changed` too. `shallowEqualColors` guards against swapping in a fresh object with identical contents, which would needlessly rebuild every MapLibre match expression.
 
 ---
 
