@@ -62,7 +62,9 @@ import {
 import { listFlags, createFlag, deleteFlag } from "./flagStore.js";
 import {
   allowedCorsOrigin,
+  allowedHostNames,
   crossOriginWriteAllowed,
+  isAllowedHostHeader,
   isAllowedHubUrl,
   isLoopbackAddress,
   metadataGuardedLookup,
@@ -148,6 +150,27 @@ const lanAddresses = () =>
 const jsonParser = express.json({ limit: "64mb" });
 const largeJsonParser = express.json({ limit: "512mb" });
 const uploadParser = express.raw({ type: () => true, limit: "512mb" });
+
+// DNS rebinding: a web page that re-points its own name at 127.0.0.1 reaches
+// this server over loopback with an Origin and Host that match each other, so
+// every check below would wave it through. Refuse a Host this server does not
+// answer to before anything else runs (server/security.js isAllowedHostHeader).
+// IP addresses and localhost always work; a name someone types on the LAN
+// (this computer's own name, or one behind a proxy) goes in OH_ALLOWED_HOSTS.
+const ALLOWED_HOST_NAMES = allowedHostNames([
+  ...String(process.env.OH_ALLOWED_HOSTS || "").split(","),
+  HOST_FROM_ENV,
+  os.hostname(),
+  `${os.hostname()}.local`,
+]);
+app.use((req, res, next) => {
+  if (isAllowedHostHeader(req.headers.host, ALLOWED_HOST_NAMES)) return next();
+  return sendError(
+    res,
+    403,
+    new Error("This server only answers to localhost, its IP addresses and the names listed in OH_ALLOWED_HOSTS."),
+  );
+});
 
 // The Android app's connect screen lives on the WebView's own origin, so its
 // probe of this server is a cross-origin request — without these headers the

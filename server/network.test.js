@@ -10,6 +10,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -119,6 +120,34 @@ describe("LAN sharing", () => {
     const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
     assert.equal(state.lanEnabled, false);
     assert.equal(state.lockedByEnv, false);
+  });
+
+  // DNS rebinding: a page on attacker.example re-points its name at 127.0.0.1.
+  // The browser then arrives over loopback with Origin and Host both saying
+  // attacker.example, which every same-origin and loopback check accepts.
+  test("a rebinding page's host name is refused, even over loopback with a matching Origin", async () => {
+    const ask = (host, method = "GET") => new Promise((resolve, reject) => {
+      const request = http.request({
+        host: "127.0.0.1",
+        port,
+        method,
+        path: method === "GET" ? "/api/games" : "/api/server/network",
+        headers: { Host: host, Origin: `http://${host}`, "Content-Type": "application/json" },
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolve(response.statusCode));
+      });
+      request.on("error", reject);
+      request.end(method === "GET" ? undefined : JSON.stringify({ lanEnabled: true }));
+    });
+
+    assert.equal(await ask(`attacker.example:${port}`), 403, "reading the saves");
+    assert.equal(await ask(`attacker.example:${port}`, "POST"), 403, "switching LAN sharing on");
+    assert.equal(await ask(`localhost:${port}`), 200);
+    assert.equal(await ask(`127.0.0.1:${port}`), 200);
+
+    const state = await (await fetch(`http://127.0.0.1:${port}/api/server/network`)).json();
+    assert.equal(state.lanEnabled, false, "the refused request changed nothing");
   });
 
   test("turning the setting on lets other devices in, without a restart", async () => {

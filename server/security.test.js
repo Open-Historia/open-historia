@@ -5,7 +5,9 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   allowedCorsOrigin,
+  allowedHostNames,
   crossOriginWriteAllowed,
+  isAllowedHostHeader,
   isAllowedHubUrl,
   isLoopbackAddress,
   isMetadataAddress,
@@ -230,4 +232,31 @@ test("allowedCorsOrigin: app shell and same origin only", () => {
   assert.equal(allowedCorsOrigin(undefined, host), null);
   // The documented escape hatch still opens it back up.
   assert.equal(allowedCorsOrigin("https://evil.com", host, { allowAll: true }), "*");
+});
+
+test("isAllowedHostHeader: addresses and localhost always, a rebinding page's name never", () => {
+  const none = allowedHostNames([]);
+  for (const ok of [
+    "localhost:3000", "LOCALHOST:3000", "localhost", "localhost.:3000", "127.0.0.1:3000", "[::1]:3000",
+    "192.168.1.9:3000", "10.0.0.2", "[fe80::1]:3000", "game.localhost:3000", undefined,
+  ]) {
+    assert.equal(isAllowedHostHeader(ok, none), true, String(ok));
+  }
+  // The rebinding case: the page's own name, now resolving to 127.0.0.1.
+  for (const bad of [
+    "attacker.example:3000", "localhost.attacker.example:3000", "127.0.0.1.attacker.example",
+    "", "localhost:3000/x", "user@localhost:3000", "not a host",
+  ]) {
+    assert.equal(isAllowedHostHeader(bad, none), false, bad);
+  }
+});
+
+test("isAllowedHostHeader: the owner's names, with or without a port, and * to switch it off", () => {
+  const names = allowedHostNames(["  MyPC ", "mypc.local", "game.example.org:8443", "", undefined]);
+  assert.deepEqual([...names].sort(), ["game.example.org", "mypc", "mypc.local"]);
+  assert.equal(isAllowedHostHeader("mypc:3000", names), true);
+  assert.equal(isAllowedHostHeader("MyPC.local:3000", names), true);
+  assert.equal(isAllowedHostHeader("game.example.org", names), true);
+  assert.equal(isAllowedHostHeader("attacker.example:3000", names), false);
+  assert.equal(isAllowedHostHeader("attacker.example:3000", allowedHostNames(["*"])), true);
 });

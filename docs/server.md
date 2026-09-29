@@ -11,11 +11,12 @@ Open Historia ships with a small **Express** server (`server/server.js`) that is
 `server/server.js` is an ES module. On import it:
 
 1. Builds the Express `app`, reads `PORT` (default `3000`, `server/server.js:61`) and `distDir = ../dist` (the Vite build output).
-2. Installs a **blanket CORS** middleware (`server/server.js:73-89`) — `Access-Control-Allow-Origin: *`, all methods, and three deliberate extras: `Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges` (so PMTiles range recovery can read `Content-Range` off a 416), and `Access-Control-Allow-Private-Network: true` (Chrome's Private Network Access preflight for loopback/LAN). `OPTIONS` short-circuits to `204`.
-3. Installs the **CSRF / cross-origin-write guard** (`server/server.js:112-128`, logic in `server/security.js`). See [Security guard](#security--path-safety).
-4. Calls `ensureScenarioStore()`, `ensureGameStore()`, `ensureMapEditorStore()`, `ensureBasemapStore()` — first-run seeding of `server/data/` (`server/server.js:91-94`).
-5. Registers all `/api/*` routes, then the `/fmg` static mount (if vendored), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html` (`server/server.js:813-820`).
-6. `app.listen(PORT)`; an `EADDRINUSE` is caught and turned into a human message instead of a raw stack (`server/server.js:828-836`).
+2. Installs the **Host guard** first (DNS rebinding, `isAllowedHostHeader` in `server/security.js`): a request whose `Host` is not an IP address, `localhost`/`*.localhost`, this computer's name (`<hostname>`, `<hostname>.local`), a hostname in `OH_HOST` or a name in `OH_ALLOWED_HOSTS` is refused with `403` before any other middleware runs. Without it a page that re-points its own name at `127.0.0.1` arrives over loopback with a matching `Origin` and `Host` and passes every check below.
+3. Installs the **CORS** middleware — `Access-Control-Allow-Origin` reflects only an allowed origin (`allowedCorsOrigin`: the Capacitor shell origins, or an `Origin` whose host equals `Host`; `*` only with `OH_ALLOW_CROSS_ORIGIN=1`), all methods, `Access-Control-Expose-Headers: Content-Range, Content-Length, Accept-Ranges` (so PMTiles range recovery can read `Content-Range` off a 416), and `Access-Control-Allow-Private-Network: true` (Chrome's Private Network Access preflight for loopback/LAN) for an allowed origin only. `OPTIONS` short-circuits to `204`.
+4. Installs the **CSRF / cross-origin-write guard** (`server/server.js:112-128`, logic in `server/security.js`). See [Security guard](#security--path-safety).
+5. Calls `ensureScenarioStore()`, `ensureGameStore()`, `ensureMapEditorStore()`, `ensureBasemapStore()` — first-run seeding of `server/data/` (`server/server.js:91-94`).
+6. Registers all `/api/*` routes, then the `/fmg` static mount (if vendored), then `express.static(distDir)`, then the SPA catch-all `GET *splat → dist/index.html` (`server/server.js:813-820`).
+7. `app.listen(PORT)`; an `EADDRINUSE` is caught and turned into a human message instead of a raw stack (`server/server.js:828-836`).
 
 Route ordering matters: `/fmg/*` and `express.static` are mounted **before** the `*splat` fallback so real files aren't swallowed by `index.html`.
 
@@ -297,6 +298,7 @@ GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequa
 | --- | --- |
 | `resolveChildPath(baseDir, name, label)` | `name` must resolve to a **direct child** of `baseDir` — rejects `../`, path separators (incl. the `%2f` Express decodes to `/`), and absolutes. Used by `getScenarioDirectory`/`getGameDirectory` and by every store's `docPath`/`metaPath`/`payloadPath`, so a route `:id` can't escape the data dir. Re-exported in `libraryStore.js` as `resolveWithinDirectory`. |
 | `crossOriginWriteAllowed({method,origin,host,remoteAddress,allowAll})` | The CSRF guard. Allows safe methods (GET/HEAD/OPTIONS); same-origin writes (`Origin` host === `Host`); and no-`Origin` writes **only from loopback**. A foreign `Origin`, or a no-`Origin` write from a non-loopback host, is `403`. Bypass with `OH_ALLOW_CROSS_ORIGIN=1`. Without it, the blanket CORS (needed so the Android connect screen can *probe*) would otherwise let any visited web page POST/DELETE to `localhost`. |
+| `isAllowedHostHeader(host, names)` / `allowedHostNames(list)` | The DNS-rebinding guard, run before every route. Allows a `Host` that is an IP address, `localhost` or `*.localhost` (names nobody can re-point at this server), or one of the owner's names (`OH_ALLOWED_HOSTS`, a hostname in `OH_HOST`, this computer's name and `<name>.local`); `*` allows everything. A missing `Host` (HTTP/1.0, never a browser) passes. Because it runs first, a "same-origin" `Origin` in the guards below is always one of these names. |
 | `isLoopbackAddress(addr)` | Unwraps IPv4-mapped IPv6 (`::ffff:127.0.0.1`); true for `::1`, `127.*`. |
 | `parseByteRange(header, size)` | Range parsing for `streamBinaryFile` (above). |
 | `isAllowedHubUrl(url, hosts)` | A hub download must be **https** and either on the fixed GitHub host set or any `*.githubusercontent.com`. Checked on the initial URL **and every redirect hop** in `/api/hub/file`, which follows redirects manually (`redirect: "manual"`) so a `github.com → attacker` redirect can't cause SSRF. |
@@ -324,6 +326,7 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `PORT` | `3000` | Listen port (`server/server.js:61`) |
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
+| `OH_ALLOWED_HOSTS` | unset | Comma-separated host names the server also answers to, beyond IP addresses, `localhost` and this computer's name (a name behind a reverse proxy, a LAN DNS name); `*` turns the Host guard off |
 | `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
 | `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
 | `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |

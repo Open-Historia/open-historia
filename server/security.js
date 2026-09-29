@@ -1,6 +1,6 @@
 /*! Open Historia — server security helpers. Pure, dependency-light functions
- *  for path containment, the CSRF/origin guard, HTTP range parsing and the hub
- *  host allowlist. Kept separate so they can be unit-tested (security.test.js)
+ *  for path containment, the CSRF/origin guard, the Host (DNS rebinding) guard,
+ *  HTTP range parsing and the hub host allowlist. Kept separate so they can be unit-tested (security.test.js)
  *  without spinning up the server. */
 import net from "net";
 import path from "path";
@@ -30,7 +30,10 @@ export const isLoopbackAddress = (addr) => {
 
 // Decide whether a state-changing request may proceed (CSRF / drive-by guard).
 // Allowed: safe methods; same-origin app writes (Origin host === Host); and
-// native clients with no Origin BUT only from loopback.
+// native clients with no Origin BUT only from loopback. "Same origin" is only
+// worth something because the server has already refused a Host it does not
+// answer to (isAllowedHostHeader, below), so a matching Origin is one of those
+// names too and never a rebinding page's.
 //
 // KNOW WHAT THIS DOES AND DOES NOT COVER. It stops a BROWSER: a page on another
 // origin cannot forge the Origin header, so a drive-by write to localhost is
@@ -222,6 +225,46 @@ export const sanitizeRelayHeaders = (headers) => {
     out[key] = String(value);
   }
   return out;
+};
+
+// --- Host allowlist (DNS rebinding) -----------------------------------------
+// Every guard in this file that says "same origin" compares the Origin with the
+// Host header, and every "loopback only" check looks at the socket. DNS
+// rebinding passes all of them: a page on attacker.example re-points its own
+// name at 127.0.0.1, so the browser connects over loopback and sends Origin
+// and Host that both say attacker.example. The page can then read, export and
+// delete every save, switch LAN sharing on and use the AI relay as a proxy.
+//
+// What rebinding cannot forge is the Host being a name the attacker does NOT
+// control. So the server answers only to names nobody can re-point at it: an
+// IP address (the browser connected to it directly, so the page's origin IS
+// that address), localhost and *.localhost (browsers resolve those to loopback
+// themselves), and the names the owner lists (OH_ALLOWED_HOSTS, a hostname in
+// OH_HOST, and this computer's own name). "*" in the list turns the check off.
+const hostnameOf = (value) => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text || /[/?#@\\\s]/.test(text)) return "";
+  try {
+    return bareHostname(new URL(`http://${text}`).hostname);
+  } catch {
+    return "";
+  }
+};
+
+// The owner's extra names, as the Set isAllowedHostHeader takes. A port on an
+// entry ("mypc:3000") is ignored; only the name is compared.
+export const allowedHostNames = (names) =>
+  new Set((names ?? []).map((name) => (String(name ?? "").trim() === "*" ? "*" : hostnameOf(name))).filter(Boolean));
+
+// No Host at all is an HTTP/1.0 client, never a browser, so it cannot be a
+// rebinding page and is let through.
+export const isAllowedHostHeader = (hostHeader, allowedNames = new Set()) => {
+  if (hostHeader === undefined || hostHeader === null) return true;
+  const host = hostnameOf(hostHeader);
+  if (!host) return false;
+  if (net.isIP(host)) return true;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  return allowedNames.has("*") || allowedNames.has(host);
 };
 
 // --- CORS origin allowlist --------------------------------------------------
