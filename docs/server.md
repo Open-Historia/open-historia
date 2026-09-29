@@ -93,7 +93,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, and it replies `504` rather than hanging | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
 | POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
-| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256 | `server/server.js:575` |
+| GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256; a scenario bundle is cached and served under the current bundle name (`scenarioBundleNames.js`) | `server/server.js` |
 | POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
 | GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
 
@@ -155,7 +155,7 @@ server/data/
   mapeditor-documents/  mapeditor-manifest.json
   flags-library.json
   lang/<code>.json               # runtime-saved translations (survive app updates)
-  hub-cache/<sha256>.body|.type  # cached hub bundle downloads
+  hub-cache/<sha256>.body|.type  # cached hub bundle downloads (bundle-names-current: the one-time rename pass is done)
   import-pings/<sha256>          # one-per-scenario import telemetry markers
   .trash/<kind>-<id>[-n]/        # soft-deleted scenarios/games (recoverable by hand)
 ```
@@ -285,7 +285,7 @@ The rules:
 - **An edited copy's games carry their map.** `fetchableHubOrigin` returns null for an edited copy, so a game exported from it embeds the map rather than pointing at a post whose file is no longer what the game was played on.
 - **Suggestions are references**, never the files: `{ id, postId, commentId, author, createdAt, zipUrl, note }`, with `zipUrl` a GitHub attachment. There are at most 50, and a blocked contributor's (a case-insensitive login in `blocked`, at most 100) are dropped on every write. `withContributorBlocked` also resets `commentCounts`, so the next check re-reads every comment. `openHubSuggestions(published, reviews)` lists the suggestions not yet reviewed or dismissed.
 
-GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal, and the reason `/api/hub/file`'s disk cache can never go stale. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
+GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal, and the reason `/api/hub/file`'s disk cache can never go stale. What players downloaded before 2026-09-29 says the project's earlier name in its schema: `scenarioBundleNames.js` rewrites the schema value (only that; the format stays 1 or 2, a zip's `scenario.json` is rewritten and re-zipped) as a download arrives, as a cached copy is served, and once for the whole cache at startup (`renameHubCacheBundles`, marker `bundle-names-current`), so every copy a player has downloaded is kept under the current name. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
 
 ---
 
