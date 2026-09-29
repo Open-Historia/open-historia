@@ -21,13 +21,7 @@ import { catalogText, extractTree } from "../../scripts/i18n/extractStrings.mjs"
 const ROOT = url.fileURLToPath(new URL("../../", import.meta.url));
 const CATALOG = JSON.parse(fs.readFileSync(new URL("../../public/lang/catalog-en.json", import.meta.url), "utf8"));
 
-// The catalog is rebuilt when a batch of changes lands (build-catalog.mjs,
-// then generate-lang-packs.mjs), not by every change, and this branch's source
-// is ahead of it. Until that rebuild the test runs and lists what is missing
-// without failing the suite; after it, delete this and the option below.
-const TODO_UNTIL_THE_CATALOG_IS_REBUILT = "the catalog has not been rebuilt since the last interface changes";
-
-test("every interface string in the source is in the committed catalog", { todo: TODO_UNTIL_THE_CATALOG_IS_REBUILT }, () => {
+test("every interface string in the source is in the committed catalog", () => {
   const { exact, patterns, errors } = extractTree(ROOT);
   assert.deepEqual(errors, [], "the extractor could not parse part of src/");
   const catalog = new Set(CATALOG);
