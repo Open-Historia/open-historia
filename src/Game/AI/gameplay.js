@@ -69,7 +69,7 @@ import {
   screenGeneratedWorldEvents,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
-import { validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
+import { politicalImpactCompletenessIssues } from "./politicalImpactCompleteness.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
 import {
@@ -6265,8 +6265,21 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // political systems; if the prose establishes one of those facts, require the
   // matching politicalActorOps before the event can enter the timeline. This is
   // deliberately semantic/completeness validation, not a second political engine.
-  const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world });
-  if (politicalCompletenessError) return politicalCompletenessError;
+  // Strict like every rule here: the retry is told the exact event. On salvage
+  // (the final attempt, or the first while requests are being saved) the answer
+  // is never lost to one event: it stays on the timeline as written, the
+  // Political Actor ledger unchanged, and the next turn is told. Removing it is
+  // not safe at this stage: the ledgers and storylines still name events by
+  // their number, and every later event's records would move to its neighbour.
+  const politicalIssues = politicalImpactCompletenessIssues(candidate, { world });
+  if (politicalIssues.length && strict) return politicalIssues[0].message;
+  for (const issue of politicalIssues) {
+    noteReceipt(
+      receipt,
+      "short",
+      `"${issue.title || `event ${issue.index + 1}`}" kept without changing the Political Actor ledger: ${firstComplaintLine(issue.message, 180)}`,
+    );
+  }
 
   const unitIds = new Set(normalizeWorldState(world).units.map((unit) => normalizeString(unit.id)).filter(Boolean));
   const generatedPolities = [];

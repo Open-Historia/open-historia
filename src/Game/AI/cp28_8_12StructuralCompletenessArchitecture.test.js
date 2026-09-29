@@ -7,7 +7,9 @@ const prompts = fs.readFileSync(new URL("./gameplayPrompts.js", import.meta.url)
 const channels = fs.readFileSync(new URL("../../runtime/institutionalChannels.js", import.meta.url), "utf8");
 
 test("world-change validation enforces PWv2 structural political completeness", () => {
-  assert.match(gameplay, /validatePoliticalImpactCompleteness\(candidate,\s*\{\s*world\s*\}\)/);
+  assert.match(gameplay, /politicalImpactCompletenessIssues\(candidate,\s*\{\s*world\s*\}\)/);
+  // A strict attempt is told the exact event; salvage keeps the answer.
+  assert.match(gameplay, /if \(politicalIssues\.length && strict\) return politicalIssues\[0\]\.message;/);
   assert.match(gameplay, /politicalActorOps before the event can enter the timeline/);
 });
 

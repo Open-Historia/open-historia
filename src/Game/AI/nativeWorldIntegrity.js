@@ -3085,64 +3085,6 @@ const remapEventIndexesAfterDrop = (candidate, dropIndexes) => {
   }
 };
 
-// World Engine event-local quarantine primitive. Validators outside the native
-// provenance pass (for example Political Decision Context compatibility) may
-// identify one or more exact event indexes that are unsafe to publish. They may
-// quarantine ONLY events that have no canonical impacts/ledger/storyline/action
-// dependencies. This preserves the strong domain-owner boundary: an event with
-// canonical consequences is still a hard failure until that entire dependency
-// set can be repaired coherently rather than silently orphaned.
-//
-// The helper deliberately accepts already-derived issues instead of re-running
-// any semantic validator. It owns only the safe batch mutation/remap step.
-export const quarantineIndependentWorldEventIssues = (
-  candidate,
-  issues = [],
-  { label = "world grounding" } = {},
-) => {
-  const events = normalizeArray(candidate?.events);
-  const dropIndexes = new Set();
-  const dropped = [];
-  const blocked = [];
-
-  for (const issue of normalizeArray(issues)) {
-    const index = Number(issue?.index);
-    if (!Number.isInteger(index) || index < 0 || index >= events.length) continue;
-    const event = events[index];
-    const row = {
-      ...issue,
-      index,
-      id: normalizeString(issue?.id || event?.id),
-      title: normalizeString(issue?.title || event?.title) || "Untitled",
-      message: normalizeString(issue?.message),
-    };
-
-    if (eventHasCanonicalProvenanceDependencies(candidate, event, index)) {
-      blocked.push(row);
-      continue;
-    }
-
-    dropIndexes.add(index);
-    dropped.push(row);
-  }
-
-  if (dropIndexes.size) {
-    candidate.events = events.filter((_, index) => !dropIndexes.has(index));
-    remapEventIndexesAfterDrop(candidate, dropIndexes);
-    console.warn(
-      `[OH World Engine] quarantined ${dropIndexes.size} independent ${label} event(s); ` +
-      "dependent canonical changes remain fail-closed.",
-      dropped,
-    );
-  }
-
-  return {
-    dropped,
-    blocked,
-    error: normalizeString(blocked[0]?.message),
-  };
-};
-
 export const validateWorldPlayerAgencyPayload = (candidate, {
   world = {},
   gameCountry = "",
