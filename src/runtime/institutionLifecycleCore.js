@@ -156,8 +156,11 @@ const lifecycleEvent = ({ institution, action, polity = "", actor = "", date = "
   const subject = polity || institution?.name || "Institution";
   const title = lifecycleEventTitle(action, subject, institution.name);
   const description = lifecycleEventDescription(action, { founder: actor || polity || "A founding government", polity, name: institution.name, reason });
+  // Dated, so a second join, departure or refusal by the same polity is its own
+  // event: the save's event list already holds the first, and an id seen there
+  // is dropped as a duplicate.
   return {
-    id: `institution-lifecycle-${slug(institution?.id || institution?.name)}-${slug(action)}-${slug(polity || date || "institution")}`,
+    id: `institution-lifecycle-${slug(institution?.id || institution?.name)}-${slug(action)}-${slug(polity || "institution")}${clean(date) ? `-${slug(date)}` : ""}`,
     date: clean(date),
     title: title.slice(0, 240),
     description: description.slice(0, 2400),

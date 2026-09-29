@@ -450,3 +450,22 @@ test("a founding negotiation is response-complete after every invitee accepts or
   });
   assert.equal(context.text, "");
 });
+
+test("a polity that leaves an institution a second time gets a second event", () => {
+  const founded = applyInstitutionLifecycleCommandCore({
+    world: baseWorld(), chats: [], events: [], playerCountry: "Republic of Latvia", date: "2014-08-20",
+    command: { type: "found", name: "Open Union", minimumFoundingMembers: 1, accessionMode: "direct" },
+  });
+  const step = (state, date, command) => applyInstitutionLifecycleCommandCore({
+    world: state.world, chats: state.chats, events: state.events, playerCountry: "Republic of Latvia", date,
+    command: { institutionId: founded.institution.id, authority: "npc", ...command },
+  });
+  const joined = step(founded, "2014-09-01", { type: "apply", polity: "Republic of Estonia" });
+  const left = step(joined, "2015-01-01", { type: "withdraw", polity: "Republic of Estonia" });
+  const rejoined = step(left, "2016-01-01", { type: "apply", polity: "Republic of Estonia" });
+  const leftAgain = step(rejoined, "2017-01-01", { type: "withdraw", polity: "Republic of Estonia" });
+  const titles = leftAgain.events.map((event) => event.title);
+  assert.equal(titles.filter((title) => title === "Republic of Estonia Joins Open Union").length, 2);
+  assert.equal(titles.filter((title) => title === "Republic of Estonia Leaves Open Union").length, 2);
+  assert.equal(new Set(leftAgain.events.map((event) => event.id)).size, leftAgain.events.length);
+});
