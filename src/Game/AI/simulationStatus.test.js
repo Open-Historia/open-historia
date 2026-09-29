@@ -5,8 +5,20 @@ import {
   TURN_RUNNING_NOTE,
   assertNoTurnRunning,
   beginSimulation,
+  discardParkedTurn,
+  discardPendingJumpSegment,
+  discardPendingProjectsJump,
   endSimulation,
+  getParkedTurn,
+  getPendingJumpSegment,
+  getPendingProjectsJump,
   isChatGenerationLikely,
+  isSimulationBusy,
+  parkFinishedTurn,
+  setCampaignResolver,
+  setPendingJumpSegment,
+  setPendingProjectsJump,
+  takeParkedTurn,
   setChatGenerationInFlight,
   subscribeChatGeneration,
 } from "./simulationStatus.js";
@@ -57,3 +69,85 @@ test("a player's world edit is refused while a turn runs, with the reason, and a
   }
   assert.doesNotThrow(() => assertNoTurnRunning());
 });
+
+// ---- Holds belong to their campaign -----------------------------------------
+let openCampaign = "";
+const openIn = (campaignId) => {
+  openCampaign = campaignId;
+};
+
+test("a jump held in one campaign keeps only that campaign busy, and is still there on the way back", () => {
+  setCampaignResolver(() => openCampaign);
+  try {
+    openIn("game-a");
+    setPendingJumpSegment({ context: { campaignId: "game-a" }, state: {}, message: "Segment 2 of 3 failed." });
+    assert.equal(isSimulationBusy(), true);
+
+    // The player opens another save: it plays as usual.
+    openIn("game-b");
+    assert.equal(isSimulationBusy(), false);
+    assert.equal(getPendingJumpSegment(), null);
+    assert.equal(discardPendingJumpSegment(), false, "a discard in B leaves A's hold alone");
+
+    // Back in A, the hold and its message are there to rebuild the notice from.
+    openIn("game-a");
+    assert.equal(getPendingJumpSegment()?.message, "Segment 2 of 3 failed.");
+    assert.equal(isSimulationBusy(), true);
+    assert.equal(discardPendingJumpSegment(), true);
+    assert.equal(isSimulationBusy(), false);
+  } finally {
+    setCampaignResolver(null);
+  }
+});
+
+test("a turn held at the board is released for its own campaign only", () => {
+  setCampaignResolver(() => openCampaign);
+  try {
+    openIn("game-a");
+    setPendingProjectsJump({ applyArgs: { campaignId: "game-a" }, message: "held in A" });
+    openIn("game-b");
+    setPendingProjectsJump({ applyArgs: { campaignId: "game-b" }, message: "held in B" });
+    assert.equal(getPendingProjectsJump()?.message, "held in B");
+    // A's turn finishing its board while B is open releases A's, not B's.
+    setPendingProjectsJump(null, "game-a");
+    assert.equal(getPendingProjectsJump()?.message, "held in B");
+    openIn("game-a");
+    assert.equal(getPendingProjectsJump(), null);
+    openIn("game-b");
+    assert.equal(discardPendingProjectsJump(), true);
+  } finally {
+    setCampaignResolver(null);
+  }
+});
+
+test("a turn finished while another campaign was open waits for its own, and is taken once", () => {
+  setCampaignResolver(() => openCampaign);
+  try {
+    openIn("game-b");
+    parkFinishedTurn({ campaignId: "game-a" });
+    assert.equal(getParkedTurn(), null, "nothing parked without the apply to run again");
+    parkFinishedTurn({ campaignId: "game-a", applyArgs: { round: 4 } });
+    assert.equal(getParkedTurn(), null);
+    assert.equal(isSimulationBusy(), false, "the save the player opened is not held up");
+
+    openIn("game-a");
+    assert.equal(isSimulationBusy(), true, "nothing else writes into A before it lands");
+    assert.deepEqual(takeParkedTurn()?.applyArgs, { round: 4 });
+    assert.equal(takeParkedTurn(), null);
+    assert.equal(isSimulationBusy(), false);
+
+    parkFinishedTurn({ campaignId: "game-a", applyArgs: {} });
+    assert.equal(discardParkedTurn(), true);
+    assert.equal(getParkedTurn(), null);
+  } finally {
+    setCampaignResolver(null);
+  }
+});
+
+test("with no campaign known, a hold counts wherever it is asked about, as before", () => {
+  setPendingJumpSegment({ context: { campaignId: "game-a" }, state: {} });
+  assert.equal(isSimulationBusy(), true);
+  assert.equal(discardPendingJumpSegment(), true);
+  assert.equal(isSimulationBusy(), false);
+});
+

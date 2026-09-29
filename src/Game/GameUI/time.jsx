@@ -16,8 +16,8 @@ import {
     loadRollbackSnapshotIndex,
 } from "../../runtime/assets.js";
 import { RESTORE_POINT_NOT_SAVED_NOTE, undoableTurns } from "../../runtime/turnCommit.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
-import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump } from "../AI/simulationStatus.js";
+import { applyParkedTurn, canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { NO_RESPONSE_BODY_NOTE, discardPendingJumpSegment, discardPendingProjectsJump, getParkedTurn, getPendingJumpSegment, getPendingProjectsJump } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
 import { describeUnavailable, fallbackAvailability } from "../AI/fallbackRunner.js";
@@ -2138,7 +2138,12 @@ const DateWidget = ({
     // Operations board could not be brought in step with it. Set means a turn is
     // waiting: the player retries just the board, or discards and runs the turn
     // again. Nothing has been saved either way.
-    const [projectsHeld, setProjectsHeld] = useState("");
+    // The widget is mounted afresh for each campaign, and a turn held in this one
+    // outlives a visit to another: its notice is put back from the hold itself,
+    // with the message it was held with (AI/simulationStatus.js).
+    const [projectsHeld, setProjectsHeld] = useState(() => (getPendingProjectsJump()
+        ? getPendingProjectsJump().message || "The Projects & Operations board did not update."
+        : ""));
     const [isRetryingProjects, setIsRetryingProjects] = useState(false);
     // How many times the board has been retried for the turn currently held.
     // Without it a failed retry re-renders the identical message and reads as a
@@ -2148,7 +2153,9 @@ const DateWidget = ({
     // of the round was never asked for. Set means a turn is waiting — the player
     // retries that one segment, or discards. Nothing has been written either way,
     // so there is no rollback to run: the game is still on its pre-jump date.
-    const [segmentHeld, setSegmentHeld] = useState("");
+    const [segmentHeld, setSegmentHeld] = useState(() => (getPendingJumpSegment()
+        ? getPendingJumpSegment().message || "A segment of this jump failed."
+        : ""));
     const [isRetryingSegment, setIsRetryingSegment] = useState(false);
     // How many times the failed segment has been retried for the jump currently
     // held — same reason as projectsRetries.
@@ -2477,6 +2484,41 @@ const DateWidget = ({
     const cancelJump = () => {
         jumpAbortRef.current?.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
     };
+
+    // A skip that finished while another campaign was open was kept for this one
+    // (AI/gameplay.js applyParkedTurn) and is written as soon as this campaign is
+    // open again, then shown like any turn that has just landed.
+    useEffect(() => {
+        if (!getParkedTurn()) return;
+        const finishParkedTurn = async () => {
+            setIsLoading(true);
+            try {
+                const result = await applyParkedTurn();
+                if (!result) return;
+                setFallbackWarning("This skip finished while another campaign was open, and was saved when you came back to this one.");
+                warnIfNoRestorePoint(result);
+                setGameData(result.game);
+                setEvents(result.events);
+                setWorldState(result.world);
+                setVisibleEventCount(1);
+                setPanel("history");
+            } catch (parkedError) {
+                setPanel("skip");
+                if (parkedError?.projectsHeld) {
+                    setProjectsHeld(parkedError.message);
+                    setProjectsRetries(0);
+                } else {
+                    setError(parkedError.message || "Failed to save the skip that finished while another campaign was open.");
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        void finishParkedTurn();
+    // Once, when this campaign's widget comes up: the parked turn is taken off
+    // the shelf by the first attempt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // Finish a held turn by re-running ONLY the board call. The events are not
     // regenerated: they are already valid, and on a slow model regenerating them

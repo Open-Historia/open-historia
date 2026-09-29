@@ -372,13 +372,17 @@ import {
   beginSimulation,
   discardPendingJumpSegment,
   discardPendingProjectsJump,
+  discardParkedTurn,
   endSimulation,
   getPendingJumpSegment,
   getPendingProjectsJump,
   isSimulationBusy,
+  parkFinishedTurn,
+  setCampaignResolver,
   setChatGenerationInFlight,
   setPendingJumpSegment,
   setPendingProjectsJump,
+  takeParkedTurn,
 } from "./simulationStatus.js";
 
 const CHAT_HINT_PATTERNS = [
@@ -3900,7 +3904,7 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     // Released BEFORE the attempt, so a turn can never be applied twice, and
     // re-held only if the BOARD fails again — a failure after that point is a
     // different situation and must not pretend otherwise.
-    setPendingProjectsJump(null);
+    setPendingProjectsJump(null, applyArgs.campaignId);
     // The RETRY's signal, not the held turn's — that one belongs to a request
     // that already finished, and if the player cancelled it this call would abort
     // before it started.
@@ -3913,8 +3917,38 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
   } catch (error) {
     if (error?.projectsHeld) {
       logDebugEvent("turn", "Board retry failed; the turn is still held.", error);
-      setPendingProjectsJump({ applyArgs });
+      setPendingProjectsJump({ applyArgs, message: error.message });
     }
+    throw error;
+  } finally {
+    endSimulation();
+  }
+};
+
+// Write the skip that finished while another campaign was open, now that its
+// campaign is open again (time.jsx calls this when the campaign's HUD comes up).
+// The same apply the first attempt ran, on the same arguments: it is pure until
+// it writes, so nothing is generated again, and the chat list and the queued
+// orders are read again at the write. Null when there is none for this
+// campaign. One whose campaign has moved on since its read is dropped, as a
+// held turn would be (heldTurnIsStale).
+export const applyParkedTurn = async ({ signal } = {}) => {
+  const parked = takeParkedTurn();
+  if (!parked) return null;
+  const { applyArgs } = parked;
+  if (await heldTurnIsStale(applyArgs.baseGame)) {
+    logDebugEvent("turn", "The kept skip was discarded: its campaign moved on while another was open.");
+    throw new Error(HELD_TURN_STALE_NOTE);
+  }
+  beginSimulation();
+  try {
+    applyArgs.projects = { ...applyArgs.projects, signal };
+    const applied = await applySimulationResult(applyArgs);
+    logDebugEvent("turn", `The kept skip was written — now ${applied?.game?.gameDate || "unknown"}.`, { round: applied?.game?.round ?? 0 });
+    return applied;
+  } catch (error) {
+    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs, message: error.message });
+    else if (error?.campaignSwitched) parkFinishedTurn(parked);
     throw error;
   } finally {
     endSimulation();
@@ -4171,6 +4205,8 @@ const activeCampaignId = () => {
 // write a turn makes after its commit: those go through the runtime endpoints,
 // which follow whichever campaign is open.
 const stillCampaign = (campaignId) => !campaignChanged(campaignId, activeCampaignId());
+// A held or parked turn keeps only its own campaign busy (simulationStatus.js).
+setCampaignResolver(activeCampaignId);
 
 // activeSimulations, pendingProjectsJump and pendingJumpSegment moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
@@ -13492,7 +13528,15 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
 
     // Held, not lost. state.nextSegment still points at the segment that failed,
     // so a retry resumes with exactly that one.
-    setPendingJumpSegment({ context, state });
+    // Its message is kept with it, so the notice can be put back up when the
+    // player returns to this campaign from another (time.jsx).
+    const heldError = segmentHeldError({
+      cause: error,
+      completedSegments: state.segmentPayloads.length,
+      segmentCount,
+      segmentIndex,
+    });
+    setPendingJumpSegment({ context, state, message: heldError.message });
     console.warn(`[ai] jump segment ${segmentIndex + 1}/${segmentCount} failed (${reason}) — the turn is held.`);
     logDebugEvent("warn", "[turn] A jump segment failed; the turn is HELD and nothing was written.", {
       completedSegments: state.segmentPayloads.length,
@@ -13500,12 +13544,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
       segmentIndex,
       reason,
     });
-    throw segmentHeldError({
-      cause: error,
-      completedSegments: state.segmentPayloads.length,
-      segmentCount,
-      segmentIndex,
-    });
+    throw heldError;
   }
 
   // Every segment is in hand. A selected storyline the skip left objectively
@@ -14077,7 +14116,7 @@ const fileReviewedAgentReports = async (review, { campaignId = "" } = {}) => {
 const finishTimelineJump = async ({ context, signal, state }) => {
   const { baseColors, bundle, mode, targetDate } = context;
   // Every segment is in hand, so there is no longer a jump to resume.
-  setPendingJumpSegment(null);
+  setPendingJumpSegment(null, context.campaignId);
 
   // One round out of every segment. applySimulationResult advances the round
   // exactly once, and the dedupeGeneratedEvents pass inside it already collapses
@@ -14276,7 +14315,19 @@ const finishTimelineJump = async ({ context, signal, state }) => {
     }
     return phaseSummary ? { ...applied, phases: phaseSummary } : applied;
   } catch (error) {
-    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs });
+    if (error?.projectsHeld) setPendingProjectsJump({ applyArgs, message: error.message });
+    // Finished, but its campaign is no longer the one open, so nothing was
+    // written (applySimulationResult checks before anything is). It is kept for
+    // that campaign rather than lost with every request it cost, and written when
+    // the campaign is next opened (applyParkedTurn), the way a turn held at the
+    // board is retried: the same apply, on the same arguments.
+    else if (error?.campaignSwitched && context.campaignId) {
+      parkFinishedTurn({ campaignId: context.campaignId, applyArgs });
+      logDebugEvent("turn", "The skip finished while another campaign was open; it is kept and will be written when its campaign is opened again.", {
+        campaign: context.campaignId,
+        events: normalizeArray(result.events).length,
+      });
+    }
     throw error;
   }
 };
@@ -14289,6 +14340,7 @@ export const simulateTimelineJump = async ({ days, mode = "jump", onEvents, onPr
   if (!evaluationMode) {
     discardPendingProjectsJump();
     discardPendingJumpSegment();
+    discardParkedTurn();
     beginSimulation();
   }
   // The skip's phases (skipPhases.js): said to the panel as each starts, timed

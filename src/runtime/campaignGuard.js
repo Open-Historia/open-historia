@@ -14,7 +14,9 @@
 // without loading the simulation: stamp the campaign a turn belongs to when its
 // state is read, and refuse to write if that is no longer the campaign in front
 // of the player. Refusing costs the player the generation; writing costs them a
-// campaign.
+// campaign. A time skip refused this way is not lost, though: it is kept for its
+// own campaign and written when that is opened again (gameplay.js
+// finishTimelineJump and applyParkedTurn; error.campaignSwitched is the sign).
 //
 // An unknown id on either side (no library state yet, a headless caller) means
 // "cannot tell", and a guard that cannot tell must not block an ordinary turn.
