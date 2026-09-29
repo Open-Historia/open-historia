@@ -314,8 +314,11 @@ export const runSimplePoliticalWorldV2 = async ({
     };
 
     try {
-      const result = await executor.executeJob(task, clone(current), { consumeModelCall });
-      const applied = await executor.applyJobResult({ checkpoint: clone(current), job: task, result: clone(result) });
+      // applyJobResult writes staging rejections (stagingRejectedPolities,
+      // stagingErrorsByPolity) onto the result it is given; accounting must read
+      // that same object or the rejections never reach the retry feedback.
+      const result = clone(await executor.executeJob(task, clone(current), { consumeModelCall }));
+      const applied = await executor.applyJobResult({ checkpoint: clone(current), job: task, result });
       current = applySimpleAccounting(current, task, result, applied?.stagedWorld ?? current.stagedWorld, inputs);
       current.currentTask = null;
       await persist();

@@ -187,6 +187,54 @@ test("a landscape-only actor and a new actor are two one-call tasks, not one tas
   assert.ok(!result.warnings.some((warning) => /provider-call ceiling/.test(warning)));
 });
 
+// A stand-in executor: one paid call, then the given result and staging.
+const scriptedExecutor = ({ result = {}, stage = () => {} } = {}) => () => ({
+  executeJob: async (_task, _checkpoint, { consumeModelCall }) => {
+    await consumeModelCall();
+    return structuredClone(result);
+  },
+  applyJobResult: async ({ checkpoint, job, result: given }) => {
+    stage({ checkpoint, job, result: given });
+    return { stagedWorld: checkpoint.stagedWorld, newJobs: [] };
+  },
+});
+
+test("a staging rejection's own errors reach the political-actor retry feedback", async () => {
+  const checkpoint = readyCheckpoint();
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.coverage["political-actor"] = ["A", "B"];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 1,
+    createExecutor: scriptedExecutor({
+      result: { generation: { proposals: [], failures: [] }, acceptedPolities: ["C"], unresolvedPolities: [] },
+      stage: ({ result: given }) => {
+        given.stagingRejectedPolities = ["C"];
+        given.stagingErrorsByPolity = { C: ["parties[0].id gov collides with an authored party"] };
+      },
+    }),
+  });
+  assert.deepEqual(result.retryContext.politicalActor.C, ["parties[0].id gov collides with an authored party"]);
+  assert.equal(result.attempts["political-actor:C"], 1);
+});
+
+test("a governing alignment rejected at staging is not counted as aligned", async () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.coverage["governing-alignment"] = [];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 1,
+    createExecutor: scriptedExecutor({
+      result: { generation: { proposals: [], failures: [] }, acceptedPolities: ["A", "B", "C"], unresolvedPolities: [] },
+      stage: ({ result: given }) => { given.stagingRejectedPolities = ["B"]; },
+    }),
+  });
+  assert.deepEqual(result.coverage["governing-alignment"].sort(), ["A", "C"]);
+  assert.equal(result.attempts["governing-alignment:B"], 1);
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),
