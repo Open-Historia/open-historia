@@ -58,12 +58,6 @@ export const normalizeCustomCountryStats = (value) => {
   return Object.keys(out).length ? out : undefined;
 };
 
-export const countryStatsTrackingIntervalLabel = (months) => {
-  const numeric = Math.max(0, Math.trunc(Number(months) || 0));
-  if (!numeric) return "Manual only";
-  return numeric === 1 ? "Every month" : `Every ${numeric} months`;
-};
-
 const uniqueTrackingPolities = (values, playerCountry = "", intervalMonths = 0) => {
   const out = [];
   const seen = new Set();

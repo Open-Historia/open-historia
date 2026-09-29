@@ -28,7 +28,6 @@ import {
     COUNTRY_STATS_POPULATION_CALIBRATION_VERSION,
     COUNTRY_STATS_TRACKING_INTERVALS,
     COUNTRY_STATS_TRACKING_MAX_POLITIES,
-    countryStatsTrackingIntervalLabel,
     finalizeCountryStatSheet,
     isCompleteCountryStatSheet,
     isCompleteCustomCountryStatSheet,
@@ -158,6 +157,15 @@ const storeSheet = (key, entry) => {
     } catch {
         // Quota errors just mean no persistence — the memory cache still works.
     }
+};
+
+// The auto-refresh cadence in words. Whole phrases written in this screen's own
+// file, so the language packs carry them: built in countryStats.js they were
+// never collected and showed in English inside translated sentences.
+const countryStatsTrackingIntervalLabel = (months) => {
+    const count = Math.max(0, Math.trunc(Number(months) || 0));
+    if (!count) return "Manual only";
+    return count === 1 ? "Every month" : `Every ${count} months`;
 };
 
 const clamp01 = (value) => Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
