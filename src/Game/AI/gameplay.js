@@ -74,7 +74,14 @@ import {
   stripWorldSweepAudit,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
-import { buildScriptedPoliticalImpactInstruction, clearPoliticalClaimBindings, preparePoliticalClaimContext, scriptedPoliticalImpactRequirements, validatePoliticalImpactCompleteness, validatePolityImpactCompleteness } from "./politicalImpactCompleteness.js";
+import { buildScriptedPoliticalImpactInstruction, clearPoliticalClaimBindings, politicalImpactCompletenessFailure, preparePoliticalClaimContext, scriptedPoliticalImpactRequirements, validatePoliticalImpactCompleteness, validatePolityImpactCompleteness } from "./politicalImpactCompleteness.js";
+import {
+  POLITICAL_CLAIM_REPAIR_TOOL,
+  applyPoliticalClaimRepairResponse,
+  buildPoliticalClaimRepairRequest,
+  politicalClaimRepairHoldError,
+  shouldPreventDeterministicFallback,
+} from "./politicalClaimRepair.js";
 import {
   PREGAME_BOOTSTRAP_CONTRACT_VERSION,
   compilePregameBootstrapCandidate,
@@ -3355,6 +3362,10 @@ const runJsonTask = async (taskKey, {
   // The call found no model whose context window takes this request
   // (contextWindow.js): kept so a time skip can refuse rather than go canned.
   let tooBigForEveryModel = null;
+  // A validator can mark a correctness failure as non-cannable. The error is
+  // carried through the task runner so a valid-but-unreconciled canonical turn
+  // can be held by the jump instead of being replaced by deterministic filler.
+  let noFallbackError = null;
   // While requests are being saved (requestBudget.js) the FIRST answer is judged
   // the way the last one always was: the task validator repairs it in place
   // instead of sending it back, and a fault the schema names is cut out
@@ -3915,6 +3926,7 @@ const runJsonTask = async (taskKey, {
   } catch (error) {
     const actualError = controller.signal.aborted ? controller.signal.reason : error;
     if (actualError?.providerFailure?.kind === "tooBig") tooBigForEveryModel = actualError;
+    if (shouldPreventDeterministicFallback(actualError)) noFallbackError = actualError;
     const transportReason = normalizeString(actualError?.message || actualError);
     // The retry dying in transport used to ERASE why the first answer was
     // rejected, so the debug report the player copies out read "Internal server
@@ -3952,6 +3964,13 @@ const runJsonTask = async (taskKey, {
     throw tooBigForEveryModel;
   }
 
+  // Canonical Political World contradictions are not content-quality failures.
+  // If their bounded repair could not reconcile the generated decision, preserve
+  // the real failure so the jump can hold/retry instead of writing canned history.
+  if (noFallbackError && ["jumpForward", "autoJumpForward"].includes(taskKey)) {
+    throw noFallbackError;
+  }
+
   // Last chance before the canned fallback. An earlier answer that cleared the
   // schema is a finished turn — every event, transfer and chat the model
   // wrote — and the task validator rejected it only under `strict`, which is on
@@ -3970,7 +3989,12 @@ const runJsonTask = async (taskKey, {
         logDebugEvent("ai", `Task "${taskKey}" salvaged an earlier answer after the retry failed — the turn is real, not canned.`, undefined, { verbose: true });
         return { generation: { source: "ai", fallbackReason: "" }, payload: salvageCandidate, removed: removedFromAnswer };
       }
-    } catch {
+    } catch (error) {
+      // A canonical Political World repair failure is deliberately non-cannable.
+      // Do not let this best-effort salvage wrapper erase that tag and then
+      // advance the campaign with deterministic filler. Ordinary salvage
+      // failures still fall through exactly as before.
+      if (shouldPreventDeterministicFallback(error)) throw error;
       // Salvage validation is best-effort; fall through to the fallback below.
     }
   }
@@ -6317,6 +6341,11 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // Transient, pre-sort binding of jump politicalClaims to their event objects.
   // Null outside timeline jumps keeps the legacy prose detector for CSE/GM paths.
   politicalClaimContext = null,
+  // Final-attempt-only bounded AI bridge supplied by the timeline jump. It may
+  // complete a structured political decision with canonical operations, but the
+  // operations still pass native shape/reference/dry-run validation before they
+  // are attached to the candidate. Null everywhere else.
+  politicalClaimRepair = null,
 } = {}) => {
   const strict = strictTransfers;
   const containers = Array.isArray(candidate?.events)
@@ -6516,7 +6545,19 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
   // callers (including authored CSE preflight) retain prose classification until
   // they gain an equivalent structured contract. politicalActorOps remain the
   // canonical state authority in both paths.
-  const politicalCompletenessError = validatePoliticalImpactCompleteness(candidate, { world, claimContext: politicalClaimContext });
+  let politicalFailure = politicalImpactCompletenessFailure(candidate, { world, claimContext: politicalClaimContext });
+  let politicalCompletenessError = politicalFailure?.issue?.message || "";
+  if (politicalCompletenessError && typeof politicalClaimRepair === "function") {
+    await politicalClaimRepair({
+      candidate,
+      world,
+      claimContext: politicalClaimContext,
+      validationError: politicalCompletenessError,
+      validationFailure: politicalFailure,
+    });
+    politicalFailure = politicalImpactCompletenessFailure(candidate, { world, claimContext: politicalClaimContext });
+    politicalCompletenessError = politicalFailure?.issue?.message || "";
+  }
   if (politicalCompletenessError) return politicalCompletenessError;
 
   // Country/polity identity is canonical world state too. A completed rename
@@ -8719,7 +8760,7 @@ const buildWorldInitiativeContextBackground = async (bundle, options = {}, signa
 // `hardLimitMs` when the caller has a time budget to keep. The abort is on a
 // local controller: the caller's `signal` stays un-aborted, so its catch sees an
 // ordinary failure, while the player's Cancel still cancels.
-const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null } = {}) => {
+const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, reasoningEnabled, hardLimitMs, lookups = null, onRequest = null } = {}) => {
   const now = () =>
     typeof performance !== "undefined" && typeof performance.now === "function"
       ? performance.now()
@@ -8738,6 +8779,7 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
           taskKey,
           tool,
           lookups,
+          ...(typeof onRequest === "function" ? { onRequest } : {}),
         }),
       { taskKey, signal, hardLimitMs },
     );
@@ -8751,6 +8793,86 @@ const callRepairAI = async ({ systemPrompt, userMessage, taskKey, tool, signal, 
       error: normalizeString(error?.message || error),
     });
     throw error;
+  }
+};
+
+// A main jump may make a coherent political decision in prose/claims and still
+// omit the Political Actor operations that make it canonical. On the LAST real
+// attempt only, spend at most one bounded repair request to translate that fixed
+// outcome into native operations. The repair is generative where politics is:
+// it may choose a plausible coalition/successor from the supplied current
+// Political World, while native validation remains the authority on ids, shapes
+// and referential integrity.
+const repairGeneratedPoliticalClaims = async ({
+  candidate,
+  world,
+  claimContext,
+  validationError,
+  validationFailure,
+  requests,
+  signal,
+  receipt,
+} = {}) => {
+  const request = buildPoliticalClaimRepairRequest({ candidate, world, claimContext, validationError, validationFailure });
+  if (!request.targets.length) {
+    return { attempted: false, applied: false, added: 0, error: "No structured Political World claim targets were available for repair." };
+  }
+
+  if (requests?.budget && !requests.budget.take("repair")) {
+    return {
+      attempted: true,
+      applied: false,
+      added: 0,
+      error: `The time skip used all ${requests.budget.cap} provider requests before Political World repair could run.`,
+    };
+  }
+
+  logDebugEvent("ai", `Political World claim repair: ${request.targets.length} event(s) need canonical reconciliation.`, {
+    targets: request.targets.map((target) => ({
+      eventNumber: target.eventNumber,
+      title: normalizeString(target.event?.title),
+      claims: target.claims,
+    })),
+  }, { verbose: true });
+
+  try {
+    const response = await callRepairAI({
+      systemPrompt: request.systemPrompt,
+      userMessage: request.userMessage,
+      taskKey: "politicalClaimRepair",
+      tool: POLITICAL_CLAIM_REPAIR_TOOL,
+      signal,
+      onRequest: jumpTaskOptions(requests, "repair").onRequest,
+    });
+    const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
+    const payload = response?.toolInput
+      ?? unwrapMimickedToolCall(extractJsonPayload(rawText), POLITICAL_CLAIM_REPAIR_TOOL.name);
+    const outcome = applyPoliticalClaimRepairResponse({
+      candidate,
+      world,
+      claimContext,
+      targets: request.targets,
+      payload,
+    });
+    if (!outcome.applied) {
+      logDebugEvent("ai", `Political World claim repair was refused: ${outcome.error}`, payload, { problem: true });
+      return { attempted: true, ...outcome };
+    }
+
+    noteReceipt(
+      receipt,
+      "adjusted",
+      `Political World repair added ${outcome.added} canonical operation${outcome.added === 1 ? "" : "s"} to reconcile the generated political outcome with canonical state.`,
+    );
+    logDebugEvent("ai", `Political World claim repair accepted ${outcome.added} canonical operation(s).`, {
+      summary: outcome.summary,
+    }, { verbose: true });
+    return { attempted: true, ...outcome };
+  } catch (error) {
+    if (signal?.aborted || error?.name === "AbortError") throw error;
+    const reason = normalizeString(error?.message) || "the repair model returned no usable answer";
+    logDebugEvent("ai", `Political World claim repair failed: ${reason}`, error instanceof Error ? error : undefined, { problem: true });
+    return { attempted: true, applied: false, added: 0, error: reason };
   }
 };
 
@@ -13622,7 +13744,7 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
           segmentTargetDate: segmentTarget,
           priorEvents: state.generatedSoFar,
         }), buildScriptedEventsInstruction(scriptedBeats), scriptedPoliticalInstruction, WRITING_REMINDER].filter(Boolean).join("\n\n"),
-        validatePayload: withReceiptDraft(async (candidate, { finalAttempt } = {}, draft) => {
+        validatePayload: withReceiptDraft(async (candidate, { attempt = 1, finalAttempt } = {}, draft) => {
           // Shape-of-story problems (event count, stray dates) are STRICT while a
           // retry remains — the model gets the exact error and usually fixes its
           // own answer — and SALVAGED on the final attempt: a finished generation
@@ -13759,6 +13881,25 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
             playerCountry: bundle.game.country,
             actions: bundle.actions,
             politicalClaimContext,
+            politicalClaimRepair: finalAttempt && Number(attempt) >= 2 && politicalClaimContext.mode === "structured"
+              ? async ({ candidate: repairCandidate, world: repairWorld, claimContext, validationError, validationFailure }) => {
+                  const outcome = await repairGeneratedPoliticalClaims({
+                    candidate: repairCandidate,
+                    world: repairWorld,
+                    claimContext,
+                    validationError,
+                    validationFailure,
+                    requests: state.requests,
+                    signal,
+                    receipt: draft,
+                  });
+                  if (!outcome.applied) {
+                    throw politicalClaimRepairHoldError(
+                      `${validationError} Repair failed: ${outcome.error || "no coherent canonical operation set was returned"}`,
+                    );
+                  }
+                }
+              : null,
           });
           if (worldChangeError) return worldChangeError;
           // Claims are generation-only semantic metadata. Canonical Political
@@ -13872,6 +14013,27 @@ const runJumpSegments = async ({ context, onEvents, onProgress, signal, state })
     if (error?.providerFailure?.kind === "tooBig" && segmentCount <= 1) {
       logDebugEvent("warn", "[turn] The jump was refused: the request fits no model in the Fallback list. Nothing was written.", { reason });
       throw error;
+    }
+
+    // A canonical Political World mismatch is different from a thin/failed
+    // generation: deterministic filler cannot make the missing government,
+    // coalition or leader mutation true. Hold even a one-segment jump so Retry
+    // can ask the AI again while the campaign date/state remain untouched.
+    if (shouldPreventDeterministicFallback(error)) {
+      holdTurn(HELD_TURN.segment, { context, state });
+      console.warn(`[ai] jump political canonical repair failed (${reason}) — the turn is held, not canned.`);
+      logDebugEvent("warn", "[turn] Political World repair failed; the turn is HELD and nothing was written.", {
+        completedSegments: state.segmentPayloads.length,
+        segmentCount,
+        segmentIndex,
+        reason,
+      });
+      throw segmentHeldError({
+        cause: error,
+        completedSegments: state.segmentPayloads.length,
+        segmentCount,
+        segmentIndex,
+      });
     }
 
     // A single call reaching here has already exhausted its own fallback, so there

@@ -179,7 +179,7 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 | `custom-regions-fill` | `["get","_fillColor"]` | author-drawn/edited geometry, opacity constant `0.72` at all zooms |
 | `custom-regions-local-outline` | `buildProvinceOutlinePaint` | Scenario province grid (`customActive && worldKnown`): hidden through z6.5; opacity `6.5→0, 7.5→0.25, 10→0.38, 12→0.45`; width `6.5→0.25, 8→0.4, 12→0.5` CSS px, capped above z12. Country/frontier strokes stay visible, and fill-based province selection is unchanged. |
 
-`_fillColor` is carried by the dissolved polity surfaces (`enrichedPolitySurfaceData`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
+The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file. Political fill arrives through `setFeatureState` (`fillColor`) using the same merged `ownerByRegionId` lookup as region selection and the stock-detail path: a live `regionOwnershipOverrides` row wins, otherwise the scenario region's authored `owner` is used. This is important for edited/authored geometry whose valid starting owner exists only in `regions.geojson`; without the scenario-owner fallback such regions remained clickable as their polity but rendered with `NEUTRAL_LAND_COLOR`. A genuinely unowned region has neither source and remains neutral. Ownership changes are still tiny feature-state diffs rather than GeoJSON replacements.
 
 ---
 

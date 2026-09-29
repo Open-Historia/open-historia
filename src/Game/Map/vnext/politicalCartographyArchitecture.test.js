@@ -354,6 +354,26 @@ test("hybrid map fallback keeps exact ownership and stock hit-testing even when 
   assert.doesNotMatch(nations, /const candidateLayers = \(hasDrawnGeometry/);
 });
 
+test("custom scenario fills use the merged owner lookup instead of live overrides alone", () => {
+  // Regression: an edited/authored region can carry its valid starting owner only
+  // in scenario metadata. Click resolution already used ownerByRegionId, while the
+  // fill-state sync used regionOwnershipOverrides alone and painted that region
+  // neutral grey. Both presentation paths must share the same precedence:
+  // live override first, otherwise scenario owner.
+  assert.match(
+    nations,
+    /for \(const \[regionId, owner\] of ownerByRegionId\) \{[\s\S]*if \(!id \|\| !owner\) continue;[\s\S]*next\.set\(id, ownerColorCss\(owner\)\);/,
+  );
+  assert.match(nations, /cachedTarget\.owners !== ownerByRegionId/);
+  assert.match(nations, /owners: ownerByRegionId/);
+
+  const fillSyncStart = nations.indexOf("// The URL-backed authored source uses the same merged ownership lookup");
+  const fillSyncEnd = nations.indexOf("// Presentation-only legal sovereignty transition", fillSyncStart);
+  assert.ok(fillSyncStart >= 0 && fillSyncEnd > fillSyncStart);
+  const fillSync = nations.slice(fillSyncStart, fillSyncEnd);
+  assert.doesNotMatch(fillSync, /Object\.entries\(regionOwnershipOverrides/);
+});
+
 test("stock-vs-authored provenance is explicit rather than inferred from punctuation in region ids", () => {
   assert.match(worker, /isExplicitAuthoredGeometry\(feature, index\)/);
   assert.match(worker, /authored,/);

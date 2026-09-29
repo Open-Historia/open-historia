@@ -585,7 +585,7 @@ const WorldMap = ({ isGlobe = false }) => {
   // The desired region -> fill map is a pure function of the two inputs cached
   // beside it, and a hold/release epoch changes neither. Keyed on identity so an
   // epoch bump mid-sweep reuses it instead of recolouring every region again.
-  const ownershipFillTargetRef = useRef({ overrides: null, colorCss: null, fills: null });
+  const ownershipFillTargetRef = useRef({ owners: null, colorCss: null, fills: null });
   const appliedTileFillStateRef = useRef(new Map());
   const ownershipSweepRef = useRef({
     active: false,
@@ -2444,9 +2444,12 @@ const WorldMap = ({ isGlobe = false }) => {
     return clauses.length ? ["all", ...clauses] : ["all"];
   }, [editedStockIds, legacyAuthoritativeCountryCodes]);
 
-  // Only live ownership overrides touch the URL-backed authored source. Seed
-  // colours remain properties of the scenario file; conquests are a tiny state
-  // diff rather than a full GeoJSON replacement.
+  // The URL-backed authored source uses the same merged ownership lookup as
+  // click resolution and the stock-detail fill path. Live overrides stay
+  // authoritative; scenario metadata supplies the starting owner when no live
+  // override exists. This keeps edited/authored regions from falling through to
+  // neutral grey simply because their starting ownership was never duplicated
+  // into world.regionOwnershipOverrides.
   useEffect(() => {
     if (!customFlag) return undefined;
     const mapInstance = map?.getMap ? map.getMap() : map;
@@ -2470,17 +2473,19 @@ const WorldMap = ({ isGlobe = false }) => {
       let next = cachedTarget.fills;
       if (
         !next
-        || cachedTarget.overrides !== regionOwnershipOverrides
+        || cachedTarget.owners !== ownerByRegionId
         || cachedTarget.colorCss !== ownerColorCss
       ) {
         next = new Map();
-        for (const [regionId, owner] of Object.entries(regionOwnershipOverrides)) {
-          next.set(String(regionId), ownerColorCss(owner));
+        for (const [regionId, owner] of ownerByRegionId) {
+          const id = String(regionId ?? "");
+          if (!id || !owner) continue;
+          next.set(id, ownerColorCss(owner));
         }
         // Read-only below: the diff never writes to it, appliedAfterSync is its
         // own Map. Anything that starts mutating it must drop the cache too.
         ownershipFillTargetRef.current = {
-          overrides: regionOwnershipOverrides,
+          owners: ownerByRegionId,
           colorCss: ownerColorCss,
           fills: next,
         };
@@ -2562,7 +2567,7 @@ const WorldMap = ({ isGlobe = false }) => {
     map,
     ownerColorCss,
     ownershipPresentationHoldEpoch,
-    regionOwnershipOverrides,
+    ownerByRegionId,
     repairedRegionIdSet,
     repairedRegionIds,
   ]);

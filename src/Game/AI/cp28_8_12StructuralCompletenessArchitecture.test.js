@@ -8,20 +8,35 @@ const channels = fs.readFileSync(new URL("../../runtime/institutionalChannels.js
 
 test("world-change validation enforces Political World structural completeness through transient claims", () => {
   assert.match(gameplay, /preparePoliticalClaimContext\(candidate\)/);
-  assert.match(gameplay, /validatePoliticalImpactCompleteness\(candidate,\s*\{\s*world,\s*claimContext:\s*politicalClaimContext\s*\}\)/);
+  assert.match(
+    gameplay,
+    /let politicalFailure = politicalImpactCompletenessFailure\(candidate, \{ world, claimContext: politicalClaimContext \}\)/,
+  );
+  assert.match(
+    gameplay,
+    /if \(politicalCompletenessError && typeof politicalClaimRepair === "function"\)[\s\S]*?await politicalClaimRepair\([\s\S]*?politicalFailure = politicalImpactCompletenessFailure\(candidate, \{ world, claimContext: politicalClaimContext \}\)[\s\S]*?if \(politicalCompletenessError\) return politicalCompletenessError;/,
+  );
   assert.match(gameplay, /validatePolityImpactCompleteness\(candidate\)/);
   assert.match(gameplay, /Always return politicalClaims: transient validation/);
 });
 
 test("jump political claims bind before event sorting and are removed before persistence", () => {
-  assert.match(
-    gameplay,
-    /preparePoliticalClaimContext\(candidate\)[\s\S]{0,1200}sortTimelineEventsChronologically\(candidate\)/,
+  const prepareIndex = gameplay.indexOf("const politicalClaimContext = preparePoliticalClaimContext(candidate);");
+  const sortIndex = gameplay.indexOf("sortTimelineEventsChronologically(candidate);", prepareIndex);
+  const validateIndex = gameplay.indexOf(
+    "const worldChangeError = await validateGeneratedWorldChanges(candidate, bundle.world, {",
+    sortIndex,
   );
-  assert.match(
-    gameplay,
-    /validateGeneratedWorldChanges\(candidate,[\s\S]{0,800}politicalClaimContext,[\s\S]{0,500}clearPoliticalClaimBindings\(candidate\);[\s\S]{0,120}delete candidate\.politicalClaims/,
-  );
+  const repairIndex = gameplay.indexOf("politicalClaimRepair:", validateIndex);
+  const clearIndex = gameplay.indexOf("clearPoliticalClaimBindings(candidate);", validateIndex);
+  const deleteIndex = gameplay.indexOf("delete candidate.politicalClaims;", clearIndex);
+
+  assert.ok(prepareIndex >= 0, "political claims must bind before the jump is sorted");
+  assert.ok(sortIndex > prepareIndex, "event sorting must happen after transient claim binding");
+  assert.ok(validateIndex > sortIndex, "world-change validation must see the bound claim context");
+  assert.ok(repairIndex > validateIndex && repairIndex < clearIndex, "bounded political repair must run inside validation before transient claims are cleared");
+  assert.ok(clearIndex > validateIndex, "claim bindings must survive through world-change validation");
+  assert.ok(deleteIndex > clearIndex, "transient politicalClaims must be removed only after bindings are cleared");
 });
 
 test("lifecycle invitation hearings are gated away from formal Council governance", () => {
