@@ -11125,6 +11125,7 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
 // something asks. Silent by design: a reading that fails costs the player
 // nothing but the default they already had.
 const firstReadingsInFlight = new Map();
+const firstReadingKey = (kind, name) => `${activeCampaignId()}|${kind}|${name.toLowerCase()}`;
 const firstReading = (kind, target, reason, work) => {
   const name = normalizeString(target);
   if (!name || typeof window === "undefined" || !isFallbackListConfigured()) return Promise.resolve(null);
@@ -11134,7 +11135,7 @@ const firstReading = (kind, target, reason, work) => {
   // service keeps the default rating until a turn gives it one, which is how
   // every service behaved before first readings existed.
   if (!backgroundAiAllowance().allowed) return Promise.resolve(null);
-  const key = `${activeCampaignId()}|${kind}|${name.toLowerCase()}`;
+  const key = firstReadingKey(kind, name);
   if (firstReadingsInFlight.has(key)) return firstReadingsInFlight.get(key);
   const run = work(name)
     .catch((error) => {
@@ -11217,6 +11218,14 @@ export const ensureCountryStatSheet = (target, { reason = "" } = {}) =>
     await waitForSimulationIdle();
     return generateCountryStatSheet({ code: name, name, requestKind: BACKGROUND_REQUEST });
   });
+
+// The background stat-sheet reading now running for this polity, or null. The
+// Stats pane's Economy view waits on it rather than asking for the same sheet
+// a second time as a player request.
+export const pendingCountryStatSheet = (target) => {
+  const name = normalizeString(target);
+  return (name && firstReadingsInFlight.get(firstReadingKey("stat sheet", name))) || null;
+};
 
 // Everything a polity the player is dealing with should have: the sheet first,
 // so the service reading can see the numbers it rests on.

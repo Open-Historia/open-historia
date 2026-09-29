@@ -74,4 +74,6 @@ export const consolidateHistoryNow = async (...args) => (await gameplay()).conso
 export const ensureIntelligenceRated = async (...args) => (await gameplay()).ensureIntelligenceRated(...args);
 export const readOpenedIntercepts = async (...args) => (await gameplay()).readOpenedIntercepts(...args);
 export const generateCountryStatSheet = async (...args) => (await gameplay()).generateCountryStatSheet(...args);
+// Settles with that reading's sheet (or null), or at once with null when none is running.
+export const pendingCountryStatSheet = async (...args) => (await gameplay()).pendingCountryStatSheet(...args);
 export const generateCountryStats = async (...args) => (await gameplay()).generateCountryStats(...args);

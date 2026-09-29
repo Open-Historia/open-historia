@@ -288,7 +288,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 | Concern | Detail | Connects to |
 |---|---|---|
 | Target | `targetCountry` seeds from the player's country; **clicking any country on the map** re-targets it (`setRegionClickObserver`) | `src/Game/Selection/Regions.jsx` |
-| Data | `generateCountryStatSheet({code, name})` (AI), validated by `validateGameplayPayload("countryStatSheet", …)` | `src/Game/AI/gameplay.js`, `gameplaySchemas.js` |
+| Data | Economy view: `generateCountryStatSheet({code, name})` (AI, the player's request) when no valid sheet is saved, validated by `validateGameplayPayload("countryStatSheet", …)`; it first waits for a background reading of the same sheet (`pendingCountryStatSheet`). Politics and Diplomacy views show a saved sheet only and ask `ensureCountryAssessed` (background AI: off unless turned on, capped, deduplicated) | `src/Game/AI/gameplay.js`, `gameplaySchemas.js` |
 | Caching | Per `gameKey:code`, keyed by game date; memory + `localStorage["oh-stat-sheets"]` (cap 60); regenerated when the date moves; ↻ forces regen | — |
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |
 | Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`) | `src/runtime/countryFlags.js` |

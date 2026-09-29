@@ -17,7 +17,7 @@ import { intelligenceOf } from "../../runtime/spycraft.js";
 import { flagImageUrlFromGid } from "../../runtime/countryFlags.js";
 import COUNTRY_NAMES from "../../runtime/generated/countryNames.js";
 import { REGION_SELECTED_EVENT } from "../Selection/Regions.jsx";
-import { ensureIntelligenceRated, generateCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
+import { ensureCountryAssessed, ensureIntelligenceRated, generateCountryStatSheet, pendingCountryStatSheet, readOpenedIntercepts } from "../AI/gameplayLazy.js";
 import PoliticalOverview from "./PoliticalOverview.jsx";
 import { institutionPortfolioForPolity } from "../../runtime/institutionLifecycleCore.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
@@ -1427,6 +1427,8 @@ const StatsPaneBody = ({ active }) => {
     const [worldSnapshot, setWorldSnapshot] = useState(null);
     const worldSnapshotRef = useRef(null);
     const statsLoadRef = useRef({ sequence: 0, controller: null });
+    // The sheet this pane is generating itself: { code, sequence } while one runs.
+    const generatingRef = useRef(null);
     const [statsView, setStatsView] = useState("politics");
     const [advancedOpen, setAdvancedOpen] = useState(false);
     const [trackingOpen, setTrackingOpen] = useState(false);
@@ -1669,7 +1671,10 @@ const StatsPaneBody = ({ active }) => {
         return () => window.removeEventListener(REGION_SELECTED_EVENT, onRegionSelected);
     }, [active]);
 
-    const loadSheet = useCallback(async ({ force = false, forceReassess = false } = {}) => {
+    // `generate: false` shows a sheet that already exists and never asks the
+    // model: the Politics and Diplomacy views, which leave generation to
+    // background AI (see the effect below).
+    const loadSheet = useCallback(async ({ force = false, forceReassess = false, generate = true } = {}) => {
         const code = targetCountry;
         if (!code) return;
         const cacheKey = `${player.gameKey}:${code}`;
@@ -1712,6 +1717,13 @@ const StatsPaneBody = ({ active }) => {
                 setState({ status: "ready", sheet, error: "" });
                 return;
             }
+            // Already generating this polity's sheet: that run fills the card.
+            // Starting another would abort it after its request was paid for.
+            if (generatingRef.current?.code === code) return;
+            if (!generate) {
+                setState({ status: "idle", sheet: null, error: "" });
+                return;
+            }
         }
         statsLoadRef.current.controller?.abort?.(
             new DOMException("Superseded by another country selection.", "AbortError")
@@ -1719,6 +1731,7 @@ const StatsPaneBody = ({ active }) => {
         const controller = new AbortController();
         const sequence = statsLoadRef.current.sequence + 1;
         statsLoadRef.current = { sequence, controller };
+        generatingRef.current = { code, sequence };
 
         // `waiting` says why the card may sit for minutes (issue #724): the sheet
         // now holds off until the world is idle, and a spinner that gives no
@@ -1736,6 +1749,20 @@ const StatsPaneBody = ({ active }) => {
         });
 
         try {
+            // A background first reading (the Politics or Diplomacy view) may be
+            // generating this very sheet. Wait for it rather than paying twice;
+            // if it produced nothing usable, generate here as before.
+            if (!force) {
+                const pending = await pendingCountryStatSheet(code).catch(() => null);
+                if (statsLoadRef.current.sequence !== sequence || controller.signal.aborted) return;
+                if (pending && isValidStatSheet(pending, statSheetDefinition)) {
+                    const sheet = finalizeCountryStatSheet(pending);
+                    rememberSheet(cacheKey, { date: player.date, sheet });
+                    setState((current) => (targetCountry === code ? { status: "ready", sheet, error: "" } : current));
+                    return;
+                }
+            }
+
             // targetCountry is the stable campaign identity key. A polity rename keeps
             // that key on purpose, so resolve the CURRENT display name separately for
             // the human-facing header and the Stats generation prompt. Identity and
@@ -1776,6 +1803,8 @@ const StatsPaneBody = ({ active }) => {
                 targetCountry === code
                     ? { status: "error", sheet: null, error: error?.message || "The stat sheet failed." }
                     : current);
+        } finally {
+            if (generatingRef.current?.sequence === sequence) generatingRef.current = null;
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [targetCountry, player.gameKey, player.date, player.startDate, player.round, displayName, statSheetDefinition]);
@@ -1889,20 +1918,32 @@ const StatsPaneBody = ({ active }) => {
     }, [active, targetCountry, player.code, worldSnapshot]);
 
     // Opening the pane on a polity is what gets that polity its numbers: the
-    // stat sheet (loadSheet generates one when nothing persisted is valid) and,
-    // once the sheet is in, a first reading of its intelligence service. Both
-    // used to wait for the Economy sub-tab, which left every service the
-    // player looked at on the same "ordinary" default; the Diplomacy tab now
-    // pays for the sheet too, in the background, rather than showing stats
-    // that were never assessed.
+    // stat sheet and, once the sheet is in, a first reading of its
+    // intelligence service. Which view is open decides who pays for them.
+    //
+    // Economy (National) shows the sheet: opening it is the player asking, so a
+    // missing sheet is generated at once as the player's request (loadSheet).
+    // Politics and Diplomacy do not show it. There the sheet and the service
+    // reading go through ensureCountryAssessed, which is background AI: off
+    // until the player turns Background AI on, under its daily cap, and asked
+    // once per polity however often the map is clicked. They used to generate
+    // directly on every tab, so browsing Politics on a free-tier key spent a
+    // request per country clicked, whatever the Background AI switch said.
     useEffect(() => {
         if (!active || !targetCountry || !statSheetDefinitionReady) return undefined;
         let cancelled = false;
-        loadSheet().finally(() => {
-            if (!cancelled) void ensureIntelligenceRated(targetCountry, { reason: "stats pane" });
-        });
+        if (statsView === "economy") {
+            loadSheet().finally(() => {
+                if (!cancelled) void ensureIntelligenceRated(targetCountry, { reason: "stats pane" });
+            });
+        } else {
+            loadSheet({ generate: false }).finally(() => {
+                if (cancelled || generatingRef.current?.code === targetCountry) return;
+                void ensureCountryAssessed(targetCountry, { reason: "stats pane" });
+            });
+        }
         return () => { cancelled = true; };
-    }, [active, targetCountry, loadSheet, statSheetDefinitionReady]);
+    }, [active, targetCountry, loadSheet, statSheetDefinitionReady, statsView]);
 
     useEffect(() => {
         if (!active || typeof window === "undefined") return undefined;
