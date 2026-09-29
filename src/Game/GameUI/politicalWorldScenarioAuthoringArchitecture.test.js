@@ -63,3 +63,24 @@ test("Scenario Political World authoring uses player-facing language instead of 
   assert.doesNotMatch(source, /Political Actor saved to scenario canon/);
   assert.doesNotMatch(source, /Full saved Political Actor JSON/);
 });
+
+test("Scenario Political World authoring can delete a profile without deleting the polity", () => {
+  const source = read("./PoliticalWorldAuthoringPanel.jsx");
+
+  assert.match(source, /removePoliticalActorFromWorld/);
+  assert.match(source, />Delete Political World profile<\/button>/);
+  assert.match(source, /This does not delete the polity or its map territory/);
+  assert.match(source, /worldPatch:\s*\{ politicalActors: removed\.world\.politicalActors \}/);
+});
+
+test("Workshop polity renames and removals are replayed into canonical Political World state on scenario save", () => {
+  const library = read("./libraryBar.jsx");
+  const mapEditor = read("../../Editor/MapEditor.jsx");
+
+  assert.match(mapEditor, /polityAuthoringOpsRef/);
+  assert.match(mapEditor, /op: "rename", from, to/);
+  assert.match(mapEditor, /op: "remove", key/);
+  assert.match(mapEditor, /polityAuthoringOps:/);
+  assert.match(library, /reconcileMapPolityAuthoringOps\(currentWorld, seed\.polityAuthoringOps\)/);
+  assert.match(library, /\.\.\.reconciledWorld/);
+});

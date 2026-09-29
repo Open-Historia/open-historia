@@ -67,6 +67,7 @@ import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
 import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
+import { reconcileMapPolityAuthoringOps } from "../../../server/polityRename.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
   ScenarioCommunityCard,
@@ -3069,6 +3070,12 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const currentWorld = details?.data?.world ?? {};
     const currentGame = details?.data?.game ?? {};
 
+    // The Workshop edits the polity registry, while Political World and several
+    // other canonical ledgers live outside its map document. Replay the explicit
+    // identity operations first so a rename moves the existing actor/relations
+    // instead of leaving a stale actor behind and creating a second one later.
+    const reconciledWorld = reconcileMapPolityAuthoringOps(currentWorld, seed.polityAuthoringOps);
+
     // A Workshop that has not finished loading the scenario's map holds an empty
     // document, and writing that over a scenario with territory is never what a
     // save meant. The Workshop disables its buttons until the map is in; this
@@ -3081,7 +3088,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
 
     const savedScenarioDetails = await saveScenario(scenarioId, {
       world: {
-        ...currentWorld,
+        ...reconciledWorld,
         regionOwnershipOverrides: seed.world?.regionOwnershipOverrides ?? {},
         // The Workshop is authoritative for the polity registry: it hydrated the
         // full current registry (landless polities included) before editing, so

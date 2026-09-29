@@ -112,6 +112,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const [cleanupNote, setCleanupNote] = useState("");
   // Set by the screen's "Save now" button; the sweep reads it between steps.
   const cleanupStopRef = useRef(false);
+  // Map authoring can rename/remove a polity while Political World and other
+  // scenario ledgers live outside the map document. Keep the explicit identity
+  // operations until the scenario save lands so the host can migrate those
+  // canonical records instead of mistaking a rename for a new country.
+  const polityAuthoringOpsRef = useRef([]);
   useEffect(() => {
     if (!cleanupNote) return undefined;
     const timer = setTimeout(() => setCleanupNote(""), 9000);
@@ -397,12 +402,18 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     setBorderCleanup((current) => ({ ...(current || {}), phase: "save", result: cleanup, error: cleanupError }));
     await yieldToBrowser();
     try {
-      const seed = buildGameSeed(
-        d.doc,
-        api.serializeRegions() || { type: "FeatureCollection", features: [] },
-        d.colors,
-      );
+      const seed = {
+        ...buildGameSeed(
+          d.doc,
+          api.serializeRegions() || { type: "FeatureCollection", features: [] },
+          d.colors,
+        ),
+        polityAuthoringOps: polityAuthoringOpsRef.current.map((entry) => ({ ...entry })),
+      };
       await onApplyToScenario(seed, { play });
+      // The scenario now owns these operations. A second Save from the same
+      // still-open Workshop must not replay an already-applied rename.
+      polityAuthoringOpsRef.current = [];
       // What the author decided about a suggestion's map changes is kept with
       // the scenario only now that the map it decided about is saved into it.
       if (reviewSource) {
@@ -617,6 +628,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   useEffect(() => {
     if (!api || !initialMap || hydratedRef.current) return;
     hydratedRef.current = true;
+    polityAuthoringOpsRef.current = [];
     const base = createDocument({ name: initialMap.name || "Scenario Map", kind: "import-world" });
     base.metadata.author = initialMap.author || "";
     // Restore the chosen built-in basemap so re-opening shows it (not the default).
@@ -1092,11 +1104,22 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
             }
             api?.renameOwner?.(from, to);
             d.renamePolity(from, to);
+            polityAuthoringOpsRef.current.push({ op: "rename", from, to });
             if (paintOwner === from) setPaintOwner(to);
             if (paintOnlyOwner === from) setPaintOnlyOwner(to);
           }}
-          removePolity={d.removePolity}
-          removePolities={d.removePolities}
+          removePolity={(key) => {
+            const stableKey = String(key || "").trim();
+            if (!stableKey) return;
+            d.removePolity(stableKey);
+            polityAuthoringOpsRef.current.push({ op: "remove", key: stableKey });
+          }}
+          removePolities={(keys) => {
+            const stableKeys = [...new Set((keys || []).map((key) => String(key || "").trim()).filter(Boolean))];
+            if (!stableKeys.length) return;
+            d.removePolities(stableKeys);
+            for (const key of stableKeys) polityAuthoringOpsRef.current.push({ op: "remove", key });
+          }}
           puppets={d.puppets}
           setPuppets={d.setPuppets}
           importPolityRoster={d.importPolityRoster}

@@ -14,6 +14,7 @@ import {
 } from "../../runtime/politicalTraitRegistry.js";
 import { collectScenarioPoliticalPolities } from "../../runtime/scenarioPolities.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
+import { removePoliticalActorFromWorld } from "../../../server/polityRename.js";
 import {
   applyPoliticalEditorStateToWorld,
   politicalActorToEditorState,
@@ -327,6 +328,34 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
 
   const selectedActor = selectedKey ? world?.politicalActors?.byPolity?.[selectedKey] || null : null;
   const debugSnapshot = selectedKey ? politicalDebugSnapshotFromWorld(world, selectedKey) : null;
+  const messageIsSuccess = message === "Political World saved." || message === "Political World profile deleted.";
+
+  const deletePoliticalWorldProfile = async () => {
+    if (!scenarioId || !selectedKey || !selectedActor || busy) return;
+    const label = actorLabel(world, selectedKey);
+    const unsaved = dirty ? "\n\nAny unsaved edits to this profile will also be discarded." : "";
+    if (!window.confirm(`Delete the Political World profile for "${label}"?\n\nThis does not delete the polity or its map territory.${unsaved}`)) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const removed = removePoliticalActorFromWorld(clone(world) || {}, selectedKey);
+      if (!removed.removedKey) {
+        setMessage("This polity has no Political World profile to delete.");
+        return;
+      }
+      const nextDetails = await saveScenario(scenarioId, {
+        worldPatch: { politicalActors: removed.world.politicalActors },
+      });
+      onDetailsChange?.(nextDetails);
+      setDraft(politicalActorToEditorState(null));
+      setDirty(false);
+      setMessage("Political World profile deleted.");
+    } catch (error) {
+      setMessage(error?.message || "Could not delete Political World profile.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const manager = managerOpen && typeof document !== "undefined" ? createPortal(
     <div
@@ -390,12 +419,13 @@ export default function PoliticalWorldAuthoringPanel({ details, onDetailsChange 
                     <div style={{ color: "rgba(255,255,255,0.44)", fontSize: "0.67rem", lineHeight: 1.45, marginTop: "0.35rem", maxWidth: "52rem" }}>These are the scenario's starting political facts. Blank trait values stay unset rather than becoming 0, and Political World data this editor does not show is preserved.</div>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    <button disabled={!selectedActor || busy} onClick={deletePoliticalWorldProfile} style={{ ...buttonStyle, borderColor: "rgba(239,68,68,0.28)", color: "#fca5a5", opacity: !selectedActor || busy ? 0.45 : 1 }} type="button">Delete Political World profile</button>
                     <button disabled={!dirty || busy} onClick={discard} style={{ ...buttonStyle, opacity: !dirty || busy ? 0.45 : 1 }} type="button">Discard</button>
                     <button disabled={!dirty || busy} onClick={save} style={{ ...buttonStyle, background: "var(--oh-grey-raised)", borderColor: "var(--oh-grey-border-strong)", opacity: !dirty || busy ? 0.5 : 1 }} type="button">{busy ? "Saving..." : "Save Political World"}</button>
                   </div>
                 </div>
 
-                {message ? <div style={{ background: message.startsWith("Political World saved") ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.09)", border: `1px solid ${message.startsWith("Political World saved") ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.24)"}`, borderRadius: "10px", color: message.startsWith("Political World saved") ? "#bbf7d0" : "#fecaca", fontSize: "0.7rem", marginBottom: "0.7rem", padding: "0.5rem 0.65rem" }}>{message}</div> : null}
+                {message ? <div style={{ background: messageIsSuccess ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.09)", border: `1px solid ${messageIsSuccess ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.24)"}`, borderRadius: "10px", color: messageIsSuccess ? "#bbf7d0" : "#fecaca", fontSize: "0.7rem", marginBottom: "0.7rem", padding: "0.5rem 0.65rem" }}>{message}</div> : null}
 
                 <div style={{ display: "grid", gap: "0.7rem" }}>
                   <details open style={sectionStyle}>
