@@ -8308,8 +8308,12 @@ const applySimulationResult = async ({
   // one request, and are only filed here; a turn with no review (a resolved
   // interactive event, a game-master command) waits for the next skip's. Otherwise each
   // agent makes its own request, as before.
+  // With saving off, the agents whose report failed are handed back on the
+  // result: the turn is already written, so they cannot hold it, but the player
+  // is told and can ask again (time.jsx).
+  let agentReportsFailed = [];
   if (review) await fileReviewedAgentReports(review);
-  else if (!savingRequests()) await refreshSpyIntercepts();
+  else if (!savingRequests()) agentReportsFailed = (await refreshSpyIntercepts()).failed.map((entry) => entry.target);
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId });
   // And the advisor flags each new paper in its conversation.
@@ -8355,6 +8359,7 @@ const applySimulationResult = async ({
     events: nextEvents,
     game: nextGame,
     generation: result.generation ?? { source: "ai", fallbackReason: "" },
+    agentReportsFailed,
     world: nextWorld,
   };
 };
@@ -11413,21 +11418,43 @@ export const maybeGatherIntelligence = async ({ chance = SPY_REPORT_CHANCE } = {
   }
 };
 
-export const refreshSpyIntercepts = async () => {
-  if (!isActiveFeatureEnabled("espionage")) return;
+// -> { failed: [{ target, reason }] }: the agents whose report did not come
+// back, so the player can be told and ask again (retryAgentReports). `targets`
+// limits it to those agents.
+export const refreshSpyIntercepts = async ({ targets = null } = {}) => {
+  const failed = [];
+  if (!isActiveFeatureEnabled("espionage")) return { failed };
   let world;
   try {
     world = normalizeWorldState(await readWorldState({ force: true }));
   } catch {
-    return;
+    return { failed };
   }
+  const only = Array.isArray(targets) ? new Set(targets.map((target) => normalizeString(target).toLowerCase())) : null;
   const player = normalizeString((await readGameData()).country);
   for (const spy of activeSpies(world, player)) {
+    if (only && !only.has(normalizeString(spy.target).toLowerCase())) continue;
     try {
       await gatherIntelligence(spy.target);
     } catch (error) {
       console.warn(`[spycraft] the spy in ${spy.target} reported nothing this period:`, error?.message || error);
+      failed.push({ target: spy.target, reason: normalizeString(error?.message) || "the request failed" });
     }
+  }
+  return { failed };
+};
+
+// Ask again for the reports a time skip could not get (with Save AI requests
+// off, each agent asks on its own after the turn is written, so a failed one
+// cannot hold the turn). Waits for no turn: refused while one is being written,
+// since the report would describe a world the turn is about to replace.
+export const retryAgentReports = async ({ targets = [] } = {}) => {
+  if (spyReportInFlight || isSimulationBusy()) throw new Error("A turn is being written; ask the agents again once it lands.");
+  spyReportInFlight = true;
+  try {
+    return await refreshSpyIntercepts({ targets });
+  } finally {
+    spyReportInFlight = false;
   }
 };
 

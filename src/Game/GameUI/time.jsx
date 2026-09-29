@@ -15,7 +15,7 @@ import {
     loadRegionCatalog,
     loadRollbackSnapshotCount,
 } from "../../runtime/assets.js";
-import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
+import { canInterveneInLastTurn, declineInteractiveOffer, interveneAfterEvent, loadRollbackSnapshots, maybeGeneratePregameHistory, retryPendingJumpSegment, retryAgentReports, retryPendingProjectsJump, retryPendingChecksJump, rollBackToSnapshot, simulateAutoJump, simulateTimelineJump } from "../AI/gameplayLazy.js";
 import { HELD_TURN, NO_RESPONSE_BODY_NOTE, discardHeldTurn } from "../AI/simulationStatus.js";
 import { acceptStructuredModeSuggestion, declineStructuredModeSuggestion, getStructuredModeSuggestion } from "../AI/main.jsx";
 import { fallbackStateStore, getResolvedFallbackList } from "../AI/providerConfig.js";
@@ -1773,6 +1773,11 @@ const TimelineHistoryPanel = ({
     openMapChanges = null,
     onToggleMapChanges = null,
     warning,
+    // { failed: [polity], state: "idle" | "working" }: agents whose report did
+    // not come back after the turn was written (AI/gameplay.js
+    // refreshSpyIntercepts), with the retry that asks them again.
+    agentReports = null,
+    onRetryAgentReports = null,
 }) => {
     // Category filter chips (ported from the abdulrahman-2005 fork): only the
     // categories present on this turn's events appear; null = no filter. Older
@@ -1860,6 +1865,45 @@ const TimelineHistoryPanel = ({
         title="Events"
         topOffset={topOffset}
         >
+        {agentReports?.failed?.length > 0 && (
+            <div
+            style={{
+                background: "rgba(120,53,15,0.24)",
+                border: "1px solid rgba(251,191,36,0.35)",
+                borderRadius: "12px",
+                color: "#fde68a",
+                fontSize: "0.76rem",
+                lineHeight: "1.5",
+                marginBottom: "0.75rem",
+                padding: "0.75rem 0.85rem",
+            }}
+            >
+            Your agent{agentReports.failed.length === 1 ? "" : "s"} in {agentReports.failed.join(", ")} did not report this turn: the request failed. The turn itself is saved.
+            {typeof onRetryAgentReports === "function" && (
+                <div style={{ marginTop: "0.6rem" }}>
+                <button
+                type="button"
+                className="oh-tap-row"
+                disabled={agentReports.state === "working"}
+                onClick={onRetryAgentReports}
+                style={{
+                    background: "rgba(251,191,36,0.1)",
+                    border: "1px solid rgba(251,191,36,0.3)",
+                    borderRadius: "8px",
+                    color: "#fde68a",
+                    cursor: agentReports.state === "working" ? "default" : "pointer",
+                    fontSize: "0.72rem",
+                    fontWeight: 600,
+                    opacity: agentReports.state === "working" ? 0.6 : 1,
+                    padding: "0.4rem 0.7rem",
+                }}
+                >
+                {agentReports.state === "working" ? "Asking the agents again…" : "Retry the reports"}
+                </button>
+                </div>
+            )}
+            </div>
+        )}
         {warning && (
             <div
             style={{
@@ -2170,6 +2214,9 @@ const DateWidget = ({
     // re-renders the identical message and reads as a dead button, which is
     // exactly how it read in testing.
     const [held, setHeld] = useState(null);
+    // Agents whose report failed after the turn was written (with Save AI
+    // requests off each asks on its own, after the write): told, with a retry.
+    const [agentReports, setAgentReports] = useState({ failed: [], state: "idle" });
     const [isRetryingHeld, setIsRetryingHeld] = useState(false);
     // A turn held by an error, keeping the count when the same kind holds it again.
     const holdFrom = (heldError) => setHeld((current) => ({
@@ -2251,6 +2298,7 @@ const DateWidget = ({
     useEffect(() => {
         const handleRolledBack = () => {
             setFallbackWarning("");
+            setAgentReports({ failed: [], state: "idle" });
         };
         window.addEventListener("oh:rolled-back", handleRolledBack);
         return () => window.removeEventListener("oh:rolled-back", handleRolledBack);
@@ -2366,6 +2414,7 @@ const DateWidget = ({
         // simulateTimelineJump abandons any held turn when it starts, so a notice
         // left on screen would offer buttons with nothing behind them.
         setHeld(null);
+        setAgentReports({ failed: [], state: "idle" });
 
         // The turn is the unit a bug report is written in ("I jumped a month and
         // the border went wrong"), so both ends of it go in the diagnostics log
@@ -2398,6 +2447,7 @@ const DateWidget = ({
             // Not for a fallback turn: the canned period is not the round that
             // was on screen, so it is read from the beginning.
             if (result.generation?.source !== "fallback") carryLiveReveal();
+            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2528,6 +2578,7 @@ const DateWidget = ({
                     : await retryPendingChecksJump({ ...options, withoutFailedChecks });
             if (kind === HELD_TURN.segment) carryLiveReveal();
             else setVisibleEventCount(1);
+            setAgentReports({ failed: result.agentReportsFailed ?? [], state: "idle" });
             setGameData(result.game);
             setEvents(result.events);
             setWorldState(result.world);
@@ -2585,6 +2636,19 @@ const DateWidget = ({
         // Remembered for the session, so it asks once rather than every turn.
         declineStructuredModeSuggestion(modeSuggestion.key, modeSuggestion.mode);
         setModeSuggestion(null);
+    };
+
+    const retryFailedAgentReports = async () => {
+        if (agentReports.state === "working" || !agentReports.failed.length) return;
+        setAgentReports((current) => ({ ...current, state: "working" }));
+        try {
+            const { failed } = await retryAgentReports({ targets: agentReports.failed });
+            setAgentReports({ failed: failed.map((entry) => entry.target), state: "idle" });
+            logDebugEvent("turn", `Agents' reports asked again: ${failed.length ? `${failed.length} still failed` : "all in"}.`);
+        } catch (retryError) {
+            setAgentReports((current) => ({ ...current, state: "idle" }));
+            setError(retryError.message || "The agents could not be asked again.");
+        }
     };
 
     // stayOnHistory: called from the fallback warning's "Rollback turn" button,
@@ -3183,6 +3247,8 @@ const DateWidget = ({
         openMapChanges={openMapChanges}
         onToggleMapChanges={toggleMapChanges}
         warning={fallbackWarning || persistedFallbackWarning}
+        agentReports={agentReports}
+        onRetryAgentReports={retryFailedAgentReports}
         />
 
         <div

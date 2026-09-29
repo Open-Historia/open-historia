@@ -158,3 +158,23 @@ test("a canned turn's checks never hold it: the fallback page and its Rollback d
     const firstHold = finish.indexOf("checksHoldTurn(checks)");
     assert.ok(created > -1 && accepted > created && firstHold > accepted);
 });
+
+// ---- Agents' reports with Save AI requests off ------------------------------------
+// Asked after the turn is written, so a failure cannot hold it: it is told instead.
+
+test("the agents whose report failed ride on the turn's result", () => {
+    const refresh = body(gameplay, "export const refreshSpyIntercepts = async");
+    assert.match(refresh, /failed\.push\(\{ target: spy\.target, reason:/);
+    const apply = body(gameplay, "const applySimulationResult = async");
+    assert.match(apply, /agentReportsFailed = \(await refreshSpyIntercepts\(\)\)\.failed\.map\(\(entry\) => entry\.target\)/);
+    assert.match(apply, /\r?\n {4}agentReportsFailed,\r?\n/);
+});
+
+test("the Events page says which agents did not report, and asks only them again", () => {
+    assert.match(time, /setAgentReports\(\{ failed: result\.agentReportsFailed \?\? \[\], state: "idle" \}\)/);
+    assert.match(time, /retryAgentReports\(\{ targets: agentReports\.failed \}\)/);
+    assert.match(time, /did not report this turn/);
+    assert.match(time, /Retry the reports/);
+    const retry = body(gameplay, "export const retryAgentReports = async");
+    assert.match(retry, /isSimulationBusy\(\)\) throw/, "never while a turn is being written");
+});
