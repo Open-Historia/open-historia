@@ -23,7 +23,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 
 | State | Init | Purpose |
 |---|---|---|
-| `isSettingsOpen` | `false` | ⋮ settings menu visibility |
+| `isSettingsOpen` | `false` | ☰ game menu visibility |
 | `isCheatsOpen` / `shouldLoadCheats` | `false` | Cheats panel open + lazy-load latch (never imports the chunk until first opened) |
 | `isAdvisorOpen` / `shouldLoadAdvisor` | `false` | Advisor drawer open + lazy-load latch |
 | `advisorWidth` | `readAdvisorWidth()` | Drawer width in px, persisted (see [§5.1](#51-advisor-width-state)) |
@@ -60,7 +60,7 @@ The in-game UI is a flat set of `position: fixed` React components layered over 
 | `ForcesPanel` | `forces.jsx` | Unit list + deploy controls + mode banner |
 | `AdvisorButton` (🧭) | `main.jsx` (inline) | Toggles the advisor drawer; sits at `rightShift` |
 | `AdvisorPanel` | `advisor.jsx` (lazy) | Advisor chat + Stats tabs, resizable drawer |
-| `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from Settings) |
+| `CheatsPanel` | `cheats.jsx` (lazy) | God-mode tools (opened from the game menu's Tools tab) |
 | `InteractivePanel` | `interactive.jsx` (lazy) | Interactive events: an event a time skip offered, played out as a scene beat by beat (opened by `oh:open-interactive-event` from the offered event's card or the time panel). See [§10-bis](#10-bis-interactive-events--srcgamegameuiinteractivejsx) |
 | `SettingsButton` (☰) | `settings.jsx` | Toggles the game menu; same corner and size as before, glass finish |
 | `SettingsMenu` | `settings.jsx` | Ported from kernely's Continuum branch as it is there: a quick menu with Game / Tools / Settings / Help tabs (session card, Game Management, Cheats, Events, AI debug console, Guides, bug report, community links) and `SettingsWorkspace`, a full-screen portal with Continuum's four sections — General, Map (with the basemap picker), AI, Advanced. This branch's own settings (profiles, per-task models, segments, batching, telemetry, beta units, network sharing, diagnostics) sit inside those four sections |
@@ -77,7 +77,7 @@ Every fixed element declares its own `zIndex`. From back to front (source-verifi
 |---:|---|---|
 | 9997 | In-game floating cluster (session summary pill, **⌂ Exit Game**) | `libraryBar.jsx:1993` / `:2061` |
 | 9998 | Timeline panels (`panelSurface`), **Actions** panel, **Chat** panel | `time.jsx:149`, `actions.jsx:427`, `chat.jsx:851` |
-| 9999 | `DateWidget` pill, bottom `Toolbar`, `Search`, `Other` flag badge, 🧭 `AdvisorButton`, ⋮ `SettingsButton`, `SettingsMenu`, `ForcesPanel` body, `WebGLWarningPopup` | shared `baseStyle`/`widgetSurface` |
+| 9999 | `DateWidget` pill, bottom `Toolbar`, `Search`, `Other` flag badge, 🧭 `AdvisorButton`, ☰ `SettingsButton`, `SettingsMenu`, `ForcesPanel` body, `WebGLWarningPopup` | shared `baseStyle`/`widgetSurface` |
 | 10000 | Forces **mode banner** (deploy hint) | `forces.jsx:156` |
 | 10028 | "Loading games and scenarios…" indicator | `libraryBar.jsx:2565` |
 | 10040 | **Advisor drawer** | `advisor.jsx:320` |
@@ -201,7 +201,7 @@ Section tabs (`SectionTabs`): scenarios show `overview | world | features | prom
 |---|---|---|
 | overview | Scenarios only, at the top: the **Community card** (`ScenarioCommunityCard`, see [§4.8](#48-suggested-changes)). Then Name, Eyebrow, Accent (color), Subtitle, Description, Hero Title, Hero Subtitle | `saveScenario`/`saveGame` meta |
 | world | Player Country, Game Date, Language, **Deployable Troop Types** (scenario only, `UNIT_TYPES` toggles), World Before Round One (`startingTimelineText`), Simulation Rules, Country Label Font/Letter Color/Border Color | merged into `world` |
-| features | `FeaturesSectionEditor` (`FeaturesSectionEditor.jsx`): one card per entry of `FEATURE_DEFINITIONS` (`server/gameFeatures.js`) — today Espionage, Idle diplomacy with its "one attempt every N minutes" setting, and World direction (the pace, the world's share, the map's tempo, and two `type: "text"` settings — the priority rules and the scripted events, one dated beat per line — rendered as textareas that show what was typed rather than the normalized value, because the normalizer trims and a field that trims on every keystroke cannot hold the space between two words; see [world direction](ai-overview.md#world-direction-what-an-author-sets-as-numbers)). A scenario edits its complete configuration (On/Off + settings), the default for every game made from it; a game edits only overrides, each control offering **Scenario default** so an unset field keeps following the scenario, including changes made to the scenario later (`resolveFeatures`). The library resolves the active game's features into `src/runtime/gameFeatures.js` (`useActiveFeatures` for the UI, `isActiveFeatureEnabled` for the simulation): espionage off hides the Spy tab and stops spy reports, intercept refreshes, the turn's espionage resolution and the simulator's spy orders; idle diplomacy's setting sets the per-minute chance of `maybeSendIdleDiplomacy`'s chat half (off keeps only the movement pulse). Scenario and game bundles carry `features`. | `saveScenario`/`saveGame` meta `features` (`readScenarioMeta`/`readGameMeta` normalise it on both stores) |
+| features | `FeaturesSectionEditor` (`FeaturesSectionEditor.jsx`): one card per entry of `FEATURE_DEFINITIONS` (`server/gameFeatures.js`) — today Espionage, Puppet states (off: nothing about subordination reaches the simulator, the leaders, the map or the advisor, and the ledger waits as it was), Idle diplomacy with its "one attempt every N minutes" setting, Player focus (no on/off, `toggleable: false`: the level a new game starts on — World first, Balanced, Focused or Spotlight — which the player changes for their own game in Settings → AI → Generation behavior), and World direction (the pace, the world's share, the map's tempo, and two `type: "text"` settings — the priority rules and the scripted events, one dated beat per line — rendered as textareas that show what was typed rather than the normalized value, because the normalizer trims and a field that trims on every keystroke cannot hold the space between two words; see [world direction](ai-overview.md#world-direction-what-an-author-sets-as-numbers)). A scenario edits its complete configuration (On/Off + settings), the default for every game made from it; a game edits only overrides, each control offering **Scenario default** so an unset field keeps following the scenario, including changes made to the scenario later (`resolveFeatures`). The library resolves the active game's features into `src/runtime/gameFeatures.js` (`useActiveFeatures` for the UI, `isActiveFeatureEnabled` for the simulation): espionage off hides the Spy tab and stops spy reports, intercept refreshes, the turn's espionage resolution and the simulator's spy orders; idle diplomacy's setting sets the per-minute chance of `maybeSendIdleDiplomacy`'s chat half (off keeps only the movement pulse). Scenario and game bundles carry `features`. | `saveScenario`/`saveGame` meta `features` (`readScenarioMeta`/`readGameMeta` normalise it on both stores) |
 | prompts | `PromptSectionEditor`: one tab per section of `PROMPT_EDITOR_SECTIONS` (the prompts with guidance), and inside it one textarea per guidance passage declared in `promptGuidance.js` (the role, the tone, what to simulate, what makes a good event…) with **Reset to default** per passage and per section. The technical text — placeholders, output contracts, map rules — is never shown or stored, so it cannot be broken here and it follows the app's defaults as they change; a pack in the old whole-prompt shape is ignored (ai-prompts.md §2). | `serializePromptPack` → `prompts` as `{ promptModel: 2, guidance }` |
 | assets | Upload/Reset per asset (cover; scenario adds cities/colors/countries/regions) via hidden file inputs | `uploadScenarioAsset`/`clearScenarioAsset` etc. |
 | bundles | **Download .zip** / **Download JSON** (`exportScenarioBundle` + `splitScenarioBundleImage`) | disk download |
@@ -411,7 +411,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 
 ## 9. Cheats panel — `src/Game/GameUI/cheats.jsx`
 
-`CheatsPanel` (`cheats.jsx:164`) — right-side panel (z 10045), opened from Settings → 🧪 Cheats (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup.
+`CheatsPanel` (`cheats.jsx:164`) — right-side panel (z 10045), opened from the game menu's Tools tab → **Cheats** (lazy-loaded). A list of tools (`TOOLS`); selecting one renders `ToolView`. Several tools enter **click-capture mode**: the panel hides behind a toast (z 10070) and map clicks route through `setRegionClickInterceptor` instead of opening the region popup.
 
 | Tool id | Does | Writes / calls |
 |---|---|---|
@@ -432,7 +432,7 @@ Owner codes render as full names via `ensurePolityNames`/`polityDisplayName` (re
 
 Every tool that changes the world records one sentence of it in `world.gmChanges` after its save succeeds (`noteGmChange`; a failed note never costs the edit): the GM console's transaction, a whole-country or region-by-region annexation (one growing line), a Region Inspector edit, a country edited or created, the player's country switched, cities and map features, an event written, edited or deleted, the history document rewritten, a rollback. The next time skip opens with them.
 
-The log viewer that used to be a Cheats tool is now **View log** in Settings → Diagnostics (section 10).
+The log viewer that used to be a Cheats tool is now **View log** in Settings → Advanced → Diagnostics (section 10).
 
 Ownership/name resolution is done in **one namespace** (country display name) — the file's comments call out the recurring bug where a GADM code (`RUS`) and a name (`Russia`) never compared equal. All map changes repaint within ~5 s (the map's own poll).
 
@@ -442,21 +442,28 @@ Ownership/name resolution is done in **one namespace** (country display name) �
 
 ## 10. Settings — `src/Game/GameUI/settings.jsx`
 
-`SettingsButton` (⋮, `settings.jsx:709`) sits top-left (z 9999); toggles `SettingsMenu` (`settings.jsx:727`), a scrollable panel below it.
+`SettingsButton` (the ☰ game-menu button) sits top-left (z 9999) and toggles `SettingsMenu`. The menu has four quick tabs (`QUICK_MENU_TABS`): **Game** (the session card and **Game Management**), **Tools** (**Cheats**, **Events / Timeline**, the **AI debug console**, and the Discord and Reddit tiles), **Settings** (one button per section below) and **Help** (**Guides**, **Report a Bug**, the community links). Cheats and Guides are buttons inside the Tools and Help panels, not tabs of their own. A Settings button opens `SettingsWorkspace`, a full-screen portal with four sections (`SETTINGS_SECTIONS`): General, Map, AI and Advanced.
 
-| Section | Control | Persists to / calls |
-|---|---|---|
-| Models | `FallbackListSection` — the Fallback list: one row per entry with its status (ready / Spent until … / Unusable: reason / busy, for about …; a status is what the row shows, never where a call starts) and when it last answered; reorder, edit, reset, remove; **Add a backup**, **Fill…** (`FillPanel`), and the rate-limit choice. With one entry it is the old single form: provider (`ApiProviderSelector`), key or endpoint, model. See `docs/ai-overview.md` | `providerConfig.js` (`addEntry`, `updateEntry`, `moveEntry`, `fillFallbackList`, `setRateLimitPolicy`…) |
-| Connections | `ConnectionsSection` — saved provider + name + key + endpoint + custom parameters (+ **Strict tool schema** for OpenAI Compatible); templates for Groq, OpenRouter, Local Ollama | `addConnection`, `updateConnection`, `removeConnection` |
-| Model reasoning | `ReasoningSection` — the global **Model reasoning** toggle | `setReasoningEnabled` |
-| Language | `LanguageSelector` — searchable; applying reloads the page | `setStoredLanguage` (server + browser) |
-| Display | **Fullscreen**, **3D Globe**, **3D Terrain** (labeled "Very Experimental") toggles | `Main` toggles / `App.jsx` state |
-| Map | Hide country labels, **Reduce motion** (umbrella over the two below), Disable idle globe rotation, Disable camera movement during events | `setMapSetting(MAP_SETTING_KEYS.*)` (`src/runtime/mapSettings.js`) |
-| AI | **Limit AI generation** (off by default; 5-min silence cap then canned fallback vs. wait-as-long-as-needed); **Generate long time skips in segments** (off by default); **AI lookup functions** (on by default: the model may call lookup functions before answering, see `docs/ai-overview.md`); **Batch background AI tasks** (Anthropic only, off by default — the event consolidator rides the Message Batches API, see `docs/ai-overview.md`) | `MAP_SETTING_KEYS.limitAiGeneration`, `MAP_SETTING_KEYS.batchBackgroundTasks`; **Record AI telemetry** / **Rate AI generations** (`telemetry.js`; recording on, rating off by default) and the **📊 AI debug console** button (`debugConsole.jsx`, lazy; see `docs/ai-overview.md`) |
-| Diagnostics | `DiagnosticsPanel` — **📋 Copy log** / **💾 Save as file** (the Logging file, Desktop log merged in), **🔎 View log** (`DiagnosticsLogViewer`: the same entries, newest first, problems-only filter, click to expand), Clear, and the **Keep a diagnostics log** / **Detailed logging** switches | `buildLoggingFile` / `getLoggingFileEntries` / `setDebugLogEnabled` / `setDebugLogVerbose` (`src/runtime/debugLog.js`, see `docs/runtime-services.md`) |
-| Footer | **🧪 Cheats** (→ `onOpenCheats`), **📖 Guides** (`/guides/`), Discord/Reddit/GitHub links | — |
+| Section | Group | Controls | Persists to / calls |
+|---|---|---|---|
+| General | Language | `LanguageSelector` (UI language, searchable; applying reloads the page) and `ChatLanguageSelector` (the language the advisor and leaders reply in) | `setStoredLanguage` (server + browser), `setStoredChatLanguage` |
+| General | Display | **Fullscreen** | `Main` toggle |
+| General | Accessibility | **Reduce motion**: one switch over Disable idle globe rotation and Disable camera movement during events (on only while both are) | `setMapSetting(MAP_SETTING_KEYS.disableIdleRotation / .disableEventCamera)` |
+| Map | Map presentation | **Basemap** (Scenario default or a built-in ESRI basemap), **Country label font** (empty = the scenario's font), **Hide country labels** | `setMapSettingValue(MAP_SETTING_KEYS.basemapStyle / .labelFont)`, `setMapSetting(MAP_SETTING_KEYS.hideCountryLabels)` (`src/runtime/mapSettings.js`) |
+| Map | 3D map | **3D Globe**, **3D Terrain** (marked Experimental) | `App.jsx` state (`localStorage["Globe"]` / `["Terrain"]`) |
+| Map | Camera behavior | **Disable idle globe rotation**, **Disable camera movement during events** | `setMapSetting(MAP_SETTING_KEYS.*)` |
+| AI | Models | `FallbackListSection` — the Fallback list: one row per entry with its status (ready / Spent until … / Unusable: reason / busy, for about …; a status is what the row shows, never where a call starts) and when it last answered; reorder, edit, reset, remove; **Add a backup**, **Fill…** (`FillPanel`), and the rate-limit choice. With one entry it is the old single form: provider (`ApiProviderSelector`), key or endpoint, model. See `docs/ai-overview.md` | `providerConfig.js` (`addEntry`, `updateEntry`, `moveEntry`, `fillFallbackList`, `setRateLimitPolicy`…) |
+| AI | Connections | `ConnectionsSection` — saved provider + name + key + endpoint + custom parameters (+ **Strict tool schema** for OpenAI Compatible); templates for Groq, OpenRouter, Local Ollama | `addConnection`, `updateConnection`, `removeConnection` |
+| AI | Model reasoning | `ReasoningSection` — the global **Model reasoning** toggle | `setReasoningEnabled` |
+| AI | AI requests | `RequestBudgetSection` — today's count against the day's limit, **Save AI requests**, **Requests a day your key allows**, **Background AI**, **Background requests a day, at most**, and one switch per **Check after a time skip** (six, `REVIEW_SECTIONS`). See [the request budget](ai-overview.md#the-request-budget) | `requestSettings` (`src/Game/AI/requestBudget.js`) |
+| AI | Generation behavior | `PlayerFocusSetting` (**Player focus** for this game: follow the scenario, or World first / Balanced / Focused / Spotlight), **Limit AI generation** (off by default), **Generate long time skips in segments** (off by default), **AI lookup functions** (on by default; only used while Save AI requests is off), **Show time skip events as they are written** (on by default), **Batch background AI tasks** (Anthropic only, off by default) | `saveGame(id, { features: { playerFocus } })`; `setMapSetting(MAP_SETTING_KEYS.limitAiGeneration / .chunkLongJumps / .lookupFunctions / .liveSkipEvents / .batchBackgroundTasks)` |
+| Advanced | Per-task models | `TaskPicks` — a Fallback entry to try first for each task in `AI_TASK_ROUTING`, and a button back to the AI section | `setTaskPick` (`providerConfig.js`) |
+| Advanced | Political World A/B Lab | **Open A/B Lab** (`PoliticalWorldABLab.jsx`): runs one frozen task with Political World context on and off, never applying either answer | — |
+| Advanced | Telemetry | **Record AI telemetry** (on by default), **Rate AI generations** (off by default), **Open console** (`debugConsole.jsx`, lazy) | `telemetry.js` |
+| Advanced | Network | `NetworkSharing` — **Let other devices connect** (desktop and local server only; the web build hides it) | `/api/server/network` |
+| Advanced | Diagnostics | `DiagnosticsPanel` — **📋 Copy log** / **💾 Save as file** (the Logging file, Desktop log merged in), **🔎 View log** (`DiagnosticsLogViewer`: the same entries, newest first, problems-only filter, click to expand), Clear, and the **Keep a diagnostics log** / **Detailed logging** switches | `buildLoggingFile` / `getLoggingFileEntries` / `setDebugLogEnabled` / `setDebugLogVerbose` (`src/runtime/debugLog.js`, see `docs/runtime-services.md`) |
 
-`Toggle` (`settings.jsx:156`) is the shared switch primitive (also exported). Map-setting toggles read initial values from `getMapSetting` and mirror them locally.
+`Toggle` is the shared switch primitive (also exported). The workspace reads its switches once when the menu mounts (`getMapSetting`, or `getMapSettingDefaultOn` for the default-on AI switches) and mirrors them locally.
 
 
 ---
@@ -492,7 +499,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 
 | # | UI element | File | Kind | Open/toggle driver | Reads | Writes / calls |
 |---|---|---|---|---|---|---|
-| 1 | ⋮ Settings button | `settings.jsx` | button | `Main.isSettingsOpen` | — | opens `SettingsMenu` |
+| 1 | ☰ Game menu button | `settings.jsx` | button | `Main.isSettingsOpen` | — | opens `SettingsMenu` |
 | 2 | Settings menu | `settings.jsx` | panel | `isSettingsOpen` | provider/map settings | localStorage, `setMapSetting`, `setStoredLanguage` |
 | 3 | 🧭 Advisor button | `main.jsx` | button | `Main.isAdvisorOpen` | — | opens advisor drawer |
 | 4 | Advisor drawer (Advisor tab) | `advisor.jsx` | panel | `isAdvisorOpen` | `JSON_URLS.advisor`, `JSON_URLS.game` | `sendMessage`, `writeJson(advisor)` |

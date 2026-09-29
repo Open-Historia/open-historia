@@ -146,7 +146,7 @@ Out of the box the server answers **only the machine it runs on** — which cove
 the desktop app, Termux on the same phone, and a browser on the same computer.
 
 To play from your phone or another computer, turn on
-**Settings → Network → "Let other devices connect"**. It takes effect
+**Settings → Advanced → Network → "Let other devices connect"**. It takes effect
 immediately (no restart), it is remembered for next time, and it shows you the
 exact address to type into the Android app, so you never have to go and find
 your own IP:

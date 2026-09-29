@@ -293,28 +293,38 @@ Reads flags shared by other players **straight from the hub repo's GitHub Issues
 
 ## Map settings — `src/runtime/mapSettings.js`
 
-Tiny localStorage-backed boolean toggles read reactively instead of threaded as props through `GameUI`/`main.jsx`. Same getter/setter pattern as `src/Game/AI/providerConfig.js`; the hook sits beside the data it subscribes to, mirroring `useCountryDisplayName`.
+Small localStorage-backed settings read reactively instead of threaded as props through `GameUI`/`main.jsx`. Same getter/setter pattern as `src/Game/AI/providerConfig.js`; the hook sits beside the data it subscribes to, mirroring `useCountryDisplayName`. Several keys are not map settings at all: the AI switches in Settings → AI → Generation behavior use the same mechanism.
 
-| `MAP_SETTING_KEYS` key | localStorage key | Effect when ON |
-|---|---|---|
-| `hideCountryLabels` | `map_hide_country_labels` | Hide country name labels |
-| `disableIdleRotation` | `map_disable_idle_rotation` | Stop the idle globe spin |
-| `disableEventCamera` | `map_disable_event_camera` | Suppress event camera moves |
-| `limitAiGeneration` | `ai_limit_generation` | (Not a map setting) timeline-jump generation gets a 5-min deadline → canned-event fallback; OFF (the default) waits as long as the model needs |
+| `MAP_SETTING_KEYS` key | localStorage key | Default | Read with | Effect |
+|---|---|---|---|---|
+| `basemapStyle` | `map_basemap_style` | empty (the scenario's basemap) | `getMapSettingValue` / `useMapSettingValue` | A built-in ESRI basemap id overrides the scenario author's basemap on this device |
+| `labelFont` | `map_label_font` | empty (the scenario's font, itself Georgia by default) | `getMapSettingValue` / `useMapSettingValue` | A font family overrides the scenario's country-label font on this device |
+| `hideCountryLabels` | `map_hide_country_labels` | off | `getMapSetting` / `useMapSetting` | Hide country name labels |
+| `disableIdleRotation` | `map_disable_idle_rotation` | off | `getMapSetting` / `useMapSetting` | Stop the idle globe spin |
+| `disableEventCamera` | `map_disable_event_camera` | off | `getMapSetting` / `useMapSetting` | Suppress event camera moves |
+| `limitAiGeneration` | `ai_limit_generation` | off | `getMapSetting` | An AI task gives up after 5 minutes of silence part-way through an answer, or 15 with no answer, and falls back to canned events; off waits as long as the model needs |
+| `batchBackgroundTasks` | `ai_batch_background_tasks` | off | `getMapSetting` | Anthropic only: the event consolidator rides the Message Batches API at about half the price |
+| `chunkLongJumps` | `ai_chunk_long_jumps` | off | `getMapSetting` / `useMapSetting` | Long time skips are generated in several shorter requests, one per segment |
+| `lookupFunctions` | `ai_lookup_functions` | **on** | `getMapSettingDefaultOn` | Structured tasks declare the lookup functions (only while Save AI requests is off) |
+| `liveSkipEvents` | `ai_live_skip_events` | **on** | `getMapSettingDefaultOn` | A skip fills the Events panel as the model writes |
 
 | Export | Purpose |
 |---|---|
-| `getMapSetting(key)` | `localStorage.getItem(key) === "1"` |
+| `getMapSetting(key)` | `localStorage.getItem(key) === "1"`: an absent key reads as **off** (and `false` with no `localStorage`) |
+| `getMapSettingDefaultOn(key)` | `localStorage.getItem(key) !== "0"`: an absent key reads as **on**. Every reader of a default-on key must use this; `getMapSetting` would read a fresh install as off |
 | `setMapSetting(key, value)` | Writes `"1"`/`"0"`, logs the flip to the diagnostics log, and dispatches a `mapSettings:updated` window event |
-| `useMapSetting(key)` | `useState` hook that re-reads on the `mapSettings:updated` event |
+| `useMapSetting(key)` | `useState` hook over `getMapSetting` that re-reads on the `mapSettings:updated` event (so only for default-off keys) |
+| `getMapSettingValue(key, fallback)` | A string setting: the in-memory value set this session, else localStorage, else `fallback` |
+| `setMapSettingValue(key, value)` | Trims the value, keeps it in memory (so it applies even where localStorage refuses writes), stores it or removes the key when empty, logs it once it settles, and dispatches `mapSettings:updated` with `{ key, value }` |
+| `useMapSettingValue(key, fallback)` | The hook for a string setting |
 
-Values are stored as `"1"`/`"0"` strings (absent = off). The custom `mapSettings:updated` event is the cross-component sync mechanism — any `setMapSetting` call updates every `useMapSetting(key)` subscriber in the same document.
+Boolean settings are stored as `"1"`/`"0"` strings; string settings as the value itself, absent when empty. The custom `mapSettings:updated` event is the cross-component sync mechanism — any `setMapSetting` or `setMapSettingValue` call updates every subscriber in the same document. `LABEL_FONT_SUGGESTIONS` is the list the label-font pickers offer.
 
 ---
 
 ## Diagnostics log — `src/runtime/debugLog.js`
 
-The log a player sends with a bug report: **Settings → Diagnostics → Copy log / Save as file**. It answers the question the per-incident buttons cannot — *what sequence of things did they do?* — because the packaged desktop app binds no developer tools, so the console every failure was already being written to is unreachable to the people filing the reports.
+The log a player sends with a bug report: **Settings → Advanced → Diagnostics → Copy log / Save as file**. It answers the question the per-incident buttons cannot — *what sequence of things did they do?* — because the packaged desktop app binds no developer tools, so the console every failure was already being written to is unreachable to the people filing the reports.
 
 The per-incident buttons — beside the timeline's fallback warning (`GameUI/time.jsx`), the advisor's error bubble and its board-update warning (`GameUI/advisor.jsx`) — save **this log** as a file: **💾 Save logging file** (`runtime/saveDebugLog.js`). They used to copy only the one failure, and that paste was what reached Discord, without the log around it. The failure's own details — for a fallback the reason, the requested range, the queued actions, and the raw model response the log's entries are too short to hold — go in a `-- Reported problem --` block between the header and the entries, passed as `buildLoggingFile({ incident })`. It is added when the file is built, not logged as an entry, so it is never clipped, never rolled off by the size cap, and still there with logging off. Fields the header already states (provider, model, polity, difficulty, round, game date) are dropped when they match it and kept when they differ.
 
@@ -345,7 +355,7 @@ Labels match the Settings panel word for word; `diagnosticsLogGuard.test.js` fai
 
 Where changes are logged: `mapSettings.js` (every switch, the basemap and the label font), `providerConfig.js` (provider, every provider field, reasoning, AI profiles saved/updated/deleted), `GameUI/main.jsx` (Fullscreen, 3D Globe, 3D Terrain), `settings.jsx` (both languages, telemetry and ratings — `telemetry.js` imports nothing on purpose — and LAN sharing), `debugLog.js` (its own two switches).
 
-**View log** (Settings → Diagnostics, `DiagnosticsLogViewer` in `settings.jsx`) lists `getLoggingFileEntries({ desktop })`: the same entries the file holds, newest first, each with `problem` for the problems-only filter (page `error`/`warn`/`crash` entries, any page entry logged with `{ problem: true }` — a failed AI task — and desktop `error`/`warn` levels). It replaced the Cheats panel's old "Diagnostics Log" tool, which read only the Desktop log.
+**View log** (Settings → Advanced → Diagnostics, `DiagnosticsLogViewer` in `settings.jsx`) lists `getLoggingFileEntries({ desktop })`: the same entries the file holds, newest first, each with `problem` for the problems-only filter (page `error`/`warn`/`crash` entries, any page entry logged with `{ problem: true }` — a failed AI task — and desktop `error`/`warn` levels). It replaced the Cheats panel's old "Diagnostics Log" tool, which read only the Desktop log.
 
 ### Two settings, both persisted
 
