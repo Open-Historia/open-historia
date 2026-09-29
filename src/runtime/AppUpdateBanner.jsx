@@ -9,7 +9,8 @@ import {
   isUpdateSettled,
   parseUpdateManifest,
 } from "./appUpdate.js";
-import { logDebugEvent } from "./debugLog.js";
+import { logDebugEvent, setDebugLogContext } from "./debugLog.js";
+import { desktopBuildLabel } from "./buildLabel.js";
 
 // Stamped into the native app build by the APK workflow (VITE_APP_BUILD / _TRACK).
 // Desktop and dev builds have no stamp, so the banner is a no-op there.
@@ -136,8 +137,11 @@ export default function AppUpdateBanner() {
         const res = await fetch("/api/app-update?track=desktop", { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
-        // `current` present = this is the desktop app. Any DIFFERENCE is an update:
-        // the ids are opaque, so a rollback counts just as much as a newer build.
+        // `current` present = this is the desktop app, and it is the build the
+        // Logging file names (only the server knows it).
+        if (!dropped && data?.current) setDebugLogContext({ build: desktopBuildLabel(data.current) });
+        // Any DIFFERENCE is an update: the ids are opaque, so a rollback counts
+        // just as much as a newer build.
         if (dropped || !data?.current || !data?.buildId || !data?.download) return;
         if (data.buildId === data.current) return;
         setDesktop({ auto: Boolean(data.autoUpdate), build: data.buildId, notes: data.notes || "", url: data.download });

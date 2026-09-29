@@ -414,7 +414,7 @@ localStorage is a ~5 MB budget per origin, shared with the translator cache and 
 | `isDebugLogEnabled()` / `setDebugLogEnabled(bool)` | The on/off switch. Turning it off clears the buffer, the stored copy, and (on the host) the Desktop log |
 | `isDebugLogVerbose()` / `setDebugLogVerbose(bool)` | Detailed mode |
 | `getDebugLogBytes()` / `getDebugLogLimitBytes()` / `getDebugLogDroppedCount()` / `formatLogSize(chars)` | Size reporting for the settings panel and the report header. `formatLogSize` renders anything under a kilobyte as `<1 KB`, never `0 KB` — beside a live entry count that reads like a broken counter |
-| `setDebugLogContext(patch)` | Merges campaign/build context for the report header. Redacted like everything else |
+| `setDebugLogContext(patch)` | Merges campaign/build context for the report header. Redacted like everything else. The `Build:` line is `buildLabel(import.meta.env)` (`src/runtime/buildLabel.js`): `android <track> #<build>`, `web <deploy id>`, `dev` or `desktop/local`; the desktop app refines it to `desktop #<build id>` once its server's `/api/app-update` reply names it (`AppUpdateBanner.jsx`) |
 | `buildLoggingFile({ incident }?)` | **The Logging file**: fetches the Desktop log and builds the report. What every button uses |
 | `fetchDesktopLog()` | `{ status: "included" \| "unavailable" \| "none", entries }` from `GET /api/log?since=<span start>`. Never throws |
 | `buildDebugLogReport({ incident, desktop }?)` | The plain-text file from what is passed in — header, reported problem, entries oldest-first, sized as above. Text, not JSON: it is going into a Discord message or a GitHub issue |

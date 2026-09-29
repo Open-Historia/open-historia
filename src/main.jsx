@@ -9,6 +9,7 @@ import {
     setDebugLogContext,
     withConsoleCaptureMuted,
 } from "./runtime/debugLog.js";
+import { buildLabel } from "./runtime/buildLabel.js";
 // Registers the Logging file's settings snapshot (every setting's current value).
 import "./runtime/settingsLog.js";
 import App from "./App.jsx";
@@ -59,7 +60,7 @@ const mount = () => {
 // console the packaged app has no way to open.
 installDebugLogCapture();
 setDebugLogContext({
-    build: import.meta.env.VITE_OH_WEB ? "web" : (import.meta.env.DEV ? "dev" : "desktop/local"),
+    build: buildLabel(import.meta.env),
     language: typeof navigator !== "undefined" ? navigator.language : "",
 });
 logDebugEvent("app", "Open Historia started.");
