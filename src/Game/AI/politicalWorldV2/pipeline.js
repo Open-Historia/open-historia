@@ -160,8 +160,30 @@ export const bootstrapPoliticalWorldV2StagedWorld = ({ inputs } = {}) => {
   };
 };
 
+// One run per scenario at a time. Two runs over one checkpoint each save their
+// own copy and the last save wins, so a Resume pressed while an earlier run is
+// still going (or still winding down after Cancel or leaving the tab) is
+// refused rather than started beside it.
+const runningScenarioIds = new Set();
 
-export const generateOrResumePoliticalWorldV2 = async ({
+export const POLITICAL_WORLD_V2_ALREADY_RUNNING = "POLITICAL_WORLD_V2_ALREADY_RUNNING";
+
+export const generateOrResumePoliticalWorldV2 = async (options = {}) => {
+  const id = clean(options?.scenarioId);
+  if (id && runningScenarioIds.has(id)) {
+    const error = new Error("Political World generation is already running for this scenario. Wait for it to pause or finish, then try again.");
+    error.code = POLITICAL_WORLD_V2_ALREADY_RUNNING;
+    throw error;
+  }
+  if (id) runningScenarioIds.add(id);
+  try {
+    return await runPoliticalWorldV2(options);
+  } finally {
+    if (id) runningScenarioIds.delete(id);
+  }
+};
+
+const runPoliticalWorldV2 = async ({
   scenarioId,
   inputs,
   qualityMode = "canonical",

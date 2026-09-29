@@ -559,6 +559,12 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
     return () => { cancelled = true; };
   }, [details?.scenario?.id, scenarioDate, inputs?.world]);
 
+  // The panel mounts only while the Politics tab is shown. A run left going
+  // after the author switches tab keeps spending AI calls on results nobody
+  // can see, so leaving stops it; a Political World run pauses with its work
+  // saved and Resume picks it up.
+  useEffect(() => () => abortRef.current?.abort(), []);
+
   const updateRow = (polityKey, patch) => {
     setRows((current) => current.map((row) => row.polityKey === polityKey ? { ...row, ...patch } : row));
   };
