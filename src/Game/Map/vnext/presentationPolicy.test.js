@@ -2,8 +2,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { MARKER_FAMILY, MARKER_VISIBILITY_TIER, getMarkerPresentation } from "./presentationPolicy.js";
+import { createPropertyExpression, latest } from "@maplibre/maplibre-gl-style-spec";
+import {
+  MARKER_FAMILY,
+  MARKER_VISIBILITY_TIER,
+  POLITICAL_FILL_OPACITY_STOPS,
+  getMarkerPresentation,
+  politicalFillOpacityAtZoom,
+} from "./presentationPolicy.js";
 import { MAP_FEATURE_KINDS } from "../../../Editor/mapFeatures.js";
+
+test("the conquest flood draws at the strength MapLibre gives the political fill", () => {
+  // The ramp Nations.jsx builds from the same stops, evaluated by MapLibre.
+  const ramp = ["interpolate", ["linear"], ["zoom"], ...POLITICAL_FILL_OPACITY_STOPS.flat()];
+  const compiled = createPropertyExpression(ramp, latest.paint_fill["fill-opacity"]);
+  assert.equal(compiled.result, "success", JSON.stringify(compiled.value));
+  for (let zoom = 0; zoom <= 16; zoom += 0.25) {
+    const expected = compiled.value.evaluate({ zoom });
+    assert.ok(Math.abs(politicalFillOpacityAtZoom(zoom) - expected) < 1e-9, `zoom ${zoom}`);
+  }
+});
 
 // What each kind the Map feature tool offers should be drawn as in the game.
 const INTENDED_FAMILY = {

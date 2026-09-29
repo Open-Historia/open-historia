@@ -47,7 +47,7 @@ import { enforceMapLayerOrder } from "./mapLayerOrder.js";
 import { parseColorToRgb } from "./cssColor.js";
 import GroupAreaLayers from "./GroupAreaLayers.jsx";
 import { EMPTY_GROUP_AREA_DATA } from "./vnext/groupAreas.js";
-import { V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
+import { POLITICAL_FILL_OPACITY_STOPS, V_NEXT_MARKER_SHAPE_LAYER_IDS } from "./vnext/presentationPolicy.js";
 import PolityTextLayer, {
   isPolityTextPtr0Enabled,
   isPolityTextPtr1DebugEnabled,
@@ -414,34 +414,14 @@ const AUTHORED_GEOMETRY_FILTER = [
 const STOCK_GEOMETRY_FILTER = ["!", AUTHORED_GEOMETRY_FILTER];
 const SCENARIO_GID0_EXPRESSION = ["upcase", ["coalesce", ["get", "gid0"], ["get", "GID_0"], ""]];
 const SCENARIO_REGION_ID_EXPRESSION = ["to-string", ["coalesce", ["get", "id"], ["get", "GID_1"], ""]];
-// Physical geography should be part of the political map rather than hidden
-// beneath it. Keep the far/continental wash translucent enough for relief and
-// bathymetry to read, then progressively strengthen ownership color as the
-// player zooms toward province/city detail.
-const PAX_POLITICAL_FILL_OPACITY_STOPS = Object.freeze([
-  // World view: terrain remains visible while political ownership is readable.
-  [1.5, 0.46],
-  [2.5, 0.50],
-  [3.75, 0.56],
-
-  // Regional view: political colours become the primary map layer.
-  // This avoids countries fading into the physical basemap during normal play.
-  [5.0, 0.62],
-  [6.5, 0.68],
-  [8.0, 0.72],
-
-  // Close play: maintain strong polity identity while showing terrain detail.
-  [10.0, 0.78],
-  [12.0, 0.82],
-  [14.0, 0.84],
-]);
-
+// The fill strength by zoom is POLITICAL_FILL_OPACITY_STOPS
+// (vnext/presentationPolicy.js), shared with the conquest flood.
 // MapLibre requires camera expressions to keep ["zoom"] as the direct input
 // of the top-level step/interpolate expression. Data-driven visibility therefore
 // belongs in each stop output, never around the zoom ramp with a top-level case.
 const buildPaxPoliticalFillOpacity = (hiddenExpression = null) => [
   "interpolate", ["linear"], ["zoom"],
-  ...PAX_POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
+  ...POLITICAL_FILL_OPACITY_STOPS.flatMap(([zoom, opacity]) => [
     zoom,
     hiddenExpression ? ["case", hiddenExpression, 0, opacity] : opacity,
   ]),
