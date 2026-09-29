@@ -1535,6 +1535,7 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                     formalBusinessInteractive,
                     institutionDebateRequested,
                     institutionProposalId,
+                    expectedGameId: campaignId,
                 });
                 const newEvents = outcome?.newEvents ?? [];
                 const spoken = newEvents.filter((event) => event.kind === "message");
@@ -3462,6 +3463,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 formalBusinessRequested: mode === "vote",
                 formalBusinessInteractive: mode === "vote",
                 useCanonicalState: true,
+                expectedGameId,
             });
             adoptInstitutionalResult({ ...result, channel: result?.channel || materialized.channel });
             logDebugEvent("diplomacy", `Institution ${mode} round completed for ${id}/${proposal}.`, { source }, { verbose: true });

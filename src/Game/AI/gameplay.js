@@ -12091,7 +12091,13 @@ export const runChatActionBatch = async ({
   // projection may be omitted/overridden. dryRun keeps formal Council actions
   // inside an in-memory governance application and never persists them.
   evaluation = null,
+  // The campaign this round belongs to. The institution commits below carry
+  // it, so the store refuses them if the player switched saves while the model
+  // was answering. Read here, before the model call, when not given: game.json
+  // carries no id, so the bundle cannot say which campaign it came from.
+  expectedGameId = "",
 } = {}) => {
+  const campaign = normalizeString(expectedGameId) || activeCampaignId();
   // Player-facing conversation normally reasons from what has been revealed. A
   // post-turn autonomous ballot is different: it is world simulation and must
   // see the just-committed canonical proposal/ballot state even before the
@@ -12409,7 +12415,7 @@ export const runChatActionBatch = async ({
         chatEvents: outcome.events,
         formalActions: partitioned.formal,
         cursors: nextCursors,
-        expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
+        expectedGameId: campaign,
       });
     formalRejected = committedInstitution.rejected || [];
   } else if (stored.lifecycleInstitutionId && lifecycleActions.length) {
@@ -12453,7 +12459,7 @@ export const runChatActionBatch = async ({
         chatEvents: outcome.events,
         lifecycleActions,
         cursors: nextCursors,
-        expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
+        expectedGameId: campaign,
       });
     }
     lifecycleRejected = committedLifecycle.rejected || [];
@@ -12501,6 +12507,7 @@ export const runPostTurnInstitutionBallots = async ({
   expectedGameId = "",
   requests = null,
 } = {}) => {
+  const campaign = normalizeString(expectedGameId) || activeCampaignId();
   const snapshot = await readGameStateBundle({ force: true });
   const player = normalizeString(playerCountry) || normalizeString(snapshot.game?.country);
   if (!player) return { attempted: 0, applied: 0, results: [] };
@@ -12519,7 +12526,7 @@ export const runPostTurnInstitutionBallots = async ({
         institutionId: item.institutionId,
         playerCountry: player,
         date: normalizeString(date) || normalizeString(snapshot.game?.gameDate),
-        expectedGameId: expectedGameId || normalizeString(snapshot.game?.id || snapshot.game?.gameId),
+        expectedGameId: campaign,
       });
       const result = await runChatActionBatch({
         chat: materialized.channel,
@@ -12528,6 +12535,7 @@ export const runPostTurnInstitutionBallots = async ({
         signal,
         formalBusinessRequested: true,
         useCanonicalState: true,
+        expectedGameId: campaign,
         ...jumpTaskOptions(requests, "institutionBallots"),
       });
       const votes = normalizeArray(result?.formalActions).filter((action) => action?.type === "institution_vote");
@@ -14173,7 +14181,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
         playerCountry: applied?.game?.country || bundle.game?.country || "",
         date: applied?.game?.gameDate || targetDate,
         signal,
-        expectedGameId: normalizeString(applied?.game?.id || applied?.game?.gameId || bundle.game?.id || bundle.game?.gameId),
+        expectedGameId: context.campaignId,
         requests: state.requests,
       });
     } catch (error) {
