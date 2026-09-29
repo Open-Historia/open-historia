@@ -1299,6 +1299,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         logDebugEvent("diplomacy",
             `Opened chat #${chat.id} with ${countries.map((country) => country.name).join(", ") || "(nobody)"} — ${saved.length} saved message(s).`,
             undefined, { verbose: true });
+        // The messages are this thread's. Both render sites key the view on the
+        // chat id, so a switch remounts it; this is the second guard, because a
+        // view still holding the last thread's lines sends them into this one.
+        messagesRef.current = saved;
+        setMessages(saved);
         const shown = withoutUnseenMessages(saved, unseen);
         if (shown.length > 0) loadDiplomaticHistory(shown);
         else startDiplomaticChat();
@@ -1322,6 +1327,19 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
         else startDiplomaticChat();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [unseenKey]);
+
+    // The thread grew outside this view: a Council round run from the
+    // Institutions workspace, a committed turn read back from storage. Shown
+    // when it holds more than the view does, and never mid-turn or mid-reveal,
+    // which write the thread themselves.
+    useEffect(() => {
+        const incoming = chat.messages ?? [];
+        if (incoming === messagesRef.current || incoming.length <= messagesRef.current.length) return;
+        if (isLoading || revealRef.current || lifecycleRevealInProgress) return;
+        messagesRef.current = incoming;
+        setMessages(incoming);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [chat.messages]);
 
         useEffect(() => {
             const scroller = messagesScrollRef.current;
@@ -3694,7 +3712,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 
             {activeChat && (!activeChat.institutionId || (activeChat.lifecycleInstitutionId && activeChat.lifecycleCaseIds?.length)) && Array.isArray(activeChat.countries) && activeChat.countries.length > 0 ? (
-                <ConversationView chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
+                <ConversationView key={String(activeChat.id)} chat={activeChat} playerCountry={playerCountry} gameDate={gameDate} world={worldSnapshot} onDelete={() => handleDeleteChat(activeChat.id)} onBack={leaveActiveChat} onMessagesUpdate={handleMessagesUpdate} onThreadUpdate={handleThreadUpdate}
                 unread={unreadIds.has(String(activeChat.id))} onToggleRead={() => toggleActiveChatRead(activeChat)}
                 draft={composerDraft?.chatId === activeChat.id ? composerDraft.text : ""}
                 onDraftApplied={() => setComposerDraft(null)}
@@ -3748,6 +3766,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                         onCouncilVisibleChange={setVisibleCouncilChatId}
                         renderCouncil={(channel) => (
                             <ConversationView
+                                key={String(channel.id)}
                                 chat={channel}
                                 playerCountry={playerCountry}
                                 gameDate={gameDate}
