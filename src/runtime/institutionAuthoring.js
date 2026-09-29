@@ -34,6 +34,10 @@ const uniqueText = (value) => {
   return out;
 };
 
+// The member list, one polity per line. Polity names are exact keys and may
+// hold commas ("Bonaire, Sint Eustatius and Saba"), so it never splits on them.
+export const institutionMemberNames = (membersText) => uniqueText(String(membersText ?? "").split(/\r?\n/g));
+
 export const institutionAuthoringRows = (world = {}) => {
   const institutions = normalizeInstitutions(world?.institutions, world);
   return Object.values(institutions.byId || {})
@@ -102,7 +106,7 @@ export const upsertScenarioInstitution = (world = {}, draft = {}) => {
   const id = clean(draft.id) ? institutionAuthoringId(draft.id) : institutionAuthoringId(draft.name);
   const existing = institutions.byId?.[id] || null;
   const existingMembers = new Map((existing?.members || []).map((member) => [lower(member?.polity), member]));
-  const members = uniqueText(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
+  const members = institutionMemberNames(draft.membersText).map((polity) => preserveMember(existingMembers, polity));
   const memberKeys = new Set(members.map((member) => lower(member.polity)));
   const leaders = (existing?.leaders || []).filter((polity) => memberKeys.has(lower(polity)));
 

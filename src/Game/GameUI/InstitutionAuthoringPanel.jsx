@@ -8,6 +8,7 @@ import {
 import {
   institutionAuthoringDraft,
   institutionAuthoringRows,
+  institutionMemberNames,
   upsertScenarioInstitution,
 } from "../../runtime/institutionAuthoring.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
@@ -202,18 +203,7 @@ export default function InstitutionAuthoringPanel({ details, onDetailsChange }) 
     : "";
   const previewUrl = pendingLogoDataUrl || storedLogoPreview;
 
-  const memberNames = useMemo(() => {
-    const seen = new Set();
-    return String(draft.membersText || "")
-      .split(/[\n,;]+/g)
-      .map((entry) => entry.trim())
-      .filter((entry) => {
-        const key = entry.toLocaleLowerCase();
-        if (!entry || seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  }, [draft.membersText]);
+  const memberNames = useMemo(() => institutionMemberNames(draft.membersText), [draft.membersText]);
 
   const setMemberNames = (names) => edit("membersText", names.join("\n"));
 

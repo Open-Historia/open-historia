@@ -5,6 +5,7 @@ import {
   institutionAuthoringDraft,
   institutionAuthoringId,
   institutionAuthoringRows,
+  institutionMemberNames,
   upsertScenarioInstitution,
 } from "./institutionAuthoring.js";
 
@@ -99,4 +100,24 @@ test("authoring preserves the dedicated uploaded-logo marker without embedding i
   assert.equal(result.error, "");
   assert.equal(result.institution.logoAsset, true);
   assert.equal(result.institution.logoUrl, "");
+});
+
+test("a member whose name holds a comma survives a save as one polity", () => {
+  const source = world();
+  source.institutions.byId.council.members.push({ polity: "Bonaire, Sint Eustatius and Saba", status: "member", role: "member", sinceDate: "2010-10-10", note: "special municipality" });
+  const draft = institutionAuthoringDraft(institutionAuthoringRows(source)[0]);
+  draft.logoUrl = "/scenario-assets/institutions/northern-council.svg";
+  const result = upsertScenarioInstitution(source, draft);
+  assert.equal(result.error, "");
+  const names = result.institution.members.map((member) => member.polity).sort();
+  assert.deepEqual(names, ["Bonaire, Sint Eustatius and Saba", "Estonia", "Latvia"]);
+  const bonaire = result.institution.members.find((member) => member.polity === "Bonaire, Sint Eustatius and Saba");
+  assert.equal(bonaire.note, "special municipality");
+});
+
+test("the member list splits on lines only", () => {
+  assert.deepEqual(
+    institutionMemberNames("Bonaire, Sint Eustatius and Saba\r\n  Latvia \n\nLatvia\nSaint Helena; Ascension"),
+    ["Bonaire, Sint Eustatius and Saba", "Latvia", "Saint Helena; Ascension"],
+  );
 });
