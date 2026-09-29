@@ -18,6 +18,7 @@ import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
 import { isProjectOpen } from "../../runtime/projects.js";
+import { gameDateDayNumber } from "../../runtime/gameDates.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
@@ -142,10 +143,14 @@ export const LOOKUP_TOOLS = Object.freeze([
   },
   {
     name: "chat_history",
-    description: "The diplomatic conversation between the player and one power: the last messages, newest last.",
+    description:
+      "The diplomatic conversation between the player and one power: the last messages, newest last, of the live thread "
+      + "with the latest word. When there are several threads with that power, threads lists them all (id, title, participants, "
+      + "closed or not); pass chatId to read another.",
     schema: object("Which power.", {
       with: text("The other power's exact name."),
       limit: integer("How many messages (default 12, max 40)."),
+      chatId: text("Optional: the id of one thread from threads."),
     }, ["with"]),
   },
   {
@@ -806,6 +811,32 @@ const spyBrief = (spy) => ({
   ...(spy?.suspected ? { suspected: true } : {}),
 });
 
+// A thread's latest dated message, as a game day number, or null. Walks back
+// past messages that carry no date (an opener saved without one).
+const messageDate = (message) => clean(message?.gameDate || message?.date || message?.time);
+const lastChatDay = (chat) => {
+  const messages = array(chat?.messages);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const day = gameDateDayNumber(messageDate(messages[i]));
+    if (day !== null) return day;
+  }
+  return null;
+};
+const chatIsClosed = (chat) => (clean(chat?.status).toLowerCase() === "closed" ? 1 : 0);
+const chatThreadBrief = (chat) => {
+  const messages = array(chat?.messages);
+  const dated = [...messages].reverse().map(messageDate).find((date) => gameDateDayNumber(date) !== null);
+  return {
+    id: clean(chat?.id),
+    title: clean(chat?.title),
+    participants: array(chat?.countries).map((country) => clean(country?.name ?? country)).filter(Boolean),
+    ...(chatIsClosed(chat) ? { status: "closed" } : {}),
+    ...(clean(chat?.institutionId) ? { institutionId: clean(chat.institutionId) } : {}),
+    messages: messages.length,
+    ...(dated ? { lastMessageDate: dated } : {}),
+  };
+};
+
 const agreementBrief = (agreement) => ({
   id: clean(agreement?.id),
   kind: clean(agreement?.kind || agreement?.type),
@@ -1058,16 +1089,35 @@ export const executeLookup = (context, name, args = {}) => {
       // answered exactly as one that does not exist: saying "you may not read
       // that" would itself tell a government that the player is talking to
       // someone, and to whom.
-      const chat = context.chats.find((entry) =>
-        array(entry?.countries).some((country) => clean(country?.name) === owner)
-        && audienceSeesChat(audience, entry, { player: context.player }));
-      if (!chat) return { with: owner, messages: [], hint: "No conversation with this power yet." };
+      // Every thread with that power, the live ones first and then the latest
+      // word: the save keeps them newest-created first, and a closed thread, an
+      // institution's table or a later multilateral one must not stand in for
+      // the negotiation that matters. chatId reads one of them.
+      const threads = context.chats
+        .map((entry, order) => ({ entry, order, last: lastChatDay(entry) }))
+        .filter(({ entry }) => array(entry?.countries).some((country) => clean(country?.name) === owner)
+          && audienceSeesChat(audience, entry, { player: context.player }))
+        .sort((x, y) => chatIsClosed(x.entry) - chatIsClosed(y.entry)
+          || (y.last ?? -Infinity) - (x.last ?? -Infinity)
+          || x.order - y.order)
+        .map(({ entry }) => entry);
+      if (!threads.length) return { with: owner, messages: [], hint: "No conversation with this power yet." };
+      const wanted = clean(a.chatId);
+      const chat = wanted ? threads.find((entry) => clean(entry?.id) === wanted) : threads[0];
+      const listed = threads.slice(0, 12).map(chatThreadBrief);
+      if (!chat) return { with: owner, threads: listed, messages: [], hint: `No thread "${wanted}" with this power. Use an id from threads.` };
       const messages = array(chat.messages).slice(-limit).map((message) => ({
         from: clean(message?.speaker || message?.role || message?.from),
-        date: clean(message?.gameDate || message?.date),
+        date: clean(message?.gameDate || message?.date || message?.time),
         text: clean(message?.text || message?.content).slice(0, 600),
       }));
-      return { with: owner, title: clean(chat.title), messages };
+      return {
+        with: owner,
+        chatId: clean(chat.id),
+        title: clean(chat.title),
+        messages,
+        ...(threads.length > 1 ? { threads: listed } : {}),
+      };
     }
     case "list_units": {
       let units = context.units;

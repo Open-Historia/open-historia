@@ -271,6 +271,35 @@ test("war_ledger and chat_history read the ledgers as they are", () => {
   assert.match(run("chat_history", { with: "Russia" }).error, /not a power/);
 });
 
+test("chat_history: every thread with the power, the live one with the latest word read, chatId reads another", () => {
+  // Stored newest-created first, as the save keeps them.
+  const chats = [
+    { id: "c-council", title: "Council table", institutionId: "rc", countries: [{ name: "Russian Federation" }, { name: "Belarus" }], messages: [{ speaker: "Belarus", text: "Order.", time: "2014-03-02" }] },
+    { id: "c-old", title: "Old talks", status: "closed", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Russian Federation", text: "Done.", time: "2014-03-09" }] },
+    { id: "c-live", title: "Ceasefire", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Ukraine", text: "Hold fire.", time: "2014-03-04" }, { speaker: "Russian Federation", text: "Agreed.", time: "" }] },
+    { id: "c-bc", title: "Ancient", countries: [{ name: "Russian Federation" }], messages: [{ speaker: "Ukraine", text: "Old.", time: "300 BC" }] },
+  ];
+  const ctx = buildLookupContext({ regions: REGIONS, world: WORLD, chats, player: "Ukraine" });
+  const out = executeLookup(ctx, "chat_history", { with: "Russian Federation" });
+  assert.equal(out.chatId, "c-live");
+  assert.equal(out.title, "Ceasefire");
+  assert.deepEqual(out.messages.map((message) => message.text), ["Hold fire.", "Agreed."]);
+  assert.equal(out.messages[0].date, "2014-03-04");
+  assert.deepEqual(out.threads.map((thread) => thread.id), ["c-live", "c-council", "c-bc", "c-old"]);
+  assert.deepEqual(out.threads[0], { id: "c-live", title: "Ceasefire", participants: ["Russian Federation"], messages: 2, lastMessageDate: "2014-03-04" });
+  assert.equal(out.threads[1].institutionId, "rc");
+  assert.equal(out.threads[3].status, "closed");
+
+  const old = executeLookup(ctx, "chat_history", { with: "Russian Federation", chatId: "c-old" });
+  assert.equal(old.chatId, "c-old");
+  assert.deepEqual(old.messages.map((message) => message.text), ["Done."]);
+  const missing = executeLookup(ctx, "chat_history", { with: "Russian Federation", chatId: "nope" });
+  assert.deepEqual(missing.messages, []);
+  assert.match(missing.hint, /No thread "nope"/);
+  // A thread with someone else is not one of this power's.
+  assert.match(executeLookup(ctx, "chat_history", { with: "Ukraine", chatId: "c-live" }).hint, /No conversation/);
+});
+
 test("list_units and contested_regions", () => {
   assert.equal(run("list_units", {}).count, 1);
   assert.equal(run("list_units", { owner: "Ukraine" }).count, 0);
