@@ -194,7 +194,7 @@ const ProposalCard = ({ proposal, view, busy, onVote, onSubmit, onAmend, onResol
     </div> : null}
     {proposal.playerCanAmend && view?.canParticipate && <div style={{ marginTop: ".55rem", display: "flex", gap: ".35rem" }}>
       <input value={amendText} onChange={(e) => setAmendText(e.target.value)} placeholder="Propose amendment…" maxLength={4000} style={{ flex: 1, minWidth: 0, border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, background: "rgba(0,0,0,.18)", color: "white", padding: ".35rem .45rem", fontSize: ".64rem" }} />
-      <button disabled={busy || !amendText.trim()} onClick={async () => { await onAmend(proposal.id, amendText.trim()); setAmendText(""); }} style={{ border: "1px solid rgba(167,139,250,.22)", background: "rgba(139,92,246,.1)", color: "#ddd6fe", borderRadius: 8, padding: ".3rem .45rem", fontSize: ".61rem", cursor: busy || !amendText.trim() ? "not-allowed" : "pointer" }}>Add</button>    </div>}
+      <button disabled={busy || !amendText.trim()} onClick={async () => { const result = await onAmend(proposal.id, amendText.trim()); if (result) setAmendText(""); }} style={{ border: "1px solid rgba(167,139,250,.22)", background: "rgba(139,92,246,.1)", color: "#ddd6fe", borderRadius: 8, padding: ".3rem .45rem", fontSize: ".61rem", cursor: busy || !amendText.trim() ? "not-allowed" : "pointer" }}>Add</button>    </div>}
   </div>;
 };
 
