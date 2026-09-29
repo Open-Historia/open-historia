@@ -1,5 +1,5 @@
 /*! Open Historia — worker-safe live polity label geometry © 2026 Open Historia contributors, AGPL-3.0-or-later (see LICENSE). */
-// Pure geometry/text-layout subset of countryLabels.js. This module intentionally
+// Pure geometry/text layout for the live polity labels. This module intentionally
 // has no MapLibre, PMTiles, DOM, storage, or translation dependencies so it can
 // run inside the political-cartography worker.
 
@@ -2509,4 +2509,57 @@ export const buildPolityLabelCollections = (
     pointLabelData: { type: "FeatureCollection", features: pointFeatures },
     glyphLabelData: { type: "FeatureCollection", features: [] },
   };
+};
+
+// One row per logical polity label, for the map's debug probe and the tests.
+export const summarizePolityLabelDiagnostics = (collections) => {
+  const features = Array.isArray(collections?.labelData?.features)
+    ? collections.labelData.features
+    : [
+        ...(collections?.lineLabelData?.features ?? []),
+        ...(collections?.pointLabelData?.features ?? []),
+      ];
+  const counts = new Map();
+  for (const feature of features) {
+    const owner = String(feature?.properties?.owner ?? "");
+    counts.set(owner, (counts.get(owner) ?? 0) + 1);
+  }
+  return features.map((feature) => {
+    const props = feature?.properties ?? {};
+    return {
+      owner: props.owner,
+      name: props.name,
+      labelCount: counts.get(String(props.owner ?? "")) ?? 0,
+      mode: props.mode,
+      tier: props.tier,
+      minZoom: props.minZoom,
+      curveMinZoom: props.curveMinZoom,
+      curveBand: props.curveBand,
+      baselineKind: props.baselineKind,
+      placementBendRatio: Number(Number(props.placementBendRatio ?? 0).toFixed(4)),
+      safeWarp: props.safeWarp,
+      forceOverlapZoom: props.forceOverlapZoom,
+      visibilityScale: props.visibilityScale,
+      fontPxAtZoom4: props.fontPxAtZoom4,
+      letterSpacing: props.letterSpacing,
+      targetOccupancy: props.targetOccupancy,
+      estimatedOccupancy: props.estimatedOccupancy,
+      lineFontPxAtZoom4: props.lineFontPxAtZoom4,
+      lineLetterSpacing: props.lineLetterSpacing,
+      lineEstimatedOccupancy: props.lineEstimatedOccupancy,
+      shapeWidth: Number(Number(props.shapeWidth ?? 0).toFixed(1)),
+      shapeHeight: Number(Number(props.shapeHeight ?? 0).toFixed(1)),
+      axisSpan: Number(Number(props.axisSpan ?? 0).toFixed(1)),
+      crossSpan: Number(Number(props.crossSpan ?? 0).toFixed(1)),
+      pathLength: Number(Number(props.pathLength ?? 0).toFixed(1)),
+      pathWidth: Number(Number(props.pathWidth ?? 0).toFixed(1)),
+      pathTurnDegrees: props.pathTurnDegrees,
+      warpPointCount: props.warpPointCount,
+      warpMaxSegmentTurnDegrees: props.warpMaxSegmentTurnDegrees,
+      warpDetourRatio: props.warpDetourRatio,
+      rotation: Number(Number(props.rotation ?? 0).toFixed(2)),
+      anchorLng: Number(Number(props.anchorLng ?? 0).toFixed(3)),
+      anchorLat: Number(Number(props.anchorLat ?? 0).toFixed(3)),
+    };
+  });
 };

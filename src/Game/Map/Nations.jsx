@@ -34,10 +34,8 @@ import {
 } from "./regionsSourceMemory.js";
 import { publishPolityIndex } from "../../runtime/placeSearch.js";
 import { toCountryName } from "../../runtime/ownerNames.js";
-import {
-  loadCountryLabelCollections,
-  summarizePolityLabelDiagnostics,
-} from "../../runtime/countryLabels.js";
+import { loadCountryLabelCollections } from "../../runtime/countryLabels.js";
+import { summarizePolityLabelDiagnostics } from "./vnext/polityLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
 import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";

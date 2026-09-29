@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 // Exercise the exact worker-safe label engine used by Political Cartography v2.
-// Runtime countryLabels.js still owns stock-map loading/caching, but geometry
-// regressions belong against production vNext layout rather than its legacy copy.
 import {
   POLITY_LABEL_TIERS,
   buildPolityLabelCollections,
   curveMinZoomForPolityLabelTier,
   selectPolityPointFallbacks,
+  summarizePolityLabelDiagnostics,
 } from "../src/Game/Map/vnext/polityLabels.js";
 import { aggregatePolityGeometry } from "../src/Game/Map/vnext/polityGeometry.js";
 import { derivePolitySurfaces } from "../src/Game/Map/vnext/politySurfaces.js";
@@ -41,58 +40,6 @@ const gentleContinentalArc = (owner, offset = 0) => surface(owner, [[[
   [offset + 0, 10],
   [offset + 0, 0],
 ]]]);
-
-const summarizePolityLabelDiagnostics = (collections) => {
-  const features = Array.isArray(collections?.labelData?.features)
-    ? collections.labelData.features
-    : [
-        ...(collections?.lineLabelData?.features ?? []),
-        ...(collections?.pointLabelData?.features ?? []),
-      ];
-  const counts = new Map();
-  for (const feature of features) {
-    const owner = String(feature?.properties?.owner ?? "");
-    counts.set(owner, (counts.get(owner) ?? 0) + 1);
-  }
-  return features.map((feature) => {
-    const props = feature?.properties ?? {};
-    return {
-      owner: props.owner,
-      name: props.name,
-      labelCount: counts.get(String(props.owner ?? "")) ?? 0,
-      mode: props.mode,
-      tier: props.tier,
-      minZoom: props.minZoom,
-      curveMinZoom: props.curveMinZoom,
-      curveBand: props.curveBand,
-      baselineKind: props.baselineKind,
-      placementBendRatio: Number(Number(props.placementBendRatio ?? 0).toFixed(4)),
-      safeWarp: props.safeWarp,
-      forceOverlapZoom: props.forceOverlapZoom,
-      visibilityScale: props.visibilityScale,
-      fontPxAtZoom4: props.fontPxAtZoom4,
-      letterSpacing: props.letterSpacing,
-      targetOccupancy: props.targetOccupancy,
-      estimatedOccupancy: props.estimatedOccupancy,
-      lineFontPxAtZoom4: props.lineFontPxAtZoom4,
-      lineLetterSpacing: props.lineLetterSpacing,
-      lineEstimatedOccupancy: props.lineEstimatedOccupancy,
-      shapeWidth: Number(Number(props.shapeWidth ?? 0).toFixed(1)),
-      shapeHeight: Number(Number(props.shapeHeight ?? 0).toFixed(1)),
-      axisSpan: Number(Number(props.axisSpan ?? 0).toFixed(1)),
-      crossSpan: Number(Number(props.crossSpan ?? 0).toFixed(1)),
-      pathLength: Number(Number(props.pathLength ?? 0).toFixed(1)),
-      pathWidth: Number(Number(props.pathWidth ?? 0).toFixed(1)),
-      pathTurnDegrees: props.pathTurnDegrees,
-      warpPointCount: props.warpPointCount,
-      warpMaxSegmentTurnDegrees: props.warpMaxSegmentTurnDegrees,
-      warpDetourRatio: props.warpDetourRatio,
-      rotation: Number(Number(props.rotation ?? 0).toFixed(2)),
-      anchorLng: Number(Number(props.anchorLng ?? 0).toFixed(3)),
-      anchorLat: Number(Number(props.anchorLat ?? 0).toFixed(3)),
-    };
-  });
-};
 
 const byOwner = (result, owner) => result.labelData.features
   .find((feature) => feature.properties.owner === owner);

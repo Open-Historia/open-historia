@@ -258,12 +258,14 @@ Builds the GeoJSON that draws country **names** on the map (not the DOM). Reads 
 
 ### How it connects
 
-- **Names** run through `translateLabel(resolveCountryDisplayName(rawName, code))` (`countryLabels.js:499`) — so labels honor both the scenario country-name overrides *and* the UI language.
+- **Names** run through `translateLabel(resolveCountryDisplayName(rawName, code))` (`countryLabels.js:646`) — so labels honor both the scenario country-name overrides *and* the UI language.
 - **`ownedCodes`** (a `Set`): when non-empty, countries owning no territory in the scenario are skipped, so a nonexistent-era nation doesn't float its modern name over unclaimed land. A distinct owner set caches separately (owner-hash suffix on the cache key).
-- **Cache key** (`computeCountryLabelCacheKey`, `countryLabels.js:461`) folds tile-byte FNV hash + byte length + archive URL + **`getStoredLanguage()`**, so caches never leak across UI languages. Persisted via `writeRuntimeJson` / read via `readRuntimeJson` (see [Assets](assets-and-data.md)). Cache version is `country-labels-v3` (bumped to v3 when glyph `lat` was added for the globe text-size fix, issue #6).
-- **Empty-result guard** (`countryLabels.js:642`): an empty build is treated as a degraded z0 read — served once, never cached — so a transient miss can't poison every future boot.
+- **Cache key** (`computeCountryLabelCacheKey`, `countryLabels.js:608`) folds tile-byte FNV hash + byte length + archive URL + **`getStoredLanguage()`**, so caches never leak across UI languages. Persisted via `writeRuntimeJson` / read via `readRuntimeJson` (see [Assets](assets-and-data.md)). Cache version is `country-labels-v3` (bumped to v3 when glyph `lat` was added for the globe text-size fix, issue #6).
+- **Empty-result guard** (`countryLabels.js:789`): an empty build is treated as a degraded z0 read — served once, never cached — so a transient miss can't poison every future boot.
 
 Geometry helpers (`getCentroid`, `getPrincipalAxisAngle`, `buildCurvedLabelPath`, `buildCurvedLabelGlyphFeatures`, `tileToLngLat`, …) convert tile coordinates to lng/lat and decide curved-vs-point; each glyph carries its own `lat` so `Nations.jsx` can correct globe-projection text inflation at high latitude.
+
+This module labels the stock countries only. A game's live polity labels are laid out by `src/Game/Map/vnext/polityLabels.js` inside the political worker (see [Game map](game-map.md)).
 
 ---
 
