@@ -2630,6 +2630,7 @@ const uploadScenarioAsset = (scenarioId, assetKey, dataBuffer, contentType = "")
   const targetPath = getScenarioUploadPath(scenarioId, assetKey);
   ensureDirectory(path.dirname(targetPath));
   fs.writeFileSync(targetPath, dataBuffer);
+  if (assetKey === "regionsGeojson") prebuildCoarseRegions(targetPath);
   writeScenarioMeta(
     scenarioId,
     assetKey === COVER_IMAGE_ASSET_KEY
@@ -2704,24 +2705,52 @@ const removeGameAsset = (gameId, assetKey) => {
 // the map zoomed out — the country picker draws it at zoom 8 at most. The full
 // file is the stock world's 221 MB (2.6M vertices); the country picker used to
 // download and parse all of it, plus the 55 MB seed, for a map the size of a
-// card. Built once per upload — a size+mtime stamp invalidates it when the
-// regions are replaced — with the far tier's own coarsening, and kept beside
-// the upload as regions.coarse.geojson (a few MB). Never exported or cloned:
-// the bundle and the clone copy only the named asset files.
+// card. Built with the far tier's own coarsening and kept beside the upload as
+// regions.coarse.geojson (a few MB), stamped on the regions file's size+mtime.
+// Never exported or cloned: the bundle and the clone copy only the named asset
+// files.
+//
+// Built where the regions are written — a Workshop save or an upload
+// (uploadScenarioAsset), a scenario import or hub Update
+// (applyScenarioBundleAsset) — rather than inside the first ?coarse=1 request:
+// Apply & Play asks for the coarse copy right after saving, and building it
+// there parsed tens of MB on the event loop while the picker waited. The stamp
+// check stays as the fallback for regions written any other way (the built-in
+// seed, an in-play geometry edit, a file changed by hand).
 const COARSE_REGIONS_FILE = "regions.coarse.geojson";
+const coarseRegionsPathsFor = (sourcePath) => {
+  const coarsePath = path.join(path.dirname(sourcePath), COARSE_REGIONS_FILE);
+  return { coarsePath, stampPath: `${coarsePath}.stamp` };
+};
+const regionsFileStamp = (sourcePath) => {
+  const stat = fs.statSync(sourcePath);
+  return `${stat.size}:${Math.round(stat.mtimeMs)}`;
+};
+
+// `data` is the parsed collection when the caller already holds it.
+const writeCoarseRegions = (sourcePath, data = null) => {
+  const { coarsePath, stampPath } = coarseRegionsPathsFor(sourcePath);
+  const stamp = regionsFileStamp(sourcePath);
+  const collection = data ?? JSON.parse(fs.readFileSync(sourcePath, "utf-8"));
+  fs.writeFileSync(coarsePath, JSON.stringify(coarsenFeatureCollection(collection)), "utf-8");
+  fs.writeFileSync(stampPath, stamp, "utf-8");
+};
+
+// Best effort at write time: a failure leaves the request-time build to try.
+const prebuildCoarseRegions = (sourcePath, data = null) => {
+  try {
+    writeCoarseRegions(sourcePath, data);
+  } catch (error) {
+    console.warn(`[coarse regions] not built for ${sourcePath}: ${error.message}`);
+  }
+};
+
 const resolveScenarioCoarseRegionsAsset = (scenarioId) => {
   const source = resolveScenarioUploadAsset(scenarioId, "regionsGeojson");
-  const stat = fs.statSync(source.sourcePath);
-  const stamp = `${stat.size}:${Math.round(stat.mtimeMs)}`;
-  const coarsePath = path.join(path.dirname(source.sourcePath), COARSE_REGIONS_FILE);
-  const stampPath = `${coarsePath}.stamp`;
+  const { coarsePath, stampPath } = coarseRegionsPathsFor(source.sourcePath);
   const fresh = fs.existsSync(coarsePath) && fs.existsSync(stampPath)
-    && fs.readFileSync(stampPath, "utf-8") === stamp;
-  if (!fresh) {
-    const data = JSON.parse(fs.readFileSync(source.sourcePath, "utf-8"));
-    fs.writeFileSync(coarsePath, JSON.stringify(coarsenFeatureCollection(data)), "utf-8");
-    fs.writeFileSync(stampPath, stamp, "utf-8");
-  }
+    && fs.readFileSync(stampPath, "utf-8") === regionsFileStamp(source.sourcePath);
+  if (!fresh) writeCoarseRegions(source.sourcePath);
   return { sourcePath: coarsePath, contentType: source.contentType };
 };
 
@@ -3688,9 +3717,11 @@ const applyScenarioBundleAsset = (scenarioId, assetKey, assetValue) => {
       // Binary, or a bundle written before JSON assets stopped being base64'd.
       const decoded = Buffer.from(String(assetValue.data ?? ""), "base64");
       fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), decoded);
+      if (assetKey === "regionsGeojson") prebuildCoarseRegions(getScenarioUploadPath(scenarioId, assetKey));
     } else {
       // A JSON asset that travelled as JSON (geometry, a vector basemap).
       fs.writeFileSync(getScenarioUploadPath(scenarioId, assetKey), JSON.stringify(assetValue.data ?? {}), "utf-8");
+      if (assetKey === "regionsGeojson") prebuildCoarseRegions(getScenarioUploadPath(scenarioId, assetKey), assetValue.data ?? {});
     }
     return;
   }
