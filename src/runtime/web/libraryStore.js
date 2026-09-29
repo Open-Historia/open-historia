@@ -719,6 +719,11 @@ const validateTurnCommitShape = (payload) => {
 const writeRuntimeTurnState = (payload) => serializeWrite(async () => {
   validateTurnCommitShape(payload);
   let activeGame = await getActiveGameRecord();
+  // Refused before a game is created for it (desktop: server/libraryStore.js).
+  const expectedGameId = String(payload?.expectedGameId ?? "").trim();
+  if (expectedGameId && !activeGame) {
+    throw new Error(`Turn commit belongs to game "${expectedGameId}", but no game is active.`);
+  }
   if (!activeGame) {
     const scenario = await getSelectedScenarioRecord();
     if (!scenario) throw new Error("No active game — start a game from a scenario first.");
@@ -730,7 +735,6 @@ const writeRuntimeTurnState = (payload) => serializeWrite(async () => {
     activeGame = await getGame(details.game.id);
   }
 
-  const expectedGameId = String(payload?.expectedGameId ?? "").trim();
   if (expectedGameId && expectedGameId !== activeGame.id) {
     throw new Error(`Turn commit belongs to game "${expectedGameId}", but "${activeGame.id}" is active.`);
   }

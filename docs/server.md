@@ -229,6 +229,8 @@ Upload assets are written straight from the raw request buffer (`uploadScenarioA
 
 `writeRuntimeJsonAsset(assetKey, value)` (`server/libraryStore.js:2314-2369`) always writes to the **active game** (auto-creating a session from the selected scenario if there is no active game), canonicalizes owner references first (`world` → `canonicalizeWorldCountryRefs`, `game` → `canonicalizeGameCountry`, `colors` → `canonicalizeColorKeys`), writes via `writeJsonFile`, bumps game meta, and returns the freshly re-read asset.
 
+`writeRuntimeTurnState(payload)` (`PUT /api/runtime/turn-commit`) writes a whole turn to the active game the same way, but a payload stamped with `expectedGameId` is checked first, before any session is created: a turn for another game, or for a game deleted while it ran (no game active), is refused and the library is left as it was. The web store (`src/runtime/web/libraryStore.js`) does the same.
+
 ---
 
 ## Owner canonicalization & the schema-2 migration

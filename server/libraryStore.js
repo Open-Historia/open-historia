@@ -3094,11 +3094,20 @@ const recoverPendingTurnCommit = (gameId) => {
 // write to finish. `failAfterAssetIndex` is only a deterministic test seam.
 const writeRuntimeTurnState = (payload, { failAfterAssetIndex = -1 } = {}) => {
   ensureGameStore();
-  const activeGameId = ensureRuntimeWriteGameId();
+  // Checked BEFORE ensureRuntimeWriteGameId, which creates and activates a game
+  // when none is active: a turn stamped for a campaign the player deleted while
+  // it ran must be refused, not first given a new "<scenario> Session" to land
+  // beside.
   const expectedGameId = String(payload?.expectedGameId ?? "").trim();
-  if (expectedGameId && expectedGameId !== activeGameId) {
-    throw new Error(`Turn commit belongs to game "${expectedGameId}", but "${activeGameId}" is active.`);
+  if (expectedGameId) {
+    const currentGameId = getActiveGameId();
+    if (expectedGameId !== currentGameId) {
+      throw new Error(currentGameId
+        ? `Turn commit belongs to game "${expectedGameId}", but "${currentGameId}" is active.`
+        : `Turn commit belongs to game "${expectedGameId}", but no game is active.`);
+    }
   }
+  const activeGameId = ensureRuntimeWriteGameId();
   recoverPendingTurnCommit(activeGameId);
   const assets = canonicalizeTurnCommit(payload);
   const transactionId = `turn-${Date.now()}-${process.pid}-${Math.random().toString(16).slice(2)}`;
