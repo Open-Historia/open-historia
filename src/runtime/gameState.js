@@ -2284,71 +2284,42 @@ const resolveProjectOpOwner = (raw, resolveOwner) => {
 // does, because identical inputs go in. NOTHING may be written back into the
 // event: an effect cached onto events.json impacts would be applied a second time
 // by any later replay, which is precisely the bug the latch exists to prevent.
+//
+// It is worked out by running the batch through applyProjectOps itself and
+// collecting every transition it latches. This used to be a separate scan that
+// recognised only a close op or a status-complete update, matched against the
+// board as it stood BEFORE the batch — so a create restating a project as
+// complete, or a close aimed at a project opened or renamed earlier in the same
+// batch, finished the project with its effects never released (and a later
+// "complete" found it already closed). One applier cannot disagree with itself.
 export const releaseProjectCompletionEffects = (projects, ops) => {
-  const list = normalizeProjects(projects);
   const polityChanges = [];
   const regionClaims = [];
   const regionTransfers = [];
   const projectIds = [];
-  const fired = new Set();
 
-  for (const raw of normalizeArray(ops)) {
-    const op = normalizeProjectOp(raw);
-    if (!op) continue;
-
-    // Two ways a project reaches `complete`, and the second is the one a model
-    // reaches for at least as often: an explicit close op, and a plain update
-    // carrying status "complete" (status is in PROJECT_PATCHABLE_FIELDS, so it
-    // lands). Handling only the first would make this fire about half the time,
-    // which is worse than not shipping it — an annexation that transfers the
-    // border on some completions and not others is unreadable to the player.
-    let completing = op.op === "close" && op.status === "complete";
-    if (!completing && op.op === "update") {
-      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
-      const alias = patchedAlias(patch, "status");
-      completing = Boolean(alias) && resolveProjectStatus(patch[alias]) === "complete";
-    }
-    if (!completing) continue;
-
-    const index = findProjectIndexForOp(list, op);
-    if (index === -1) continue;
-    const project = list[index];
-
-    if (fired.has(project.id)) continue;
-    if (!project.onComplete) continue;
-    // Only the TRANSITION fires. A project that is already closed is a
-    // restatement, and one already latched has spent its effects.
-    if (!PROJECT_OPEN_STATUSES.has(project.status)) continue;
-    if (project.onCompleteAppliedAt) continue;
-
-    fired.add(project.id);
-    projectIds.push(project.id);
-    polityChanges.push(...project.onComplete.polityChanges);
-    regionClaims.push(...project.onComplete.regionClaims);
-    regionTransfers.push(...project.onComplete.regionTransfers);
-  }
+  applyProjectOps(projects, ops, {
+    onRelease: (project) => {
+      projectIds.push(project.id);
+      polityChanges.push(...project.onComplete.polityChanges);
+      regionClaims.push(...project.onComplete.regionClaims);
+      regionTransfers.push(...project.onComplete.regionTransfers);
+    },
+  });
 
   return { polityChanges, projectIds, regionClaims, regionTransfers };
 };
 
-// Stamps the onComplete latch on the transition into `complete`.
-//
-// The invariant a future edit will break if it is not stated: this fires under
-// EXACTLY the predicate releaseProjectCompletionEffects fires under — the project
-// was open, it carries effects, it is not already latched, and it is completing
-// (not cancelled, not failed). The two agree by construction because they are
-// handed the same list, the same op and the same matcher; if you change the
-// condition in one, change it in the other or a completion will either transfer
-// its regions twice or never transfer them at all.
-//
-// Stamped whether or not THIS caller applied the effects. Both call sites
-// (applyEventImpactsToWorld and applyProjectOpsToWorld) run the release first, and
-// the alternative — threading a "did you apply them?" flag down here — is a flag
-// that eventually arrives false and silently swallows a country's annexation.
-const stampCompletionLatch = (project, completing, when) => (
-  completing && project.onComplete && !project.onCompleteAppliedAt
-    ? when
-    : project.onCompleteAppliedAt);
+// Is `after` the moment `before` completes? The one transition that releases a
+// project's onComplete effects and stamps its latch: it carries effects, it is
+// not already latched, it is now complete, and it was open before this op
+// (`before` is null for a project the op creates). Every op that can finish a
+// project — close, a status-complete update, a create restating it — asks this,
+// so no path can finish a project without deciding what happens to its effects.
+const completesWithEffects = (before, after) => Boolean(after?.onComplete)
+  && !after.onCompleteAppliedAt
+  && after.status === "complete"
+  && (!before || PROJECT_OPEN_STATUSES.has(before.status));
 
 // Apply a batch of project ops (pure).
 //
@@ -2389,12 +2360,29 @@ const withoutPastDeadlines = (projects, before, date) => {
   });
 };
 
+// Two ctx hooks decide what a completion with effects does (see
+// completesWithEffects). `onRelease(project)` is told of each one as it latches;
+// releaseProjectCompletionEffects collects them. `holdCompletions` is the
+// non-event door's rule (applyProjectOpsToWorld): the project is left open, the
+// rest of the op still lands, and its id is passed to `onHold(project)`.
 export const applyProjectOps = (projects, ops, ctx = {}) => {
-  const { date = "", eventId = "", round = 0 } = ctx;
+  const { date = "", eventId = "", round = 0, holdCompletions = false, onHold, onRelease } = ctx;
   const stamp = new Date().toISOString();
   let next = normalizeProjects(projects);
 
   const indexOf = (op) => findProjectIndexForOp(next, op);
+
+  // `after` as it lands, given the entry it replaces (null for a new one). A
+  // held completion keeps everything else the op said and only stays open.
+  const settleCompletion = (before, after) => {
+    if (!completesWithEffects(before, after)) return after;
+    if (holdCompletions) {
+      onHold?.(after);
+      return { ...after, status: before ? before.status : "active" };
+    }
+    onRelease?.(after);
+    return { ...after, onCompleteAppliedAt: date || stamp };
+  };
 
   // Every mutation routes through here so the "when did this last move" fields
   // and the activity feed cannot be updated in one branch and forgotten in
@@ -2437,22 +2425,24 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
           if (field === "name") continue; // matched BY the name; never rewrite it here
           merged[field] = op.project[field];
         }
+        // A restatement may say the project is complete, which finishes it
+        // exactly as a close op would — see completesWithEffects.
         next = next.map((project, index) => (index === existingIndex
-          ? touch({
+          ? settleCompletion(existing, touch({
             ...merged,
             id: existing.id,
             createdAt: existing.createdAt,
             // A restatement rarely repeats the history, so keep what we had.
             eventIds: existing.eventIds,
-          })
+          }))
           : project));
         continue;
       }
-      next = [...next, touch({
+      next = [...next, settleCompletion(null, touch({
         ...op.project,
         startedAt: op.project.startedAt || date,
         createdAt: stamp,
-      })];
+      }))];
       continue;
     }
 
@@ -2487,14 +2477,8 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
       );
       if (!normalized) continue;
       // A model completes a project with a plain status patch at least as often
-      // as with an explicit close op, so the latch has to be stamped here too.
-      const completedHere = PROJECT_OPEN_STATUSES.has(current.status) && normalized.status === "complete";
-      next = next.map((project, i) => (i === index
-        ? touch({
-          ...normalized,
-          onCompleteAppliedAt: stampCompletionLatch(current, completedHere, date || stamp),
-        })
-        : project));
+      // as with an explicit close op, so the latch has to be settled here too.
+      next = next.map((project, i) => (i === index ? settleCompletion(current, touch(normalized)) : project));
       continue;
     }
 
@@ -2570,8 +2554,14 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
 
     if (op.op === "close") {
       const succeeded = op.status === "complete";
+      // A held completion drops the close whole: marking the milestones done on
+      // a project that stays open would be a claim the board cannot keep.
+      if (holdCompletions && completesWithEffects(current, { ...current, status: op.status })) {
+        onHold?.(current);
+        continue;
+      }
       next = next.map((project, i) => (i === index
-        ? touch({
+        ? settleCompletion(project, touch({
           ...project,
           status: op.status,
           // Only success implies the work is all done. A cancelled programme at
@@ -2586,14 +2576,10 @@ export const applyProjectOps = (projects, ops, ctx = {}) => {
             (isMilestoneOutstanding(entry) ? { ...entry, status: succeeded ? "done" : "missed" } : entry)),
           nextMilestone: null,
           lastUpdate: op.note || project.lastUpdate,
-          // Cancel and fail never release effects: `succeeded` is the only gate,
-          // so a called-off annexation leaves the border exactly where it was.
-          onCompleteAppliedAt: stampCompletionLatch(
-            project,
-            succeeded && PROJECT_OPEN_STATUSES.has(project.status),
-            date || stamp,
-          ),
-        })
+          // Cancel and fail never release effects: only `complete` passes
+          // completesWithEffects, so a called-off annexation leaves the border
+          // exactly where it was.
+        }))
         : project));
       continue;
     }
@@ -5424,19 +5410,16 @@ export const applyProjectOpsToWorld = ({
   const resolveOwner = createOwnerResolver(buildOwnerAliasMap(nextWorld.polityOverrides));
   const resolved = normalizeArray(ops).map((raw) => resolveProjectOpOwner(raw, resolveOwner));
 
-  // The same pre-scan the event path runs, used here purely as a PREDICATE: what
-  // would this batch release? Anything it names is an op this door may not apply.
-  const released = releaseProjectCompletionEffects(nextWorld.projects, resolved);
-  const deferred = new Set(released.projectIds);
+  const deferred = new Set();
   const refused = new Set();
 
   const allowed = resolved.filter((raw) => {
     const op = normalizeProjectOp(raw);
     if (!op) return true;
     const index = findProjectIndexForOp(nextWorld.projects, op);
-    // A create names nothing on the board yet, so there is no owner to check and
-    // no completion to defer. The panel never sends one; the advisor legitimately
-    // opens a rival's programme.
+    // A create names nothing on the board yet, so there is no owner to check.
+    // The panel never sends one; the advisor legitimately opens a rival's
+    // programme.
     if (index === -1) return true;
     const target = nextWorld.projects[index];
 
@@ -5446,21 +5429,22 @@ export const applyProjectOpsToWorld = ({
       refused.add(target.id);
       return false;
     }
-
-    // Only the completing op is dropped. An update to the same project in the same
-    // batch — progress, a note, a milestone — still lands: refusing to close it is
-    // not a reason to lose everything else the reply said about it.
-    if (!deferred.has(target.id)) return true;
-    if (op.op === "close" && op.status === "complete") return false;
-    if (op.op === "update") {
-      const patch = op.patch && typeof op.patch === "object" ? op.patch : {};
-      const alias = patchedAlias(patch, "status");
-      if (alias && resolveProjectStatus(patch[alias]) === "complete") return false;
-    }
     return true;
   });
 
-  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, { date, eventId, round });
+  // Held inside the applier rather than filtered out here, because only the
+  // applier knows every way a batch can finish a project (a create restating it,
+  // a close aimed at one opened earlier in the batch). Only the completion is
+  // held: an update to the same project — progress, a note, a milestone — still
+  // lands, since refusing to close it is not a reason to lose everything else
+  // the reply said about it.
+  nextWorld.projects = applyProjectOps(nextWorld.projects, allowed, {
+    date,
+    eventId,
+    round,
+    holdCompletions: true,
+    onHold: (project) => deferred.add(project.id),
+  });
 
   return { deferredProjectIds: [...deferred], refusedProjectIds: [...refused], world: nextWorld };
 };
