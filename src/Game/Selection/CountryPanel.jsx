@@ -131,6 +131,12 @@ const CountryInfoPanel = () => {
     useEffect(() => {
         if (!country) shownReportKey.current = "";
     }, [country]);
+    // The panel goes with the map on a switch to another save: a report still
+    // being written is then kept for when its campaign and country are open
+    // again, not handed to a panel that is gone.
+    useEffect(() => () => {
+        shownReportKey.current = "";
+    }, []);
 
     // Shows a report when it comes back, if its country is still the one on
     // screen; otherwise keeps it for when that country is opened again.
