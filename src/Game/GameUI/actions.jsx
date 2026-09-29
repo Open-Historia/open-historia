@@ -964,7 +964,9 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         {improveFailure && (
             <div style={{ padding: "0 1.25rem 0.5rem" }}>
             <AiFailureNote incident={aiFailureIncident("improve-failed", "Improve action failed", improveFailure)}>
-            {`Improve failed, so your text was left as you wrote it: ${improveFailure.reason || "the AI gave no usable answer."}`}
+            {improveFailure.reason
+                ? `Improve failed, so your text was left as you wrote it: ${improveFailure.reason}`
+                : "Improve failed, so your text was left as you wrote it."}
             </AiFailureNote>
             </div>
         )}
