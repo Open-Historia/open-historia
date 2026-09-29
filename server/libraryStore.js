@@ -2345,8 +2345,10 @@ const updateScenario = (scenarioId, body = {}) => {
 
   if (world && typeof world === "object") {
     writeJsonFile(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(world));
+    invalidateOwnerSchemaCache("scenario", scenarioId);
   } else if (worldPatch && typeof worldPatch === "object") {
     mergeJsonAsset(getScenarioJsonPath(scenarioId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
+    invalidateOwnerSchemaCache("scenario", scenarioId);
   }
 
   if (storage && typeof storage === "object") {
@@ -2457,8 +2459,10 @@ const updateGame = (
 
   if (world && typeof world === "object") {
     writeJsonFile(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(world));
+    invalidateOwnerSchemaCache("game", gameId);
   } else if (worldPatch && typeof worldPatch === "object") {
     mergeJsonAsset(getGameJsonPath(gameId, "world"), canonicalizeWorldCountryRefs(worldPatch), JSON_ASSET_DEFAULTS.world);
+    invalidateOwnerSchemaCache("game", gameId);
   }
 
   if (storage && typeof storage === "object") {
@@ -2548,6 +2552,7 @@ const deleteScenario = (scenarioId) => {
   }
 
   moveDirectoryToTrash(resolved, "scenario", scenarioId);
+  invalidateOwnerSchemaCache("scenario", scenarioId);
 
   const manifest = getScenarioManifest();
   const nextOrder = resolveOrderedIds(manifest.order, SCENARIOS_DIR, DEFAULT_SCENARIO_ID).filter(
@@ -2578,6 +2583,7 @@ const deleteGame = (gameId) => {
   }
 
   moveDirectoryToTrash(resolved, "game", gameId);
+  invalidateOwnerSchemaCache("game", gameId);
 
   const manifest = getGameManifest();
   const nextOrder = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
@@ -2808,6 +2814,16 @@ const normalizeRuntimeWorld = (assetKey, data) => {
 // or a custom polity that happens to read like one.
 // ---------------------------------------------------------------------------
 const ownerSchemaChecked = new Set();
+
+// A check describes the world that was on disk when it ran. Anything that
+// replaces a record's world (a bundle import or hub Update, a whole-world save)
+// or removes the record (whose id a later import may reuse) has to forget it:
+// otherwise a legacy code-keyed world written afterwards is never migrated
+// until the app restarts, and the player owns nothing on the map. The web
+// store clears its migratedRecords for the same case.
+const invalidateOwnerSchemaCache = (kind, id) => {
+  ownerSchemaChecked.delete(`${kind}:${id}`);
+};
 
 const migrateOwnerRecordAtPaths = (label, paths) => {
   const world = readJsonFile(paths.world, null);
@@ -3955,6 +3971,7 @@ const importGameBundle = (bundle) => {
       cloneJson(value ?? JSON_ASSET_DEFAULTS[assetKey] ?? {}),
     );
   }
+  invalidateOwnerSchemaCache("game", gameId);
 
   const manifest = getGameManifest();
   manifest.order = resolveOrderedIds(manifest.order, GAMES_DIR, DEFAULT_GAME_ID).filter(
