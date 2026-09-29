@@ -43,8 +43,6 @@ const EXPLORATION_WIDER_EVIDENCE_ACTOR_SLOTS = 1;
 const EXPLORATION_WIDER_LATENT_ACTOR_SLOTS = 2;
 const EXPLORATION_WIDER_ACTOR_SLOTS =
   EXPLORATION_WIDER_EVIDENCE_ACTOR_SLOTS + EXPLORATION_WIDER_LATENT_ACTOR_SLOTS;
-const EXPLORATION_ACTOR_SLOTS =
-  EXPLORATION_PLAYER_SPHERE_ACTOR_SLOTS + EXPLORATION_WIDER_ACTOR_SLOTS;
 const EXPLORATION_TARGET_PER_SCOPE = 5;
 
 const EXPLORATION_DOMAINS = Object.freeze([
@@ -59,8 +57,6 @@ const EXPLORATION_DOMAINS = Object.freeze([
   "political rupture / elite fracture / mass unrest / coup or constitutional risk when current pressures support it",
   "strategic risk / coercive escalation / mobilization / brinkmanship / miscalculation when current interests support it",
 ]);
-
-const WORLD_SWEEP_AUDIT_RE = /\[\[WORLD_SWEEP:([^\]]*)\]\]/i;
 
 const ROUTINE_MILITARY_CUE_RE =
   /\b(skirmish(?:es)?|reconnaissance|patrol(?:s|ling)?|prob(?:e|es|ing)|artillery(?:\s+(?:fire|exchange|exchanges|bombardment|bombardments))?|counter[- ]battery|sporadic\s+(?:fire|clashes|fighting)|trench\s+(?:raid|raids)|outpost\s+(?:clash|clashes)|localized\s+(?:fighting|clashes|attacks?)|readiness\s+(?:remains?|stays?|continues?)\s+(?:elevated|heightened|high)|(?:elevated|heightened)\s+(?:military\s+)?readiness\s+(?:remains?|continues?)|maintain(?:s|ed|ing)?\s+(?:a\s+)?(?:heavy\s+|heightened\s+|elevated\s+)?(?:military\s+|security\s+)?posture|continued\s+(?:vigilance|monitoring|surveillance|alert\s+status)|security\s+posture\s+(?:remains?|continues?)|forces?\s+remain(?:s|ed)?\s+on\s+(?:heightened|high)\s+alert)\b/i;
@@ -204,34 +200,6 @@ const normalizeString = (value) =>
 const normalizeArray = (value) =>
   Array.isArray(value) ? value : [];
 
-
-const eventMentionsPolity = (event, polity) => {
-  const token = normalizeString(polity);
-  if (!token) return true;
-  const text = `${normalizeString(event?.title)} ${normalizeString(event?.description)}`.toLocaleLowerCase();
-  return text.includes(token.toLocaleLowerCase());
-};
-
-// FC5B: canonical war state must be legible in the visible event that creates or
-// carries it. A model may correctly emit combatants/war lifecycle while writing
-// prose that only mentions proxies or one side. Native repair keeps the accepted
-// canonical meaning visible without spending another model request.
-export const repairVisibleWarEventCoherence = (candidate) => {
-  let repaired = 0;
-  for (const event of normalizeArray(candidate?.events)) {
-    if (!event || typeof event !== "object") continue;
-    const warId = normalizeString(event?.warId);
-    const combatants = [...new Set(normalizeArray(event?.combatants).map(normalizeString).filter(Boolean))];
-    if (!warId || combatants.length < 2) continue;
-    const missing = combatants.filter((polity) => !eventMentionsPolity(event, polity));
-    if (!missing.length) continue;
-    const allNamed = combatants.join(" and ");
-    const suffix = ` Canonical belligerents in this fighting include ${allNamed}; their exact form of involvement remains as recorded in the campaign war state.`;
-    event.description = `${normalizeString(event?.description)}${suffix}`.trim();
-    repaired += 1;
-  }
-  return { repaired };
-};
 
 const uniqueStrings = (items) => [...new Set(
   normalizeArray(items).map(normalizeString).filter(Boolean),
@@ -1205,60 +1173,6 @@ export const buildNativeWorldExplorationSlate = ({
   return [...actorSlots, ...systemSlots].slice(0, 10);
 };
 
-export const formatWorldExplorationAuditContract = (slate) => {
-  if (!normalizeArray(slate).length) return [];
-
-  return [
-    "WORLD SWEEP EVALUATION — REQUIRED INTERNALLY",
-    "The native exploration slate below is an evaluation obligation, NOT an event quota.",
-    "Evaluate every numbered slot against THIS campaign before finalizing the response. A slot may be genuinely quiet.",
-    "Do NOT output WORLD_SWEEP markers, eventN audit references, storyline audit references, or any other audit bookkeeping.",
-    "Native Javascript derives exploration coverage from the actual events, storyline updates, diplomacy, and ledgers you return.",
-    "Your job is to decide what happened; runtime owns indexing, linkage, and audit bookkeeping.",
-  ];
-};
-
-const parseWorldSweepAudit = (summary) => {
-  const match = WORLD_SWEEP_AUDIT_RE.exec(String(summary ?? ""));
-  if (!match) return null;
-
-  const entries = new Map();
-
-  for (const rawPart of String(match[1] || "").split(";")) {
-    const part = rawPart.trim();
-    if (!part) continue;
-
-    const pos = part.indexOf("=");
-    if (pos < 1) {
-      return {
-        error: `Malformed WORLD_SWEEP audit entry "${part}".`,
-        entries,
-      };
-    }
-
-    const id = Number.parseInt(part.slice(0, pos).trim(), 10);
-    const verdict = normalizeString(part.slice(pos + 1));
-
-    if (!Number.isInteger(id) || id < 1 || !verdict) {
-      return {
-        error: `Malformed WORLD_SWEEP audit entry "${part}".`,
-        entries,
-      };
-    }
-
-    if (entries.has(id)) {
-      return {
-        error: `Duplicate WORLD_SWEEP slot ${id}.`,
-        entries,
-      };
-    }
-
-    entries.set(id, verdict);
-  }
-
-  return { error: "", entries };
-};
-
 const decodeStorylineAuditRecords = (value) => {
   if (Array.isArray(value)) return value.filter(Boolean);
 
@@ -1516,12 +1430,6 @@ export const validateWorldExplorationAudit = (
 
   return "";
 };
-
-export const stripWorldSweepAudit = (summary) =>
-  normalizeString(
-    String(summary ?? "").replace(WORLD_SWEEP_AUDIT_RE, " ")
-  );
-
 
 const stablePolityIdentityToken = (token, world) => {
   const raw = normalizeString(token);
@@ -3113,9 +3021,6 @@ const eventAgencyAuthorityReason = (event, {
 export const playerAgencyViolationReason = (event, options = {}) =>
   eventAgencyAuthorityReason(event, { ...options, requireAgency: false });
 
-export const resolveWorldEventProvenance = (candidate, options = {}) =>
-  bindWorldEventAuthorityRefs(candidate, options);
-
 const eventReferencesPlayerSovereignty = (event, {
   world = {},
   gameCountry = "",
@@ -3393,12 +3298,6 @@ export const createWorldEventScopeClassifier = (
     return actors.length ? "wider-world" : "unknown";
   };
 };
-
-export const classifyWorldEventScope = (
-  event,
-  analysis = null,
-  options = {},
-) => createWorldEventScopeClassifier(analysis, options)(event);
 
 const applyLowTrajectoryFeedGuard = ({
   events,

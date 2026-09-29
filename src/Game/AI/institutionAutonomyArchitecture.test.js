@@ -16,12 +16,6 @@ test("completed turns run a bounded autonomous institution ballot pass through e
   assert.match(gameplay, /requests: state\.requests/);
 });
 
-test("autonomous ballot requests are charged to the same completed-turn request budget", () => {
-  const budget = read("./requestBudget.js");
-  assert.match(budget, /"institutionBallots"/);
-  assert.match(budget, /unresolved NPC formal ballots after the new turn is canonical/i);
-});
-
 test("autonomous formal pass targets only unresolved voters and keeps player sovereignty", () => {
   const gameplay = read("./gameplay.js");
   const autonomy = read("./institutionAutonomy.js");

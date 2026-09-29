@@ -1637,9 +1637,6 @@ droppedCount:
   return { events: keptEvents, hidden, dropped };
 };
 
-export const getLastNativeCuratorAudit =
-  () => lastAudit;
-
 const runNativeCuratorSelfTests = () => {
   const make = (description) => ({
     title: "Test",

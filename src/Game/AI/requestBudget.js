@@ -256,18 +256,15 @@ export const backgroundAllowance = ({ settings, ledger }) => {
 
 // --- One time skip ---
 //
-// Who may spend, in order, while requests are being saved. The skip itself
-// always runs. Everything after it asks first, and a "no" is never an error:
-// the checks fail open, the agents report next turn, the history is folded on
-// a later skip.
-export const JUMP_SPENDERS = Object.freeze([
-    "jump",          // the time skip itself
-    "jumpRetry",     // asked again, only when the first answer could not be used at all
-    "review",        // units, territory, timeline, board and agents, in one request
-    "history",       // folding old events into the history document, when due
-    "repair",        // a second search when the skip came back thin
-    "institutionBallots", // unresolved NPC formal ballots after the new turn is canonical
-]);
+// Who may spend, in order, while requests are being saved: "jump" (the time
+// skip itself), "jumpRetry" (asked again, only when the first answer could not
+// be used at all), "review" (units, territory, timeline, board and agents, in
+// one request), "history" (folding old events into the history document, when
+// due), "repair" (a second search when the skip came back thin) and
+// "institutionBallots" (unresolved NPC formal ballots after the new turn is
+// canonical). The skip itself always runs. Everything after it asks first, and
+// a "no" is never an error: the checks fail open, the agents report next turn,
+// the history is folded on a later skip.
 
 // A skip generated in segments (Settings → AI) pays one request per segment:
 // the player chose that, so the cap moves with it rather than breaking the skip.

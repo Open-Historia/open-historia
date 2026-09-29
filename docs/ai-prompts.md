@@ -175,7 +175,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `markersSummary` | `world.markers` structures (≤60) with kind/owner/coords/note | `buildMarkersSummaryText` `promptContext.js` |
 | `numberOfRegions` | `String(regionCatalog.length)` | `promptContext.js` |
 | `recentEvents` | Unconsolidated event history, `eventLimit` window (10 default; 16 on advisor/leader path) | `buildEventHistoryText` `promptContext.js` |
-| `recentEventsLong` | `buildCampaignHistoryText`: "STORY SO FAR" (consolidated) + "RECENT EVENTS" (≤`longEventLimit`, 24) | `promptContext.js` / builder `95` |
+| `recentEventsLong` | Built inline in `buildPromptContext`: "STORY SO FAR" (`buildConsolidatedHistoryText`), "PERMANENT HISTORICAL ANCHORS" when a long history has them, then "RECENT EVENTS" (`buildEventHistoryText`, ≤`longEventLimit`, 24; 8 with lookups on) | `promptContext.js` |
 | `consolidatedHistory` | `buildConsolidatedHistoryText(world)` — the `consolidatedHistory[]` summaries | `promptContext.js` / builder `86` |
 | `recentRoundsWithDates` | `from → to` date pairs from `world.simulationHistory` (≤8) | `buildRecentRoundsWithDates` `promptContext.js` |
 | `chatHistory` | Current chat's `speaker: text` lines, or "No chat history." | `promptContext.js` |

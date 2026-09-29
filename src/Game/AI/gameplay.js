@@ -67,7 +67,6 @@ import {
   createWorldEventScopeClassifier,
   deriveWorldExplorationAudit,
   screenGeneratedWorldEvents,
-  stripWorldSweepAudit,
   validateWorldExplorationAudit,
 } from "./nativeWorldIntegrity.js";
 import { validatePoliticalImpactCompleteness } from "./politicalImpactCompleteness.js";
@@ -1127,7 +1126,7 @@ const screenSegmentPayload = (payload, {
     existingStorylines: world?.storylines,
     dropped: screened.dropped,
   });
-  payload.summary = stripWorldSweepAudit(payload?.summary);
+  payload.summary = String(payload?.summary ?? "").replace(/\s+/g, " ").trim();
 };
 
 // The one exploration audit the post-curation breadth repair works from: the
