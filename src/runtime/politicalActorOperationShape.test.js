@@ -225,3 +225,54 @@ test("native form-coalition rejects unknown parties while accepting parties crea
   assert.deepEqual(actor.government.rulingPartyIds, ["existing-party"]);
   assert.deepEqual(actor.government.coalitionPartyIds, ["new-party"]);
 });
+
+test("set-government that names only one side of the government keeps the other side", () => {
+  const makeWorld = () => ({
+    politicalActors: normalizePoliticalActors({
+      byPolity: {
+        Ruritania: {
+          polityKey: "Ruritania",
+          parties: [
+            { id: "red", name: "Red Party" },
+            { id: "blue", name: "Blue Party" },
+            { id: "green", name: "Green Party" },
+          ],
+          government: { rulingPartyIds: ["red"], coalitionPartyIds: ["blue"], coalitionName: "Old Alliance" },
+        },
+      },
+    }),
+  });
+
+  const coalitionOnly = makeWorld();
+  assert.equal(applyPoliticalActorOperation(coalitionOnly, {
+    op: "set-government", polityKey: "Ruritania", patch: { coalitionPartyIds: ["green"] },
+  }).applied, true);
+  let government = getPoliticalProfile(coalitionOnly, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red"]);
+  assert.deepEqual(government.coalitionPartyIds, ["green"]);
+
+  const rulingOnly = makeWorld();
+  assert.equal(applyPoliticalActorOperation(rulingOnly, {
+    op: "set-government", polityKey: "Ruritania", patch: { rulingPartyIds: ["green"] },
+  }).applied, true);
+  government = getPoliticalProfile(rulingOnly, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["green"]);
+  assert.deepEqual(government.coalitionPartyIds, ["blue"]);
+
+  const named = makeWorld();
+  assert.equal(applyPoliticalActorOperation(named, {
+    op: "set-government", polityKey: "Ruritania", patch: { coalition: "Grand Coalition" },
+  }).applied, true);
+  government = getPoliticalProfile(named, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red"]);
+  assert.deepEqual(government.coalitionPartyIds, ["blue"]);
+  assert.equal(government.coalitionName, "Grand Coalition");
+
+  const promoted = makeWorld();
+  assert.equal(applyPoliticalActorOperation(promoted, {
+    op: "set-government", polityKey: "Ruritania", patch: { rulingPartyIds: ["red", "blue"] },
+  }).applied, true);
+  government = getPoliticalProfile(promoted, "Ruritania").government;
+  assert.deepEqual(government.rulingPartyIds, ["red", "blue"]);
+  assert.deepEqual(government.coalitionPartyIds, []);
+});
