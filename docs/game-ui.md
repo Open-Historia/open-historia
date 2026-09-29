@@ -516,7 +516,7 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 | 20 | Country / faction picker | `libraryBar.jsx` | modal | `countryPicker` | country options, custom regions | `createGame`, `saveGame`, `activateGame` |
 | 21 | Map editor host | `libraryBar.jsx` | overlay | `isMapEditorOpen` | scenario assets | `applyMapToScenario` → many asset writes + new game |
 | 22 | ⌂ Exit Game / summary | `libraryBar.jsx` | cluster | `!menuOpen` | `activeGame` | `setMenuOpen(true)` |
-| 23 | Community hub tab | `communityHub.jsx` (posts read by `runtime/hubPosts.js`) | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle` (stamps `hubOrigin`), publish/export (writes `Scenario-Key`, see [§4.8](#48-suggested-changes)) |
+| 23 | Community hub tab | `communityHub.jsx` (posts read by `runtime/hubPosts.js`) | panel | menu tab | GitHub hub API, `/api/hub/*` | `downloadHubBundle`+`importScenarioBundle` (stamps `hubOrigin`), publish/export (writes `Scenario-Key`, see [§4.8](#48-suggested-changes); the prefilled post also stays on the page as **Open the GitHub post ↗**, because a browser may block the page a slow export tries to open) |
 
 ---
 

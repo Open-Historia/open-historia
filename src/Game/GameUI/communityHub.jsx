@@ -466,6 +466,9 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
   // The post whose Import button was clicked once while the library already
   // held a copy: the second click imports another (importLabel).
   const [armedId, setArmedId] = useState(null);
+  // The prefilled hub post a publish made, kept as a link: the export takes long
+  // enough that a browser may block the page it tries to open by itself.
+  const [publishPostUrl, setPublishPostUrl] = useState(null);
   // Client-side filter over the already-fetched posts — title, author and
   // description. No extra network calls; the hub API is only ever hit by load().
   const [searchQuery, setSearchQuery] = useState("");
@@ -484,6 +487,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
     setNotice(null);
     setError(null);
     setArmedId(null);
+    setPublishPostUrl(null);
   };
 
   // What the library already holds of each post: every import is stamped with
@@ -637,7 +641,7 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
   // where the author drags the downloaded bundle into the description.
   const handlePublish = async (scenario) => {
     setPublishPickerOpen(false);
-    setError(null);
+    clearBanners();
     try {
       const bundle = await exportScenarioBundle(scenario.id);
       // If this scenario's custom basemap is already on the community hub,
@@ -713,9 +717,14 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       const scenarioUrl =
         `${HUB_NEW_POST_URL}&title=${encodeURIComponent(`[Scenario] ${scenario.name}`)}` +
         `&technical=${encodeURIComponent(technicalLines.join("\n"))}`;
+      // A browser lets a click open a window only for a moment, and the export
+      // above can outlast it (web, Android), so the page may be blocked, and
+      // with noopener window.open says nothing either way. Try anyway (the
+      // desktop app always opens it), and keep the post as a link the player
+      // can click (publishPostUrl).
       window.open(scenarioUrl, "_blank", "noopener");
-      // After the page is open: a browser only lets a click open a window for
-      // a moment, and this write is not worth losing the page over.
+      setPublishPostUrl(scenarioUrl);
+      // After the page is open: this write is not worth losing the page over.
       if (!scenario.hubPublished?.key) {
         saveScenario(scenario.id, {
           hubPublished: { ...(scenario.hubPublished ?? {}), key: publishKey, publishedAt: new Date().toISOString() },
@@ -723,7 +732,10 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
       }
       setNotice(
         `${hasCover ? `"${fileName}" and its cover image were` : `"${fileName}" was`} downloaded. ` +
-          `On the GitHub page that just opened, drag ${hasCover ? "both files" : "that file"} into the Description box, then submit.` +
+          (hasCover
+            ? "On the GitHub post page, drag both files into the Description box, then submit."
+            : "On the GitHub post page, drag that file into the Description box, then submit.") +
+          " If that page did not open, use the Open the GitHub post button." +
           `${hasCover ? " The cover image becomes the card's preview in the hub." : ""}${extra}`,
       );
     } catch (nextError) {
@@ -801,6 +813,11 @@ const CommunityPanel = ({ fullPage = false, onPlay }) => {
           )}
 
           <StatusBanner notice={notice} error={error} />
+          {publishPostUrl && (
+            <a href={publishPostUrl} target="_blank" rel="noopener noreferrer" className="oh-tap-row" style={touchFit({ ...pillButton, marginBottom: "0.9rem", textDecoration: "none" }, touch)}>
+              Open the GitHub post ↗
+            </a>
+          )}
 
           {!posts && !error && (
             <div style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.85rem", padding: "1rem 0" }}>
