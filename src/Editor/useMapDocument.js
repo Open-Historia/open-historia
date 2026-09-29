@@ -14,6 +14,7 @@ import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
 import { mergeCityMarkers } from "./cityMarkers.js";
+import { mergePolityRoster } from "./polityRoster.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
 // The official editor ships a handful of region "types" carrying render +
@@ -281,117 +282,14 @@ export const useMapDocument = (initial) => {
   // Scenario Workshop bulk polity import. A 1911 roster can contain dozens of
   // landless polity identities before any of the newly imported regions have
   // been painted. Do the whole merge in ONE document update instead of calling
-  // upsertPolity/setColor/setTags eighty-plus times.
+  // upsertPolity/setColor/setTags eighty-plus times. The merge itself is
+  // polityRoster.js, which runs in node; this is the state wrapper. The summary is
+  // computed from the document as it is now; the state update recomputes on
+  // whatever the document is when React applies it.
   const importPolityRoster = useCallback((rows) => {
-    const sourceRows = Array.isArray(rows) ? rows : [];
-    const normalized = [];
-    const seen = new Set();
-
-    const parseRgb = (value) => {
-      if (Array.isArray(value) && value.length >= 3) {
-        const rgb = value.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(Number(v)))));
-        return rgb.every(Number.isFinite) ? rgb : null;
-      }
-      const m = /^#?([a-f0-9]{6})$/i.exec(String(value || "").trim());
-      if (!m) return null;
-      return [
-        Number.parseInt(m[1].slice(0, 2), 16),
-        Number.parseInt(m[1].slice(2, 4), 16),
-        Number.parseInt(m[1].slice(4, 6), 16),
-      ];
-    };
-
-    for (const raw of sourceRows) {
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-      const key = String(
-        raw.key ?? raw.stableKey ?? raw.stable_key ?? raw.code ?? raw.id ?? raw.name ?? "",
-      ).trim();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-
-      const name = String(
-        raw.name ?? raw.displayName ?? raw.display_name ?? raw.label ?? key,
-      ).trim() || key;
-      const aliasesRaw = Array.isArray(raw.aliases)
-        ? raw.aliases
-        : typeof raw.aliases === "string"
-          ? raw.aliases.split("|")
-          : [];
-      const aliases = [...new Set(
-        [key, name, ...aliasesRaw]
-          .map((v) => String(v || "").trim())
-          .filter(Boolean),
-      )];
-
-      const color = parseRgb(raw.color ?? raw.rgb ?? raw.colour ?? null);
-      const flag = String(raw.flag ?? raw.flagUrl ?? raw.flag_url ?? raw.flagDataUrl ?? "").trim();
-      const rowTags = Array.isArray(raw.tags)
-        ? raw.tags
-        : typeof raw.tags === "string"
-          ? raw.tags.split("|")
-          : [];
-
-      normalized.push({
-        key,
-        name,
-        aliases,
-        color,
-        flag: flag || null,
-        tags: normalizeTagList(rowTags),
-        status: String(raw.status || "active").trim() || "active",
-        note: String(raw.note || ""),
-        mapRefs: raw.mapRefs && typeof raw.mapRefs === "object" && !Array.isArray(raw.mapRefs)
-          ? raw.mapRefs
-          : null,
-      });
-    }
-
-    if (!normalized.length) {
-      return { count: 0, created: 0, updated: 0, colors: 0, flags: 0, tags: 0, firstKey: "" };
-    }
-
-    const existingBefore = new Set(Object.keys(doc.polities || {}));
-    const summary = {
-      count: normalized.length,
-      created: normalized.filter((row) => !existingBefore.has(row.key)).length,
-      updated: normalized.filter((row) => existingBefore.has(row.key)).length,
-      colors: normalized.filter((row) => row.color).length,
-      flags: normalized.filter((row) => row.flag).length,
-      tags: normalized.filter((row) => row.tags.length).length,
-      firstKey: normalized[0]?.key || "",
-    };
-
-    setDoc((d) => {
-      const polities = { ...(d.polities || {}) };
-      const colorOverrides = { ...(d.colorOverrides || {}) };
-      const flags = { ...(d.flags || {}) };
-      const tags = { ...(d.tags || {}) };
-
-      for (const row of normalized) {
-        const current = polities[row.key] || {};
-        const aliases = [...new Set([
-          ...(Array.isArray(current.aliases) ? current.aliases : []),
-          current.name,
-          ...row.aliases,
-        ].map((v) => String(v || "").trim()).filter(Boolean))];
-
-        polities[row.key] = {
-          ...current,
-          code: current.code || row.key,
-          name: row.name,
-          aliases,
-          status: row.status || current.status || "active",
-          note: row.note || current.note || "",
-          ...(row.mapRefs ? { mapRefs: row.mapRefs } : {}),
-        };
-
-        if (row.color) colorOverrides[row.key] = row.color;
-        if (row.flag) flags[row.key] = row.flag;
-        if (row.tags.length) tags[row.key] = row.tags;
-      }
-
-      return { ...d, polities, colorOverrides, flags, tags };
-    });
+    const { summary } = mergePolityRoster({ polities: doc.polities }, rows);
+    if (!summary.count) return summary;
+    setDoc((d) => mergePolityRoster(d, rows).doc);
     setSaveStatus("dirty");
     return summary;
   }, [doc.polities]);

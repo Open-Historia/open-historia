@@ -12,6 +12,7 @@ import { flagImageUrlFromGid } from "../runtime/countryFlags.js";
 import { resolveStockCountryCode } from "../runtime/polityIdentity.js";
 import { acceptFor } from "../runtime/fileAccept.js";
 import PuppetFields from "./PuppetFields.jsx";
+import { rosterRowKey } from "./polityRoster.js";
 
 const clean = (value) => String(value ?? "").trim();
 
@@ -38,9 +39,6 @@ const rosterRowsFromJson = (value) => {
   }
   return rows;
 };
-
-const rosterKey = (row) =>
-  clean(row?.key ?? row?.stableKey ?? row?.stable_key ?? row?.code ?? row?.id ?? row?.name);
 
 const uniqueStandardFlagForCandidates = (candidates) => {
   const codes = new Set();
@@ -287,7 +285,8 @@ const PolitiesPanel = ({
       let duplicates = 0;
 
       for (const row of rawRows) {
-        const key = rosterKey(row);
+        // The key the import will use, so the preview counts what lands.
+        const key = rosterRowKey(row);
         if (!key) {
           invalid += 1;
           continue;
