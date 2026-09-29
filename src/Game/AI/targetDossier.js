@@ -14,7 +14,8 @@
 // shown to them. A covert subordination appears only once the player's own
 // intelligence has found it (runtime/puppets.js visiblePuppetsFor).
 
-import { buildBoundedDiplomaticContext, canonicalDiplomaticPolity, diplomaticDisplayName } from "./nativeDiplomaticDirector.js";
+import { diplomaticDisplayName, relationStatusForScore } from "./nativeDiplomaticDirector.js";
+import { buildPolityIdentityIndex, resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { visiblePuppetsFor } from "../../runtime/puppets.js";
 import { groupRegions } from "../../runtime/groups.js";
 import { buildCompactEconomicContext } from "../../runtime/countryStats.js";
@@ -38,14 +39,39 @@ export const buildTargetLedgerLines = (world, target, {
 } = {}) => {
     const name = text(target);
     if (!world || !name) return [];
-    const key = canonicalDiplomaticPolity(name, world) || name;
+    // Each name resolved once, through one identity index, the way the
+    // diplomatic ledger resolves it (nativeDiplomaticDirector.js
+    // canonicalDiplomaticPolity). Resolving without an index rebuilds the
+    // world's polity tables on every call — several ms each — and this runs on
+    // the main thread for every briefing, stat sheet and agent report, against
+    // every war side, agreement party and group region.
+    const identityIndex = buildPolityIdentityIndex(world);
+    const resolved = new Map();
+    const canonical = (value) => {
+        const raw = text(value);
+        if (!raw) return "";
+        if (!resolved.has(raw)) {
+            const identity = resolvePolityIdentity(raw, world, {
+                allowUnknown: false,
+                requireActive: false,
+                allowCoreMatch: true,
+                allowStockBase: true,
+                identityIndex,
+            });
+            resolved.set(raw, text(identity?.resolved) || raw);
+        }
+        return resolved.get(raw);
+    };
+    const key = canonical(name);
     const same = (value) => {
-        const other = canonicalDiplomaticPolity(value, world) || text(value);
+        const other = canonical(value);
         return Boolean(other) && other === key;
     };
-    const shown = (value) => diplomaticDisplayName(world, canonicalDiplomaticPolity(value, world) || text(value)) || text(value);
+    const shown = (value) => diplomaticDisplayName(world, canonical(value)) || text(value);
     const player = text(playerPolity);
+    const playerKey = canonical(player);
     const isPlayer = Boolean(player) && same(player);
+    const withPlayer = (value) => Boolean(playerKey) && canonical(value) === playerKey;
     const lines = [];
 
     // Wars — world.wars is the only authority on who is fighting.
@@ -61,24 +87,21 @@ export const buildTargetLedgerLines = (world, target, {
         .filter(Boolean);
     lines.push(wars.length ? `Wars: ${wars.join("; ")}.` : "Wars: none recorded.");
 
-    // Its standing with the player: the bilateral relation and their agreements.
+    // Its standing with the player: the bilateral relation and their agreements,
+    // read from the normalized ledgers (the status is the band of the score, as
+    // the diplomatic ledger reads it).
     if (player && !isPlayer) {
-        const slice = buildBoundedDiplomaticContext(world, {
-            playerPolity: player,
-            focusActors: [name],
-            maxActors: 2,
-            puppetStates: false,
-        });
-        const relation = array(slice.relations).find((entry) => (same(entry.a) && !same(entry.b)) || (same(entry.b) && !same(entry.a)));
+        const relation = array(world.relations).find((entry) => (same(entry?.a) && withPlayer(entry?.b)) || (same(entry?.b) && withPlayer(entry?.a)));
         if (relation) {
             const score = Number(relation.score) || 0;
             const summary = text(relation.summary).slice(0, 200).replace(/[.\s]+$/, "");
-            lines.push(`Standing with ${player}: ${relation.status} (${score >= 0 ? "+" : ""}${score})${summary ? ` — ${summary}` : ""}.`);
+            lines.push(`Standing with ${player}: ${relationStatusForScore(score)} (${score >= 0 ? "+" : ""}${score})${summary ? ` — ${summary}` : ""}.`);
         } else {
             lines.push(`Standing with ${player}: no bilateral relation recorded.`);
         }
-        const agreements = array(slice.agreements)
-            .filter((agreement) => array(agreement.parties).some(same))
+        const agreements = array(world.agreements)
+            .filter((agreement) => agreement?.status === "active" || agreement?.status === "suspended")
+            .filter((agreement) => array(agreement.parties).some(same) && array(agreement.parties).some(withPlayer))
             .map((agreement) => {
                 const type = text(agreement.type).replace(/_/g, " ");
                 return `${text(agreement.title) || type} (${type}${agreement.status === "suspended" ? ", suspended" : ""})`;

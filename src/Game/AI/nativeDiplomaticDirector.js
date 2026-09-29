@@ -160,6 +160,9 @@ const normalizeRelationStatus = (_value, score = 0) => {
   if (numeric > -90) return "hostile";
   return "rival";
 };
+// The band a relation's score puts it in, for readers outside the director
+// (targetDossier.js).
+export const relationStatusForScore = (score) => normalizeRelationStatus("", score);
 
 // Band order and midpoints, for comparing a DECLARED status against the band
 // the score implies.

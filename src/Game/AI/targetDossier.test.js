@@ -114,3 +114,43 @@ test("polity names are exact: Russia is not Russian Federation", () => {
     });
     assert.equal(line(ledger(world), "Wars:"), "Wars: none recorded.");
 });
+
+test("the standing is the band of the score, and a treaty with a third party still counts", () => {
+    const world = worldOf({
+        // A declared status the score contradicts: the ledger reads the band.
+        relations: [{ a: "France", b: "Russia", score: 30, status: "hostile" }],
+        agreements: [
+            { id: "a1", title: "Channel Pact", type: "alliance", status: "active", parties: ["France", "Russia", "Germany"] },
+            { id: "a2", title: "Old Accord", type: "trade_economic", status: "ended", parties: ["France", "Russia"] },
+            { id: "a3", title: "Eastern Pact", type: "alliance", status: "suspended", parties: ["Belarus", "Russia"] },
+        ],
+    });
+    const lines = ledger(world);
+    assert.equal(line(lines, "Standing with"), "Standing with France: cordial (+30).");
+    assert.equal(line(lines, "Agreements with"), "Agreements with France: Channel Pact (alliance).");
+});
+
+// Every name used to be resolved from scratch (canonicalDiplomaticPolity, several
+// ms each on a real map) against every war side, agreement party and group
+// region, and three more whole-world normalizations came with the diplomatic
+// slice: seconds on the main thread per briefing, sheet or agent report.
+test("a world with many ledger rows is read in well under a second", () => {
+    const names = Object.keys(polities);
+    const regionOwnershipOverrides = {};
+    const groupAreas = {};
+    for (let i = 0; i < 4000; i += 1) {
+        regionOwnershipOverrides[`r${i}`] = names[i % names.length];
+        if (i % 3 === 0) groupAreas[`r${i}`] = "Wagner";
+    }
+    const world = worldOf({
+        regionOwnershipOverrides,
+        groups: { Wagner: { name: "Wagner" } },
+        groupAreas,
+        wars: Array.from({ length: 40 }, (_, i) => ({ id: `w${i}`, title: `War ${i}`, status: "active", sideA: [names[i % 5]], sideB: [names[(i + 1) % 5]] })),
+        agreements: Array.from({ length: 200 }, (_, i) => ({ id: `a${i}`, title: `Pact ${i}`, type: "alliance", status: "active", parties: [names[i % 5], names[(i + 2) % 5]] })),
+    });
+    const started = performance.now();
+    const lines = ledger(world);
+    assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
+    assert.match(line(lines, "Groups controlling"), /^Groups controlling part of its land: Wagner \(\d+ regions\)\.$/);
+});
