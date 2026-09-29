@@ -370,10 +370,10 @@ If a fresh game (round 1, no events/turns) has a "World Before Round One" briefi
 | **Help brainstorm actions** | `onOpenAdvisor` (opens the advisor drawer) | `Main.openAdvisor` |
 | **Get/Refresh AI suggestions** | `generateActionSuggestions({force:true})` → `SuggestionCard`s | AI |
 | Queue a suggestion | `normalizeSuggestionAction` → persisted; button flips to "✓ Queued" | — |
-| Delete an action | `handleDelete`; if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
+| Delete an action | `handleDelete`; once the shorter list is saved, if it was a queued unit order (`unitRevert`, still `planned`), also `revertUnitOrder` to undo its map effect | `src/Game/Map/unitsController.js` |
 | **🎯 Standing goal** (`StandingGoal`) | Under the date line: *Set a standing goal*, or the goal with **Edit**; editing offers Save (Enter), Cancel (Esc) and **Clear goal**. Locked while a turn runs (polls `isSimulationBusy()`), since the turn writes the world the goal lives in. The advisor, the time skip and the suggestions steer by it; a leader never sees it | `withPlayerGoal` → `writeWorldState` (`src/runtime/playerGoal.js`); read with `useRuntimeState("world", playerGoalOf)` |
 
-Only `status === "planned"` actions render. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
+Only `status === "planned"` actions render. Every change to the queue (`persistActions`) shows only once `writeActionsState` has saved it, because the time skip reads actions.json, not the panel: when the save fails the list stays as stored, a typed order stays in the box, a suggestion stays unqueued, a unit order is not undone, and an amber line under the list says the order could not be saved (or removed) and to try again. Country + date poll `JSON_URLS.game` every 5 s (display only). The launcher button (`Actions`, `actions.jsx:700`) lives in the toolbar.
 
 ---
 

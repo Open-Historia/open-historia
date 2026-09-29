@@ -97,6 +97,10 @@ const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
 
 const saveActions = async (actions) => writeActionsState(actions);
 
+// What the panel says when the queue could not be written.
+const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
+const ORDER_NOT_REMOVED = "The order could not be removed, so the next time skip would still carry it out. Try again.";
+
 const createManualAction = (input) =>
 normalizeActionEntry({
     kind: "action",
@@ -468,6 +472,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     const [queuedSuggestionIds, setQueuedSuggestionIds] = React.useState(() => new Set());
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+    // Why the last change to the queue was not saved, until one is.
+    const [saveError, setSaveError] = React.useState("");
     const [isImproving, setIsImproving] = React.useState(false);
     // Holds the in-flight improve's AbortController so the button can stop it,
     // the same shape as the timeline jump's cancel (time.jsx jumpAbortRef).
@@ -491,6 +497,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         ensureActionsStyles();
         setSuggestions([]);
         setHasRequestedSuggestions(false);
+        setSaveError("");
 
         // Actions created/edited from OUTSIDE this panel (the advisor, chatting in
         // its own drawer) used to be invisible here until the panel was closed and
@@ -520,13 +527,23 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         lastRoundRef.current = game.round;
     }, [isOpen, game.round]);
 
-    const persistActions = async (nextActions) => {
-        setActions(nextActions);
+    // Saves the list and says whether it was saved. The panel shows the new list
+    // only once it is: the time skip reads actions.json, not this panel, so an
+    // order shown as queued but never written would be dropped without a word.
+    // On a failure nothing is put back from this closure, because nothing was
+    // changed: the list on screen is still what the store holds, including
+    // anything the advisor or a unit move wrote meanwhile.
+    const persistActions = async (nextActions, failureNote = ORDER_NOT_SAVED) => {
         try {
             await saveActions(nextActions);
         } catch (error) {
             console.error("Failed to save actions:", error);
+            setSaveError(failureNote);
+            return false;
         }
+        setActions(nextActions);
+        setSaveError("");
+        return true;
     };
 
     const submittedActions = React.useMemo(
@@ -553,7 +570,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         setIsSubmitting(true);
         try {
-            await persistActions([...actions, nextAction]);
+            // Not saved: the order stays in the box to try again.
+            if (!(await persistActions([...actions, nextAction]))) return;
             // What the player told their country to do is half of "the series of
             // events they did" — a turn that goes wrong usually goes wrong
             // BECAUSE of an order, and the diagnostics log is unreadable without
@@ -600,6 +618,10 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
     const handleDelete = async (index) => {
         const removed = actions[index];
+        // Removed from the queue first: undoing the unit's move while the order
+        // stays in actions.json would leave the skip acting on a move the map no
+        // longer shows.
+        if (!(await persistActions(actions.filter((_, actionIndex) => actionIndex !== index), ORDER_NOT_REMOVED))) return;
         // Deleting a queued troop order also undoes what it did to the map —
         // otherwise a manual move/deploy stays in place while the AI is never
         // told about it (#368). Only planned orders carry a revert; anything
@@ -614,7 +636,6 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         logDebugEvent("action", `Order removed: ${removed?.title || removed?.text || "(untitled)"}`, {
             reverted: Boolean(removed?.unitRevert && (removed.status ?? "planned") === "planned"),
         });
-        await persistActions(actions.filter((_, actionIndex) => actionIndex !== index));
     };
 
     const handleQueueSuggestion = async (action) => {
@@ -625,7 +646,8 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             return;
         }
 
-        await persistActions([...actions, queuedAction]);
+        // Not saved: the card stays unqueued, so it can be tried again.
+        if (!(await persistActions([...actions, queuedAction]))) return;
         logDebugEvent("action", `Suggested order queued: ${queuedAction.title || queuedAction.text || "(untitled)"}`);
         // Visible click feedback: the suggestion button flips to "✓ Queued".
         setQueuedSuggestionIds((previous) => new Set(previous).add(action.id));
@@ -865,6 +887,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </div>
         </div>
         </div>
+
+        {saveError && (
+            <div role="alert" style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.72rem", lineHeight: "1.45", padding: "0 1.25rem 0.5rem" }}>
+            {saveError}
+            </div>
+        )}
 
         <div
         style={{
