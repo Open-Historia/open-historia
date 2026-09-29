@@ -37,6 +37,7 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
+import { contextWindowKey, createContextWindowMemory, describeRememberedWindow } from "../AI/contextWindow.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
@@ -508,6 +509,42 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
 //
 // Never a lock: whatever is chosen, the ladder can still step down from it, so a
 // setting made months ago cannot strand a campaign when a provider changes.
+// What each model has said about its context window (contextWindow.js), read
+// from the same storage the AI calls keep it in (main.jsx contextWindows).
+const contextWindowMemory = createContextWindowMemory({
+    getItem: (key) => { try { return localStorage.getItem(key); } catch { return null; } },
+    setItem: (key, value) => { try { localStorage.setItem(key, value); } catch { /* this session only */ } },
+});
+
+// A model's context window: what was learned from its refusals, which keeps a
+// request it cannot fit from being sent to it, and the player's own figure,
+// which beats that. Forget clears either — for a local model whose window was
+// raised, or a provider that raised its limit — and the next request is sent.
+const ContextWindowField = ({ entry }) => {
+    const [, setRevision] = useState(0);
+    if (!entry) return null;
+    const key = contextWindowKey(entry);
+    const known = contextWindowMemory.remembered(key);
+    const changed = () => setRevision((value) => value + 1);
+    return (
+        <div>
+        <SettingsInput
+        label="Context window (tokens)"
+        type="number"
+        value={known?.source === "declared" ? String(known.limitTokens) : ""}
+        onChange={(value) => { contextWindowMemory.declare(key, Number(value)); changed(); }}
+        placeholder="Not set"
+        helperText={describeRememberedWindow(known)}
+        />
+        {known && (
+            <button type="button" className="oh-tap-row" onClick={() => { contextWindowMemory.forget(key); changed(); }} style={{ ...smallButtonStyle, marginTop: "-0.5rem", marginBottom: "0.9rem" }}>
+            Forget this window
+            </button>
+        )}
+        </div>
+    );
+};
+
 const StructuredModeSelect = ({ onChange, value }) => {
     const mode = normalizeStructuredMode(value);
     return (
@@ -773,6 +810,7 @@ const EntryEditor = ({ entry, connections, entries }) => {
         helperText="Replaces the connection's custom parameters for this entry — e.g. the same model with a larger max_tokens, picked by the Time skip task."
         />
         <StructuredModeSelect value={entry.structuredMode} onChange={set("structuredMode")} />
+        <ContextWindowField entry={entry.resolved} />
         </details>
         </div>
     );

@@ -10,6 +10,7 @@ import {
     CONTEXT_WINDOW_MARGIN,
     contextWindowKey,
     createContextWindowMemory,
+    describeRememberedWindow,
     estimateTokens,
     nothingFitsMessage,
     parseContextWindowError,
@@ -141,10 +142,48 @@ test("the memory survives a storage that refuses to write", () => {
     assert.equal(memory.refusal("k", 5000), "");
 });
 
+test("a window the player set is named as theirs when it refuses a request", () => {
+    const memory = createContextWindowMemory(memoryStorage());
+    memory.declare("mine", 32768);
+    memory.learn("learned", { limitTokens: 32768 });
+    assert.equal(memory.refusal("mine", 47000), "this request is about 47K tokens and the window you set for this model is 33K");
+    assert.equal(memory.refusal("learned", 47000), "this request is about 47K tokens and the model's window is 33K");
+});
+
+test("Settings is told what is remembered, until when, and nothing once it lapsed", () => {
+    let at = 1000;
+    const memory = createContextWindowMemory(memoryStorage(), { now: () => at });
+    const formatDate = (ms) => `day ${Math.floor(ms / (24 * 60 * 60 * 1000))}`;
+    assert.equal(memory.remembered("k"), null);
+    assert.match(describeRememberedWindow(null, { formatDate }), /learns this model's window from its own refusal/);
+
+    memory.learn("k", { limitTokens: 32768 });
+    assert.equal(describeRememberedWindow(memory.remembered("k"), { formatDate }),
+        "The model said its window is 33K tokens. A request too big for it is not sent to it until day 30.");
+
+    memory.learn("seen", { limitTokens: null, requestTokens: 47000 });
+    assert.equal(describeRememberedWindow(memory.remembered("seen"), { formatDate }),
+        "The model refused a request of about 47K tokens. One that big is not sent to it until day 7.");
+
+    memory.declare("mine", 200000);
+    assert.equal(memory.remembered("mine").until, null);
+    assert.equal(describeRememberedWindow(memory.remembered("mine"), { formatDate }),
+        "You set this model's window to 200K tokens. A request too big for it is not sent to it.");
+
+    at = 8 * 24 * 60 * 60 * 1000;
+    assert.equal(memory.remembered("seen"), null, "lapsed, as the preflight treats it");
+    assert.notEqual(memory.remembered("k"), null);
+
+    memory.forget("k");
+    assert.equal(memory.remembered("k"), null);
+    assert.equal(memory.refusal("k", 470000), "", "forgotten: the next request is sent");
+});
+
 test("when nothing fits, the message names every entry and what to do", () => {
     const message = nothingFitsMessage([{ label: "small (Local)", reason: "this request is about 47K tokens and the model's window is 33K" }], 46901);
     assert.match(message, /about 47K tokens/);
     assert.match(message, /small \(Local\): this request/);
     assert.match(message, /was not sent/);
     assert.match(message, /Settings → AI/);
+    assert.match(message, /forget its window/);
 });
