@@ -108,8 +108,10 @@ import {
   getGameplayTool,
   getGameplayToolForCustomStatSheet,
   getGameplayToolForStatIndices,
+  INTELLIGENCE_RATING_FIELD,
   normalizeGameplayPayload,
   validateGameplayPayload,
+  withIntelligenceRating,
 } from "./gameplaySchemas.js";
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
@@ -3142,9 +3144,15 @@ const runJsonTask = async (taskKey, {
     { idleMs, firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0 },
     () => controller.abort(timeoutError),
   );
-  const defaultTool = customFullStatSheet
+  const taskTool = customFullStatSheet
     ? getGameplayToolForCustomStatSheet(taskKey, customStatRows, { custom: true })
     : getGameplayToolForStatIndices(taskKey, statIndexRows, { custom: customStatIndices });
+  // A first reading's sheet can carry the service's rating, in the same request
+  // (generateCountryStatSheet rateIntelligence, gameplaySchemas.js
+  // withIntelligenceRating).
+  const defaultTool = taskKey === "countryStatSheet" && variables?.statsRateIntelligence
+    ? withIntelligenceRating(taskTool)
+    : taskTool;
   const tool = toolOverride !== undefined ? toolOverride : defaultTool;
   const history = [{ role: "user", parts: [{ text: userMessage }] }];
   // Detailed mode follows every AI task, not only the ones that fail. Sizes and
@@ -3545,6 +3553,7 @@ const runJsonTask = async (taskKey, {
           territorialMacroComponentsText: _territorialMacroComponentsText,
           territorialComponentsText: _territorialComponentsText,
           territorialComponentSplitText: _territorialComponentSplitText,
+          [INTELLIGENCE_RATING_FIELD]: statsIntelligenceService,
           ...statFields
         } = parsed;
         const plannedComponentCount = normalizeArray(variables?.statsTerritorialPlan).length;
@@ -3559,6 +3568,8 @@ const runJsonTask = async (taskKey, {
         // Keyed by the payload itself: the answer runJsonTask returns may be an
         // earlier attempt's (the salvage pass), and only that answer's split counts.
         variables?.statsComponentSplitOutcome?.set?.(parsed, splitGeographies);
+        // And the service's rating a first reading asked for alongside the sheet.
+        if (statsIntelligenceService !== undefined) variables?.statsIntelligenceOutcome?.set?.(parsed, statsIntelligenceService);
 
         const finalizedComponentCount = normalizeArray(parsed?.territorialComponents).length;
         if (!statsCoverageError && plannedComponentCount > 0 && finalizedComponentCount !== plannedComponentCount) {
@@ -11276,23 +11287,38 @@ export const assessIntelligenceService = async (target, { signal, requestKind } 
     ].filter(Boolean).join("\n\n"),
     variables,
   });
-  const rating = normalizeIntelligenceRating(payload?.intelligence);
+  return storeFirstIntelligenceRating(name, payload, { campaign, signal });
+};
+
+// A first rating written: `assessment` is the intelligence assessment's answer
+// ({ intelligence, service, rationale }), from its own request or from a stat
+// sheet that carried it. Re-read at write time, once the simulation is idle
+// again: a turn may have rated the service meanwhile (its number wins), and the
+// campaign in front of the player may have changed (then this belongs to
+// nobody).
+const storeFirstIntelligenceRating = async (name, assessment, { campaign, signal = null } = {}) => {
+  const rating = normalizeIntelligenceRating(assessment?.intelligence);
   if (rating === null) throw new Error("The assessment carried no rating.");
-  // Re-read at write time, once the simulation is idle again: a turn may have
-  // rated the service meanwhile (its number wins), and the campaign in front
-  // of the player may have changed (then this belongs to nobody).
   await waitForSimulationIdle({ signal });
   throwIfAborted(signal);
   if (activeCampaignId() !== campaign) throw new Error("The campaign changed while the service was being assessed.");
   const fresh = normalizeWorldState(await readWorldState({ force: true }));
   if (isIntelligenceRated(fresh, name)) return intelligenceOf(fresh, name);
   await writeWorldState({ ...fresh, intelligence: { ...(fresh.intelligence ?? {}), [name]: rating } });
-  const service = normalizeString(payload?.service);
+  const service = normalizeString(assessment?.service);
   logDebugEvent("espionage", `${name}'s intelligence service rated ${rating}/100 on first inspection${service ? ` (${service})` : ""}.`, {
-    rationale: normalizeString(payload?.rationale),
+    rationale: normalizeString(assessment?.rationale),
   });
   return rating;
 };
+
+// What a combined first reading adds to the stat sheet's request: the
+// intelligence assessment's question, after the numbers it rests on.
+const intelligenceRatingInstruction = (target, date) =>
+  `Also rate the intelligence service of ${target} as it stands on ${date || "the current date"}, in ${INTELLIGENCE_RATING_FIELD}, after the sheet's values: `
+  + "how well it reads other governments and how well it keeps its own secrets. "
+  + "Weigh the state's size, wealth and reach, its regime's appetite for secret police and foreign operations, its tradition of espionage, "
+  + "the help of its allies, and anything the events so far say about purges, defections, new bureaus or exposed networks.";
 
 // Fire-and-forget forms for the UI and the turn: deduplicated, silent on
 // failure, and no-ops for a polity that already has its number or a provider
@@ -11304,7 +11330,9 @@ export const ensureIntelligenceRated = (target, { reason = "" } = {}) =>
     return assessIntelligenceService(name, { requestKind: BACKGROUND_REQUEST });
   });
 
-export const ensureCountryStatSheet = (target, { reason = "" } = {}) =>
+// `rateIntelligence`: a polity whose service is not rated either gets its rating
+// in the same request as the sheet (ensureCountryAssessed).
+export const ensureCountryStatSheet = (target, { reason = "", rateIntelligence = false } = {}) =>
   firstReading("stat sheet", target, reason, async (name) => {
     const [world, definition] = await Promise.all([
       readWorldState({ force: false }).then(normalizeWorldState),
@@ -11316,13 +11344,32 @@ export const ensureCountryStatSheet = (target, { reason = "" } = {}) =>
       : isCompleteCountryStatSheet(persisted);
     if (complete) return persisted;
     await waitForSimulationIdle();
-    return generateCountryStatSheet({ code: name, name, requestKind: BACKGROUND_REQUEST });
+    const rate = rateIntelligence && !isIntelligenceRated(world, name);
+    const campaign = activeCampaignId();
+    let assessment = null;
+    const sheet = await generateCountryStatSheet({
+      code: name,
+      name,
+      requestKind: BACKGROUND_REQUEST,
+      ...(rate ? { rateIntelligence: true, onIntelligenceRating: (value) => { assessment = value; } } : {}),
+    });
+    // After the sheet is written, so the two writes never race. A missing or
+    // unusable rating is not a failure: the standalone reading asks for it.
+    if (assessment) {
+      await storeFirstIntelligenceRating(name, assessment, { campaign }).catch((error) => {
+        logDebugEvent("espionage", `${name}: the rating that came with the stat sheet was not kept: ${error?.message || error}`);
+      });
+    }
+    return sheet;
   });
 
 // Everything a polity the player is dealing with should have: the sheet first,
-// so the service reading can see the numbers it rests on.
+// so the service reading can see the numbers it rests on. With neither, both
+// come in the sheet's one request (the rating written after the numbers); the
+// standalone reading below then finds the service rated and asks nothing, or
+// asks on its own when the sheet's answer did not carry a usable rating.
 export const ensureCountryAssessed = (target, options = {}) =>
-  ensureCountryStatSheet(target, options).then(() => ensureIntelligenceRated(target, options));
+  ensureCountryStatSheet(target, { ...options, rateIntelligence: true }).then(() => ensureIntelligenceRated(target, options));
 
 const generateScenarioCustomStatSheet = async ({
   bundle,
@@ -11331,6 +11378,8 @@ const generateScenarioCustomStatSheet = async ({
   target,
   worldAtStart,
   signal,
+  rateIntelligence = false,
+  onIntelligenceRating = null,
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
@@ -11356,9 +11405,11 @@ ${dossier || "(nothing recorded)"}`,
         ? `PREVIOUS PERSISTENT CUSTOM STATS (campaign canon; preserve continuity unless supplied events justify change):
 ${JSON.stringify(previousValues)}`
         : "No previous custom Stats baseline exists; establish scenario-appropriate initial values from the supplied canon.",
+      rateIntelligence ? intelligenceRatingInstruction(target, currentDate) : "",
     ].filter(Boolean).join("\n\n"),
-    variables,
+    variables: rateIntelligence ? { ...variables, statsRateIntelligence: true } : variables,
   });
+  if (rateIntelligence) onIntelligenceRating?.(payload?.[INTELLIGENCE_RATING_FIELD] ?? null);
 
   throwIfAborted(signal);
   const customStats = normalizeCustomStatValues(payload?.customStats, definition);
@@ -11425,7 +11476,9 @@ ${JSON.stringify(previousValues)}`
 
 // Structured national stat sheet for the Stats tab, grounded in the same
 // campaign context as the intelligence briefing.
-export const generateCountryStatSheet = async ({ code, name, forceReassess = false, signal, requestKind, budget = null, onRequest } = {}) => {
+// `rateIntelligence` asks for the polity's intelligence rating in the same
+// request, handed to `onIntelligenceRating` (ensureCountryStatSheet writes it).
+export const generateCountryStatSheet = async ({ code, name, forceReassess = false, signal, requestKind, budget = null, onRequest, rateIntelligence = false, onIntelligenceRating = null } = {}) => {
   // Issue #724: wait out any running simulation before reading the world.
   // The Stats pane calls this directly, not through ensureCountryStatSheet, so
   // it skipped the idle wait every other out-of-turn writer takes — on a fresh
@@ -11454,6 +11507,8 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       target,
       worldAtStart,
       signal,
+      rateIntelligence,
+      onIntelligenceRating,
     });
   }
 
@@ -11819,6 +11874,8 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       }))
     : [];
   const componentSplitOutcome = new WeakMap();
+  // The service's rating, when this sheet was asked for one; keyed like the split.
+  const intelligenceOutcome = new WeakMap();
 
   const statsAiStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   const { payload } = await runJsonTask("countryStatSheet", {
@@ -11834,9 +11891,11 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       `AUTHORITATIVE TERRITORIAL BASIS:\n${territorialContext}`,
       previousContext ? `PREVIOUS PERSISTENT STATS:\n${previousContext}` : "",
       `FRESH ECONOMIC / DEMOGRAPHIC EVIDENCE:\n${evidenceContext || "None newly unaccounted."}`,
+      rateIntelligence ? intelligenceRatingInstruction(target, currentDate) : "",
     ].filter(Boolean).join("\n\n"),
     variables: {
       ...variables,
+      ...(rateIntelligence ? { statsRateIntelligence: true, statsIntelligenceOutcome: intelligenceOutcome } : {}),
       statsTerritorialContext: territorialContext,
       statsTerritorialPlan: territorialPlan,
       statsTerritorialMacroPlan: territorialMacroPlan,
@@ -11858,6 +11917,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       statsCalibrationTargetName: statCode || target,
     },
   });
+  if (rateIntelligence) onIntelligenceRating?.((payload && intelligenceOutcome.get(payload)) ?? null);
   const statsAiEndedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   console.info(`[stats 8B.2.18.1 perf] ${target}: bounded Stats AI ${(Math.max(0, statsAiEndedAt - statsAiStartedAt)).toFixed(1)} ms.`);
 

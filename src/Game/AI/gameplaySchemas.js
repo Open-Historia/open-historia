@@ -2935,6 +2935,33 @@ const INTELLIGENCE_ASSESSMENT_SCHEMA = {
   additionalProperties: false,
 };
 
+// A first reading of a polity with neither a stat sheet nor a rated service asks
+// for both in ONE request (gameplay.js ensureCountryAssessed): the stat-sheet
+// tool, standard or scenario-defined, with the intelligence assessment's own
+// fields added LAST, so the rating is written after the numbers it rests on.
+// Only the tool shown to the model changes: the field is a transport field,
+// taken off the answer before the sheet is validated, and no other request
+// carries it.
+export const INTELLIGENCE_RATING_FIELD = "intelligenceService";
+export const withIntelligenceRating = (tool) => {
+  if (!tool?.schema?.properties) return tool;
+  return {
+    ...tool,
+    description: `${tool.description} Also rate the polity's intelligence service in ${INTELLIGENCE_RATING_FIELD}.`,
+    schema: {
+      ...tool.schema,
+      properties: {
+        ...tool.schema.properties,
+        [INTELLIGENCE_RATING_FIELD]: {
+          ...INTELLIGENCE_ASSESSMENT_SCHEMA,
+          description: "The polity's intelligence service as it stands on the current date: how well it reads other governments and keeps its own secrets. Written after the sheet's values.",
+        },
+      },
+      required: [...(Array.isArray(tool.schema.required) ? tool.schema.required : []), INTELLIGENCE_RATING_FIELD],
+    },
+  };
+};
+
 export const GAMEPLAY_SCHEMAS = Object.freeze({
   spyIntercept: SPY_INTERCEPT_SCHEMA,
   intelligenceAssessment: INTELLIGENCE_ASSESSMENT_SCHEMA,
