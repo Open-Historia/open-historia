@@ -326,6 +326,10 @@ The map's single `click` handler (`Nations.jsx:564`) routes by `getInteractionMo
 
 The staged-reveal system (`setUnitsOverride` / `setWorldStateOverride`) lets the map show units/world as of the last revealed event during a turn's event playback, snapping back to live state when cleared (see [World state](world-state.md) and the turn/time system).
 
+### Selection cards — `src/Game/Selection/*`
+
+The region, unit and feature cards share `Selection/mapCards.js`. On a desktop each card points at its place (`useCardScreenPos`, following the camera once a frame); on a phone it is a sheet and follows nothing. `cardScreenPoint` hides a card whose place is off the screen, and on the globe one on the far side. The horizon test is the globe's alone: on the flat map, the default, a zoomed-out view shows far more than half the world, and a place more than 90° of longitude from the centre used to open no card at all. The flat map's world copies are tried a turn east and west. A card that is not on screen has no fade-out to play, so a dismiss then clears the selection at once.
+
 ---
 
 ## 10. The decorative globe (`GlobeEffects.jsx`)

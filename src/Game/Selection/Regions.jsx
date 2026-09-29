@@ -16,6 +16,7 @@ import { openCountryPanel } from "./CountryPanel.jsx";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
+import { useCardScreenPos } from "./mapCards.js";
 
 let _setSelection = null;
 let _currentSelection = null;
@@ -291,7 +292,6 @@ const RegionPopup = () => {
     const asSheet = isMobile || shortTouch;
     const isTouch = useTouchPrimary();
     const [selection, setSelection] = useState(null);
-    const [screenPos, setScreenPos] = useState(null);
     const [animKey, setAnimKey] = useState(0);
     const [dismissing, setDismissing] = useState(false);
     const [flagState, setFlagState] = useState(() => createFlagState());
@@ -474,14 +474,17 @@ const RegionPopup = () => {
 
     _dismiss = () => setDismissing(true);
 
-    const handleAnimationEnd = (e) => {
-        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
-
+    const finishDismiss = () => {
         _currentSelection = null;
         setSelection(null);
         setFlagState(createFlagState());
         setFlagImageFailed(false);
         setDismissing(false);
+    };
+
+    const handleAnimationEnd = (e) => {
+        if (e.animationName !== "regionPopupFadeOut" && e.animationName !== "regionSheetFadeOut") return;
+        finishDismiss();
     };
 
     useEffect(() => {
@@ -506,58 +509,16 @@ const RegionPopup = () => {
         );
     }, [selection?.COUNTRY, selection?.GID_0, selection?.GID_1, selection?.owner, worldState, customFlags, territoryState]);
 
+    // A phone's sheet follows no point on the map, so nothing is tracked
+    // (mapCards.js).
+    const screenPos = useCardScreenPos(map, selection?.lngLat, Boolean(selection) && !asSheet);
+
+    // A card that is not on screen has no fade-out to play, and the fade's end
+    // is what clears the selection: without this a dismiss left it selected.
     useEffect(() => {
-        // A phone's sheet follows no point on the map, so nothing is tracked.
-        if (!map || !selection || asSheet) {
-            setScreenPos(null);
-            return;
-        }
-
-        const update = () => {
-            const center = map.getCenter();
-            const toRad = (deg) => (deg * Math.PI) / 180;
-            const lat1 = toRad(center.lat);
-            const lat2 = toRad(selection.lngLat.lat);
-            const dLng = toRad(selection.lngLat.lng - center.lng);
-            const cosAngle =
-            Math.sin(lat1) * Math.sin(lat2) +
-            Math.cos(lat1) * Math.cos(lat2) * Math.cos(dLng);
-
-            if (cosAngle < 0) {
-                setScreenPos(null);
-                return;
-            }
-
-            const point = map.project(selection.lngLat);
-            setScreenPos((prev) => {
-                if (
-                    prev &&
-                    Math.abs(prev.x - point.x) < 0.5 &&
-                    Math.abs(prev.y - point.y) < 0.5
-                ) {
-                    return prev;
-                }
-
-                return { x: point.x, y: point.y };
-            });
-        };
-
-        let frameId = 0;
-        const scheduleUpdate = () => {
-            if (frameId) return;
-            frameId = requestAnimationFrame(() => {
-                frameId = 0;
-                update();
-            });
-        };
-
-        update();
-        map.on("move", scheduleUpdate);
-        return () => {
-            if (frameId) cancelAnimationFrame(frameId);
-            map.off("move", scheduleUpdate);
-        };
-    }, [map, selection, asSheet]);
+        if (dismissing && !asSheet && !screenPos) finishDismiss();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dismissing, asSheet, screenPos]);
 
     // On a phone the card and a bottom panel would share one spot at the
     // bottom of the screen, the card underneath: it tells the HUD it opened,
