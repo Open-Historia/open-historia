@@ -277,6 +277,25 @@ test("list_projects: the board by owner and status, with what completion moves o
   assert.match(run("list_projects", { owner: "Russia" }).error, /not a power/);
 });
 
+test("list_projects: a proposed programme is open, and the board's statuses decide it", () => {
+  const ctx = buildLookupContext({
+    regions: REGIONS,
+    world: {
+      ...WORLD,
+      projects: [
+        { id: "q1", name: "Canal", ownerCode: "Ukraine", status: "proposed" },
+        { id: "q2", name: "Dam", ownerCode: "Ukraine", status: "Stalled" },
+        { id: "q3", name: "Bridge", ownerCode: "Ukraine", status: "complete" },
+        { id: "q4", name: "Port", ownerCode: "Ukraine", status: "cancelled" },
+        { id: "q5", name: "Rail", ownerCode: "Ukraine" },
+      ],
+    },
+    player: "Ukraine",
+  });
+  assert.deepEqual(executeLookup(ctx, "list_projects", {}).projects.map((project) => project.id), ["q1", "q2", "q5"]);
+  assert.deepEqual(executeLookup(ctx, "list_projects", { status: "closed" }).projects.map((project) => project.id), ["q3", "q4"]);
+});
+
 test("relations_between: the pairwise ledger, agreements and whether they are at war", () => {
   const pair = run("relations_between", { a: "Ukraine", b: "Russian Federation" });
   assert.equal(pair.relation.score, -70);

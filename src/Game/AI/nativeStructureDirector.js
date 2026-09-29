@@ -18,7 +18,7 @@
 // satellite or a constellation never gets a marker, the ground station serving
 // it does — and not what moves, which is a unit.
 
-import { normalizeMarkers } from "../../runtime/gameState.js";
+import { PROJECT_OPEN_STATUSES, normalizeMarkers } from "../../runtime/gameState.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -82,9 +82,8 @@ const summarizeStructure = (marker) => ({
 });
 
 // The entries a structure could belong to: the ones still under way.
-const OPEN_PROJECT_STATUSES = new Set(["proposed", "active", "stalled", "paused"]);
 const summarizeProjects = (projects, playerCountry) => normalizeArray(projects)
-  .filter((project) => normalizeString(project?.id) && OPEN_PROJECT_STATUSES.has(normalizeString(project?.status).toLowerCase() || "active"))
+  .filter((project) => normalizeString(project?.id) && PROJECT_OPEN_STATUSES.has(normalizeString(project?.status).toLowerCase() || "active"))
   .map((project) => ({
     id: normalizeString(project.id),
     name: normalizeString(project.name),

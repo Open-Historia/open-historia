@@ -17,6 +17,7 @@ import { foldRegionKey, matchRegionName, stripRegionAffixes, editDistance } from
 import { getPoliticalProfile } from "../../runtime/politicalActors.js";
 import { buildPoliticalKnowledgeView, POLITICAL_KNOWLEDGE_LEVELS } from "../../runtime/politicalKnowledge.js";
 import { normalizeInstitutions } from "../../runtime/institutions.js";
+import { isProjectOpen } from "../../runtime/projects.js";
 import { findGroupKey, groupRegions, normalizeGroupAreas, normalizeGroups } from "../../runtime/groups.js";
 import {
   SIMULATION_AUDIENCE,
@@ -726,11 +727,9 @@ const projectAsSeenBy = (audience, project, player) => {
   return null;
 };
 
-const OPEN_PROJECT_STATUSES = new Set(["active", "planned", "stalled", "paused", "in-progress", "ongoing"]);
-const projectIsOpen = (project) => {
-  const status = clean(project?.status).toLowerCase();
-  return !status || OPEN_PROJECT_STATUSES.has(status);
-};
+// The board's own rule (runtime/projects.js), case-folded because a lookup world
+// can carry a status as the model wrote it.
+const projectIsOpen = (project) => isProjectOpen({ status: clean(project?.status).toLowerCase() });
 
 const storylineBrief = (storyline) => ({
   id: clean(storyline?.id),
