@@ -327,7 +327,7 @@ The setting is **offered, never inferred**: `createModeObserver` records where c
 
 ### Streaming vs buffered
 
-**Every request streams** unless a gateway has refused to (`streamThisRequest = !streamingDisabled`). The reason is keep-alive, not rendering: a buffered request sends zero bytes for the whole generation, which is indistinguishable from a dead one, and a gateway closes it. The original field report was a 502 at exactly 301.7s on a healthy endpoint.
+**Every request streams** unless a gateway has refused to (`streamThisRequest = !streamingDisabled`). The reason is keep-alive, not rendering: a buffered request sends zero bytes for the whole generation, which is indistinguishable from a dead one, and a gateway closes it. The original field report was a 502 at exactly 301.7s on a healthy endpoint. A refusal (`isStreamingRefusal`) is remembered for the session per provider, endpoint and model, and per whether the request declared functions (`streamingRefusals`), so later calls on that gateway start buffered instead of each paying one refused request; on Anthropic a later "streaming is required" answer forgets it again.
 
 Diplomatic chat was the last buffered path — the only call with neither a `tool` nor an `onChunk` — and failed on precisely this: an endpoint 502'd every leader reply after ~38s of silence, while the **advisor**, a *bigger* prompt on the same endpoint, worked fine because it renders tokens and therefore streamed.
 

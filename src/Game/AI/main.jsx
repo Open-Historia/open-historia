@@ -1232,6 +1232,16 @@ async function callGemini(systemPrompt, history, {
 // left to write with.
 const REASONING_HEADROOM_TOKENS = 8192;
 
+// Gateways that refused a streamed request, for the session: without this every
+// call paid one refused request before going buffered, and a skip with three
+// lookup rounds paid four. Keyed by provider, endpoint and model, and by whether
+// the request declared functions — the usual refusal is stream-with-tools, and
+// a plain chat on the same gateway should keep its tokens streaming. Kept for
+// the session only: streaming is the keep-alive a long turn needs, so a gateway
+// that starts accepting it again should get it back after a reload.
+const streamingRefusals = new Set();
+const streamingRefusalKey = (samplingKey, withTools) => `${samplingKey}|${withTools ? "tools" : "plain"}`;
+
 async function callOpenAIStyleChatCompletions({
     endpoint,
     headers,
@@ -1295,6 +1305,7 @@ async function callOpenAIStyleChatCompletions({
     // stream parameter). One-shot, and tried BEFORE the structuredMode ladder
     // below: giving up streaming costs a keep-alive, while giving up tool mode
     // costs structured output, so the cheaper concession goes first.
+    // Remembered, so the next call on this gateway starts buffered.
     let streamingDisabled = false;
     // The model answered with its own planning monologue instead of calling the
     // tool (see looksLikeDeliberation in providerErrors.js). One-shot, same
@@ -1302,6 +1313,8 @@ async function callOpenAIStyleChatCompletions({
     // runJsonTask's two output attempts, so it must only ever flip once.
     let insistedOnToolCall = false;
     const samplingKey = temperatureRefusalKey({ provider: providerLabel, endpoint, model });
+    const streamingKey = streamingRefusalKey(samplingKey, Boolean(tool) || isLookupChat(tool, onChunk, lookupTools));
+    streamingDisabled = streamingRefusals.has(streamingKey);
     const ownTemperature = temperatureBody(taskKey);
     let disableTemperature = temperatureRefusals.refuses(samplingKey);
     const wantsReasoning = getReasoningEnabled();
@@ -1453,6 +1466,7 @@ async function callOpenAIStyleChatCompletions({
             // difference between a real turn and canned events.
             if (streamThisRequest && isStreamingRefusal(errorMessage)) {
                 streamingDisabled = true;
+                streamingRefusals.add(streamingKey);
                 console.warn(`[ai] ${providerLabel} refused a streamed request; retrying buffered — long turns on this endpoint may time out.`);
                 continue;
             }
@@ -1859,6 +1873,11 @@ async function callAnthropic(systemPrompt, history, {
         signal,
     });
     onModel?.(model);
+    const streamingKey = streamingRefusalKey(
+        temperatureRefusalKey({ provider: "Anthropic", endpoint: ANTHROPIC_API_ENDPOINT, model }),
+        Boolean(tool) || isLookupChat(tool, onChunk, lookupTools),
+    );
+    streamingDisabled = streamingRefusals.has(streamingKey);
 
     const headers = {
         "Content-Type": "application/json",
@@ -1966,6 +1985,7 @@ async function callAnthropic(systemPrompt, history, {
             // if streaming was turned off below.
             if (response.status === 400 && streamingDisabled && isStreamingRequired(message) && attempt < retries) {
                 streamingDisabled = false;
+                streamingRefusals.delete(streamingKey);
                 console.warn("[ai] Anthropic requires streaming for a request this long; re-enabling it.");
                 continue;
             }
@@ -1973,6 +1993,7 @@ async function callAnthropic(systemPrompt, history, {
             // keep-alive rather than the request.
             if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
                 streamingDisabled = true;
+                streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic refused a streamed request; retrying buffered — long turns may time out.");
                 continue;
             }
@@ -2106,6 +2127,11 @@ async function callAnthropicCompatible(systemPrompt, history, {
         signal,
     });
     onModel?.(model);
+    const streamingKey = streamingRefusalKey(
+        temperatureRefusalKey({ provider: "Anthropic Compatible", endpoint, model }),
+        Boolean(tool) || isLookupChat(tool, onChunk, lookupTools),
+    );
+    streamingDisabled = streamingRefusals.has(streamingKey);
 
     // Self-hosted proxy: tried directly first, falling back to the local relay
     // if it refuses the browser call (providerFetch). The browser-access opt-in
@@ -2229,6 +2255,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // if streaming was turned off below.
             if (response.status === 400 && streamingDisabled && isStreamingRequired(message) && attempt < retries) {
                 streamingDisabled = false;
+                streamingRefusals.delete(streamingKey);
                 console.warn("[ai] Anthropic-compatible requires streaming for a request this long; re-enabling it.");
                 continue;
             }
@@ -2236,6 +2263,7 @@ async function callAnthropicCompatible(systemPrompt, history, {
             // keep-alive rather than the request.
             if (response.status === 400 && streamThisRequest && isStreamingRefusal(message) && attempt < retries) {
                 streamingDisabled = true;
+                streamingRefusals.add(streamingKey);
                 console.warn("[ai] Anthropic-compatible refused a streamed request; retrying buffered — long turns may time out.");
                 continue;
             }
