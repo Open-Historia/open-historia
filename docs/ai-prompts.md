@@ -166,7 +166,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 |---|---|---|
 | `playerPolity` | `game.country` or "Unknown polity" | `promptContext.js` |
 | `playerPolityRegions` | Player's owned-region names, "No player polity…", "No explicit… override list", or the LANDLESS block | `buildPlayerPolityRegionsText` `promptContext.js` (LANDLESS text 287) |
-| `playerBattalionSummaries` | `buildUnitsSummaryText(world)` (up to 60 units, coords/type/owner/strength/status) | `promptContext.js` / builder `195` |
+| `playerBattalionSummaries` | `buildUnitsSummaryText(world, { player, actions, chats, events })` (up to 60 units, coords/type/owner/strength/posture; past 60, the player's units first, then the powers `selectFocusPowers` ranks for the turn, then the rest, with a `[N more units omitted; they remain on the map]` line) | `promptContext.js` / builder `195` |
 | `unitsSummary` | Same unit text; **`buildTemplateVariables` appends `buildMilitaryFeasibilityText`** (era-reach/type/distance doctrine) only when units exist or the actions text matches the military regex | `promptContext.js`; override `gameplay.js`; feasibility builder `319` |
 | `playerPolityReputationContext` | "International reputation: N/100 (poor/mixed/well-regarded)." from `world.internationalReputation[player]`, else last viewed stat sheet, else 50 | `buildPlayerPolityReputationText` `gameplay.js` (added `371`) |
 | `worldSummary` | Multi-section snapshot: player line + tags, round, date, language, difficulty, world-before-round-one, simulation rules, up-to-24 territorial overrides, up-to-16 polity overrides (incl. `note` lore), up-to-40 country tag lines, the interactive event in progress | `buildWorldSummary` `promptContext.js` |

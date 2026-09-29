@@ -7,9 +7,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPromptContext } from "./promptContext.js";
+import { buildPromptContext, buildUnitsSummaryText } from "./promptContext.js";
 
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
+
+const unit = (id, ownerCode) => ({ id, name: `${ownerCode} unit ${id}`, type: "infantry", ownerCode, strength: 100, lat: 50, lng: 10 });
+
+test("a long units list keeps the player's and the turn's powers' units and counts the rest", () => {
+  const units = [
+    ...Array.from({ length: 65 }, (_, index) => unit(`b${index}`, "Borduria")),
+    ...Array.from({ length: 5 }, (_, index) => unit(`r${index}`, "Ruritania")),
+    ...Array.from({ length: 3 }, (_, index) => unit(`s${index}`, "Slavonia")),
+  ];
+  const text = buildUnitsSummaryText({ units }, {
+    player: "Ruritania",
+    actions: [{ title: "Warn Slavonia", text: "Warn Slavonia off the border.", status: "planned" }],
+  });
+  for (let index = 0; index < 5; index += 1) assert.ok(text.includes(`[id r${index}]`), `player unit r${index} is listed`);
+  for (let index = 0; index < 3; index += 1) assert.ok(text.includes(`[id s${index}]`), `ordered-on unit s${index} is listed`);
+  assert.ok(text.indexOf("[id r0]") < text.indexOf("[id s0]") && text.indexOf("[id s0]") < text.indexOf("[id b0]"));
+  assert.equal(text.split("\n").filter((line) => line.startsWith("- ")).length, 60);
+  assert.match(text, /\[13 more units omitted; they remain on the map\]$/);
+});
+
+test("a units list that fits keeps its saved order and has no omission line", () => {
+  const units = [unit("b0", "Borduria"), unit("r0", "Ruritania")];
+  const text = buildUnitsSummaryText({ units }, { player: "Ruritania" });
+  assert.ok(text.indexOf("[id b0]") < text.indexOf("[id r0]"));
+  assert.doesNotMatch(text, /omitted/);
+});
 
 test("marker attention reads the queued orders, not the answered ones", async () => {
   const markers = Array.from({ length: 60 }, (_, index) => ({

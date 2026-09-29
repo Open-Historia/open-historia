@@ -935,10 +935,47 @@ export const buildRecentRoundsWithDates = (bundle) => {
     .join("; ");
 };
 
-export const buildUnitsSummaryText = (world) => {
+export const UNITS_SUMMARY_LIMIT = 60;
+
+// When the map holds more units than the list does, the list keeps the
+// player's first, then those of the powers the turn is about (the ranking the
+// region lists use, regionFocus.js: orders, wars, chats, recent events), then
+// the rest, each power's in saved order, and says how many it left out. It
+// used to keep the first sixty in storage order, so the player's newest
+// formations vanished and orders naming them went unanswered. A list that fits
+// keeps its saved order.
+export const buildUnitsSummaryText = (world, {
+  player = "",
+  actions = [],
+  chats = [],
+  events = [],
+  limit = UNITS_SUMMARY_LIMIT,
+} = {}) => {
   const units = normalizeArray(world?.units);
   if (units.length === 0) return "No military units are currently deployed on the map.";
-  return units.slice(0, 60).map((unit) => {
+  let ordered = units;
+  if (units.length > limit) {
+    const counts = new Map();
+    for (const unit of units) {
+      const owner = normalizeString(unit?.ownerCode);
+      if (owner) counts.set(owner, (counts.get(owner) ?? 0) + 1);
+    }
+    const ranked = selectFocusPowers({
+      owners: [...counts].map(([label, regions]) => ({ key: label, label, regions })),
+      player,
+      actions: normalizeArray(actions),
+      chats: normalizeArray(chats),
+      events: recentEventList(events),
+      wars: normalizeArray(world?.wars),
+    });
+    const rank = new Map(ranked.map((entry, index) => [entry.label, index]));
+    ordered = units
+      .map((unit, index) => ({ unit, index, rank: rank.get(normalizeString(unit?.ownerCode)) ?? ranked.length }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index)
+      .map((entry) => entry.unit);
+  }
+  const omitted = Math.max(0, units.length - limit);
+  const rows = ordered.slice(0, limit).map((unit) => {
     const lat = Number(unit.lat);
     const lng = Number(unit.lng);
     const coords = Number.isFinite(lat) && Number.isFinite(lng)
@@ -952,7 +989,13 @@ export const buildUnitsSummaryText = (world) => {
     ].join(", ");
     return `- ${unit.name} [id ${unit.id}] (${detail})${unit.composition ? ` — ${unit.composition}` : ""}` +
       `${unit.covert ? " [unconfirmed]" : ""} at ${coords}${unit.regionId ? `, region ${unit.regionId}` : ""}`;
-  }).join("\n");
+  });
+  if (omitted > 0) {
+    rows.push(omitted === 1
+      ? "[1 more unit omitted; it remains on the map]"
+      : `[${omitted} more units omitted; they remain on the map]`);
+  }
+  return rows.join("\n");
 };
 
 // Phase 10.1: persistent physical world, bounded object attention. The save keeps
@@ -1962,7 +2005,12 @@ export const buildPromptContext = async (bundle, {
   }
 
   if (wants("playerBattalionSummaries", "unitsSummary")) {
-    const unitsText = buildUnitsSummaryText(bundle.world);
+    const unitsText = buildUnitsSummaryText(bundle.world, {
+      player: toCountryName(normalizeString(bundle.game?.country)),
+      actions: bundle.actions,
+      chats: bundle.chats,
+      events: bundle.events,
+    });
     put("playerBattalionSummaries", unitsText);
     put("unitsSummary", unitsText);
   }
