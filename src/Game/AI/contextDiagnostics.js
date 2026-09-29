@@ -348,6 +348,8 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
     "worldBeforeRoundOne",
   ]),
   projects: Object.freeze(["playerPolity", "projectsSummary", "plannedActions"]),
+  // buildPregameBootstrapDirective dates the bootstrap from these.
+  pregameHistory: Object.freeze(["date", "dateReadable"]),
   timelineCurator: Object.freeze(["curatorPriorHistory", "curatorCandidates"]),
   territoryDirector: Object.freeze(["territoryDirectorCandidates", "territoryDirectorState", "territorialControlContext"]),
   structureDirector: Object.freeze([
@@ -430,6 +432,32 @@ export const resolveTemplateVariableDemand = ({
       "Candidate-char totals measure materialized variable payload, not CPU time. " +
       "Aliases can share one computed string and some builders have different computational costs.",
   };
+};
+
+// Every prompt runner reads these two besides the template: where the world
+// summary repeats the briefing and the rules, the second copy is collapsed
+// (promptDedupe.js collapseRepeatedWorldContext), which needs both.
+export const RUNNER_VARIABLE_KEYS = Object.freeze(["worldBeforeRoundOne", "simulationRules"]);
+
+// The variables one prompt build must construct: what its template can reach
+// (resolveTemplateVariableDemand, over the loaded pack), what every runner
+// reads, and `extra` keys its call-time directives read, less `exclude` — keys
+// the caller overwrites anyway. The advisor and the leaders (main.jsx) build
+// through this; the tasks through gameplay.js buildTemplateVariables.
+export const promptVariableDemand = ({
+  helperTemplates = {},
+  promptTemplate = "",
+  taskKey = "",
+  extra = [],
+  exclude = [],
+} = {}) => {
+  const skip = new Set(array(exclude).map(clean));
+  const keys = [
+    ...resolveTemplateVariableDemand({ helperTemplates, promptTemplate, taskKey }).requiredVariableKeys,
+    ...RUNNER_VARIABLE_KEYS,
+    ...array(extra).map(clean),
+  ];
+  return [...new Set(keys)].filter((key) => key && !skip.has(key)).sort();
 };
 
 const appendDiagnosticHistory = (report) => {

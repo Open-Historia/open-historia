@@ -78,7 +78,7 @@ import {
   POLITICAL_ACTOR_GENERATED_ARG_GUIDANCE,
   validatePoliticalActorOperationShape,
 } from "../../runtime/politicalActorOps.js";
-import { buildPromptFingerprint, isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
+import { RUNNER_VARIABLE_KEYS, buildPromptFingerprint, isContextDiagnosticsEnabled, logContextDiagnostics, resolveTemplateVariableDemand } from "./contextDiagnostics.js";
 import {
   SEGMENTED_JUMP_MIN_DAYS,
   WRITING_REMINDER,
@@ -1658,9 +1658,11 @@ const buildTemplateVariables = async (bundle, options = {}) => {
       demand = null;
     }
   }
+  // The runner's own reads ride along (RUNNER_VARIABLE_KEYS): without them a
+  // demanded build could not collapse the briefing the world summary repeats.
   const requiredKeys = explicitRequiredKeys != null
     ? explicitRequiredKeys
-    : demand?.requiredVariableKeys ?? null;
+    : demand ? [...demand.requiredVariableKeys, ...RUNNER_VARIABLE_KEYS] : null;
   const requiredSet = requiredKeys == null
     ? null
     : new Set(
@@ -3750,7 +3752,7 @@ const generateProjectOps = async (bundle, events, { signal, hiddenEvents = [], r
   // an empty board that is worth a whole extra request.
   if (board.length === 0 || (events.length === 0 && hidden.length === 0)) return { ops: [], skipped: true };
 
-  const variables = await buildTemplateVariables(bundle, { lookups: true });
+  const variables = await buildTemplateVariables(bundle, { taskKey: "projects", lookups: true });
   // The events, numbered, because eventIndex is how an op says which one moved
   // the effort. Impacts are deliberately left out: this call decides what the
   // STORY did to the board, and the other levers are noise for that question.
@@ -3903,6 +3905,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
   const baseRevision = normalizeWorldState(bundle.world).historyDocument?.revision ?? 0;
   const historyDocumentContext = buildHistoryDocumentDirective(bundle.world);
   const variables = await buildTemplateVariables(bundle, {
+    taskKey: "eventConsolidator",
     // Resolved orders are consolidated alongside the events they caused. Capping
     // the history that gets SENT each turn is not enough on its own: drop the old
     // orders without recording what they did and the model loses the campaign's
@@ -7970,7 +7973,7 @@ const readSeenGameStateBundle = async (options) => {
 export const generateActionSuggestions = async ({ force = true } = {}) => {
   // Suggestions answer the moment the player is looking at (readSeenGameStateBundle).
   const bundle = await readSeenGameStateBundle({ force });
-  const variables = await buildTemplateVariables(bundle, { lookups: true });
+  const variables = await buildTemplateVariables(bundle, { taskKey: "actions", lookups: true });
   const { payload } = await runJsonTask("actions", {
     lookups: buildTaskLookups(bundle),
     fallback: () => fallbackActionSuggestions(bundle),
@@ -10629,7 +10632,11 @@ const statsTerritorialPlanMatchesSheet = (sheet, plan = []) => {
 
 export const generateCountryStats = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
-  const variables = await buildTemplateVariables(bundle, { lookups: true });
+  // Only what the briefing below reads. No lookups: this call carries no
+  // functions to fetch the region lists a slim world summary leaves out.
+  const variables = await buildTemplateVariables(bundle, {
+    requiredKeys: ["playerPolity", "date", "worldSummary", "recentEvents", "language"],
+  });
   const target = name || code || "the polity";
   const playerPolity = variables.playerPolity || bundle?.game?.country || "the player";
   const dossier = await buildTargetDossier(bundle, normalizeString(code));
@@ -10763,7 +10770,7 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
   const disinformation = spy.status === "turned"
     ? "IMPORTANT: this agent has been TURNED by " + name + " and now works for them. Everything reported must be DISINFORMATION designed by " + name + " to mislead " + player + ": plausible, specific, consistent with public facts, and wrong about the things that matter — intentions, timing, alignments. Never hint that it is false."
     : "";
-  const variables = { ...(sharedVariables ?? await buildTemplateVariables(bundle, { lookups: true })), targetPolity: name, disinformation };
+  const variables = { ...(sharedVariables ?? await buildTemplateVariables(bundle, { taskKey: "spyIntercept", lookups: true })), targetPolity: name, disinformation };
   const dossier = await buildTargetDossier(bundle, name);
   const era = normalizeString(bundle.world?.simulationRules).slice(0, 700);
   // Standing orders. A doubted entry can only be settled from material that
@@ -11901,7 +11908,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
 
 export const refinePlayerAction = async (rawInput, { persist = true, signal } = {}) => {
   const bundle = await readSeenGameStateBundle({ force: true });
-  const variables = await buildTemplateVariables(bundle, { actionInput: rawInput, lookups: true });
+  const variables = await buildTemplateVariables(bundle, { actionInput: rawInput, taskKey: "descriptionToAction", lookups: true });
   const { payload } = await runJsonTask("descriptionToAction", {
     lookups: buildTaskLookups(bundle),
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
@@ -12617,7 +12624,7 @@ export const createInteractive = async ({ eventId = "", angle = "", force = true
       : null;
     if (!event) throw new Error("That interactive event has passed.");
     const asked = normalizeString(angle).slice(0, 1200);
-    const variables = await buildTemplateVariables(bundle, { lookups: true });
+    const variables = await buildTemplateVariables(bundle, { taskKey: "interactiveCreation", lookups: true });
     const { generation, payload } = await runJsonTask("interactiveCreation", {
       lookups: buildTaskLookups(bundle),
       fallback: () => ({ choices: [], opening: "", premise: "", title: "" }),
@@ -12682,6 +12689,7 @@ export const setAsideActiveInteractive = async () => {
 // early. The one request any resolution costs.
 const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interactive, history }) => {
   const summaryVariables = await buildTemplateVariables(bundle, {
+    taskKey: "interactiveSummary",
     interactiveHistory: normalizeArray(history)
       .map((entry) => `${entry.choice}: ${entry.summary}`)
       .join("\n"),
@@ -12796,6 +12804,7 @@ export const advanceActiveInteractive = async (choiceText) => {
     .map((entry) => `${entry.choice}: ${entry.summary}`)
     .join("\n");
   const variables = await buildTemplateVariables(bundle, {
+    taskKey: "interactiveExecutor",
     lookups: true,
     interactiveChoice: choiceText,
     interactiveHistory: interactiveHistoryText,
@@ -16613,7 +16622,7 @@ export const maybeGeneratePregameHistory = async () => {
     // the books, and a standing alliance is a fact from day one.
     const canonicalPolities = await buildCurrentCanonicalPolityVocabulary(bundle.world);
     const variables = {
-      ...(await buildTemplateVariables(bundle, { lookups: true })),
+      ...(await buildTemplateVariables(bundle, { taskKey: "pregameHistory", lookups: true })),
       pregameStartDate: startDate,
       pregameCanonicalPolityVocabulary: canonicalPolities.length
         ? canonicalPolities.map((name) => `- ${name}`).join("\n")
@@ -16845,7 +16854,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
     const variables = {
-      ...(await buildTemplateVariables(bundle, { lookups: true })),
+      ...(await buildTemplateVariables(bundle, { taskKey: "idleDiplomacy", lookups: true })),
       idleChatAllowed: allowChat ? "yes" : "no",
     };
     const openChats = normalizeChats(bundle.chats).filter((chat) => !isLifecycleNegotiationChat(chat));

@@ -101,6 +101,7 @@ import {
     sortDiplomaticChatsByRecentActivity,
 } from "./promptContext.js";
 import { collapseRepeatedWorldContext } from "./promptDedupe.js";
+import { promptVariableDemand } from "./contextDiagnostics.js";
 import { filterChatsVisibleTo, isChatVisibleTo } from "./chatVisibility.js";
 import { foreignAgentBrief } from "../../runtime/spycraft.js";
 import { renderReminders } from "../../runtime/gmChanges.js";
@@ -2801,6 +2802,7 @@ async function buildPromptVariables({
     chatData,
     eventData,
     gameData,
+    requiredKeys = null,
     speakingAs = "",
     worldData,
 }) {
@@ -2820,8 +2822,23 @@ async function buildPromptVariables({
         // speakingAs and therefore sees everything, which is correct — it is the
         // player's own staff, and the player is in every chat.
         chatVisibleTo: speakingAs,
+        // Only what the prompt can show (chatPromptDemand). Without it every
+        // advisor and leader message built the whole context, the force
+        // posture's border geometry and the city catalog among it.
+        requiredKeys,
     });
 }
+
+// What a conversation's prompt reads of the context: its template's variables
+// over the loaded pack (contextDiagnostics.js promptVariableDemand, the rule
+// the tasks use), plus the keys its directives read, less the ones the caller
+// overwrites with the conversation's own turns.
+const chatPromptDemand = (template, { extra = [], exclude = [] } = {}) => promptVariableDemand({
+    helperTemplates: promptPack.helpers,
+    promptTemplate: template,
+    extra,
+    exclude,
+});
 
 // Lets the advisor create/edit/remove the player's queued Actions (the same
 // queue the Actions panel manages) as part of an ordinary chat reply, instead
@@ -3160,6 +3177,10 @@ async function buildAdvisorSystemPrompt() {
             eventData,
             gameData,
             worldData,
+            requiredKeys: chatPromptDemand(promptPack.advisor, {
+                extra: ["plannedActionsWithIds", "projectsSummary"],
+                exclude: ["advisorMessages"],
+            }),
         })),
         advisorMessages: CONVERSATION_IN_TURNS,
     };
@@ -3308,6 +3329,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
             gameData,
             speakingAs: speaker,
             worldData,
+            requiredKeys: chatPromptDemand(promptPack.leader, { exclude: ["chatHistory", "chatParticipants"] }),
         })),
         chatParticipants: participantList || "",
         // The thread itself rides as the turns (see CONVERSATION_IN_TURNS). It
