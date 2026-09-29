@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizeActionEntry, normalizeWorldState } from "../../runtime/gameState.js";
-import { queuedActionIds, selectSavedSuggestions } from "./actionSuggestions.js";
+import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 
 const topic = {
     id: "topic-0",
@@ -38,4 +38,16 @@ test("a restored card knows which of its orders are already queued", () => {
     // Deleted from the queue: the card can queue it again.
     assert.equal(queuedActionIds([manual]).has("action-a"), false);
     assert.equal(queuedActionIds(null).size, 0);
+});
+
+test("canned topics stay marked through the world, so a reload does not pass them off as the model's", () => {
+    const world = normalizeWorldState({ actionSuggestions: [{ ...topic, source: "fallback" }] });
+    assert.equal(world.actionSuggestions[0].source, "fallback");
+    assert.equal(suggestionsFellBack(selectSavedSuggestions(world)), true);
+    // The model's topics carry no mark, and nothing else is taken for one.
+    const fromModel = normalizeWorldState({ actionSuggestions: [topic, { ...topic, id: "topic-1", source: "ai" }] });
+    assert.equal("source" in fromModel.actionSuggestions[0], false);
+    assert.equal("source" in fromModel.actionSuggestions[1], false);
+    assert.equal(suggestionsFellBack(fromModel.actionSuggestions), false);
+    assert.equal(suggestionsFellBack(null), false);
 });

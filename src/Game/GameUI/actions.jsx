@@ -20,7 +20,8 @@ import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { formatGameDateReadable } from "../../runtime/gameDates.js";
 import { refreshRuntimeState, subscribeRuntime } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { queuedActionIds, selectSavedSuggestions } from "./actionSuggestions.js";
+import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
+import { queuedActionIds, selectSavedSuggestions, suggestionsFellBack } from "./actionSuggestions.js";
 
 dayjs.extend(advancedFormat);
 
@@ -97,6 +98,45 @@ const SpinnerRing = ({ size = 14, tone = "rgba(255,255,255,0.88)" }) => {
 };
 
 const saveActions = async (actions) => writeActionsState(actions);
+
+// Saves the diagnostics log with an AI failure attached at the top, or copies
+// the failure alone while logging is off (runtime/saveDebugLog.js), as the
+// advisor's report button does.
+const FailureReportButton = ({ buildIncident }) => {
+    const { busy, label, loggingOn, onClick } = useFailureReportButton({ buildIncident, copyIdleLabel: "Copy for a bug report" });
+    return (
+        <button
+        type="button"
+        className="oh-tap-row"
+        disabled={busy}
+        onClick={onClick}
+        title={loggingOn
+            ? "Saves the diagnostics log as a file, with this error's details at the top. Attach the file to your bug report."
+            : "Copies this error's details. Diagnostics logging is off — turn it on in Settings → Diagnostics to save the full log instead."}
+        style={{ background: "none", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "6px", color: "#fde68a", cursor: busy ? "default" : "pointer", flexShrink: 0, fontSize: "0.7rem", fontWeight: 600, padding: "0.2rem 0.5rem" }}
+        >
+        {label}
+        </button>
+    );
+};
+
+// An amber line saying an AI answer is not the model's, with the report button
+// when there is something to report.
+const AiFailureNote = ({ children, incident }) => (
+    <div role="status" style={{ alignItems: "center", color: "rgba(253,186,116,0.9)", display: "flex", flexWrap: "wrap", fontSize: "0.72rem", gap: "0.4rem", lineHeight: "1.45" }}>
+    <span style={{ flex: "1 1 12rem", minWidth: 0 }}>{children}</span>
+    {incident && <FailureReportButton buildIncident={() => incident} />}
+    </div>
+);
+
+const aiFailureIncident = (kind, title, { reason = "", rawResponse = "" } = {}) => ({
+    kind,
+    title,
+    fields: [
+        ["Failure reason", reason || "(unknown)"],
+        ...(rawResponse ? [["Raw model response", rawResponse]] : []),
+    ],
+});
 
 // What the panel says when the queue could not be written.
 const ORDER_NOT_SAVED = "Your order could not be saved, so the next time skip would not see it. Try again.";
@@ -473,6 +513,12 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
     // reopening the panel shows them again without spending a request.
     const suggestions = useRuntimeState("world", selectSavedSuggestions);
     const [hasRequestedSuggestions, setHasRequestedSuggestions] = React.useState(false);
+    // Why the last press of the suggestions button got no list at all, and, when
+    // it got the canned one instead, what the AI did (for the report button).
+    const [suggestionError, setSuggestionError] = React.useState("");
+    const [suggestionFallback, setSuggestionFallback] = React.useState(null);
+    // Why the last Improve left the text as typed: { reason, rawResponse }.
+    const [improveFailure, setImproveFailure] = React.useState(null);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     // Why the last change to the queue was not saved, until one is.
     const [saveError, setSaveError] = React.useState("");
@@ -498,6 +544,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         let cancelled = false;
         ensureActionsStyles();
         setHasRequestedSuggestions(false);
+        setSuggestionError("");
         setSaveError("");
 
         // Actions created/edited from OUTSIDE this panel (the advisor, chatting in
@@ -585,6 +632,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 queued: actions.length + 1,
             });
             setInputValue("");
+            setImproveFailure(null);
         } finally {
             setIsSubmitting(false);
         }
@@ -597,11 +645,18 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         }
 
         setIsImproving(true);
+        setImproveFailure(null);
         const controller = new AbortController();
         improveAbortRef.current = controller;
         try {
             const refined = await refinePlayerAction(trimmed, { persist: false, signal: controller.signal });
-            const improvedText = refined?.text || buildActionDisplayText(refined) || trimmed;
+            // The canned template is no improvement on what the player wrote:
+            // their text stays, and the panel says the AI failed.
+            if (refined?.source === "fallback") {
+                setImproveFailure({ reason: refined.fallbackReason, rawResponse: refined.rawResponse });
+                return;
+            }
+            const improvedText = refined?.action?.text || buildActionDisplayText(refined?.action) || trimmed;
             setInputValue(improvedText);
             inputRef.current?.focus();
         } catch (error) {
@@ -609,6 +664,7 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
             // player typed exactly as it was.
             if (error?.name !== "AbortError") {
                 console.error("Failed to improve action:", error);
+                setImproveFailure({ reason: error?.message || String(error) });
             }
         } finally {
             improveAbortRef.current = null;
@@ -664,11 +720,16 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
 
         setHasRequestedSuggestions(true);
         setIsSuggesting(true);
+        setSuggestionError("");
         try {
             // Saved on the world, which is where the list above reads it from.
-            await generateActionSuggestions({ force: true });
+            const result = await generateActionSuggestions({ force: true });
+            setSuggestionFallback(result?.source === "fallback"
+                ? { reason: result.fallbackReason, rawResponse: result.rawResponse }
+                : null);
         } catch (error) {
             console.error("Failed to generate suggestions:", error);
+            setSuggestionError(error?.message || String(error));
         } finally {
             setIsSuggesting(false);
         }
@@ -845,10 +906,20 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
                 scrollbarWidth: "none",
             }}
             >
-            {hasRequestedSuggestions && !isSuggesting && suggestions.length === 0 && (
+            {suggestionError && !isSuggesting && (
+                <AiFailureNote incident={aiFailureIncident("suggestions-error", "AI suggestions failed", { reason: suggestionError })}>
+                {`The AI suggestions could not be generated: ${suggestionError}`}
+                </AiFailureNote>
+            )}
+            {!suggestionError && hasRequestedSuggestions && !isSuggesting && suggestions.length === 0 && (
                 <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.78rem", fontStyle: "italic", margin: 0 }}>
                 No AI suggestions generated yet.
                 </p>
+            )}
+            {suggestionsFellBack(suggestions) && !isSuggesting && (
+                <AiFailureNote incident={suggestionFallback ? aiFailureIncident("suggestions-fallback", "AI suggestions fell back", suggestionFallback) : null}>
+                The AI gave no usable suggestions, so these are generic ones.
+                </AiFailureNote>
             )}
             {suggestions.map((topic) => (
                 <SuggestionCard key={topic.id} topic={topic} onQueue={handleQueueSuggestion} queuedIds={queuedSuggestionIds} />
@@ -889,6 +960,14 @@ const ActionsPanel = ({ isOpen, onClose, onOpenAdvisor }) => {
         </div>
         </div>
         </div>
+
+        {improveFailure && (
+            <div style={{ padding: "0 1.25rem 0.5rem" }}>
+            <AiFailureNote incident={aiFailureIncident("improve-failed", "Improve action failed", improveFailure)}>
+            {`Improve failed, so your text was left as you wrote it: ${improveFailure.reason || "the AI gave no usable answer."}`}
+            </AiFailureNote>
+            </div>
+        )}
 
         {saveError && (
             <div role="alert" style={{ color: "rgba(253,186,116,0.9)", fontSize: "0.72rem", lineHeight: "1.45", padding: "0 1.25rem 0.5rem" }}>

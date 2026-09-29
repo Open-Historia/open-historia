@@ -7,6 +7,10 @@
 export const selectSavedSuggestions = (world) =>
     (Array.isArray(world?.actionSuggestions) ? world.actionSuggestions : []);
 
+// Canned topics, written when the AI could not be reached, are marked.
+export const suggestionsFellBack = (topics) =>
+    Array.isArray(topics) && topics.some((topic) => topic?.source === "fallback");
+
 // The ids of the orders waiting for the next time skip. A suggested order keeps
 // its id when queued, so a card restored from the world knows which of its
 // orders are already in the queue, and one deleted from the queue can be

@@ -295,11 +295,11 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 - **Purpose:** Produce 6–9 "Topics of Concern," each with 2–5 concrete actions (kind `action`, or `chat` for outreach).
 - **Prompt:** `tasks.actions`. **Entry:** `generateActionSuggestions({force})` `gameplay.js`.
 - **Tool/schema:** `submit_actions` / `ACTIONS_SCHEMA` (`gameplaySchemas.js`): `topics[] { title, description, actions[] { title, text, kind, invitees, chatStarter } }`.
-- **Validation/fallback:** accepts array/`topics`/`suggestions` shapes; empty → `fallbackActionSuggestions` (`678`, from `DEFAULT_SUGGESTION_TOPICS`). Result stored on `world.actionSuggestions`.
+- **Validation/fallback:** accepts array/`topics`/`suggestions` shapes; empty → `fallbackActionSuggestions` (`678`, from `DEFAULT_SUGGESTION_TOPICS`). Result stored on `world.actionSuggestions`; canned topics (a failed task or an empty answer) are stored with `source: "fallback"`. Returns `{ topics, source, fallbackReason, rawResponse }`, so the Actions panel can say the list is generic.
 
 ### 7.4 `descriptionToAction` — freeform text → structured command
 - **Purpose:** Turn the player's raw sentence into one action (or a chat invitation), ~50% longer, tone-matched, ≤650 chars.
-- **Prompt:** `tasks.descriptionToAction`. **Entry:** `refinePlayerAction(rawInput, {persist})` `gameplay.js` (passes `actionInput`).
+- **Prompt:** `tasks.descriptionToAction`. **Entry:** `refinePlayerAction(rawInput, {persist})` `gameplay.js` (passes `actionInput`). Returns `{ action, source, fallbackReason, rawResponse }`; on `source: "fallback"` the Actions panel keeps the player's text instead of the template.
 - **Tool/schema:** `submit_description_to_action` / `DESCRIPTION_TO_ACTION_SCHEMA`: `{ title, text, kind, invitees[], chatStarter }`.
 - **Fallback:** `fallbackDescriptionToAction` — heuristic chat detection via `CHAT_HINT_PATTERNS` and `inferInviteeNames`.
 

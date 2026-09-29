@@ -3518,6 +3518,8 @@ const normalizeActionSuggestions = (value) =>
       description: normalizeOptionalString(topic.description),
       id: normalizeOptionalString(topic.id) || generateId("topic"),
       title,
+      // Canned topics written when the AI could not be reached say so.
+      ...(topic.source === "fallback" ? { source: "fallback" } : {}),
     };
   }).filter(Boolean);
 

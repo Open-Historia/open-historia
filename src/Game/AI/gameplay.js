@@ -8031,7 +8031,7 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   // Suggestions answer the moment the player is looking at (readSeenGameStateBundle).
   const bundle = await readSeenGameStateBundle({ force });
   const variables = await buildTemplateVariables(bundle, { lookups: true });
-  const { payload } = await runJsonTask("actions", {
+  const { payload, generation } = await runJsonTask("actions", {
     lookups: buildTaskLookups(bundle),
     fallback: () => fallbackActionSuggestions(bundle),
     // The direction the suggestions serve (runtime/playerGoal.js), when the
@@ -8080,6 +8080,9 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   let topics = normalizeTopics(
     Array.isArray(payload) ? payload : payload?.topics ?? payload?.suggestions,
   );
+  let fallbackReason = generation?.source === "fallback"
+    ? normalizeString(generation.fallbackReason) || "The model did not return valid structured output."
+    : "";
 
   // A parseable-but-EMPTY answer used to be accepted as "no suggestions were
   // generated" — the deterministic fallback (which always has topics) now
@@ -8087,13 +8090,19 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   if (topics.length === 0) {
     console.warn("[ai] action suggestions came back empty — using the deterministic fallback.");
     topics = normalizeTopics((await fallbackActionSuggestions(bundle))?.topics);
+    fallbackReason = fallbackReason || "The model returned no suggestions.";
   }
+
+  // Canned topics are marked as such where they are kept, so the panel can say
+  // so after a reload too, and never passes them off as the model's.
+  const source = fallbackReason ? "fallback" : "ai";
+  if (fallbackReason) topics = topics.map((topic) => ({ ...topic, source }));
 
   const world = normalizeWorldState(await readWorldState());
   world.actionSuggestions = topics;
   await writeWorldState(world);
 
-  return topics;
+  return { topics, source, fallbackReason, rawResponse: fallbackReason ? normalizeString(generation?.rawResponse) : "" };
 };
 
 // Freeform AI intelligence briefing on a specific country/polity, grounded in the
@@ -11974,7 +11983,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
 export const refinePlayerAction = async (rawInput, { persist = true, signal } = {}) => {
   const bundle = await readSeenGameStateBundle({ force: true });
   const variables = await buildTemplateVariables(bundle, { actionInput: rawInput, lookups: true });
-  const { payload } = await runJsonTask("descriptionToAction", {
+  const { payload, generation } = await runJsonTask("descriptionToAction", {
     lookups: buildTaskLookups(bundle),
     fallback: () => fallbackDescriptionToAction(rawInput, bundle),
     // Improve can be stopped mid-generation, exactly like a timeline jump.
@@ -12007,7 +12016,15 @@ export const refinePlayerAction = async (rawInput, { persist = true, signal } = 
     await writeActionsState(nextActions);
   }
 
-  return action;
+  // `source` says whether the model wrote it or the canned template did, so the
+  // Actions panel never presents the template as an improvement.
+  const fellBack = generation?.source === "fallback";
+  return {
+    action,
+    source: fellBack ? "fallback" : "ai",
+    fallbackReason: fellBack ? normalizeString(generation.fallbackReason) || "The model did not return valid structured output." : "",
+    rawResponse: fellBack ? normalizeString(generation.rawResponse) : "",
+  };
 };
 
 // ---- One turn of a chat, for every AI participant, in ONE request -----------
