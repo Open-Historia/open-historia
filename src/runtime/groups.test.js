@@ -210,6 +210,8 @@ test("a country's Politics view lists the groups on its regions, most first", ()
   assert.equal(rows[0].description, "Runs the border towns.");
   assert.ok(rows[0].color, "the group's own colour for its swatch");
   assert.deepEqual(groupsOnTerritory(world, "Belize", { ownerOf: (id) => owners[id] }), []);
+  assert.deepEqual(groupsOnTerritory(world, "mexico", { ownerOf: (id) => owners[id] }), [],
+    "owner names are exact: another spelling is another polity");
 });
 
 test("a polity that is a group sees its own area first, even an empty one", () => {

@@ -499,7 +499,7 @@ const GroupsOnTerritory = ({ world, targetCountry, isPlayer, mapRef }) => {
                     <span style={{ WebkitBoxOrient: "vertical", WebkitLineClamp: 2, color: "rgba(255,255,255,0.38)", display: "-webkit-box", fontSize: "0.62rem", lineHeight: 1.4, marginTop: "0.2rem", overflow: "hidden" }}>{row.description}</span>
                 )}
                 </span>
-                {row.own && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
+                {row.own && isPlayer && <span style={statusBadgeStyle("#2bc1f3")}>Our group</span>}
                 </button>
             );
         })}

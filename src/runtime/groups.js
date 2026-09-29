@@ -258,8 +258,10 @@ export const playerGroupKey = (world, playerName) => {
 // `ownerOf(regionId)` is the region's current owner. A polity that is itself a
 // group (the player leading one, playerGroupKey) owns no land, so its own group
 // comes first with its whole area, `own: true`, even while that area is empty.
+// A region counts only when its owner is the polity's exact name: owner names
+// are identities, never folded.
 export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) => {
-  const wanted = fold(polity);
+  const wanted = clean(polity);
   if (!wanted) return [];
   const groups = normalizeGroups(world?.groups);
   const areas = groupRegions(normalizeGroupAreas(world?.groupAreas, groups));
@@ -269,7 +271,7 @@ export const groupsOnTerritory = (world, polity, { ownerOf = () => "" } = {}) =>
     own: name === own,
     regionIds: name === own
       ? areas[name] ?? []
-      : (areas[name] ?? []).filter((regionId) => fold(ownerOf(regionId)) === wanted),
+      : (areas[name] ?? []).filter((regionId) => clean(ownerOf(regionId)) === wanted),
   }));
   return rows
     .filter((row) => row.own || row.regionIds.length)
