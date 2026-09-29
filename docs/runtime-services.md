@@ -170,7 +170,7 @@ Owns the UI-language *choice* and static catalog. The choice is stored on the **
 | `languageDisplayName(code)` | English display name, falls back to the code |
 | `getStoredLanguage()` | Reads localStorage; returns `DEFAULT_LANGUAGE` on miss/error |
 | `setStoredLanguage(code)` | Writes localStorage **and** PUT `/api/ui-settings` `{ language }` (offline-tolerant) |
-| `syncLanguageFromServer()` | GET `/api/ui-settings`; server wins; returns `true` if the local value changed (caller reloads) |
+| `syncLanguageFromServer()` | GET `/api/ui-settings`; server wins; returns `true` only when the new value reads back from localStorage and this tab has not already reloaded for it (sessionStorage `ui_language_reloaded`), so the caller reloads once. A value storage refuses (full or blocked) is held in memory for the page instead (`getStoredLanguage` returns it) and no reload is asked for |
 | `isRtlLanguage(code)` | Membership in `RTL_LANGUAGES` = `{ ar, he, fa, ur }` |
 | `languageDirective()` | System-prompt fragment appended to every AI call so replies arrive natively in-language |
 
@@ -190,10 +190,10 @@ Puts the running game into the player's language. The full design (the three kin
 
 | Export | Purpose |
 |---|---|
-| `startTranslator()` | Called once from `src/main.jsx:24`. Syncs language from server (reload if changed), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
+| `startTranslator()` | Called once from `src/main.jsx:24`. Syncs language from server (reload if changed and stored; a language held in memory starts the translator in place when the page booted in English), returns early for English, sets `<html lang>` + RTL `direction`, loads localStorage cache + server pack, waits out the startup screen, then starts the observer and pre-translation pass |
 | `stopTranslator()` | Disconnects the observer, clears timers, removes the progress pill |
 
-Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on change) → bail if `en` → `loadPromptTranslations()` (pack languages) → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectContentStrings()` (again on `oh:active-game-changed`) → show progress if >10 pending → `processQueue()`.
+Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on a stored change; a held one starts `startInLanguage` in place) → bail if `en` → `loadPromptTranslations()` (pack languages) → set `lang`/`direction` → `loadCache()` → `loadServerPack()` → `whenStartupScreenGone()` (polls for `[data-startup-screen]`, 180 s cap) → activate observer + `scan()` → `collectContentStrings()` (again on `oh:active-game-changed`) → show progress if >10 pending → `processQueue()`.
 
 ### Public lookups (for callers/data outside the DOM)
 

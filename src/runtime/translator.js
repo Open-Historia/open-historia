@@ -770,10 +770,18 @@ export const startTranslator = () => {
   void syncLanguageFromServer().then((changed) => {
     if (changed) {
       window.location.reload();
+    } else if (language === DEFAULT_LANGUAGE && getStoredLanguage() !== DEFAULT_LANGUAGE) {
+      // This device could not store the choice (i18n.js holds it for the
+      // page), so a reload would come back in English: start in it now.
+      startInLanguage(getStoredLanguage());
     }
   });
 
-  language = getStoredLanguage();
+  startInLanguage(getStoredLanguage());
+};
+
+const startInLanguage = (code) => {
+  language = code;
   if (language === DEFAULT_LANGUAGE) {
     return;
   }
