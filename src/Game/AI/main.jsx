@@ -3287,7 +3287,9 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     decisionFocusText = "",
 } = {}) {
     await ensurePromptsLoaded();
-    const participantList = countries.map((country) => `- ${country}`).join("\n");
+    // The panel passes its country objects; `- ${country}` of one read
+    // "- [object Object]", and every leader was told that was the table.
+    const participantList = countries.map(participantName).filter(Boolean).map((name) => `- ${name}`).join("\n");
     let savedGame;
     let actionData;
     let savedChats;
@@ -3580,9 +3582,10 @@ export function loadDiplomaticHistory(savedMessages) {
 
 // Participants reach these functions as either country objects (the Diplomacy
 // panel's own list) or bare name strings (the advisor's one-off send), and the
-// log has to read the same either way.
+// prompt and the log have to read the same either way.
+const participantName = (country) => (typeof country === "string" ? country : country?.name || country?.code || "");
 const participantLabel = (countries) => (Array.isArray(countries) ? countries : [])
-    .map((country) => (typeof country === "string" ? country : country?.name || country?.code || ""))
+    .map(participantName)
     .filter(Boolean)
     .join(", ") || "(no participants)";
 

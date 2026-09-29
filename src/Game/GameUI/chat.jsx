@@ -1733,7 +1733,9 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             // the same AI request that writes the turn. There is no legacy sequential
             // group-chat fallback. A one-on-one thread has exactly one AI counterpart,
             // so native code selects it directly and makes only the diplomacy request.
-            if (isGroup || (chat.lifecycleCaseIds?.length && chat.lifecycleInstitutionId)) {
+            // An institution's Council is never that, even with one AI member: it
+            // has an agenda, a charter and votes, which only the batch can act on.
+            if (isGroup || isInstitutional || isLifecycleConversation) {
                 await runGroupTurn(text, nextMessages);
                 return;
             }

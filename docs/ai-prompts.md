@@ -305,7 +305,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.5 Diplomatic speaker routing — native / in-batch
 - **One-on-one:** there is exactly one AI counterpart, selected natively. No speaker-selection model call exists.
-- **Groups and institution conversations:** `runChatActionBatch` is the canonical path. The same AI request that decides what the table does also decides who speaks, reacts, votes, or stays silent and in what order.
+- **Groups and institution conversations:** `runChatActionBatch` is the canonical path, for an institution's Council even with a single AI member (it has an agenda, a charter and votes, which the one-on-one leader path cannot act on). The same AI request that decides what the table does also decides who speaks, reacts, votes, or stays silent and in what order.
 - **Failure:** the group batch fails closed and reports the request error. There is no legacy sequential group-chat fallback and no standalone `nextSpeaker` prompt/tool/schema.
 
 ### 7.6 `eventConsolidator` — compress history
