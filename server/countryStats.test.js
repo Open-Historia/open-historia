@@ -5,6 +5,7 @@ import { validateGameplayPayload } from "../src/Game/AI/gameplaySchemas.js";
 
 import {
   aggregateTerritorialEconomy,
+  buildEconomicConditionSummary,
   captureCountryStatsHistory,
   countryStatsTrackingMonthsElapsed,
   finalizeCountryStatSheet,
@@ -188,6 +189,35 @@ test("an explicit non-territorial stat sheet can be complete without fabricated 
   assert.equal(distributedEconomy.economy.gdp, 100000000);
   assert.equal(distributedEconomy.economy.gdpPerCapita, 40000);
   assert.equal(isCompleteCountryStatSheet(distributedEconomy), true);
+});
+
+test("deflation survives normalization and validation while public debt stays non-negative", () => {
+  const base = {
+    territorialScope: "nonterritorial",
+    capital: "Nowhere",
+    continent: "Transnational",
+    government: "Council",
+    leader: "Test Leader",
+    stability: 50,
+    indices: {
+      sovereignty: 40,
+      foodAutonomy: 0,
+      energyAutonomy: 0,
+      economicIndependence: 35,
+      internalSecurity: 55,
+      internationalReputation: 20,
+    },
+    territorialComponents: [],
+    economy: { gdpGrowth: 0, currency: "EUR", inflation: 2, unemployment: 0, publicDebt: 0, budgetBalance: 0 },
+    gdpBreakdown: { agriculture: 0, industry: 0, services: 100 },
+  };
+  const deflating = mergeCountryStatPatch(base, { economy: { inflation: -2.5, publicDebt: -5 } });
+  assert.equal(deflating.economy.inflation, -2.5);
+  assert.equal(deflating.economy.publicDebt, 0);
+  assert.equal(isCompleteCountryStatSheet(deflating), true);
+  assert.deepEqual(validateGameplayPayload("countryStatSheet", deflating), { valid: true, error: "" });
+  assert.equal(finalizeCountryStatSheet({ economy: { inflation: "-4000%" } }).economy.inflation, -1000);
+  assert.match(buildEconomicConditionSummary(deflating), /, deflation\./);
 });
 
 test("an empty territorial ledger is still invalid unless native code marks the polity non-territorial", () => {

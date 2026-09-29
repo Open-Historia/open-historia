@@ -858,7 +858,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
             const gdpB = editorNumber(form.gdpB, { min: 0.001, max: 1000000, label: "GDP (billions)" });
             const stability = editorNumber(form.stability, { min: 0, max: 100, label: "Stability" });
             const gdpGrowth = editorNumber(form.gdpGrowth, { min: -1000, max: 1000, label: "GDP growth" });
-            const inflation = editorNumber(form.inflation, { min: 0, max: 1000, label: "Inflation" });
+            const inflation = editorNumber(form.inflation, { min: -1000, max: 1000, label: "Inflation" });
             const unemployment = editorNumber(form.unemployment, { min: 0, max: 100, label: "Unemployment" });
             const publicDebt = editorNumber(form.publicDebt, { min: 0, max: 1000, label: "Public debt" });
             const budgetBalance = editorNumber(form.budgetBalance, { min: -1000, max: 1000, label: "Budget balance" });
@@ -1402,7 +1402,7 @@ const CountryEditorView = ({ meta, header, busy, status, polities, refresh, runB
                                     {pairedField("Currency", "currency")}
                                     {pairedField("Continent / region", "continent")}
                                     {pairedField("Stability / 100", "stability", { type: "number", min: "0", max: "100", step: "1" })}
-                                    {pairedField("Inflation (%)", "inflation", { type: "number", min: "0", step: "0.1" })}
+                                    {pairedField("Inflation (%)", "inflation", { type: "number", min: "-1000", step: "0.1" })}
                                     {pairedField("Unemployment (%)", "unemployment", { type: "number", min: "0", max: "100", step: "0.1" })}
                                     {pairedField("Public debt (% GDP)", "publicDebt", { type: "number", min: "0", step: "0.1" })}
                                     {pairedField("Budget balance (% GDP)", "budgetBalance", { type: "number", step: "0.1" })}

@@ -320,9 +320,11 @@ const normalizeEconomy = (value) => {
 
   for (const key of ECONOMY_NUMERIC_KEYS) {
     let normalized = null;
-    if (["gdpGrowth", "budgetBalance"].includes(key)) normalized = normalizeSignedPercent(value[key]);
+    // Inflation is signed: deflation is a real reading (the GM schema allows
+    // -1000..1000). Public debt cannot go below zero.
+    if (["gdpGrowth", "budgetBalance", "inflation"].includes(key)) normalized = normalizeSignedPercent(value[key]);
     else if (key === "unemployment") normalized = normalizePercent(value[key]);
-    else if (["inflation", "publicDebt"].includes(key)) {
+    else if (key === "publicDebt") {
       const parsed = parseStatNumber(value[key]);
       normalized = parsed == null ? null : clamp(parsed, 0, 1000);
     } else normalized = parseStatNumber(value[key]);
@@ -1397,6 +1399,7 @@ export const buildEconomicConditionSummary = (value) => {
   if (Number.isFinite(inflation)) {
     if (inflation >= 20) clauses.push("very high inflation");
     else if (inflation >= 8) clauses.push("elevated inflation");
+    else if (inflation < 0) clauses.push("deflation");
     else if (inflation <= 3) clauses.push("contained inflation");
   }
   if (Number.isFinite(unemployment)) {
