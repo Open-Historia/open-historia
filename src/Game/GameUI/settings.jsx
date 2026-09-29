@@ -64,7 +64,7 @@ import {
     setStoredChatLanguage,
     setStoredLanguage,
 } from "../../runtime/i18n.js";
-import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { LABEL_FONT_SUGGESTIONS, MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, setMapSetting, setMapSettingValue, useMapSettingValue, useSystemReducedMotion } from "../../runtime/mapSettings.js";
 import { getLibraryState, saveGame, useLibraryState } from "../../runtime/library.js";
 import { DISCORD_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { CommunityTile, DISCORD_BLURPLE, DiscordMark, REDDIT_ORANGERED, RedditMark } from "./communityLogos.jsx";
@@ -315,29 +315,33 @@ const ChatLanguageSelector = () => {
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
-const Toggle = ({ label, enabled, onToggle }) => {
+// disabled: the switch shows its state but is held there by something else
+// (the system's reduced-motion setting), so it does not respond.
+const Toggle = ({ label, enabled, onToggle, disabled = false }) => {
     const touch = useTouchPrimary();
     return (
     <div
     className="oh-tap-row"
-    onClick={touch ? onToggle : undefined}
+    onClick={touch && !disabled ? onToggle : undefined}
     style={{
         display: "flex",
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: "1rem",
-        ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
+        ...(touch ? { cursor: disabled ? "default" : "pointer", gap: "0.75rem" } : null),
     }}
     >
     <span style={{ fontSize: "0.9rem" }}>{label}</span>
     <button
-    onClick={touch ? undefined : onToggle}
+    onClick={touch || disabled ? undefined : onToggle}
+    disabled={disabled}
     style={{
         width: "3.5rem",
         height: "1.75rem",
         borderRadius: "1rem",
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.55 : 1,
         position: "relative",
         transition: "0.3s",
         backgroundColor: enabled ? "#3b82f6" : "#55555b",
@@ -1961,6 +1965,9 @@ const SettingsWorkspace = ({
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
     const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
+    // The system asks for reduced motion: the motion switches are on whatever
+    // is stored, so they show on and stay put (mapSettings.js).
+    const systemReducedMotion = useSystemReducedMotion();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2038,16 +2045,18 @@ const SettingsWorkspace = ({
                 <SettingsSection title="Display" description="Window and presentation preferences that apply to the game client.">
                     <Toggle label="Fullscreen" enabled={isFullscreenEnabled} onToggle={onToggleFullscreen} />
                 </SettingsSection>
-                <SettingsSection title="Accessibility" description="Reduce automatic camera motion without changing simulation behavior.">
+                <SettingsSection title="Accessibility" description="Reduce automatic camera motion and map animations without changing simulation behavior.">
                     <Toggle
                     label="Reduce motion"
-                    enabled={mapSettings.disableIdleRotation && mapSettings.disableEventCamera}
+                    enabled={systemReducedMotion || (mapSettings.disableIdleRotation && mapSettings.disableEventCamera)}
+                    disabled={systemReducedMotion}
                     onToggle={() => {
                         const next = !(mapSettings.disableIdleRotation && mapSettings.disableEventCamera);
                         updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, next);
                         updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, next);
                     }}
                     />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}
@@ -2091,8 +2100,9 @@ const SettingsWorkspace = ({
                     <Toggle label="3D Terrain" enabled={isTerrainEnabled} onToggle={onToggleTerrain} />
                 </SettingsSection>
                 <SettingsSection title="Camera behavior" description="Fine-grained controls for automatic map movement.">
-                    <Toggle label="Disable idle globe rotation" enabled={mapSettings.disableIdleRotation} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
-                    <Toggle label="Disable camera movement during events" enabled={mapSettings.disableEventCamera} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    <Toggle label="Disable idle globe rotation" enabled={systemReducedMotion || mapSettings.disableIdleRotation} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableIdleRotation", MAP_SETTING_KEYS.disableIdleRotation, !mapSettings.disableIdleRotation)} />
+                    <Toggle label="Disable camera movement during events" enabled={systemReducedMotion || mapSettings.disableEventCamera} disabled={systemReducedMotion} onToggle={() => updateMapSetting("disableEventCamera", MAP_SETTING_KEYS.disableEventCamera, !mapSettings.disableEventCamera)} />
+                    {systemReducedMotion && <div style={{ ...helperStyle, marginTop: "-0.6rem", marginBottom: "0.6rem" }}>On, following your system setting for reduced motion.</div>}
                 </SettingsSection>
                 </>
             )}

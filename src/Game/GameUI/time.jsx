@@ -49,7 +49,7 @@ import { getUnitById, setUnitsOverride } from "../Map/unitsController.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { primeRuntimeValue } from "../../runtime/runtimeStore.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
-import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting, useMotionSetting } from "../../runtime/mapSettings.js";
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { normalizeGroupOp } from "../../runtime/groups.js";
@@ -2162,7 +2162,8 @@ const DateWidget = ({
     // letters.
     const touch = useTouchPrimary();
     const stackCountry = isMobile || touch;
-    const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
+    // The player's switch, or the system's reduced-motion setting.
+    const disableEventCamera = useMotionSetting(MAP_SETTING_KEYS.disableEventCamera);
 
     useEffect(() => {
         ensureTimelineStyles();
@@ -3003,7 +3004,7 @@ const DateWidget = ({
     // The camera follows EVERY revealed event — impacts pin the exact spot,
     // otherwise the polities the event involves do, and its own words are the
     // last resort. Opt out via the "Disable camera movement during events" map
-    // setting.
+    // setting (or Reduce motion, or the system's reduced-motion setting).
     useEffect(() => {
         if (!activeVisibleEvent || disableEventCamera) {
             return;

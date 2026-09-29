@@ -15,7 +15,7 @@ import {
   drawCelestialStars,
   releaseCelestialStars,
 } from "./globeCelestialCanvas.js";
-import { MAP_SETTING_KEYS, useMapSetting } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, useMotionSetting } from "../../runtime/mapSettings.js";
 import { isConstrainedDevice } from "../../runtime/deviceProfile.js";
 
 const ROTATION_DEG_PER_MS = 360 / (10 * 60 * 1000);
@@ -70,7 +70,8 @@ let sunWorldPosition = subsolarPoint();
 
 const GlobeEffects = ({ active }) => {
   const { current: map } = useMap();
-  const autoRotateDisabled = useMapSetting(MAP_SETTING_KEYS.disableIdleRotation);
+  // Off by the player's switch, or by the system's reduced-motion setting.
+  const autoRotateDisabled = useMotionSetting(MAP_SETTING_KEYS.disableIdleRotation);
 
   useEffect(() => {
     if (!active || !map) return undefined;

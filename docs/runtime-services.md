@@ -307,8 +307,13 @@ Tiny localStorage-backed boolean toggles read reactively instead of threaded as 
 | `getMapSetting(key)` | `localStorage.getItem(key) === "1"` |
 | `setMapSetting(key, value)` | Writes `"1"`/`"0"`, logs the flip to the diagnostics log, and dispatches a `mapSettings:updated` window event |
 | `useMapSetting(key)` | `useState` hook that re-reads on the `mapSettings:updated` event |
+| `systemPrefersReducedMotion()` / `useSystemReducedMotion()` | The OS's `(prefers-reduced-motion: reduce)`, read once / as a hook that follows its `change` event |
+| `useMotionSetting(key)` | `disableIdleRotation` or `disableEventCamera` in force: the player's switch, or the OS's reduced motion (GlobeEffects, the event camera in `time.jsx`) |
+| `reduceMotionEnabled()` | The whole **Reduce motion** switch in force — both motion switches on, or the OS's reduced motion — read when the ownership sweep would start (Nations.jsx), which it skips |
 
 Values are stored as `"1"`/`"0"` strings (absent = off). The custom `mapSettings:updated` event is the cross-component sync mechanism — any `setMapSetting` call updates every `useMapSetting(key)` subscriber in the same document.
+
+While the OS asks for reduced motion, the game behaves as if **Reduce motion** were on — no idle globe spin, no event camera, no ownership sweep — whatever is stored; Settings shows the three switches on, held there, with "On, following your system setting for reduced motion." The stored values are left alone, so turning the OS setting off gives back the player's own.
 
 ---
 

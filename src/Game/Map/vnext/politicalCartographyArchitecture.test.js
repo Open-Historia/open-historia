@@ -288,7 +288,7 @@ test("legal ownership animation keeps canonical ownership separate from bounded 
     nations,
     /new Worker\(new URL\("\.\/vnext\/ownershipTransitionWorker\.js"/,
   );
-  assert.match(nations, /prefers-reduced-motion/);
+  assert.match(nations, /if \(reduceMotionEnabled\(\)\) \{/);
   assert.match(ownershipTransitionWorker, /transitionT/);
 
   // Animation stays presentation-only; canonical political colour is not rewritten as an effect.

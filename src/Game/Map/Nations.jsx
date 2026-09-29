@@ -39,7 +39,7 @@ import {
   summarizePolityLabelDiagnostics,
 } from "../../runtime/countryLabels.js";
 import { translateLabel } from "../../runtime/translator.js";
-import { MAP_SETTING_KEYS, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
+import { MAP_SETTING_KEYS, reduceMotionEnabled, useMapSetting, useMapSettingValue } from "../../runtime/mapSettings.js";
 import { getWorldStateSnapshot, useWorldState } from "./useWorldState.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import { buildProvinceOutlinePaint, PROVINCE_OUTLINE_MIN_ZOOM } from "./provinceOutlineStyle.js";
@@ -2626,9 +2626,9 @@ const WorldMap = ({ isGlobe = false }) => {
       return;
     }
 
-    const reducedMotion = typeof window !== "undefined"
-      && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-    if (reducedMotion) {
+    // The in-game Reduce motion switch or the system's reduced-motion setting:
+    // the new owner's colour lands at once, without the sweep.
+    if (reduceMotionEnabled()) {
       queued.animationDone = true;
       if (queued.cartographyAccepted && queued.cartographyResult) {
         publishOwnershipPresentation(queued);

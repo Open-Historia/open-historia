@@ -21,7 +21,7 @@
 // parameters (they can carry headers — only their size), and an endpoint only by
 // its host. Everything is redacted again as the file is built.
 import { isDebugLogEnabled, isDebugLogVerbose, registerSettingsSnapshot } from "./debugLog.js";
-import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, getMapSettingValue } from "./mapSettings.js";
+import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn, getMapSettingValue, systemPrefersReducedMotion } from "./mapSettings.js";
 import { getStoredChatLanguage, getStoredLanguage, languageDisplayName } from "./i18n.js";
 import {
     AI_TASK_ROUTING,
@@ -56,6 +56,8 @@ registerSettingsSnapshot("Display", () => [
     ["Fullscreen", onOff(typeof document !== "undefined" && document.fullscreenElement)],
     // The umbrella switch: on exactly when both of the map's motion switches are.
     ["Reduce motion", onOff(getMapSetting(MAP_SETTING_KEYS.disableIdleRotation) && getMapSetting(MAP_SETTING_KEYS.disableEventCamera))],
+    // The OS setting, which holds all three motion switches on while it is.
+    ["System reduced motion", onOff(systemPrefersReducedMotion())],
 ]);
 
 registerSettingsSnapshot("Map", () => [
