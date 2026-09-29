@@ -10,7 +10,7 @@
 // the author the real image file and opens a prefilled issue form to drag it into.
 
 import { createBasemap, listBasemaps, makeImageThumbnail, makeVectorThumbnail, sha256Hex } from "./basemapLibrary.js";
-import { unzipBundle, zipBundle } from "./bundleZip.js";
+import { looksLikeZip, unzipBundle, zipBundle } from "./bundleZip.js";
 import { saveBlobToDisk } from "./saveFile.js";
 
 // UTF-8-safe base64 <-> string (the scenario bundle base64-encodes the
@@ -90,7 +90,6 @@ const fetchHubResponse = async (url) => {
   return r;
 };
 
-const fetchHubText = async (url) => (await fetchHubResponse(url)).text();
 const fetchHubImage = async (url) => {
   const r = await fetchHubResponse(url);
   const buf = await r.arrayBuffer();
@@ -209,6 +208,48 @@ export const findCommunityBasemapByHash = async (hash) => {
   }
 };
 
+// A post's data file, read back into { meta, kind, payload }. Shared by install
+// and by a scenario's communityRef (resolveScenarioBundleBackground), which
+// point at the same file. Told apart by its bytes, not its name:
+//   - a .zip: a vector basemap published zipped, because GitHub's issue
+//     attachments reject .geojson outright ("File type .geojson not
+//     supported") — the same trick scenario bundles already rely on;
+//   - an old .basemap.json bundle, or a vector .geojson file (posts made before
+//     GitHub started rejecting the extension, or linked from a release).
+const readBasemapDataFile = async (url) => {
+  const bytes = new Uint8Array(await (await fetchHubResponse(url)).arrayBuffer());
+  if (looksLikeZip(bytes)) {
+    const zip = await unzipBundle(bytes);
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n))
+      ?? zip.names().find((n) => /\.geojson$/i.test(n));
+    if (vectorName) {
+      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
+      return { meta: {}, kind: "vector", payload: { geojson } };
+    }
+    const imageName = zip.names().find((n) => /\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
+    if (imageName) {
+      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
+      return { meta: {}, kind: "image", payload: { dataUrl } };
+    }
+    throw new Error("That .zip has no basemap inside it.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new Error("That basemap file isn't valid JSON.");
+  }
+  if (parsed && parsed.payload) {
+    // Old bundle: { basemap:{…}, payload:{ dataUrl | geojson } }.
+    const kind = parsed.basemap?.kind === "vector" ? "vector" : "image";
+    return { meta: parsed.basemap ?? {}, kind, payload: parsed.payload ?? {} };
+  }
+  if (parsed && (parsed.type === "FeatureCollection" || Array.isArray(parsed.features))) {
+    return { meta: {}, kind: "vector", payload: { geojson: parsed } };
+  }
+  throw new Error("That basemap file is missing its data.");
+};
+
 // Resolve a post to its payload: { kind, dataUrl } | { kind:"vector", geojson }.
 // New image basemaps carry the image inline; new vectors carry a .geojson file;
 // old posts carry a { basemap, payload } .basemap.json bundle.
@@ -232,45 +273,7 @@ const loadBasemapPayload = async (post) => {
   // An image the post links as a file (e.g. an .svg GitHub attaches rather than
   // rendering inline) is the image payload, not a data file.
   const imageFileUrl = post.bundleUrl && IMAGE_EXT_PATTERN.test(post.bundleUrl) ? post.bundleUrl : null;
-  // A vector basemap published as a .zip. GitHub's issue attachments reject
-  // .geojson outright ("File type .geojson not supported"), so a vector is shared
-  // zipped — the same trick scenario bundles already rely on.
-  if (post.bundleUrl && !imageFileUrl && /\.zip(\?|#|$)/i.test(post.bundleUrl)) {
-    const r = await fetchHubResponse(post.bundleUrl);
-    const zip = await unzipBundle(await r.arrayBuffer());
-    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n))
-      ?? zip.names().find((n) => /\.geojson$/i.test(n));
-    if (vectorName) {
-      const geojson = JSON.parse(new TextDecoder().decode(await zip.bytes(vectorName)));
-      return { meta: {}, kind: "vector", payload: { geojson } };
-    }
-    const imageName = zip.names().find((n) => /\.(?:png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      const dataUrl = bytesToDataUrl(await zip.bytes(imageName), extToMime(imageName.split(".").pop()));
-      return { meta: {}, kind: "image", payload: { dataUrl } };
-    }
-    throw new Error("That .zip has no basemap inside it.");
-  }
-  // Old .basemap.json bundle, or a vector .geojson file (posts made before GitHub
-  // started rejecting the extension, or linked from a release rather than attached).
-  if (post.bundleUrl && !imageFileUrl) {
-    const text = await fetchHubText(post.bundleUrl);
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("That basemap file isn't valid JSON.");
-    }
-    if (parsed && parsed.payload) {
-      // Old bundle: { basemap:{…}, payload:{ dataUrl | geojson } }.
-      const kind = parsed.basemap?.kind === "vector" ? "vector" : "image";
-      return { meta: parsed.basemap ?? {}, kind, payload: parsed.payload ?? {} };
-    }
-    if (parsed && (parsed.type === "FeatureCollection" || Array.isArray(parsed.features))) {
-      return { meta: {}, kind: "vector", payload: { geojson: parsed } };
-    }
-    throw new Error("That basemap file is missing its data.");
-  }
+  if (post.bundleUrl && !imageFileUrl) return readBasemapDataFile(post.bundleUrl);
   // New image basemap: the attached cover image (or an image file link) is the payload.
   const imageUrl = post.coverImageUrl || imageFileUrl;
   if (post.kind !== "vector" && imageUrl) {
@@ -456,11 +459,9 @@ export const resolveScenarioBundleBackground = async (bundle) => {
     if (viaImage) {
       payload = { dataUrl: await fetchHubImage(asset.url) };
     } else {
-      // A referenced data file: old .basemap.json bundle or a raw .geojson.
-      const text = await fetchHubText(asset.url);
-      const parsed = JSON.parse(text);
-      if (parsed?.payload) payload = parsed.payload;
-      else if (parsed?.type === "FeatureCollection" || Array.isArray(parsed?.features)) payload = { geojson: parsed };
+      // A referenced data file: old .basemap.json bundle, a raw .geojson, or a
+      // vector published as a .zip — read exactly the way install reads it.
+      ({ payload } = await readBasemapDataFile(asset.url));
     }
     if (payload && (payload.dataUrl || payload.geojson)) {
       bundle.assets.backgroundData = {
