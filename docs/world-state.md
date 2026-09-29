@@ -428,7 +428,7 @@ Colors live in a separate asset (`code → [r,g,b]`), not inside `world.json`. `
 
 ## 9. State distribution: three stores, no panel polls
 
-No panel fetches a runtime document on its own timer any more. Three stores hold the live state, and all three are driven by the canonical write events `writeJson` dispatches (`assets.js`-): `oh:world-updated`, `oh:game-updated`, and `oh:runtime-json-updated` for every mutable runtime asset. Updates are pushed, not polled. The one remaining timer is a 60-second backstop for a writer no event can reach.
+No panel fetches a runtime document on its own timer any more. Three stores hold the live state, and all three are driven by the canonical write events `writeJson` dispatches (`assets.js`-): `oh:world-updated`, `oh:game-updated`, and `oh:runtime-json-updated` for every mutable runtime asset. Updates are pushed, not polled. A writer that normalized the document before saving it (`writeWorldState`, the turn commit) sets `normalized: true` on the event (`writeJson`'s `normalized` option, a `publishJsonWriteBatch` entry's `normalized`), and the runtime store applies it without normalizing it again. The one remaining timer is a 60-second backstop for a writer no event can reach.
 
 ### The map store: `src/Game/Map/useWorldState.js`
 

@@ -197,11 +197,14 @@ const openChannel = () => {
 };
 
 // Authoritative on arrival: take the object writeJson holds, skip the fetch.
+// A writer that normalized the document before saving it says so
+// (detail.normalized), and it is not normalized again: for the world that was
+// a second full normalization on the main thread on every write.
 const onRuntimeJsonUpdated = (event) => {
   const key = keyForUrl(event?.detail?.url);
   if (!key) return;
   entries.get(key).canonicalAt = Date.now();
-  applyValue(key, event.detail.value);
+  applyValue(key, event.detail.value, { normalize: event.detail.normalized !== true });
   // BroadcastChannel never echoes to its own sender, so this cannot loop.
   channel?.postMessage({ key });
 };

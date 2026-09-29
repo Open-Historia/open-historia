@@ -4392,7 +4392,7 @@ export const writeWorldState = async (world, options = {}) => {
   // saved to the server language pack) the moment they're written, not when
   // they first happen to be rendered somewhere.
   enqueueContentStrings(normalized.polityOverrides);
-  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options });
+  return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options, normalized: true });
 };
 
 export const readGameData = async ({ force = false } = {}) =>
@@ -4522,7 +4522,7 @@ const commitCanonicalTurnPayload = async (payload, {
     { url: JSON_URLS.events, value: committed.events },
     { url: JSON_URLS.game, value: committed.game },
     { url: JSON_URLS.colors, value: committed.colors },
-    { url: JSON_URLS.world, value: committed.world, cacheClone: false },
+    { url: JSON_URLS.world, value: committed.world, cacheClone: false, normalized: true },
   ], { emitEvents });
 
   worldViewRaw = committed.world;

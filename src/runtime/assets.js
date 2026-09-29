@@ -999,7 +999,7 @@ export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
     if (urls.has(JSON_URLS.flags)) window.dispatchEvent(new CustomEvent("oh:flags-updated"));
 
     for (const entry of list) {
-      const { url, value } = entry;
+      const { url, value, normalized = false } = entry;
       if (url === JSON_URLS.world) {
         window.dispatchEvent(new CustomEvent("oh:world-updated", { detail: { world: value } }));
       }
@@ -1008,7 +1008,7 @@ export const publishJsonWriteBatch = (entries, { emitEvents = true } = {}) => {
       }
       if (isMutableRuntimeJsonUrl(url)) {
         window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-          detail: { key: runtimeAssetLabel(url), url, value },
+          detail: { key: runtimeAssetLabel(url), url, value, normalized: Boolean(normalized) },
         }));
       }
     }
@@ -1033,6 +1033,10 @@ export const writeJson = async (
     // worth reading back. Asks for none (Prefer: return=minimal) and caches what
     // was sent; a store that answers with the record anyway is not parsed.
     echo = true,
+    // The caller normalized `data` before writing it (gameState.js
+    // writeWorldState). Carried on oh:runtime-json-updated so the runtime store
+    // does not normalize the whole document a second time.
+    normalized = false,
   } = {},
 ) => {
   const stringifyStartedAt = perfNow();
@@ -1115,7 +1119,7 @@ export const writeJson = async (
   }
   if (emitEvents && typeof window !== "undefined" && isMutableRuntimeJsonUrl(url)) {
     window.dispatchEvent(new CustomEvent("oh:runtime-json-updated", {
-      detail: { key: runtimeAssetLabel(url), url, value: saved },
+      detail: { key: runtimeAssetLabel(url), url, value: saved, normalized: Boolean(normalized) },
     }));
   }
 
