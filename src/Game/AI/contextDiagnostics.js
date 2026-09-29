@@ -318,7 +318,8 @@ const LIVE_RUNTIME_VARIABLE_KEYS = Object.freeze({
   ]),
   eventConsolidator: Object.freeze(["actionsToConsolidate", "historyDocumentContext"]),
   geographyResolver: Object.freeze(["geographyResolverItems"]),
-  gameMaster: Object.freeze(["gameMasterMode", "territorialControlContext"]),
+  // projectsSummary: the [Projects & Operations] directive shows the board.
+  gameMaster: Object.freeze(["gameMasterMode", "territorialControlContext", "projectsSummary"]),
   idleDiplomacy: Object.freeze([
     "playerPolity",
     "idleChatAllowed",
