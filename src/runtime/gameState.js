@@ -2,7 +2,7 @@
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
 import { applyGroupOps, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
-import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
+import { enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
 import { displayNameMigrations, renamePolityInColors, renamePolityInWorld, samePolityName } from "../../server/polityRename.js";
@@ -4405,10 +4405,10 @@ export const primeCountryStatsWorkerCommit = async ({
 
 export const writeWorldState = async (world, options = {}) => {
   const normalized = normalizeWorldState(world);
-  // Edited/AI-written polity names, aliases and notes get translated (and
-  // saved to the server language pack) the moment they're written, not when
-  // they first happen to be rendered somewhere.
-  enqueueContentStrings(normalized.polityOverrides);
+  // Polity names, aliases and notes written during play are not queued for
+  // translation: the AI writes them in the player's language already, and the
+  // player types theirs in it. A scenario's own polities are content, queued
+  // when the game opens and when the scenario is saved (translator.js).
   return writeJson(JSON_URLS.world, normalized, { pretty: true, ...options });
 };
 
@@ -4484,7 +4484,6 @@ const buildCanonicalTurnPayload = ({
   world = {},
 } = {}, { expectedGameId = "", preserveApprovedEvents = false } = {}) => {
   const normalizedWorld = normalizeWorldState(world);
-  enqueueContentStrings(normalizedWorld.polityOverrides);
 
   const eventLog = normalizeEvents(events);
   const normalizedEvents = preserveApprovedEvents

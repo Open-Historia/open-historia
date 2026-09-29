@@ -183,7 +183,7 @@ Storage rule: writing `en` (or empty) **removes** the key rather than storing it
 Puts the running game into the player's language. The full design (the three kinds of text, the packs, patterns and runs, content, the prompts, regenerating the packs) is in **[Languages & Translation](i18n.md)**. In short:
 
 1. **The interface** comes from the shipped pack (`public/lang/<code>.json`) in the 22 languages that have one (`SHIPPED_PACK_LANGUAGES`), applied to the DOM by a `MutationObserver` as it renders: exact strings, `{{slot}}` patterns and runs of text nodes (`phraseBook.js`). It never costs an AI request there.
-2. **Content** (what a scenario's author or a player made) is gathered up front, at boot and on every switch of save, and translated by the AI in a few big requests, then saved to the server's pack.
+2. **Content** (what a scenario's author or a player made) is gathered up front, at boot and on every switch of save, and translated by the AI in a few big background requests, only while Background AI allows, then saved to the server's pack. Region names go only once they are shown.
 3. In a language **without** a pack, the interface goes through the AI as well, as content does.
 
 ### Lifecycle
@@ -202,7 +202,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 | `translateLabel(text)` | **Sync** best-effort translate for text drawn outside the DOM (map country labels). Returns the known translation, or the original while queuing the name as content + firing `i18n:updated` when it resolves |
 | `enqueueStrings(strings)` | Proactively queue content (e.g. freshly-fetched hub posts); only unknown strings cost a call |
 | `enqueueEventStrings(events)` | An event log as it is written: queues only the scenario's own events (`source` `"scenario"`); the AI's are written in the player's language |
-| `enqueueContentStrings(payload)` | Deep-walk a saved payload (≤6 deep) pulling human-readable fields (`CONTENT_TEXT_KEYS` + `aliases`), skipping `features`/`geometry`/`coordinates`, and enqueue them. Called by `library.js` on `createScenario/saveScenario/createGame/saveGame` so edited names/descriptions translate **and reach the server pack** the moment they're saved |
+| `enqueueContentStrings(payload)` | Deep-walk a saved payload (≤6 deep, arrays of ≤500; `collectContentText` in `translationRules.js`) pulling human-readable fields (`CONTENT_TEXT_KEYS` + `aliases`), skipping `features`/`geometry`/`coordinates`, and enqueue them. Called by `library.js` on `createScenario/saveScenario/createGame/saveGame` so edited names/descriptions translate **and reach the server pack** the moment they're saved |
 
 `countryLabels.js` calls `translateLabel(...)` so map labels follow the UI language; when new translations land, the `"i18n:updated"` event (debounced in `announceUpdate`) tells label builders to rebuild.
 
@@ -213,7 +213,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 
 ### Translation engine + config
 
-`translateBatch()` (`translator.js:305`) late-imports `callAI` from `../Game/AI/main.jsx` and sends a strict JSON-array prompt (same length/order, keep numbers/emoji/placeholders, proper names unchanged). `processQueue()` sends **one batch at a time** (`planTranslationBatch`), writes results into both `cache` and `unsyncedEntries`, and backs off on repeated failure. It used to send 60 strings × 3 batches in parallel, which made a first pass over a new language dozens of requests nobody pressed a button for — on a free key, where a few hundred a day is the whole allowance, and where three concurrent requests is also the surest way to trip the per-MINUTE limit. A batch is now up to 240 strings or 6,000 source characters, whichever comes first: a quarter of the requests for the same language, one request in flight. On a failure the size halves (down to `BATCH_MIN_STRINGS`) and recovers on the next success, so a model that cannot hold a big batch still finishes. Live check (`.lab/probes/live-translation-probe.mjs`, Gemini, Japanese — the worst case for output tokens): 240 strings, 9.3 KB in, a complete 240-entry array back in 9 s.
+`translateBatch()` late-imports `callAI` from `../Game/AI/main.jsx` and sends a strict JSON-array prompt (same length/order, keep numbers/emoji/placeholders, proper names unchanged), as a background request (`requestKind: BACKGROUND_REQUEST`). `processQueue()` sends **one batch at a time** (`chooseTranslationBatch` in `translationRules.js`: the interface of a language without a pack first, content only while `backgroundAiAllowance()` allows, never both in one request), keeps an answer only when it has one entry per string (`readTranslationReply`; a misaligned answer is dropped whole and asked again in halves, an empty entry leaves its string in English for the session), writes results into both `learned` and `unsyncedEntries`, and backs off on repeated failure, stopping for the session after the second run of failures with a line in the progress pill. It used to send 60 strings × 3 batches in parallel, which made a first pass over a new language dozens of requests nobody pressed a button for — on a free key, where a few hundred a day is the whole allowance, and where three concurrent requests is also the surest way to trip the per-MINUTE limit. A batch is now up to 240 strings or 6,000 source characters, whichever comes first: a quarter of the requests for the same language, one request in flight. On a failure the size halves (down to `BATCH_MIN_STRINGS`) and recovers on the next success, so a model that cannot hold a big batch still finishes. Live check (`.lab/probes/live-translation-probe.mjs`, Gemini, Japanese — the worst case for output tokens): 240 strings, 9.3 KB in, a complete 240-entry array back in 9 s.
 
 | Constant | Value | Meaning |
 |---|---|---|
@@ -224,6 +224,7 @@ Boot order inside `startTranslator`: `syncLanguageFromServer()` (reload on chang
 | `BATCH_MIN_STRINGS` | `30` | What the batch halves down to after a failure, recovering on the next success |
 | `SCAN_DEBOUNCE_MS` | `350` | Debounce before a DOM scan |
 | `MAX_CONSECUTIVE_FAILURES` | `3` | Failures before a 60 s cooldown |
+| `MAX_COOLDOWNS` | `2` | The run of failures that stops translation for the session instead of cooling down |
 | `TRANSLATED_ATTRIBUTES` | `placeholder, title, aria-label, aria-description, alt` | Attributes also translated (and observed as they change) |
 | `SKIP_SELECTOR` | `script, style, noscript, input, textarea, [contenteditable], [data-no-translate]` | Never-translated nodes; opt out with `data-no-translate` |
 
