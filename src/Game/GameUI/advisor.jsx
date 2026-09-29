@@ -507,18 +507,22 @@ const AdvisorDraftSend = ({ draft, onDraft }) => {
 // as a translucent pending unit with a queued order for the AI to adjudicate.
 const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
     const [status, setStatus] = useState(placed ? "placed" : "idle");
+    const [error, setError] = useState("");
 
     useEffect(() => { if (placed) setStatus("placed"); }, [placed]);
 
     const handleClick = async () => {
         if (status !== "idle") return;
         setStatus("placing");
+        setError("");
         const result = await onPlace();
         setStatus(result?.ok ? "placed" : "idle");
+        if (!result?.ok) setError(result?.error || "The unit could not be placed. Try again.");
     };
 
     const busy = status !== "idle";
     return (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
         <button type="button" onClick={handleClick} disabled={busy} style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
             background: status === "placed" ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
@@ -534,6 +538,8 @@ const AdvisorDeployPlace = ({ deployment, placed, onPlace }) => {
                 ? `Placing ${deployment.name}…`
                 : `📍 Place ${deployment.name} here`}
         </button>
+        {error && <span role="alert" style={{ color: "#fca5a5", fontSize: "0.7rem", lineHeight: 1.35 }}>{error}</span>}
+        </div>
     );
 };
 
@@ -1486,7 +1492,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     const handlePlaceDeployment = React.useCallback(async (msgIndex, deployIndex, deployment) => {
         try {
             const { deployUnit } = await import("../Map/unitsController.js");
-            await deployUnit({
+            const placed = await deployUnit({
                 type: String(deployment.type).toLowerCase(),
                 strength: Math.max(1, Math.min(100, Number(deployment.strength) || 100)),
                 name: String(deployment.name).trim(),
@@ -1494,6 +1500,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 lng: Number(deployment.lng),
                 lat: Number(deployment.lat),
             });
+            // Not saved: no flight to a unit that is not there, no "placed" mark.
+            if (!placed?.ok) return { ok: false, error: placed?.error };
             mapRef?.current?.getMap?.()?.flyTo?.({
                 center: [Number(deployment.lng), Number(deployment.lat)],
                 zoom: 4.5,

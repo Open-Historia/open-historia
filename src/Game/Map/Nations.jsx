@@ -7,6 +7,7 @@ import { onUnitSelected, dismissUnitPopup } from "../Selection/Units";
 import { onFeatureSelected, dismissFeaturePopup } from "../Selection/Features";
 import {
   getInteractionMode,
+  setInteractionMode,
   clearInteractionMode,
   deployUnit,
   placeUnitAdmin,
@@ -1218,8 +1219,12 @@ const WorldMap = ({ isGlobe = false }) => {
     }
 
     if (mode.kind === "deploy") {
-      deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat });
       clearInteractionMode();
+      // A deploy that could not be saved stays armed and says so in the
+      // Forces banner, for another tap (unitsController.js deployUnit).
+      void deployUnit({ ...mode.params, lng: event.lngLat.lng, lat: event.lngLat.lat }).then((result) => {
+        if (!result?.ok && getInteractionMode().kind === "idle") setInteractionMode({ ...mode, error: result?.error });
+      });
       return;
     }
     const unitHits = unitsAt();

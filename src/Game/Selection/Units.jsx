@@ -15,8 +15,9 @@ import {
   getUnitById,
   getUnitOrder,
   getPlayerCode,
-  removeUnit,
+  disbandUnit,
   requestUnitOrders,
+  ORDER_NOT_SAVED,
 } from "../Map/unitsController.js";
 import { useEventsById } from "./eventLookup.js";
 // One posture vocabulary and one set of strength bands for the popup and the
@@ -193,6 +194,9 @@ const UnitPopup = () => {
   const [dismissing, setDismissing] = useState(false);
   const [request, setRequest] = useState("");
   const [requestState, setRequestState] = useState("idle"); // idle | sending | queued
+  // Said when an order (a request or a disband) could not be saved.
+  const [orderError, setOrderError] = useState("");
+  const [disbanding, setDisbanding] = useState(false);
   const { current: map } = useMap();
   // On a touch screen Disband sits a thumb's width from Request orders, and on
   // a phone just above the toolbar; one stray tap would stand the formation
@@ -215,6 +219,7 @@ const UnitPopup = () => {
     setRequest("");
     setRequestState("idle");
     setConfirmingDisband(false);
+    setOrderError("");
     if (value !== null) setAnimKey((key) => key + 1);
   };
 
@@ -295,22 +300,43 @@ const UnitPopup = () => {
   const orderText = describeOrder(unit, order);
   const postureText = POSTURE_LABEL[unit.posture] || "";
 
-  const disband = () => {
+  // The unit leaves the map and a Disband order rides with the next jump, so
+  // the AI narrates the stand-down (unitsController.js disbandUnit). The card
+  // closes once both are saved; if they could not be, it stays and says so.
+  const disband = async () => {
+    if (disbanding) return;
     if (isTouch && !confirmingDisband) {
       setConfirmingDisband(true);
       return;
     }
     setConfirmingDisband(false);
-    removeUnit(unit.id);
-    _dismiss?.();
+    setOrderError("");
+    setDisbanding(true);
+    let result = null;
+    try {
+      result = await disbandUnit(unit.id);
+    } catch (error) {
+      console.error("Failed to disband unit:", error);
+    }
+    setDisbanding(false);
+    if (result?.ok) _dismiss?.();
+    else setOrderError(result?.error || ORDER_NOT_SAVED);
   };
 
+  // A request that could not be saved keeps its text in the box, to try again.
   const sendRequest = async () => {
     if (!request.trim() || requestState === "sending") return;
+    setOrderError("");
     setRequestState("sending");
-    const queued = await requestUnitOrders(unit.id, request);
+    let queued = false;
+    try {
+      queued = await requestUnitOrders(unit.id, request);
+    } catch (error) {
+      console.error("Failed to request unit orders:", error);
+    }
     setRequestState(queued ? "queued" : "idle");
     if (queued) setRequest("");
+    else setOrderError(ORDER_NOT_SAVED);
   };
 
   return createPortal(
@@ -447,6 +473,7 @@ const UnitPopup = () => {
                 onChange={(e) => {
                   setRequest(e.target.value);
                   if (requestState === "queued") setRequestState("idle");
+                  if (orderError) setOrderError("");
                 }}
                 rows={2}
                 placeholder="Request orders, e.g. move to the Med"
@@ -474,9 +501,15 @@ const UnitPopup = () => {
                 <ActionButton
                   label={confirmingDisband ? "Disband?" : "Disband"}
                   tone={confirmingDisband ? "danger" : "neutral"}
+                  disabled={disbanding}
                   onClick={disband}
                 />
               </div>
+              {orderError && (
+                <div role="alert" style={{ marginTop: "5px", fontSize: "10px", lineHeight: 1.4, color: "#fca5a5", textAlign: "center" }}>
+                  {orderError}
+                </div>
+              )}
               {requestState === "queued" && (
                 <div style={{ marginTop: "5px", fontSize: "10px", color: "rgba(255,255,255,0.45)", textAlign: "center" }}>
                   Added to your actions for this round.

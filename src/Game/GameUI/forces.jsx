@@ -218,7 +218,10 @@ export const ForcesPanel = ({ mapRef, topOffset = "0px", open = false, onToggle 
               : null),
           }}
         >
-          <span>{(isTouch ? TOUCH_MODE_HINT : MODE_HINT)[mode.kind] ?? "Select a target"}</span>
+          {/* A placement that could not be saved stays armed and says why. */}
+          <span role={mode.error ? "alert" : undefined} style={mode.error ? { color: "#fca5a5" } : undefined}>
+            {mode.error || ((isTouch ? TOUCH_MODE_HINT : MODE_HINT)[mode.kind] ?? "Select a target")}
+          </span>
           <button
             className="oh-tap-row"
             onClick={() => clearInteractionMode()}

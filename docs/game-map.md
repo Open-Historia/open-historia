@@ -314,8 +314,9 @@ A module-level store, separate from `useWorldState` but with the same 5s cadence
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
 | `deployUnit` | Add a `pending` unit (translucent) | placed locally | queues a "Deploy request" order; revert = remove |
+| `disbandUnit` | Remove one of the player's units | removed locally | queues a "Disband order"; revert = restore the unit. A `pending` unit's Deploy request is withdrawn instead |
 
-Player deploy is purely local **and** queues a machine-readable `action` (via `queueOrder`) so the AI confirms, repositions or rejects it on the next jump. The player never moves or fights a formation by hand: they state intent (`requestUnitOrders`, also an `action`), and the engine (`runtime/unitMotion.js`) and the AI carry it out.
+Player deploy is purely local **and** queues a machine-readable `action` so the AI confirms, repositions or rejects it on the next jump. The unit and its action are saved as one change or not at all (`commitWithActions`); a failure is reported to the player instead of logged (see [the units store](world-state.md#the-units-store-unitscontrollerjs)). The player never moves or fights a formation by hand: they state intent (`requestUnitOrders`, also an `action`), and the engine (`runtime/unitMotion.js`) and the AI carry it out.
 
 ### Interaction dispatch — `Nations.jsx` `handleRegionClick`
 

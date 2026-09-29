@@ -406,18 +406,23 @@ const normalizeActionParticipants = (value) =>
     .filter(Boolean);
 
 // How to undo a queued manual troop order if its action is deleted before the
-// next jump (see unitsController): a deploy is removed again, a move snaps the
-// unit back, a long-range order restores the prior status (#368).
+// next jump (see unitsController): a deploy is removed again, a disbanded unit
+// comes back as it was (`restore`, the whole unit), a move snaps the unit back,
+// a long-range order restores the prior status (#368).
 const normalizeUnitRevert = (value) => {
   if (!value || typeof value !== "object") return null;
   const unitId = normalizeOptionalString(value.unitId);
   if (!unitId) return null;
   const lng = finiteOrNull(value.lng);
   const lat = finiteOrNull(value.lat);
+  const restore = value.restore && typeof value.restore === "object"
+    ? normalizeUnitEntry({ ...value.restore, id: unitId })
+    : null;
   return {
     unitId,
     ...(lng !== null && lat !== null ? { lng, lat } : {}),
     ...(value.remove === true ? { remove: true } : {}),
+    ...(restore ? { restore } : {}),
     ...(normalizeOptionalString(value.status) ? { status: normalizeOptionalString(value.status) } : {}),
     // The standing multi-turn order (world.pendingUnitOrders) this move/attack
     // created, if any — so deleting the queued action also cancels the order
