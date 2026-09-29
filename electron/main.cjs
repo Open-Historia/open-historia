@@ -74,8 +74,9 @@ const BETA_UPDATE_MANIFEST =
 // testing the beta a way to quietly damage a real campaign.
 const USER_ROOT = app.getPath("userData");
 const DATA_DIR = path.join(USER_ROOT, "server", "data");
-// The world map is the exception, and it is the safe one to share: ~170MB of
-// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches,
+// The world map is the exception, and it is the safe one to share: ~35MB of
+// pmtiles that scripts/map-assets.json pins by sha256, identical on both branches
+// (so a change to those pins has to reach every branch in the same release),
 // and written through a temp file and a rename. Pointing the beta at the stable
 // app's copy saves a tester that download; with no stable install the fetcher just
 // creates the folder, and a later stable install finds the map already there.

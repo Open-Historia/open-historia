@@ -278,3 +278,12 @@ test("a stamp for other bytes than the manifest's is not trusted", async (t) => 
   const stamps = JSON.parse(fs.readFileSync(path.join(install.dir, ".map-assets-verified.json"), "utf8"));
   assert.equal(stamps[install.target].sha256, install.asset.sha256);
 });
+
+test("the desktop downloads the same z8 map archives the Android app ships", () => {
+  const android = JSON.parse(fs.readFileSync(new URL("../mobile/map-assets.android.json", import.meta.url), "utf8"));
+  const pmtiles = (list) => Object.fromEntries(list.assets
+    .filter((asset) => asset.path.endsWith(".pmtiles"))
+    .map((asset) => [path.posix.basename(asset.path), { asset: asset.asset, bytes: asset.bytes, sha256: asset.sha256 }]));
+  assert.deepEqual(pmtiles(MANIFEST), pmtiles(android));
+  assert.equal(pmtiles(MANIFEST)["regions.pmtiles"].asset, "regions-z8.pmtiles");
+});
