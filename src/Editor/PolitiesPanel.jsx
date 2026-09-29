@@ -504,7 +504,7 @@ const PolitiesPanel = ({
                 type="button"
                 style={pillButton(false)}
                 disabled={!clean(draftName) || clean(draftName) === current.key}
-                title="Renames the country everywhere on this map: its regions, claims, colour, flag, tags and cities. The old name is kept as a former name."
+                title="Renames the country everywhere on this map: its regions, claims, colour, flag, tags, map features, units and puppet ties. The old name is not kept."
                 onClick={() => {
                   const next = clean(draftName);
                   const previousKey = current.key;
