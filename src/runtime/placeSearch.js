@@ -146,13 +146,17 @@ export const buildPolityIndex = (features) => {
     const lat = Number(point[1] ?? properties.anchorLat);
     if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
 
-    // Several label sites per polity; the most prominent one is its home.
+    // Several label sites per polity; the primary one is its home, else the most
+    // prominent. A dependency can out-measure the home ground (Greenland).
+    const primary = role !== "sovereign-secondary";
     const weight = Number(properties.priorityScale ?? properties.areaScale) || 0;
     const held = byOwner.get(owner);
-    if (!held || weight > held.weight) byOwner.set(owner, { owner, lng, lat, weight });
+    if (!held || (primary && !held.primary) || (primary === held.primary && weight > held.weight)) {
+      byOwner.set(owner, { owner, lng, lat, weight, primary });
+    }
   }
 
-  return [...byOwner.values()];
+  return [...byOwner.values()].map(({ owner, lng, lat, weight }) => ({ owner, lng, lat, weight }));
 };
 
 const polityNames = (owner, override) => {

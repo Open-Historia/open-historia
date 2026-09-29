@@ -10,6 +10,7 @@ import {
   curveMinZoomForPolityLabelTier,
   selectPolityPointFallbacks,
 } from "../src/Game/Map/vnext/polityLabels.js";
+import { aggregatePolityGeometry } from "../src/Game/Map/vnext/polityGeometry.js";
 import { derivePolitySurfaces } from "../src/Game/Map/vnext/politySurfaces.js";
 
 const surface = (owner, coordinates) => ({
@@ -567,24 +568,82 @@ test("R8 never removes point-persistent labels when another polity warps", () =>
   assert.equal(selected.features.some((feature) => feature.properties.owner === "Finland"), true);
 });
 
-test("R8 keeps DENMARK on its core and adds GREENLAND as a territory label", () => {
-  const result = buildPolityLabelCollections({
-    type: "FeatureCollection",
-    features: [surface("Kingdom of Denmark", [
-      [[[-52, 60], [-18, 60], [-18, 82], [-52, 82], [-52, 60]]],
-      [[[8, 54], [13, 54], [13, 58], [8, 58], [8, 54]]],
-    ])],
-  }, { nameResolver: () => "DENMARK" });
+const region = (id, owner, gid0, west, south, east, north) => ({
+  type: "Feature",
+  properties: { id, owner, gid0 },
+  geometry: {
+    type: "Polygon",
+    coordinates: [[[west, south], [east, south], [east, north], [west, north], [west, south]]],
+  },
+});
+const JUTLAND_WEST = region("dk-w", "Kingdom of Denmark", "DNK", 8, 54, 10.5, 58);
+const JUTLAND_EAST = region("dk-e", "Kingdom of Denmark", "DNK", 10.5, 54, 13, 58);
+const GREENLAND = region("gl", "Kingdom of Denmark", "GRL", -52, 60, -18, 82);
+const ownerParts = (result, owner) => result.pointLabelData.features.filter((feature) => (
+  feature.properties.labelKind === "territory" && feature.properties.sourceOwner === owner
+));
 
-  assert.equal(result.labelData.features.length, 1, "territory labels must not create a second polity record");
+test("R8 keeps the polity's label on its home ground when a dependency is larger", () => {
+  const result = buildPolityLabelCollections(
+    aggregatePolityGeometry({ type: "FeatureCollection", features: [JUTLAND_WEST, JUTLAND_EAST, GREENLAND] }),
+    { nameResolver: () => "DENMARK" },
+  );
+
+  assert.equal(result.labelData.features.length, 1, "a dependency must not create a second polity record");
   const denmark = byOwner(result, "Kingdom of Denmark");
   assert.ok(denmark.geometry.coordinates[0] > 0, `DENMARK should anchor on Europe, got ${denmark.geometry.coordinates[0]}`);
 
-  const greenland = result.pointLabelData.features.find((feature) => feature.properties.labelKind === "territory");
-  assert.ok(greenland, "GREENLAND supplemental territory label should exist");
-  assert.equal(greenland.properties.name, "GREENLAND");
-  assert.ok(greenland.geometry.coordinates[0] < -10);
-  assert.equal(summarizePolityLabelDiagnostics(result).length, 1, "territory labels stay outside polity diagnostics");
+  const parts = ownerParts(result, "Kingdom of Denmark");
+  assert.equal(parts.length, 1, "Greenland carries the owner's name like any landmass of consequence");
+  assert.equal(parts[0].properties.name, "DENMARK");
+  assert.equal(parts[0].properties.labelSiteRole, "sovereign-secondary");
+  assert.ok(parts[0].geometry.coordinates[0] < -10);
+  assert.equal(summarizePolityLabelDiagnostics(result).length, 1, "part labels stay outside polity diagnostics");
+});
+
+test("R8 labels every landmass of a union whose name contains another polity's", () => {
+  const regions = [
+    JUTLAND_WEST,
+    JUTLAND_EAST,
+    GREENLAND,
+    region("no", "Denmark-Norway", "NOR", 5, 59, 31, 71),
+    region("is", "Denmark-Norway", "ISL", -17, 63.5, -12, 66.5),
+  ].map((feature) => ({ ...feature, properties: { ...feature.properties, owner: "Denmark-Norway" } }));
+  const result = buildPolityLabelCollections(
+    aggregatePolityGeometry({ type: "FeatureCollection", features: regions }),
+    { nameResolver: () => "DENMARK-NORWAY" },
+  );
+
+  const core = byOwner(result, "Denmark-Norway");
+  assert.ok(core.geometry.coordinates[0] > 7 && core.geometry.coordinates[1] < 58.5,
+    `the core label sits on the home ground, got ${core.geometry.coordinates}`);
+  const parts = ownerParts(result, "Denmark-Norway");
+  const inside = (feature, west, south, east, north) => {
+    const [lng, lat] = feature.geometry.coordinates;
+    return lng >= west && lng <= east && lat >= south && lat <= north;
+  };
+  assert.ok(parts.some((feature) => inside(feature, 5, 59, 31, 71)), "Norway carries a label");
+  assert.ok(parts.some((feature) => inside(feature, -17, 63.5, -12, 66.5)), "Iceland carries a label");
+  assert.ok(parts.some((feature) => inside(feature, -52, 60, -18, 82)), "Greenland carries a label");
+  const names = new Set(result.pointLabelData.features.map((feature) => feature.properties.name));
+  assert.deepEqual([...names], ["DENMARK-NORWAY"], "no label is named after a hard-coded territory");
+});
+
+test("R8 special-cases no polity name: without stock countries the largest landmass is the core", () => {
+  const geometry = (owner) => surface(owner, [
+    [[[-52, 60], [-18, 60], [-18, 82], [-52, 82], [-52, 60]]],
+    [[[8, 54], [13, 54], [13, 58], [8, 58], [8, 54]]],
+  ]);
+  const denmark = buildPolityLabelCollections({ type: "FeatureCollection", features: [geometry("Kingdom of Denmark")] },
+    { nameResolver: () => "NORTHLAND" });
+  const other = buildPolityLabelCollections({ type: "FeatureCollection", features: [geometry("Northland")] },
+    { nameResolver: () => "NORTHLAND" });
+
+  assert.deepEqual(
+    denmark.pointLabelData.features.map((feature) => feature.geometry.coordinates),
+    other.pointLabelData.features.map((feature) => feature.geometry.coordinates),
+  );
+  assert.ok(byOwner(denmark, "Kingdom of Denmark").geometry.coordinates[0] < -10);
 });
 
 

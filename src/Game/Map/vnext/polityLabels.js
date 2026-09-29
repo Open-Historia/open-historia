@@ -1715,15 +1715,17 @@ const polygonBoundsLngLat = (polygon) => {
 
 // Groups an owner's polygons into landmasses, largest first. Specks below
 // PART_CLUSTER_MIN_AREA_LOCAL never get a label and are left out entirely.
-const landmassClusters = (polygons) => {
+// homeFlags marks, index for index, the polygons on the polity's home ground; a
+// landmass holding any of them is `home`.
+const landmassClusters = (polygons, homeFlags = null) => {
   const items = [];
-  for (const polygon of polygons ?? []) {
+  (polygons ?? []).forEach((polygon, polygonIndex) => {
     const area = polygonAreaLocal(polygon);
-    if (!(area > PART_CLUSTER_MIN_AREA_LOCAL)) continue;
+    if (!(area > PART_CLUSTER_MIN_AREA_LOCAL)) return;
     const bounds = polygonBoundsLngLat(polygon);
-    if (!Number.isFinite(bounds.west)) continue;
-    items.push({ polygon, area, bounds });
-  }
+    if (!Number.isFinite(bounds.west)) return;
+    items.push({ polygon, area, bounds, home: Boolean(homeFlags?.[polygonIndex]) });
+  });
   if (!items.length) return [];
 
   const parent = items.map((_, index) => index);
@@ -1764,8 +1766,9 @@ const landmassClusters = (polygons) => {
     if (cluster) {
       cluster.polygons.push(item.polygon);
       cluster.area += item.area;
+      cluster.home = cluster.home || item.home;
     } else {
-      clusters.set(root, { polygons: [item.polygon], area: item.area });
+      clusters.set(root, { polygons: [item.polygon], area: item.area, home: item.home });
     }
   });
   return [...clusters.values()].sort((a, b) => b.area - a.area);
@@ -1783,13 +1786,6 @@ const ownerFeatureId = (owner) => {
 };
 
 
-const polygonOuterCentroidLngLat = (polygon) => {
-  const outer = Array.isArray(polygon?.[0]) ? polygon[0] : [];
-  if (!outer.length) return { lng: 0, lat: 0 };
-  const { cx, cy } = getCentroid(outer);
-  return { lng: cx, lat: cy };
-};
-
 const polygonSetAreaLngLat = (polygons) => (polygons ?? []).reduce((sum, polygon) => {
   const outer = calculateArea(polygon?.[0] ?? []);
   const holes = (polygon ?? []).slice(1)
@@ -1797,30 +1793,20 @@ const polygonSetAreaLngLat = (polygons) => (polygons ?? []).reduce((sum, polygon
   return sum + Math.max(0, outer - holes);
 }, 0);
 
-// A sovereign owner may contain a very large detached dependency. Geometry alone
-// cannot infer the political core: Kingdom of Denmark is the canonical modern-map
-// case, where Greenland is physically much larger than Denmark. Keep the polity
-// label on the core and emit GREENLAND separately as a geographic territory label.
-const cartographicPolygonSetsForOwner = (owner, allPolygons) => {
-  const normalized = String(owner ?? "").toLocaleLowerCase();
-  if (!normalized.includes("denmark")) {
-    return { primary: allPolygons, detached: [] };
-  }
-
-  const primary = [];
-  const greenland = [];
-  for (const polygon of allPolygons ?? []) {
-    const { lng, lat } = polygonOuterCentroidLngLat(polygon);
-    if (lng < -10 && lat > 58) greenland.push(polygon);
-    else if (lng > 5 && lng < 16 && lat > 53 && lat < 59) primary.push(polygon);
-  }
-
-  return {
-    primary: primary.length ? primary : allPolygons,
-    detached: greenland.length
-      ? [{ id: "greenland", name: "GREENLAND", polygons: greenland }]
-      : [],
-  };
+// A sovereign owner may hold a detached dependency much larger than its own
+// country - Greenland is far larger than Denmark - so area alone cannot find the
+// political core. The regions say where the polity is at home: the stock country
+// most of them came from (the aggregation's first gadm0). Its polygons are
+// flagged here, and the core is the largest landmass holding any of them. A
+// polity whose regions carry no stock country keeps the largest landmass.
+// No polity name is special-cased; the dependency is labelled like any other
+// landmass of consequence.
+const homePolygonFlags = (feature, allPolygons) => {
+  const properties = feature?.properties ?? {};
+  const home = String(properties.gadm0?.[0] ?? "").trim();
+  const codes = properties.polygonGadm0;
+  if (!home || !Array.isArray(codes) || codes.length !== allPolygons.length) return null;
+  return codes.map((code) => code === home);
 };
 
 export const selectPolityPointFallbacks = (pointLabelData, renderedWarpOwners = new Set()) => {
@@ -2465,15 +2451,15 @@ export const buildPolityLabelCollections = (
     const name = String(nameResolver(owner, feature) ?? owner).trim();
     if (!name || !allPolygons.length) continue;
 
-    const cartographicSets = cartographicPolygonSetsForOwner(owner, allPolygons);
-    const clusters = landmassClusters(cartographicSets.primary);
+    const clusters = landmassClusters(allPolygons, homePolygonFlags(feature, allPolygons));
     if (!clusters.length) continue;
     const upperName = name.toUpperCase();
     const featureId = ownerFeatureId(owner);
 
-    // The political core is the landmass with the most ground; its label is the
-    // polity's one logical record.
-    const core = clusters[0];
+    // The political core is the home landmass with the most ground; its label is
+    // the polity's one logical record.
+    const coreIndex = Math.max(0, clusters.findIndex((cluster) => cluster.home));
+    const core = clusters[coreIndex];
     const coreRecords = buildLandmassLabelRecords({
       polygons: core.polygons,
       owner,
@@ -2493,7 +2479,8 @@ export const buildPolityLabelCollections = (
     // without a colour key. They are supplemental cartographic labels, not
     // polity records: the one-polity/one-logical-label invariant stands, and
     // each has a pseudo owner so the curve/point handoff treats it on its own.
-    for (let index = 1; index < clusters.length; index += 1) {
+    for (let index = 0; index < clusters.length; index += 1) {
+      if (index === coreIndex) continue;
       const part = clusters[index];
       if (part.area < MIN_PART_AREA_LOCAL || part.area < core.area * MIN_PART_FRACTION) break;
       const partRecords = buildLandmassLabelRecords({
@@ -2511,92 +2498,6 @@ export const buildPolityLabelCollections = (
       ptrFeatures.push(partRecords.ptr);
       pointFeatures.push(partRecords.point);
       if (partRecords.line) lineFeatures.push(partRecords.line);
-    }
-
-    // Detached geographic territories are supplemental cartographic labels, not
-    // additional polity records. This keeps the one-polity/one-logical-label
-    // invariant while allowing GREENLAND to exist alongside DENMARK.
-    for (const territory of cartographicSets.detached) {
-      const territoryArea = polygonSetAreaLngLat(territory.polygons);
-      if (!(territoryArea > 0)) continue;
-      const territoryCloud = [];
-      let territoryMinX = Infinity;
-      let territoryMinY = Infinity;
-      let territoryMaxX = -Infinity;
-      let territoryMaxY = -Infinity;
-      for (const polygon of territory.polygons) {
-        const outerTile = ringLngLatToTile(polygon?.[0], extent);
-        if (outerTile.length < 4) continue;
-        for (const point of outerTile) {
-          territoryCloud.push(point);
-          territoryMinX = Math.min(territoryMinX, point[0]);
-          territoryMinY = Math.min(territoryMinY, point[1]);
-          territoryMaxX = Math.max(territoryMaxX, point[0]);
-          territoryMaxY = Math.max(territoryMaxY, point[1]);
-        }
-      }
-      if (territoryCloud.length < 4) continue;
-      const territoryShapeWidth = Math.max(0, territoryMaxX - territoryMinX);
-      const territoryShapeHeight = Math.max(0, territoryMaxY - territoryMinY);
-      const territoryAxis = getPrincipalAxisMetrics(territoryCloud);
-      // Detached territories are already a geographic grouping rather than one
-      // polygon. Anchor against the canonical owner group's visual centre instead of
-      // whichever administrative region happens to be the single largest.
-      const territoryPoint = [
-        (territoryMinX + territoryMaxX) / 2,
-        (territoryMinY + territoryMaxY) / 2,
-      ];
-      const [territoryRawLng, territoryLat] = tileToLngLat(territoryPoint[0], territoryPoint[1], extent);
-      const territoryName = String(territory.name).toUpperCase();
-      const territoryPriority = Math.sqrt(Math.max(territoryArea, 1e-8)) * 17500;
-      const territoryVisibility = visibilityScaleFor(territoryPriority, territoryName);
-      const territoryTier = tierForVisibilityScale(territoryVisibility);
-      const territoryTypography = fitPointTypography({
-        shapeWidth: territoryShapeWidth,
-        shapeHeight: territoryShapeHeight,
-        axisSpan: territoryAxis.axisSpan,
-        crossSpan: territoryAxis.crossSpan,
-        name: territoryName,
-        priorityScale: territoryPriority,
-      });
-
-      pointFeatures.push({
-        type: "Feature",
-        id: `territory-label-${territory.id}`,
-        geometry: { type: "Point", coordinates: [wrapLongitude(territoryRawLng), territoryLat] },
-        properties: {
-          name: territoryName,
-          owner: `__territory_${territory.id}__`,
-          sourceOwner: owner,
-          labelKind: "territory",
-          labelSiteRole: "geographic-territory",
-          tier: territoryTier.id,
-          minZoom: territoryTier.minZoom,
-          curveMinZoom: null,
-          curveBand: "none",
-          forceOverlapZoom: territoryTier.forceOverlapZoom,
-          allowOverlap: true,
-          areaScale: territoryPriority,
-          priorityScale: territoryPriority,
-          visibilityScale: Number(territoryVisibility.toFixed(2)),
-          shapeWidth: territoryShapeWidth,
-          shapeHeight: territoryShapeHeight,
-          axisSpan: Number(territoryAxis.axisSpan.toFixed(3)),
-          crossSpan: Number(territoryAxis.crossSpan.toFixed(3)),
-          rotation: territoryAxis.angle,
-          lat: territoryLat,
-          anchorLng: wrapLongitude(territoryRawLng),
-          anchorLat: territoryLat,
-          mode: "point",
-          presentation: "persistent",
-          safeWarp: false,
-          fitScale: territoryTypography.fitScale,
-          fontPxAtZoom4: territoryTypography.fontPxAtZoom4,
-          letterSpacing: territoryTypography.letterSpacing,
-          targetOccupancy: territoryTypography.targetOccupancy,
-          estimatedOccupancy: territoryTypography.estimatedOccupancy,
-        },
-      });
     }
   }
 
