@@ -66,6 +66,7 @@ import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js"
 import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { followSavedFields } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
+import { buildScenarioCountryOptions, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -111,20 +112,6 @@ const hexToRgbArray = (hex) => {
   const n = parseInt(m[1], 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
-
-const TECHNICAL_OWNER_CODES = new Set([
-  "NA",
-  "XCA",
-  "Z01",
-  "Z02",
-  "Z03",
-  "Z04",
-  "Z05",
-  "Z06",
-  "Z07",
-  "Z08",
-  "Z09",
-]);
 
 // Set by the mounted LibraryTopBar; lets outside callers open the main menu
 // on a specific tab.
@@ -1957,23 +1944,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // polityOverrides/ownerCodes/regionOwnershipOverrides outright and wiping
       // every other country on the map).
       const gameDetails = await loadGameDetails(gameId).catch(() => null);
-      const world = { ...(gameDetails?.data?.world ?? {}) };
-      const name = faction.name;
-      const hexColor = /^#[0-9a-fA-F]{6}$/.test(faction.color) ? faction.color : "#a1a1aa";
-
-      world.polityOverrides = {
-        ...(world.polityOverrides ?? {}),
-        [name]: { name, aliases: [], color: hexColor, note: faction.lore || "" },
-      };
-      world.regionOwnershipOverrides = { ...(world.regionOwnershipOverrides ?? {}) };
-      for (const regionId of faction.regionIds ?? []) {
-        world.regionOwnershipOverrides[regionId] = name;
-      }
-      // ownerCodes lists who is playable — include the faction even when landless.
-      world.ownerCodes = [...new Set([...(world.ownerCodes ?? []), name])].sort();
-      // A faction that claimed drawn/overridden territory needs the custom-region
-      // renderer on so its regions paint; a landless faction leaves the flag as-is.
-      if ((faction.regionIds ?? []).length) world.customRegions = true;
+      const { world, name, color: hexColor } = worldWithFaction(gameDetails?.data?.world ?? {}, faction);
 
       await saveGame(gameId, { world, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
 
@@ -2041,24 +2012,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // The same read-merge-write as a faction (see startGameForFaction): saveGame
       // writes `world` whole.
       const gameDetails = await loadGameDetails(gameId).catch(() => null);
-      const world = { ...(gameDetails?.data?.world ?? {}) };
-      const groups = normalizeGroups(world.groups);
-      const known = Object.keys(groups).find((key) => key.toLowerCase() === name.toLowerCase());
-      const hexColor = /^#[0-9a-fA-F]{6}$/.test(group.color ?? "") ? group.color : (known ? groups[known].color : "#a1a1aa");
-      const description = String(group.lore ?? group.description ?? "").trim() || (known ? groups[known].description : "");
-      const key = known || name;
-
-      world.groups = { ...groups, [key]: { ...(groups[key] ?? {}), name: key, description, color: hexColor } };
-      if (!group.existing) {
-        world.groupAreas = { ...(world.groupAreas ?? {}) };
-        for (const regionId of group.regionIds ?? []) world.groupAreas[regionId] = key;
-      }
-      world.polityOverrides = {
-        ...(world.polityOverrides ?? {}),
-        [key]: { name: key, aliases: [], color: hexColor, note: description, ...(world.polityOverrides?.[key] ?? {}) },
-      };
-      // ownerCodes lists who is playable — a group owns nothing, so name it here.
-      world.ownerCodes = [...new Set([...(world.ownerCodes ?? []), key])].sort();
+      const { world, key, color: hexColor } = worldWithPlayerGroup(gameDetails?.data?.world ?? {}, group);
 
       await saveGame(gameId, { world, gamePatch: { country: key, ...(difficulty ? { difficulty } : null) } });
 
@@ -2084,47 +2038,6 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     } finally {
       setIsBusy(false);
     }
-  };
-
-  // Build the start-country list for a scenario: only the factions that actually
-  // exist in it (world.ownerCodes), named as era polities where defined. Falls
-  // back to every country for scenarios without an owner list.
-  const buildScenarioCountryOptions = (world, allCountries, nameOverrides = {}) => {
-    const entries = Array.isArray(allCountries) ? allCountries : [];
-    const entriesByCode = new Map();
-    for (const entry of entries) {
-      const code = String(entry?.code ?? "").trim();
-      const name = String(entry?.name ?? "").trim();
-      if (!code || !name || TECHNICAL_OWNER_CODES.has(code)) continue;
-      const existing = entriesByCode.get(code);
-      if (!existing || existing.name === code) entriesByCode.set(code, { code, name });
-    }
-    const list = [...entriesByCode.values()];
-    const ownerCodes = Array.isArray(world?.ownerCodes) ? world.ownerCodes : null;
-    const nameByCode = new Map(list.map((entry) => [entry.code, entry.name]));
-    const polity = world?.polityOverrides ?? {};
-    const resolveOption = (code, fallbackName = code) => {
-      const scenarioName = nameOverrides[code] || nameOverrides[fallbackName];
-      const polityName = polity[code]?.name;
-      return {
-        code,
-        name: (polityName && polityName !== code ? polityName : null) || scenarioName || fallbackName,
-      };
-    };
-    // ownerCodes lists only owners that hold territory (it is the deduped values of
-    // regionOwnershipOverrides). A LANDLESS faction — a polity that owns no regions,
-    // e.g. a government-in-exile — is defined in polityOverrides but appears in no
-    // ownership override, so it would never reach this list. Union the two: a
-    // faction is playable if it holds land OR exists as a polity. The map surface
-    // needs no change — a landless faction has nothing to click, and the list
-    // button is selection enough.
-    const codes = new Set(ownerCodes && ownerCodes.length ? ownerCodes : list.map((e) => e.code));
-    for (const code of Object.keys(polity)) codes.add(code);
-    const options = [...codes]
-      .filter((code) => !TECHNICAL_OWNER_CODES.has(code))
-      .map((code) => resolveOption(code, nameByCode.get(code) || code));
-    return options
-      .sort((left, right) => left.name.localeCompare(right.name));
   };
 
   const getBaseCountryOptions = () =>
