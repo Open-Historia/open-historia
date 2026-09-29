@@ -11147,6 +11147,19 @@ const waitForSimulationIdle = async ({ signal, timeoutMs = 10 * 60 * 1000 } = {}
   }
 };
 
+// The write half of a stat sheet, held to the same rules. The model may answer
+// minutes later: a skip that started meanwhile owns the world until it lands,
+// so wait for it and take the lock before the first await of the write (#724);
+// and a sheet read from a campaign the player has since left belongs to
+// nobody, since the world endpoint follows the open campaign. Returns holding
+// the lock; the caller ends it once the write is done.
+const beginStatsWrite = async (campaign, signal) => {
+  await waitForSimulationIdle({ signal });
+  throwIfAborted(signal);
+  assertCampaignUnchanged(campaign, activeCampaignId(), "stat sheet");
+  beginSimulation();
+};
+
 // One in-flight promise per (campaign, kind, polity), so the pane re-opening
 // on the same polity, or a deploy right after the tab opened, does not ask
 // twice. Settled promises are dropped, so a failure is retried the next time
@@ -11258,6 +11271,7 @@ const generateScenarioCustomStatSheet = async ({
   target,
   worldAtStart,
   signal,
+  campaign = "",
 } = {}) => {
   const currentDate = normalizeString(bundle?.game?.gameDate || bundle?.game?.startDate);
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
@@ -11304,50 +11318,55 @@ ${JSON.stringify(previousValues)}`
 
   if (!statCode || !sheet) return sheet;
 
+  await beginStatsWrite(campaign, signal);
   try {
-    const persisted = await persistCountryStatsBackground({
-      code: statCode,
-      sheet,
-      continuity: { assessedDate: currentDate, assessedRound: currentRound },
-      date: currentDate,
-      round: currentRound,
-      signal,
-    });
-    if (persisted?.sheet) {
-      await primeCountryStatsWorkerCommit({
-        country: statCode,
-        sheet: persisted.sheet,
-        historySeries: persisted.historySeries,
+    try {
+      const persisted = await persistCountryStatsBackground({
+        code: statCode,
+        sheet,
+        continuity: { assessedDate: currentDate, assessedRound: currentRound },
+        date: currentDate,
+        round: currentRound,
+        signal,
       });
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-          detail: { country: statCode, sheet: persisted.sheet, source: "scenario-custom-stats-worker-persist" },
-        }));
+      if (persisted?.sheet) {
+        await primeCountryStatsWorkerCommit({
+          country: statCode,
+          sheet: persisted.sheet,
+          historySeries: persisted.historySeries,
+        });
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
+            detail: { country: statCode, sheet: persisted.sheet, source: "scenario-custom-stats-worker-persist" },
+          }));
+        }
+        return persisted.sheet;
       }
-      return persisted.sheet;
+    } catch (workerPersistError) {
+      if (signal?.aborted || workerPersistError?.name === "AbortError") throw workerPersistError;
+      console.warn("[stats custom] worker persistence failed; using canonical main-thread fallback.", workerPersistError);
     }
-  } catch (workerPersistError) {
-    if (signal?.aborted || workerPersistError?.name === "AbortError") throw workerPersistError;
-    console.warn("[stats custom] worker persistence failed; using canonical main-thread fallback.", workerPersistError);
-  }
 
-  const world = await readWorldState({ force: false });
-  const nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
-    continuity: { assessedDate: currentDate, assessedRound: currentRound },
-  });
-  world.countryStatsHistory = appendCountryStatHistorySample(
-    world.countryStatsHistory,
-    statCode,
-    nextSheet,
-    { date: currentDate, round: currentRound },
-  );
-  await writeWorldState(world, { emitEvents: false });
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
-      detail: { country: statCode, sheet: nextSheet, source: "scenario-custom-stats-main-thread-persist" },
-    }));
+    const world = await readWorldState({ force: false });
+    const nextSheet = applyCountryStatPatchToWorld(world, statCode, sheet, {
+      continuity: { assessedDate: currentDate, assessedRound: currentRound },
+    });
+    world.countryStatsHistory = appendCountryStatHistorySample(
+      world.countryStatsHistory,
+      statCode,
+      nextSheet,
+      { date: currentDate, round: currentRound },
+    );
+    await writeWorldState(world, { emitEvents: false });
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oh:country-stats-updated", {
+        detail: { country: statCode, sheet: nextSheet, source: "scenario-custom-stats-main-thread-persist" },
+      }));
+    }
+    return nextSheet;
+  } finally {
+    endSimulation();
   }
-  return nextSheet;
 };
 
 // Structured national stat sheet for the Stats tab, grounded in the same
@@ -11360,6 +11379,9 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
   // built from a world with no history in it yet, which then became campaign
   // canon. Ahead of the perf timer, so waiting is not reported as preparation.
   await waitForSimulationIdle({ signal });
+  // The campaign the sheet is read from; every write below checks it again
+  // (beginStatsWrite).
+  const campaign = activeCampaignId();
   const statsStartedAt = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
   // Stats is a read-mostly panel. Use the already-canonical runtime bundle cache
   // rather than forcing every underlying state resource back through storage on each
@@ -11381,6 +11403,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       target,
       worldAtStart,
       signal,
+      campaign,
     });
   }
 
@@ -11868,6 +11891,7 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
         .map((member) => ({ geography: member.geography, regions: heldRegionCount(member) })),
     };
 
+    await beginStatsWrite(campaign, signal);
     try {
       const commitStartedAt =
         typeof performance !== "undefined" && performance.now
@@ -11977,6 +12001,8 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
       } catch (error) {
         console.warn("[ai] failed to persist native country stats:", error);
       }
+    } finally {
+      endSimulation();
     }
   }
 
