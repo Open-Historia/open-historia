@@ -12566,7 +12566,10 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
     signal,
     userMessage: demandCheckPrompt({ context, reply, openDemand, answering, demands: stored.demands }),
     variables: {},
-    requestKind: BACKGROUND_REQUEST,
+    // A player request, not background: it is the direct result of a message
+    // the player sent. Counted as background it ate the day's background cap
+    // (about thirty exchanges) and silently stopped the idle pulse, agent
+    // reports and first readings.
   });
   const events = interpretDemandCheck({ payload, context, openDemand, messageId, time, idFor: mintDemandId, demands: stored.demands });
   logDebugEvent("diplomacy",
