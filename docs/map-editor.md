@@ -37,7 +37,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `BottomBar.jsx` | Status bar: counts (open managers), Layers/Reference buttons, basemap picker, map name, save-status dot, search box. |
 | `SelectionInspector.jsx` | Right panel for the current region selection: name/type/country/disputed-by/colour/flag/tags + merge/copy/zoom/delete. |
 | `TypeManager.jsx` | Region "type" editor (render + gameplay settings). |
-| `RegionsPanel.jsx` | Searchable region list → select + zoom. |
+| `RegionsPanel.jsx` | Searchable region list → select + zoom. Matches and shows the owner's display name (`regionSearch.js`). |
 | `FeatureManager.jsx` | City/point-feature list; bulk import from the seed, or from the author's own file (`featureImport.js`). |
 | `CityPopup.jsx` | Inline city editor anchored at the click. |
 | `SearchBar.jsx` | Unified place search (this map's cities, regions, ~70k world places). |
@@ -161,7 +161,7 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `pasteRegions(fc)` | Adds regions copied from another map, carving each one's land out of whatever already covers it (`overlaps` + `subtractFrom`, the Draw tool's rule: a bite, a hole, or the region beneath removed, survivors marked `edited`). A pasted region keeps its id when the target has none by that id, else gets a fresh `reg_` id, and is always marked `edited`. Selects the pasted regions; returns `{ added, trimmed, removed }`; one undo step. |
 | `getRegionSummary(id)` | `{ id, name, owner, typeId, country, claimants }`. |
 | `listOwners()` | Sorted unique owner names — backs the Country field's suggestions so re-owning offers existing names (avoids near-miss forks). |
-| `queryRegions(text, limit=200)` | Search id/name/owner. |
+| `queryRegions(text, limit=200, { polities })` | Search id/name/owner key, and with `polities` the owner's display name and aliases (`regionSearch.js`), so a code-keyed roster polity is found by its name. |
 | `countByType()` | Region count per typeId (Type Manager usage). |
 | `setLayerVisibility(key, visible)`, `getLayerVisibility(key)` | `regions` \| `labels` \| `groups` \| `features` (cities and map features) \| `units`. |
 | `locateFeature(coord)` | Fly to a lon/lat. |
@@ -264,7 +264,7 @@ Point features (mostly cities) live in `doc.features`. Feature schema (`citiesIm
 **Editing paths:**
 - **City tool + `CityPopup`** (`CityPopup.jsx`) — inline editor at the click. Name, **Size** select (Town 20k / City 250k / Major 1.5M — maps to population) and a **★ Capital** checkbox (toggles the `capital` tag). Enter/Esc closes.
 - **Feature Manager** (`FeatureManager.jsx`) — searchable list; per-feature name/symbol/tags, locate, delete, **Delete All**, and **Import all cities** / **Major only** which pull from `public/assets/cities-seed.json` (~70k, deduped by `name|coord`). **Import from file…** adds the author's own point features — GeoJSON Point/MultiPoint features (other geometries are counted as skipped), a Workshop document or its `features` array, or a JSON list of rows with lon/lat (`featureImport.js`: names from name/title/city/label, tags from tags/kind/category, a country from country/owner); exact duplicates of features already listed are dropped, and the panel reports what was added. **Selection:** every row has a checkbox (Shift-click selects a range), the **Box-select features** tool selects by dragging a rectangle on the map, and the selection bar above the list adds a tag to every selected feature at once, removes one from all of them, deletes them all, or clears the selection. The selection (`featureSelection` in `MapEditor.jsx`) is shared by the map and the panel, so a box drawn on the map ticks the rows and a ticked row rings its marker.
-- **Search bar** (`SearchBar.jsx`) — unified search over this map's cities, its regions, and the ~70k world place index; world results get a **＋ Add** button to drop them as a city.
+- **Search bar** (`SearchBar.jsx`) — unified search over this map's cities, its regions (by name, id, or the owner's key, display name or aliases; a region hit selects the region and zooms to it), and the ~70k world place index; world results get a **＋ Add** button to drop them as a city.
 
 Prominence tier (`exportPreset.js:100`, `cityTier`): `capital`→4, ≥1M→3, ≥100k→2, else 1. This gates when a city label appears in-game (`Cities.jsx`).
 

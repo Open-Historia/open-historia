@@ -1066,7 +1066,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         <TypeManager types={d.types} setTypes={d.setTypes} usage={typeUsage} onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "regions" && (
-        <RegionsPanel api={api} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
+        <RegionsPanel api={api} polities={d.polities} selection={d.selection} setSelection={d.setSelection} onClose={() => setOpenPanel(null)} />
       )}
       {openPanel === "polities" && (
         <PolitiesPanel
@@ -1309,6 +1309,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
           <SearchBar
             api={api}
             features={d.features}
+            polities={d.polities}
+            setSelection={d.setSelection}
             onAddCity={(c) => {
               const id = newId("feat");
               d.setFeatures((list) => [

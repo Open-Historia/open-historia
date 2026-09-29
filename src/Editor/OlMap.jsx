@@ -51,6 +51,7 @@ import { buildPoliticalBoundaryTopology } from "../Game/Map/vnext/politicalBound
 import { buildGroupAreaIndex, deriveGroupAreas } from "../Game/Map/vnext/groupAreas.js";
 import { getMarkerPresentation } from "../Game/Map/vnext/presentationPolicy.js";
 import { loadSeedFeatures } from "./regionImport.js";
+import { ownersMatchingQuery, regionMatchesQuery } from "./regionSearch.js";
 import { newId } from "./useMapDocument.js";
 import {
   unionGeoms,
@@ -2222,14 +2223,16 @@ const OlMap = ({
           .map((f) => ({ id: f.getId(), name: String(f.get("name") || "").trim(), typeId: f.get("typeId") || "land" }))
           .sort((a, b) => (a.name || String(a.id)).localeCompare(b.name || String(b.id)));
       },
-      queryRegions: (text, limit = 200) => {
+      // `polities` (the document's records) lets a search find a region by
+      // its owner's display name or aliases, not only by the owner key.
+      queryRegions: (text, limit = 200, { polities } = {}) => {
         const q = (text || "").trim().toLowerCase();
+        const owners = ownersMatchingQuery(polities, q);
         const out = [];
         for (const f of regionSource.getFeatures()) {
           if (q) {
             // `country` is gone from region props — owner IS the country name now.
-            const hay = `${f.getId()} ${f.get("name") || ""} ${f.get("owner") || ""}`.toLowerCase();
-            if (!hay.includes(q)) continue;
+            if (!regionMatchesQuery({ id: f.getId(), name: f.get("name"), owner: f.get("owner") }, q, owners)) continue;
           }
           out.push(summarize(f));
           if (out.length >= limit) break;
