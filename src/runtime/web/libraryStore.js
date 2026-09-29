@@ -471,7 +471,7 @@ const builtInCoarseRegionsText = () => {
 // ownership by) is too big to bundle, so fetch it once from the content origin
 // (the Worker proxy → GitHub Release) and cache it for the session. It is what
 // a scenario without a map of its own — and without the built-in stamp — renders on.
-const CONTENT_BASE = (import.meta.env.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
+const CONTENT_BASE = (import.meta.env?.VITE_OH_PMTILES_URL || "/assets").replace(/\/$/, "");
 let defaultRegionsGeojsonPromise = null;
 const fetchDefaultRegionsGeojson = () => {
   if (!defaultRegionsGeojsonPromise) {
@@ -1248,6 +1248,39 @@ const exportScenarioBundle = async (id) => {
   };
 };
 
+// One bundle asset onto a stored scenario, for the fresh import and the hub
+// Update alike (server twin: applyScenarioBundleAsset). The Update path once had
+// its own copy of this that lacked the JSON branch, so a current bundle's
+// geometry, cities and basemap were deleted on every Update.
+const applyScenarioBundleAsset = async (scenarioId, key, descriptor) => {
+  const embedded = descriptor?.mode === "embedded";
+  if (key === COVER_IMAGE_ASSET_KEY) {
+    if (embedded && descriptor.data) await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
+    else await removeScenarioAsset(scenarioId, key);
+  } else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
+    // colors / flags / tags are JSON descriptor assets: `descriptor.data` is the
+    // object itself, NOT base64. Store it verbatim on the record. Passing it to
+    // base64ToBytes (as the binary branch below does) makes atob throw
+    // "string to be decoded is not correctly encoded" — which made EVERY scenario
+    // carrying tags or flags (e.g. the WWII preset) fail to import on the web build.
+    const r = await getScenario(scenarioId);
+    if (embedded && descriptor.data !== undefined) r[key] = descriptor.data;
+    else delete r[key];
+    writeScenarioMeta(r, {});
+    await putScenario(r);
+  } else if (embedded && typeof descriptor.data === "string") {
+    // geojson / pmtiles: base64-encoded binary. The typeof guard keeps any stray
+    // non-string payload from reaching atob and crashing the whole import.
+    await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
+  } else if (embedded && descriptor.data !== undefined && descriptor.data !== null) {
+    // A JSON asset that travelled as JSON — the shape exports write now. Without
+    // this branch a current bundle would arrive with no geometry at all.
+    await uploadScenarioAsset(scenarioId, key, new TextEncoder().encode(serializeJsonValue(descriptor.data)), descriptor.contentType || "application/json");
+  } else {
+    await removeScenarioAsset(scenarioId, key);
+  }
+};
+
 const importScenarioBundle = async (bundle) => {
   // Accept every schema we can read, not just the one we write — a v1 bundle
   // imports fine, arriving unmarked and named by the migration on first read.
@@ -1267,32 +1300,7 @@ const importScenarioBundle = async (bundle) => {
   });
   for (const [key, descriptor] of Object.entries(bundle.assets ?? {})) {
     if (!UPLOADABLE_SCENARIO_ASSET_KEYS.includes(key)) continue;
-    const embedded = descriptor?.mode === "embedded";
-    if (key === COVER_IMAGE_ASSET_KEY) {
-      if (embedded && descriptor.data) await uploadScenarioAsset(newId, key, base64ToBytes(descriptor.data), descriptor.contentType);
-      else await removeScenarioAsset(newId, key);
-    } else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
-      // colors / flags / tags are JSON descriptor assets: `descriptor.data` is the
-      // object itself, NOT base64. Store it verbatim on the record. Passing it to
-      // base64ToBytes (as the binary branch below does) makes atob throw
-      // "string to be decoded is not correctly encoded" — which made EVERY scenario
-      // carrying tags or flags (e.g. the WWII preset) fail to import on the web build.
-      const r = await getScenario(newId);
-      if (embedded && descriptor.data !== undefined) r[key] = descriptor.data;
-      else delete r[key];
-      writeScenarioMeta(r, {});
-      await putScenario(r);
-    } else if (embedded && typeof descriptor.data === "string") {
-      // geojson / pmtiles: base64-encoded binary. The typeof guard keeps any stray
-      // non-string payload from reaching atob and crashing the whole import.
-      await uploadScenarioAsset(newId, key, base64ToBytes(descriptor.data), descriptor.contentType);
-    } else if (embedded && descriptor.data !== undefined && descriptor.data !== null) {
-      // A JSON asset that travelled as JSON — the shape exports write now. Without
-      // this branch a current bundle would import with no geometry at all.
-      await uploadScenarioAsset(newId, key, new TextEncoder().encode(serializeJsonValue(descriptor.data)), descriptor.contentType || "application/json");
-    } else {
-      await removeScenarioAsset(newId, key);
-    }
+    await applyScenarioBundleAsset(newId, key, descriptor);
   }
   if (hubOrigin) {
     const record = await getScenario(newId);
@@ -1335,24 +1343,7 @@ const updateScenarioFromBundle = async (scenarioId, bundle) => {
   });
 
   for (const key of UPLOADABLE_SCENARIO_ASSET_KEYS) {
-    const descriptor = (bundle.assets ?? {})[key];
-    const embedded = descriptor?.mode === "embedded";
-    if (key === COVER_IMAGE_ASSET_KEY) {
-      if (embedded && descriptor.data) await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
-      else await removeScenarioAsset(scenarioId, key);
-    } else if (OPTIONAL_JSON_ASSET_KEYS.includes(key)) {
-      // JSON descriptor assets carry the object itself, not base64 (see the
-      // matching branch in importScenarioBundle above).
-      const r = await getScenario(scenarioId);
-      if (embedded && descriptor.data !== undefined) r[key] = descriptor.data;
-      else delete r[key];
-      writeScenarioMeta(r, {});
-      await putScenario(r);
-    } else if (embedded && typeof descriptor.data === "string") {
-      await uploadScenarioAsset(scenarioId, key, base64ToBytes(descriptor.data), descriptor.contentType);
-    } else {
-      await removeScenarioAsset(scenarioId, key);
-    }
+    await applyScenarioBundleAsset(scenarioId, key, (bundle.assets ?? {})[key]);
   }
 
   if (hubOrigin) {
