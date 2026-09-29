@@ -3154,7 +3154,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         new Blob([JSON.stringify(seed.flags)], { type: "application/json" }),
       );
     } else {
-      await clearScenarioAsset(scenarioId, "flags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "flags");
     }
     // Author-set country tags, same contract as flags.
     if (seed.tags) {
@@ -3164,7 +3164,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         new Blob([JSON.stringify(seed.tags)], { type: "application/json" }),
       );
     } else {
-      await clearScenarioAsset(scenarioId, "tags").catch(() => {});
+      await clearScenarioAsset(scenarioId, "tags");
     }
     await uploadScenarioAsset(
       scenarioId,
@@ -3192,7 +3192,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         new Blob([JSON.stringify(seed.backgroundData)], { type: "application/json" }),
       );
     } else {
-      await clearScenarioAsset(scenarioId, "backgroundData").catch(() => {});
+      await clearScenarioAsset(scenarioId, "backgroundData");
     }
 
     // A Workshop save is complete by itself; Apply & Play opts into the fresh-game

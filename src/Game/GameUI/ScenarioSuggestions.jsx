@@ -656,7 +656,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
         : new Blob([Uint8Array.from(globalThis.atob(upload.base64), (char) => char.charCodeAt(0))], { type: upload.contentType });
       await uploadScenarioAsset(scenario.id, upload.key, blob);
     }
-    for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey).catch(() => {});
+    for (const assetKey of clears) await clearScenarioAsset(scenario.id, assetKey);
   };
 
   const accept = async (list) => {
