@@ -289,7 +289,7 @@ A city in the scenario's `cities.geojson` may carry its **population by year** �
 
 ### Markers (built structures) — `MarkersLayer.jsx`
 
-Fed from `world.markers` (structures founded during play — bases, silos, embassies…). Each valid marker (`Number.isFinite(lng/lat) && name`) becomes a Point feature. Shape by keyword: `MILITARY_KIND` regex → `▲`, else `■`. Colour by owner via `ownerColorString(colorMap, ownerCode)` (from `getNationColors`; unowned = neutral parchment `rgb(226,222,205)`). Two layers: `markers-shapes` (glyph, owner-coloured) and `markers-labels` (`minzoom 2.6`).
+Fed from `world.markers` (structures founded during play — bases, silos, embassies…). `buildMarkerFeatureCollection` (`markerFeatures.js`) turns each valid marker (`Number.isFinite(lng/lat) && name`) into a Point feature. Glyph, sort key and visibility tier come from the kind and name through `getMarkerPresentation` (`vnext/presentationPolicy.js`); the status sets the opacity. Colour by owner via `markerOwnerColor`, in the order the region fills use: the owner code read as its name (`toCountryName`), then `colors.json`, then the live registry's `polityOverrides[owner].color`; names are exact keys, and an unowned or unknown owner is neutral parchment `rgb(226,222,205)`. The palette is read again on every `oh:colors-updated` (a polity founded or recoloured mid-game) and `oh:active-game-changed`. Two symbol layers per visibility tier: `markers-shapes-<tier>` (glyph, owner-coloured) and `markers-labels-<tier>`.
 
 ---
 
@@ -356,7 +356,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | Pixel-ratio switch z4.5 / z5 | `applyDynamicPixelRatio` | Soften the whole-world view; hysteresis prevents flapping |
 | Cities `minzoom 3.4`, city thresholds step by zoom | `Cities.jsx` | Thin out symbols as you zoom out |
 | Label `text-opacity` fades to 0 by z8 | `labelLayerPaint` | Country/owner labels hand the screen to city labels on zoom in |
-| Markers labels `minzoom 2.6` | `MarkersLayer.jsx` | Structure names appear slightly earlier than cities |
+| Markers by tier: strategic glyphs z3.0 / names z3.8, regional z4.2 / z5.0, local z5.8 / z6.6 | `V_NEXT_TIER_LAYERS` (`MarkersLayer.jsx`) | Headquarters and capitals first, then resources and ports, then landmarks |
 
 ---
 
