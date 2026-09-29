@@ -1653,16 +1653,27 @@ export const handleScenarios = async ({ method, segments, body, rawBody, content
 // parsing them.
 // Server twin of scenarioBundleBytes: what this scenario would weigh once
 // bundled, so the caller can decide whether it can carry it before building it.
+// Measured field by field as exportScenarioBundle encodes them: the JSON assets
+// and the geometry travel as JSON, the tile archives and the cover as base64
+// (4/3, the same 1.34 the desktop uses). It once summed a record.assets field
+// that web records do not have, so the geometry and tiles went uncounted, a
+// 300 MB map measured a few kilobytes, and the guard against building it in the
+// page never tripped.
+const jsonTextLength = (value) => {
+  if (value === undefined || value === null) return 0;
+  if (typeof value === "string") return value.length;
+  try { return JSON.stringify(value).length; } catch { return 0; /* unserialisable */ }
+};
+const base64Length = (bytes) => (bytes && typeof bytes.byteLength === "number" ? Math.round(bytes.byteLength * 1.34) : 0);
+
 const scenarioBundleBytes = async (scenarioId) => {
   const record = await getScenario(scenarioId);
   if (!record) return 0;
-  let total = 0;
-  try { total += JSON.stringify(record.json ?? {}).length; } catch { /* unserialisable */ }
-  for (const asset of Object.values(record.assets ?? {})) {
-    const bytes = asset?.bytes;
-    if (bytes && typeof bytes.byteLength === "number") total += Math.round(bytes.byteLength * 1.34);
-  }
-  if (record.cover?.bytes?.byteLength) total += Math.round(record.cover.bytes.byteLength * 1.34);
+  let total = jsonTextLength(record.json ?? {});
+  for (const key of OPTIONAL_JSON_ASSET_KEYS) total += jsonTextLength(record[key]);
+  for (const key of SCENARIO_GEOJSON_ASSET_KEYS) total += jsonTextLength(record.geojson?.[key]);
+  for (const key of PMTILES_ASSET_KEYS) total += base64Length(record.pmtiles?.[key]);
+  total += base64Length(record.cover?.bytes);
   return total;
 };
 

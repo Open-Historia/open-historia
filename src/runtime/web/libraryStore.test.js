@@ -252,6 +252,26 @@ test("a map edit on a game whose scenario is gone is refused, not written into a
   assert.equal(db.get("scenarios").has("gone-map"), false);
 });
 
+const upload = async (id, key, bytes, contentType = "application/octet-stream") => {
+  const response = await store.handleScenarios({ method: "PUT", segments: [id, "assets", key], rawBody: bytes, contentType, query: new URLSearchParams() });
+  assert.equal(response.status, 200, await response.clone().text());
+};
+
+test("a game export measures its scenario's tile archives and geometry", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { name: "Heavy Map" })).scenario.id;
+  const tiles = new Uint8Array(25 * 1024 * 1024);
+  await upload(scenarioId, "regions", tiles);
+  const regionsText = JSON.stringify({ ...REGIONS, padding: "x".repeat(1024 * 1024) });
+  await upload(scenarioId, "regionsGeojson", new TextEncoder().encode(regionsText), "application/json");
+  const id = await newGame("Heavy", { scenarioId });
+
+  const { scenarioRef } = ok(await games("GET", `${id}/export`));
+  assert.ok(scenarioRef.scenarioBytes >= Math.round(tiles.byteLength * 1.34) + regionsText.length, `measured ${scenarioRef.scenarioBytes}`);
+  // gameZip.js refuses to embed anything over 32 MB.
+  assert.ok(scenarioRef.scenarioBytes > 32 * 1024 * 1024);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },
