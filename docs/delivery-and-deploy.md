@@ -30,7 +30,7 @@ Every delivery path starts with one of these npm scripts (`package.json:9`). The
 |---|---|---|
 | `upstream` | `github.com/Open-Historia/open-historia` | Canonical org repo. Has `main`, `beta`, `alpha` branches. All CI runs here. |
 | `beta` | `github.com/Arkniem/Open-Historia-Beta` | Beta fork lineage. |
-| `origin` | `github.com/Arkniem/pax-historia-2` | Working fork. |
+| `origin` | the maintainer's personal fork on GitHub (`Arkniem`) | Working fork. |
 | `ltfork` | `github.com/lt20202122/open-historia` | Contributor fork. |
 
 ### The three long-lived channels
@@ -67,11 +67,11 @@ Delivery leans on **rolling releases** (fixed tags whose assets are re-uploaded 
 |---|---|---|---|---|---|
 | `app-stable` | `app-bundle.yml` | push to `main` | `Open-Historia.zip` (source + map data) | no (`--latest=false`) | One-download desktop install, stable |
 | `app-beta` | `app-bundle.yml` | push to `beta` | `Open-Historia.zip` | no (`--latest=false`) | One-download desktop install, beta |
-| `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (`io.github.arkniem.paxhistoria`); it self-updates from here |
-| `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (`io.github.arkniem.paxhistoria.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
+| `android` | `android-apk.yml` | `workflow_dispatch` from `main` / `android-v*` tag | `open-historia.apk`, `latest.json` | no | The Android app (the `appId` in `mobile/capacitor.config.json`); it self-updates from here |
+| `android-beta` | `android-apk-beta.yml` (§4.3) | `workflow_dispatch` from `beta` / `android-beta-v*` tag | `open-historia-beta.apk`, `latest.json` | **yes** (`--prerelease`) | The Android beta, "Open Historia Beta" (the stable id + `.beta`): a second app beside the stable one, with its own saves; it self-updates from here |
 | `map-data` | *manually uploaded* | — | `regions.pmtiles`, `countries.pmtiles`, `cities.pmtiles`, `cities-seed.json`, `regions-seed-z8.geojson`, `default-regions-names.geojson` | — | The ~200 MB world-map binaries, off Git LFS (§7) |
 
-The APK asset names are contractual — they, and the two Android application ids (`io.github.arkniem.paxhistoria`, and the beta's `io.github.arkniem.paxhistoria.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from `pax-historia.apk` to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
+The APK asset names are contractual — they, and the two Android application ids (the `appId` in `mobile/capacitor.config.json`, and the beta's, the same id + `.beta`), must not change, because anything holding a fixed release/asset URL keeps pointing at the old name, and a new id is a new app beside the old one. The stable name WAS changed, from the project's earlier name to `open-historia.apk`, on 2026-09-04 (main `e29967e`, with the README and site/index.html updated to match); the old asset has since been deleted. The in-app update banner reads `apk` out of the release's `latest.json`, which each Android workflow writes beside its APK.
 
 ---
 
@@ -110,7 +110,7 @@ The map data must be staged **before** `cap sync` copies `www/` into the native 
 
 ### 4.3 `android-apk-beta.yml` — the Android beta app
 
-`.github/workflows/android-apk-beta.yml`. The same build as §4.2 with the channel set to beta, which makes it a second app, as `desktop-beta.yml` makes the desktop beta: "Open Historia Beta", application id `io.github.arkniem.paxhistoria.beta`, the compass with a BETA banner for its icon. It installs **beside** the stable app rather than over it, keeps its own saves (a package's WebView storage is its own; Export and Import carry games across), and updates itself from its own release. Same keystore as the stable app.
+`.github/workflows/android-apk-beta.yml`. The same build as §4.2 with the channel set to beta, which makes it a second app, as `desktop-beta.yml` makes the desktop beta: "Open Historia Beta", application id = the stable id + `.beta`, the compass with a BETA banner for its icon. It installs **beside** the stable app rather than over it, keeps its own saves (a package's WebView storage is its own; Export and Import carry games across), and updates itself from its own release. Same keystore as the stable app.
 
 | Aspect | Detail |
 |---|---|
@@ -325,7 +325,7 @@ Key asymmetries a newcomer should internalize:
 
 - **Never re-add map binaries to Git LFS** — they live on the `map-data` Release only (§8).
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
-- **Neither Android application id may ever change** (`io.github.arkniem.paxhistoria`; the beta's `io.github.arkniem.paxhistoria.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
+- **Neither Android application id may ever change** (the `appId` in `mobile/capacitor.config.json`; the beta's, the same id + `.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (from the project's earlier name to `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
 - **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.

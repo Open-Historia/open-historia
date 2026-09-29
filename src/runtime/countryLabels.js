@@ -1063,7 +1063,7 @@ const estimatedTextWidthEm = (name, letterSpacing = 0) =>
 const preferredLetterSpacing = (name, mode = "point") => {
   const letters = Math.max(1, String(name ?? "").replace(/\s+/g, "").length);
   const line = mode === "line";
-  // Pax-style point labels spend territory on larger glyphs first and tracking
+  // Atlas-style point labels spend territory on larger glyphs first and tracking
   // second. R3/R4 did the opposite on many states, producing delicate labels
   // with too much empty air between letters.
   if (letters <= 5) return line ? 0.70 : 0.36;
@@ -1181,7 +1181,7 @@ const fitPointTypography = ({
   priorityScale,
 }) => {
   // R5 fits against the territory's ROTATED dominant axis, not its axis-aligned
-  // bounding box. That is the key Pax-like behaviour: Germany/UK may use their
+  // bounding box. That is the key atlas behaviour: Germany/UK may use their
   // north-south span, France/Poland their diagonal span, and Ukraine its east-west
   // span instead of all being sized as if the label were horizontal.
   const widthPixels = Math.max(
@@ -1195,7 +1195,7 @@ const fitPointTypography = ({
       * REFERENCE_PIXELS_PER_TILE_UNIT,
   );
 
-  // R5 deliberately overshot the Pax target to prove that dominant-axis fitting
+  // R5 deliberately overshot the atlas target to prove that dominant-axis fitting
   // worked. R6 pulls the whole system back by roughly one visual step while
   // keeping the same hierarchy. A shape-slenderness dampener is applied only to
   // extreme long/thin territories (Norway is the canonical regression case), so

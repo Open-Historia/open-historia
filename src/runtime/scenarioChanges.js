@@ -1,6 +1,6 @@
 /*! Open Historia — what changed between two versions of a scenario © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 
-// The difference between two scenario bundles (pax-historia-scenario-bundle/2,
+// The difference between two scenario bundles (open-historia-scenario-bundle/2,
 // as exportScenarioBundle writes them and the hub serves them), as a list of
 // changes an author can accept or reject one at a time. It is what a
 // suggestion carries: the player who downloaded a community scenario and

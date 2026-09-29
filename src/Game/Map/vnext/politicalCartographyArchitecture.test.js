@@ -200,13 +200,13 @@ test("dark promotional basemaps have dedicated runtime paths instead of bright r
   assert.match(world, /effectiveBasemap === "natgeo-dark"/);
   assert.match(world, /"atlas-relief-dark"/);
   assert.match(world, /basemapId === "midnight-terrain"/);
-  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT/);
-  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT/);
-  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.96/);
-  assert.match(world, /PAX_WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.16/);
-  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.92/);
-  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.20/);
-  assert.match(world, /PAX_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-contrast": 0\.38/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.96/);
+  assert.match(world, /WORLD_RELIEF_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.16/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-saturation": -0\.92/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-brightness-max": 0\.20/);
+  assert.match(world, /RELIEF_TERRAIN_MIDNIGHT_PAINT[\s\S]*?"raster-contrast": 0\.38/);
   assert.match(world, /5\.40, 0\.70[\s\S]*?6\.50, 0\.74[\s\S]*?12, 0\.78/);
   assert.match(world, /"#000205"/);
   assert.match(editorBasemaps, /id: "midnight-terrain"[\s\S]*previewFilter: "brightness\(0\.15\) saturate\(0\.14\) contrast\(1\.10\)"/);
@@ -351,19 +351,19 @@ test("switching custom-map geometry invalidates old derived cartography before t
 test("political fill opacity expressions keep zoom at MapLibre top level", () => {
   assert.match(
     nations,
-    /const buildPaxPoliticalFillOpacity = \(hiddenExpression = null\) => \[\s*"interpolate", \["linear"\], \["zoom"\]/,
+    /const buildPoliticalFillOpacity = \(hiddenExpression = null\) => \[\s*"interpolate", \["linear"\], \["zoom"\]/,
   );
-  assert.match(nations, /const PAX_POLITICAL_FILL_OPACITY = buildPaxPoliticalFillOpacity\(\)/);
+  assert.match(nations, /const POLITICAL_FILL_OPACITY = buildPoliticalFillOpacity\(\)/);
   assert.match(
     nations,
-    /const transitionAwareFillOpacity = useMemo\([\s\S]*?buildPaxPoliticalFillOpacity\(\[\s*"boolean",[\s\S]*?"ownershipTransitionHidden"/,
+    /const transitionAwareFillOpacity = useMemo\([\s\S]*?buildPoliticalFillOpacity\(\[\s*"boolean",[\s\S]*?"ownershipTransitionHidden"/,
   );
   assert.doesNotMatch(
     nations,
-    /const transitionAwareFillOpacity = useMemo\([\s\S]*?\[\s*"case",[\s\S]*?PAX_POLITICAL_FILL_OPACITY/,
+    /const transitionAwareFillOpacity = useMemo\([\s\S]*?\[\s*"case",[\s\S]*?POLITICAL_FILL_OPACITY/,
   );
-  assert.match(nations, /const DISPUTED_TILE_FILL_OPACITY = PAX_POLITICAL_FILL_OPACITY/);
-  assert.doesNotMatch(nations, /\["\*", PAX_POLITICAL_FILL_OPACITY,/);
+  assert.match(nations, /const DISPUTED_TILE_FILL_OPACITY = POLITICAL_FILL_OPACITY/);
+  assert.doesNotMatch(nations, /\["\*", POLITICAL_FILL_OPACITY,/);
   assert.doesNotMatch(nations, /\["\*", TILE_FILL_FADE,/);
   assert.doesNotMatch(nations, /\["-", 1, TILE_FILL_FADE\]/);
 });

@@ -53,16 +53,16 @@ const ATLAS_PAINT = {
   "raster-brightness-max": 0.98,
 };
 
-// The low-zoom Pax-style foundation is a dedicated global topography +
+// The low-zoom atlas foundation is a dedicated global topography +
 // bathymetry raster from NOAA/NCEI (ETOPO1). It is label-free, so it cannot
 // fight the map's live polity typography. A dark grade keeps it contextual
 // while preserving substantially more seabed/relief structure than the old
 // nearly-black far-zoom atlas.
-const PAX_WORLD_RELIEF_TILES =
+const WORLD_RELIEF_TILES =
   "https://tiles.arcgis.com/tiles/C8EMgrsFcRFL6LrL/arcgis/rest/services/" +
   "ETOPO1_Global_Relief_Model_Color_Shaded_Relief/MapServer/tile/{z}/{y}/{x}";
 
-const PAX_WORLD_RELIEF_PAINT = {
+const WORLD_RELIEF_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-saturation": -0.26,
@@ -86,7 +86,7 @@ const PAX_WORLD_RELIEF_PAINT = {
 // World Terrain Base takes over as the player approaches regional/local zoom.
 // Crossfading instead of hard-switching avoids the visible material flash that
 // the old basemap handoff produced.
-const PAX_TERRAIN_PAINT = {
+const RELIEF_TERRAIN_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   // R21: World Terrain Base is substantially greyer than the global ETOPO
@@ -112,7 +112,7 @@ const PAX_TERRAIN_PAINT = {
 // R12 added the ids to the basemap registry, but R14 was based on the R11
 // World.jsx and accidentally dropped their special rendering path. As a result,
 // selecting a "Dark" option fell through to the normal bright atlas grade.
-const PAX_WORLD_RELIEF_OCEAN_DARK_PAINT = {
+const WORLD_RELIEF_OCEAN_DARK_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   // The source has a strong cyan/green cast. Rotate it toward blue while
@@ -134,7 +134,7 @@ const PAX_WORLD_RELIEF_OCEAN_DARK_PAINT = {
   ],
 };
 
-const PAX_TERRAIN_OCEAN_DARK_PAINT = {
+const RELIEF_TERRAIN_OCEAN_DARK_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-hue-rotate": 34,
@@ -158,7 +158,7 @@ const PAX_TERRAIN_OCEAN_DARK_PAINT = {
   ],
 };
 
-const PAX_WORLD_RELIEF_ATLAS_DARK_PAINT = {
+const WORLD_RELIEF_ATLAS_DARK_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-saturation": -0.82,
@@ -176,7 +176,7 @@ const PAX_WORLD_RELIEF_ATLAS_DARK_PAINT = {
   ],
 };
 
-const PAX_TERRAIN_ATLAS_DARK_PAINT = {
+const RELIEF_TERRAIN_ATLAS_DARK_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-saturation": -0.80,
@@ -200,7 +200,7 @@ const PAX_TERRAIN_ATLAS_DARK_PAINT = {
 // owns essentially all strong colour. Brightness caps keep mountain/desert
 // highlights from turning into a second visual foreground. Both inputs remain
 // label-free so no modern names or borders sit underneath scenario canon.
-const PAX_WORLD_RELIEF_MIDNIGHT_PAINT = {
+const WORLD_RELIEF_MIDNIGHT_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-saturation": -0.96,
@@ -218,7 +218,7 @@ const PAX_WORLD_RELIEF_MIDNIGHT_PAINT = {
   ],
 };
 
-const PAX_TERRAIN_MIDNIGHT_PAINT = {
+const RELIEF_TERRAIN_MIDNIGHT_PAINT = {
   "raster-resampling": "linear",
   "raster-fade-duration": 0,
   "raster-saturation": -0.92,
@@ -243,28 +243,28 @@ const PAX_TERRAIN_MIDNIGHT_PAINT = {
   ],
 };
 
-const getPaxReliefPaints = (basemapId) => {
+const getReliefPaints = (basemapId) => {
   if (basemapId === "midnight-terrain") {
     return {
-      world: PAX_WORLD_RELIEF_MIDNIGHT_PAINT,
-      terrain: PAX_TERRAIN_MIDNIGHT_PAINT,
+      world: WORLD_RELIEF_MIDNIGHT_PAINT,
+      terrain: RELIEF_TERRAIN_MIDNIGHT_PAINT,
     };
   }
   if (basemapId === "ocean-dark") {
     return {
-      world: PAX_WORLD_RELIEF_OCEAN_DARK_PAINT,
-      terrain: PAX_TERRAIN_OCEAN_DARK_PAINT,
+      world: WORLD_RELIEF_OCEAN_DARK_PAINT,
+      terrain: RELIEF_TERRAIN_OCEAN_DARK_PAINT,
     };
   }
   if (basemapId === "atlas-relief-dark") {
     return {
-      world: PAX_WORLD_RELIEF_ATLAS_DARK_PAINT,
-      terrain: PAX_TERRAIN_ATLAS_DARK_PAINT,
+      world: WORLD_RELIEF_ATLAS_DARK_PAINT,
+      terrain: RELIEF_TERRAIN_ATLAS_DARK_PAINT,
     };
   }
   return {
-    world: PAX_WORLD_RELIEF_PAINT,
-    terrain: PAX_TERRAIN_PAINT,
+    world: WORLD_RELIEF_PAINT,
+    terrain: RELIEF_TERRAIN_PAINT,
   };
 };
 // Full-map image corners (TL, TR, BR, BL). The flat mercator map only reaches
@@ -345,19 +345,19 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   // relief composition too, so a map authored on Ocean or Dark Gray opened on a
   // satellite-looking globe and only showed its real basemap once the relief
   // had faded out around z5.
-  const usePaxRelief = basemapId === "atlas-relief"
+  const useComposedRelief = basemapId === "atlas-relief"
     || basemapId === "atlas-relief-dark"
     || basemapId === "ocean-dark"
     || basemapId === "midnight-terrain";
-  const paxReliefPaints = getPaxReliefPaints(basemapId);
-  const basemapPaint = usePaxRelief
-    ? paxReliefPaints.terrain
+  const reliefPaints = getReliefPaints(basemapId);
+  const basemapPaint = useComposedRelief
+    ? reliefPaints.terrain
     : basemapId === "imagery" ? SATELLITE_PAINT : ATLAS_PAINT;
   // World_Ocean_Base bakes political names into the raster, while plain shaded
-  // relief loses the ocean/bathymetry material that gives Pax-like maps depth.
+  // relief loses the ocean/bathymetry material that gives an atlas map depth.
   // World Terrain Base is the useful middle ground for the relief presets:
   // label-free shaded land relief + bathymetry + coastal water context.
-  const renderedBasemapId = usePaxRelief ? "terrain" : basemapId;
+  const renderedBasemapId = useComposedRelief ? "terrain" : basemapId;
   const darkPhysicalVariant = basemapId === "ocean-dark"
     || basemapId === "atlas-relief-dark"
     || basemapId === "midnight-terrain";
@@ -380,10 +380,10 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
   const style = {
     version: 8,
     sources: {
-      ...(usePaxRelief ? {
-        "pax-world-relief": {
+      ...(useComposedRelief ? {
+        "world-relief": {
           type: "raster",
-          tiles: [PAX_WORLD_RELIEF_TILES],
+          tiles: [WORLD_RELIEF_TILES],
           tileSize: 256,
           // R5.4: fixed-resolution relief material. Load ETOPO only through z3;
           // MapLibre overzooms those already-loaded tiles at higher camera zooms.
@@ -430,11 +430,11 @@ const buildWorldStyle = (basemapId, customBg, backgroundDeclared, isGlobe, terra
       // glaze the fading ETOPO colour/bathymetry material above it. Previously
       // ETOPO sat underneath an almost-opaque terrain layer, so only a few percent
       // of its colour survived at the Europe/Poland zoom band.
-      ...(usePaxRelief ? [{
-        id: "pax-world-relief-layer",
+      ...(useComposedRelief ? [{
+        id: "world-relief-layer",
         type: "raster",
-        source: "pax-world-relief",
-        paint: paxReliefPaints.world,
+        source: "world-relief",
+        paint: reliefPaints.world,
       }] : []),
       // Do not paint the DEM as a second hillshade pass here. The old DEM overlay
       // produced a rectangular veil at whole-world zoom. Terrain Base supplies the
