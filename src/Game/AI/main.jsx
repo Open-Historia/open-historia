@@ -83,6 +83,9 @@ import {
 import {
     anthropicMessagesFromHistory,
     appendLookupRound,
+    carriedRoundCount,
+    carryLookupRound,
+    createLookupCarry,
     describeLookupCall,
     flattenLookupRounds,
     geminiContentsFromHistory,
@@ -91,6 +94,7 @@ import {
     lookupCallsFromOpenAI,
     lookupRoundCount,
     openAiMessagesFromHistory,
+    withCarriedRounds,
 } from "./toolTurns.js";
 import { GROUP_LOOKUP_TOOLS, buildLookupContext, executeLookup } from "./lookupTools.js";
 import { viewerAudience } from "./audience.js";
@@ -2437,14 +2441,23 @@ const chatAnswer = (result) => (result && typeof result === "object" && typeof r
 // Every round the model spends asking is reported to `onRound` — callAI
 // writes it to the telemetry record and the diagnostics log — so "what did
 // the model look up before it answered" is answerable from the console.
-async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null }) {
+//
+// Answered rounds are kept on `carry` (toolTurns.js): the next attempt — the
+// next Fallback entry, or the task's retry — starts with them and only the rest
+// of the round budget, rather than asking again what was already answered.
+async function runWithLookups(lookups, history, dispatch, { label, provider, onRound = null, carry = null }) {
     const tools = Array.isArray(lookups?.tools) ? lookups.tools.filter((entry) => entry?.name && entry?.schema) : [];
     if (!tools.length || typeof lookups?.execute !== "function") return dispatch(history, {});
     const maxRounds = Number.isInteger(lookups.maxRounds) && lookups.maxRounds >= 0 ? lookups.maxRounds : DEFAULT_LOOKUP_ROUNDS;
-    let conversation = Array.isArray(history) ? history : [];
+    const baseHistory = Array.isArray(history) ? history : [];
+    const carried = carriedRoundCount(carry);
+    if (carried) {
+        logDebugEvent("ai-call", `${label}: ${provider} starts with ${carried} lookup round${carried === 1 ? "" : "s"} already answered.`, undefined, { verbose: true });
+    }
+    let conversation = withCarriedRounds(baseHistory, carry);
     let roundStartedAt = Date.now();
     for (let round = 0; ; round += 1) {
-        const requireOutputTool = round >= maxRounds;
+        const requireOutputTool = carried + round >= maxRounds;
         if (round > 0) lookups.onRound?.(round);
         const result = await dispatch(conversation, { lookupTools: tools, requireOutputTool });
         const calls = Array.isArray(result?.lookupCalls) ? result.lookupCalls : [];
@@ -2497,6 +2510,7 @@ async function runWithLookups(lookups, history, dispatch, { label, provider, onR
             console.warn("[ai] a lookup-round observer threw; continuing.", error);
         }
         conversation = appendLookupRound(conversation, calls, results);
+        carryLookupRound(carry, baseHistory.length, calls, results);
         roundStartedAt = Date.now();
     }
 }
@@ -2681,6 +2695,9 @@ export async function callAI(systemPrompt, history, opts = {}) {
         tools: [providerOpts.tool, ...(Array.isArray(lookups?.tools) ? lookups.tools : [])].filter(Boolean),
     }));
     const answerReserve = Number(providerOpts.maxTokens) > 0 ? Number(providerOpts.maxTokens) : DEFAULT_ANSWER_RESERVE_TOKENS;
+    // Lookup rounds answered on one entry go on to the next (runWithLookups);
+    // a caller that retries hands in its own carry so its retry keeps them too.
+    const lookupCarry = lookups?.carry && typeof lookups.carry === "object" ? lookups.carry : createLookupCarry();
     const rememberContextWindow = (entry, error) => {
         const failure = error?.providerFailure;
         if (failure?.kind !== "tooBig") return;
@@ -2740,6 +2757,7 @@ export async function callAI(systemPrompt, history, opts = {}) {
                 }).catch((error) => { rememberContextWindow(entry, error); throw asUnreachable(error, providerOpts.signal); }), {
                     label,
                     provider: entry.provider,
+                    carry: lookupCarry,
                     onRound: ({ round, calls, elapsedMs }) => {
                         lookupRounds = round;
                         lookupCalls += calls.length;

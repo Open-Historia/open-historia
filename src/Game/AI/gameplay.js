@@ -115,6 +115,7 @@ import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from
 import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
+import { createLookupCarry } from "./toolTurns.js";
 import {
   BACKGROUND_REQUEST,
   backgroundAiAllowance,
@@ -3157,6 +3158,8 @@ const runJsonTask = async (taskKey, {
   const salvageFirst = savingRequests() && !strictFirst;
   // What schema salvage cut out of the answer that was finally taken.
   let removedFromAnswer = [];
+  // Lookup rounds answered on one attempt, for the next (toolTurns.js).
+  const lookupCarry = createLookupCarry();
 
   try {
     for (let outputAttempt = 1; outputAttempt <= 2; outputAttempt += 1) {
@@ -3244,9 +3247,11 @@ const runJsonTask = async (taskKey, {
           signal: controller.signal,
           tool,
           // Lookup rounds re-evaluate the prompt, so each one restarts the long
-          // first-byte window rather than being timed as a stalled answer.
+          // first-byte window rather than being timed as a stalled answer. The
+          // carry is the task's, so the retry starts with the rounds already
+          // answered instead of paying for them again.
           lookups: Array.isArray(lookups?.tools) && lookups.tools.length
-            ? { ...lookups, onRound: () => { idle.cancel(); idle.start(); } }
+            ? { ...lookups, carry: lookupCarry, onRound: () => { idle.cancel(); idle.start(); } }
             : null,
           // Names this call in the ai-call transport entries, so a task's own
           // entries and the request/response pair underneath them line up.
