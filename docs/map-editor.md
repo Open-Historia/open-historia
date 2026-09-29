@@ -173,6 +173,8 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `undo()` / `redo()` | Drive the command stack. |
 | `restyle()` | Force `layer.changed()`. |
 
+Every load — `loadRegions`, `reseedWorld`, `reseedWorldWithOwners`, `replaceRegionsFromImport` — empties the undo and redo stacks (their steps hold the previous map's regions) and starts a new load. A world seed still downloading when another load starts is dropped when it arrives, so a slow seed (the standalone editor's first one, or New) never lands on a map opened in the meantime.
+
 Keyboard: **Ctrl/⌘+Z** undo, **Ctrl/⌘+Shift+Z / Ctrl+Y** redo, **Delete/Backspace** removes the selection — all suppressed while typing in an input (`:545`).
 
 ---

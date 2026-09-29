@@ -1102,10 +1102,27 @@ const OlMap = ({
     const onResize = () => map.updateSize();
     window.addEventListener("resize", onResize);
 
+    // Every map load (open, New, generate, import, reseed) starts afresh: the
+    // undo steps held the old map's regions, and a world seed still
+    // downloading for the old map must not land on the new one. A seed checks
+    // on arrival that no load has started since it was asked for.
+    let loadToken = 0;
+    const clearHistory = () => {
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      emitHistory();
+    };
+    const startLoad = () => {
+      clearHistory();
+      loadToken += 1;
+      return loadToken;
+    };
+
     let alive = true;
     if (seedKind === "import-world") {
+      const token = loadToken;
       loadSeedFeatures().then((features) => {
-        if (!alive || !regionSourceRef.current) return;
+        if (!alive || !regionSourceRef.current || token !== loadToken) return;
         regionSourceRef.current.addFeatures(features);
         onRegionCount?.(regionSourceRef.current.getFeatures().length);
       });
@@ -2332,9 +2349,7 @@ const OlMap = ({
         }
         onSelectionRef.current?.([]);
         selectedIdsRef.current = new Set();
-        undoStackRef.current = [];
-        redoStackRef.current = [];
-        emitHistory();
+        startLoad();
 
         regionSource.clear();
         savedRegionHashes.clear();
@@ -2409,6 +2424,7 @@ const OlMap = ({
       forgetSavedRegions: () => savedRegionHashes.clear(),
       loadRegions: (fc, ownershipOverrides = null, claimOverrides = null) => {
         const fmt = new GeoJSON();
+        startLoad();
         regionSource.clear();
         savedRegionHashes.clear();
         if (fc && Array.isArray(fc.features)) {
@@ -2438,7 +2454,10 @@ const OlMap = ({
         notifyRegions();
       },
       reseedWorld: () => {
+        const token = startLoad();
         loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           regionSource.addFeatures(feats);
@@ -2451,7 +2470,10 @@ const OlMap = ({
       // top — how a scenario WITHOUT custom geometry opens in the editor (its
       // tier-1 map is exactly "stock world + these overrides").
       reseedWorldWithOwners: (overrides = {}, claimOverrides = null) => {
+        const token = startLoad();
         loadSeedFeatures().then((feats) => {
+          if (!alive || token !== loadToken) return;
+          clearHistory();
           regionSource.clear();
         savedRegionHashes.clear();
           const stampClaims = claimStamper(claimOverrides);
