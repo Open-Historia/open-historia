@@ -413,6 +413,10 @@ const PROSE_THAT_CHANGES_NO_GOVERNMENT = [
   ["Failed Coup Attempt Crushed in Ankara", "Loyal troops thwart the coup within hours."],
   ["New Ambassador Sworn In", "The ambassador was sworn in at the foreign ministry."],
   ["New Government Programme Launched", "A new government programme for housing starts in April."],
+  ["Police Hold Protesters After Election Rally", "Dozens are detained outside the party offices."],
+  ["Elections to Be Held in May", "The electoral commission publishes the calendar."],
+  ["Election Debate Held on State TV", "The candidates clash over pensions."],
+  ["Party Names Tusk Prime Minister Candidate", "The campaign begins in Gdansk."],
 ];
 
 for (const [title, description] of PROSE_THAT_CHANGES_NO_GOVERNMENT) {
@@ -432,6 +436,11 @@ const PROSE_THAT_CHANGES_A_GOVERNMENT = [
   ["Liberals Leave the Governing Coalition", "", "coalition"],
   ["Coalition Collapses in Rome", "", "coalition"],
   ["Germany Holds Federal Elections", "Voters head to the polls.", "election"],
+  ["Parliamentary Elections Held in Poland", "", "election"],
+  ["Party Wins Majority in Parliamentary Elections", "", "election"],
+  ["Sejm Elects Andrzej Duda as President", "", "leadership"],
+  ["King Appoints Smith Prime Minister", "", "leadership"],
+  ["Monarchy Restored in Spain", "", "regime"],
   ["Election Results Hand Labour a Majority", "", "election"],
   ["New Cabinet Sworn In", "", "government"],
   ["Biden Sworn In as President", "", "government"],
