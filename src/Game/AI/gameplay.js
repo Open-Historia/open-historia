@@ -7103,7 +7103,7 @@ const applySimulationResult = async ({
       .filter((update) => survivingRepairStorylineIds.has(normalizeString(update?.id)));
     if (repairStorylineUpdates.length) {
       result.storylineUpdates = [
-        ...decodeWorldStorylineUpdates(result.storylineUpdates),
+        ...decodeWorldStorylineUpdates(result.storylineUpdates, { limit: Infinity }),
         ...repairStorylineUpdates,
       ];
     }
@@ -7307,12 +7307,15 @@ const applySimulationResult = async ({
   // counts when the world's services decide whom to spy on; the diplomatic
   // ledger merges after it, so a publicly exposed ring can sour a relation in
   // the same pass. Both are pure: they return a new normalized world.
+  // A turn's ledgers are every segment's records together, each segment's
+  // answer already held to the per-answer caps; the applies read them all.
   const warMerge = applyWarUpdates({
     world: worldWithImpacts,
     updates: warUpdates,
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
+    limit: Infinity,
   });
   worldWithImpacts = warMerge.world;
 
@@ -7446,6 +7449,7 @@ const applySimulationResult = async ({
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
+    limit: Infinity,
   });
   // Agents report on the ledger as this turn left it: an arrangement installed
   // or ended this turn is what an agent inside either party now sees. After the
@@ -7464,13 +7468,14 @@ const applySimulationResult = async ({
     events: freshEvents,
     stopDate: nextGame.gameDate,
     round: nextGame.round,
+    limit: Infinity,
   });
   worldWithImpacts = storylineMerge.world;
   // Each segment was checked on its own; this is the merged round. A finished
   // turn is never lost to this check, but its verdict is worth a report. Read
   // as the one period it is (startsInForce), as the last attempt's repair
   // reads it: a war the round starts is in force for all of the round.
-  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld, startsInForce: true });  if (canonicalWarError) {
+  const canonicalWarError = validateCanonicalWarEvents({ events: freshEvents, updates: warUpdates, world: baseWorld, startsInForce: true, limit: Infinity });  if (canonicalWarError) {
     console.warn(`[ai] canonical war-state check on the merged turn: ${canonicalWarError}`);
     logDebugEvent("warn", "[turn] The canonical war-state check flagged the merged turn.", { error: canonicalWarError });
   }

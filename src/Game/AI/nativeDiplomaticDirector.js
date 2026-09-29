@@ -324,7 +324,7 @@ const decodeRelationLine = (line, index) => {
   };
 };
 
-export const decodeRelationUpdates = (value) => {
+export const decodeRelationUpdates = (value, { limit = MAX_RELATION_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodeRelationLine(entry, index);
@@ -342,13 +342,13 @@ export const decodeRelationUpdates = (value) => {
         eventIds: unique(entry.eventIds, 24),
         summary: clean(entry.summary),
       };
-    }).filter(Boolean).slice(0, MAX_RELATION_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodeRelationLine(line, index))
     .filter((entry) => entry.a || entry.b || entry.summary)
-    .slice(0, MAX_RELATION_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
 const decodeAgreementLine = (line, index) => {
@@ -374,7 +374,7 @@ const decodeAgreementLine = (line, index) => {
   };
 };
 
-export const decodeAgreementUpdates = (value) => {
+export const decodeAgreementUpdates = (value, { limit = MAX_AGREEMENT_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodeAgreementLine(entry, index);
@@ -389,13 +389,13 @@ export const decodeAgreementUpdates = (value) => {
         title: clean(entry.title),
         terms: clean(entry.terms),
       };
-    }).filter(Boolean).slice(0, MAX_AGREEMENT_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodeAgreementLine(line, index))
     .filter((entry) => entry.id && entry.op)
-    .slice(0, MAX_AGREEMENT_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
 const bindEventIds = (updates, events) => {
@@ -415,11 +415,11 @@ const bindEventIds = (updates, events) => {
   });
 };
 
-export const bindRelationUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodeRelationUpdates(updates), events);
+export const bindRelationUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodeRelationUpdates(updates, { limit }), events);
 
-export const bindAgreementUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodeAgreementUpdates(updates), events);
+export const bindAgreementUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodeAgreementUpdates(updates, { limit }), events);
 
 const linkedEvents = (update, events) => {
   const byId = new Map(normalizeEvents(events).map((event) => [clean(event.id), event]));
@@ -1196,10 +1196,10 @@ export const validateDiplomaticLedgerPayload = (
   return "";
 };
 
-export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false } = {}) => {
+export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = relationMapFromWorld(nextWorld);
-  const decoded = bindRelationUpdatesToEvents(updates, events);
+  const decoded = bindRelationUpdatesToEvents(updates, events, { limit });
   const applied = [];
 
   for (const update of decoded) {
@@ -1251,10 +1251,10 @@ export const applyRelationUpdates = ({ world, updates, events = [], stopDate = "
   return { world: { ...nextWorld, relations }, relations, appliedIds: applied };
 };
 
-export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false } = {}) => {
+export const applyAgreementUpdates = ({ world, updates, events = [], stopDate = "", round = 0, allowUnboundBaseline = false, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = agreementMapFromWorld(nextWorld);
-  const decoded = bindAgreementUpdatesToEvents(updates, events);
+  const decoded = bindAgreementUpdatesToEvents(updates, events, { limit });
   const applied = [];
 
   for (const update of decoded) {
@@ -1439,7 +1439,7 @@ const decodePuppetLine = (line, index) => {
   };
 };
 
-export const decodePuppetUpdates = (value) => {
+export const decodePuppetUpdates = (value, { limit = MAX_PUPPET_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value.map((entry, index) => {
       if (typeof entry === "string") return decodePuppetLine(entry, index);
@@ -1457,17 +1457,17 @@ export const decodePuppetUpdates = (value) => {
         eventIds: unique(entry.eventIds, 24),
         note: clean(entry.note),
       };
-    }).filter(Boolean).slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+    }).filter(Boolean).slice(0, limit);
   }
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => decodePuppetLine(line, index))
     .filter((entry) => entry.op || entry.overlord || entry.puppet)
-    .slice(0, MAX_PUPPET_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
-export const bindPuppetUpdatesToEvents = (updates, events) =>
-  bindEventIds(decodePuppetUpdates(updates), events);
+export const bindPuppetUpdatesToEvents = (updates, events, { limit } = {}) =>
+  bindEventIds(decodePuppetUpdates(updates, { limit }), events);
 
 const livePuppetRow = (rows, overlord, puppet) => rows.find((row) =>
   row.status === "active" && lower(row.overlord) === lower(overlord) && lower(row.puppet) === lower(puppet));
@@ -1550,11 +1550,12 @@ export const applyPuppetUpdates = ({
   allowUnboundBaseline = false,
   refusedDemands = [],
   regionCatalog = [],
+  limit,
 } = {}) => {
   let nextWorld = normalizeWorldState(world);
   const holdsLand = landedPolityCheck(nextWorld, regionCatalog);
   let rows = array(nextWorld.puppets).map((row) => ({ ...row }));
-  const decoded = bindPuppetUpdatesToEvents(updates, events);
+  const decoded = bindPuppetUpdatesToEvents(updates, events, { limit });
   const applied = [];
   const settledStorylines = new Set();
   // What was NOT applied, and why. A skip can shrug a bad line off, but the GM
@@ -1872,6 +1873,10 @@ export const applyDiplomaticUpdates = ({
   // runtime/gameFeatures.js so this module stays testable without the browser
   // runtime, exactly as the rest of the director is.
   puppetStates = true,
+  // How many records of each kind to read. A single model answer is held to
+  // the per-answer caps (the default); a merged turn passes Infinity, since
+  // every segment's answer was already held to them.
+  limit,
 } = {}) => {
   const relationMerge = applyRelationUpdates({
     world,
@@ -1880,6 +1885,7 @@ export const applyDiplomaticUpdates = ({
     stopDate,
     round,
     allowUnboundBaseline,
+    limit,
   });
   const agreementMerge = applyAgreementUpdates({
     world: relationMerge.world,
@@ -1888,6 +1894,7 @@ export const applyDiplomaticUpdates = ({
     stopDate,
     round,
     allowUnboundBaseline,
+    limit,
   });
   // Puppets merge LAST, so a revolt's fallout lands on the relation and the
   // agreements this same pass has already written rather than under them.
@@ -1907,6 +1914,7 @@ export const applyDiplomaticUpdates = ({
         stopDate,
         round,
         allowUnboundBaseline,
+        limit,
       })
     : {
         world: agreementMerge.world,

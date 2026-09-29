@@ -141,7 +141,7 @@ const parseWarUpdateRecord = (line, index = 0) => {
   };
 };
 
-export const decodeWarUpdates = (value) => {
+export const decodeWarUpdates = (value, { limit = MAX_WAR_UPDATES_PER_PASS } = {}) => {
   if (Array.isArray(value)) {
     return value
       .map((entry, index) => {
@@ -161,19 +161,19 @@ export const decodeWarUpdates = (value) => {
         };
       })
       .filter(Boolean)
-      .slice(0, MAX_WAR_UPDATES_PER_PASS);
+      .slice(0, limit);
   }
 
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => parseWarUpdateRecord(line, index))
     .filter(Boolean)
-    .slice(0, MAX_WAR_UPDATES_PER_PASS);
+    .slice(0, limit);
 };
 
-export const bindWarUpdatesToEvents = (updates, events) => {
+export const bindWarUpdatesToEvents = (updates, events, { limit } = {}) => {
   const normalizedEvents = normalizeEvents(events);
-  return decodeWarUpdates(updates).map((update) => {
+  return decodeWarUpdates(updates, { limit }).map((update) => {
     const stableIds = [...new Set(
       normalizeArray(update.eventIds).map(normalizeString).filter(Boolean),
     )].slice(0, 24);
@@ -979,10 +979,10 @@ export const validateWarLedgerPayload = (candidate, { world = {}, startsInForce 
   return validateBoundWarBatch({ events, updates, world, requireUpdateLinks: true, startsInForce });
 };
 
-export const validateCanonicalWarEvents = ({ events, updates, world, startsInForce = false } = {}) =>
+export const validateCanonicalWarEvents = ({ events, updates, world, startsInForce = false, limit } = {}) =>
   validateBoundWarBatch({
     events,
-    updates: bindWarUpdatesToEvents(updates, events),
+    updates: bindWarUpdatesToEvents(updates, events, { limit }),
     world,
     requireUpdateLinks: false,
     startsInForce,
@@ -1186,10 +1186,12 @@ export const repairWarLedgerPayload = (candidate, { world = {} } = {}) => {
   return result;
 };
 
-export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0 } = {}) => {
+// `limit` as in the decoder: a merged turn passes Infinity, because the cap is
+// per model answer and each segment's answer was held to it already.
+export const applyWarUpdates = ({ world, updates, events = [], stopDate = "", round = 0, limit } = {}) => {
   const nextWorld = normalizeWorldState(world);
   const map = warMapFromWorld(nextWorld);
-  const decoded = bindWarUpdatesToEvents(updates, events);
+  const decoded = bindWarUpdatesToEvents(updates, events, { limit });
   const appliedIds = [];
 
   for (const update of decoded) {

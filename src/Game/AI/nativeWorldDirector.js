@@ -1399,7 +1399,11 @@ const parseStorylineRecord = (line, index = 0) => {
   };
 };
 
-export const decodeWorldStorylineUpdates = (value) => {
+// The cap is per model answer. A merged turn (every segment's records, plus
+// motion repairs and engine seeds) passes { limit: Infinity }: each answer in
+// it was held to the cap already, and cutting the whole turn to one answer's
+// worth dropped every later segment's records.
+export const decodeWorldStorylineUpdates = (value, { limit = MAX_STORYLINE_UPDATES_PER_JUMP } = {}) => {
   // Internal/back-compat callers may already provide object records.
   if (Array.isArray(value)) {
     return value
@@ -1415,14 +1419,14 @@ export const decodeWorldStorylineUpdates = (value) => {
         };
       })
       .filter(Boolean)
-      .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+      .slice(0, limit);
   }
 
   return String(value ?? "")
     .split(/\r?\n/)
     .map((line, index) => parseStorylineRecord(line, index))
     .filter(Boolean)
-    .slice(0, MAX_STORYLINE_UPDATES_PER_JUMP);
+    .slice(0, limit);
 };
 
 const STORYLINE_LINK_STOPWORDS = new Set([
@@ -1913,9 +1917,10 @@ export const findWorldStorylineAntiStasisIssues = (
     originDate = "",
     stopDate = "",
     world = null,
+    limit,
   } = {},
 ) => {
-  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates);
+  const updates = decodeWorldStorylineUpdates(candidate?.storylineUpdates, { limit });
   const updateById = new Map(
     updates
       .map((entry) => [normalizeString(entry?.id), entry])
@@ -2025,7 +2030,7 @@ export const findSkipStorylineMotionIssues = ({
 } = {}) => {
   const skipEvents = normalizeArray(events);
   const lastUpdateById = new Map();
-  for (const update of decodeWorldStorylineUpdates(storylineUpdates)) {
+  for (const update of decodeWorldStorylineUpdates(storylineUpdates, { limit: Infinity })) {
     const id = normalizeString(update?.id);
     if (id) lastUpdateById.set(id, update);
   }
@@ -2038,7 +2043,7 @@ export const findSkipStorylineMotionIssues = ({
   }));
   return findWorldStorylineAntiStasisIssues(
     { events: skipEvents, storylineUpdates: netUpdates },
-    { existingStorylines, selectedStorylines, originDate, stopDate, world },
+    { existingStorylines, selectedStorylines, originDate, stopDate, world, limit: Infinity },
   );
 };
 
@@ -2492,6 +2497,7 @@ export const applyWorldStorylineUpdates = ({
   events = [],
   stopDate = "",
   round = 0,
+  limit,
 } = {}) => {
   const coalescedExisting = coalesceWorldStorylines(world);
   const existing = coalescedExisting.storylines;
@@ -2511,7 +2517,7 @@ export const applyWorldStorylineUpdates = ({
     }
   }
 
-  const decodedUpdates = decodeWorldStorylineUpdates(updates);
+  const decodedUpdates = decodeWorldStorylineUpdates(updates, { limit });
   const appliedIds = [];
 
   for (let index = 0; index < decodedUpdates.length; index += 1) {
