@@ -63,6 +63,7 @@ import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js
 import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js";
+import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -2971,12 +2972,19 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   const [mapEditorSeed, setMapEditorSeed] = useState(null); // the scenario's current map, loaded async
   // A suggestion being reviewed in the Workshop (openMapReview), or null.
   const [mapEditorReview, setMapEditorReview] = useState(null);
+  // Which opening of the Workshop the map downloads in flight belong to. Every
+  // open and every close moves it on, so a map still downloading for a
+  // Workshop the player already left can never seed the next one: MapEditor
+  // hydrates once, from the first map it is handed, and saves into its own
+  // scenario whatever that map was.
+  const [mapEditorRequest] = useState(createLatestRequest);
 
   // Open the Workshop on a scenario's CURRENT map (geometry + owners + cities +
   // palette) so it edits that map instead of the default world. Assets stream
   // in async; the editor hydrates the moment they arrive. `review` puts a
   // suggestion's map changes beside it (src/Editor/SuggestionReviewPanel.jsx).
   const openMapEditorFor = (scenario, world = {}, { review = null } = {}) => {
+    const isCurrent = mapEditorRequest.begin();
     setMapEditorScenario(scenario);
     setMapEditorSeed(null);
     setMapEditorReview(review);
@@ -2995,6 +3003,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // The custom map background so re-opening the editor restores it.
       world.background?.kind ? downloadScenarioJsonAsset(scenario.id, "backgroundData") : Promise.resolve(null),
     ]).then(([regions, cities, colors, flags, tags, bgData]) => {
+      if (!isCurrent()) return;
       const bgDesc = world.background;
       const background =
         bgDesc?.kind === "image" && bgData?.dataUrl
@@ -3039,11 +3048,13 @@ const LibraryTopBar = ({ onOpenSettings }) => {
         puppets: Array.isArray(world.puppets) ? world.puppets : [],
       });
     }).catch((error) => {
+      if (!isCurrent()) return;
       // A piece that failed to download is not a piece the map lacks: seeded
       // without it, the Workshop's save would clear the flags, tags and
       // background and write the stock world over the geometry. So the
       // Workshop closes before anything can be saved, and the drawer says why.
       console.warn("[editor] the scenario's map could not be loaded:", error);
+      mapEditorRequest.cancel();
       setIsMapEditorOpen(false);
       setMapEditorScenario(null);
       setMapEditorSeed(null);
@@ -3248,6 +3259,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     const newGameId = gameDetails.game.id;
 
     // Tear down all the library UI so the freshly-activated game is visible.
+    mapEditorRequest.cancel();
     setIsMapEditorOpen(false);
     setMapEditorScenario(null);
     setMapEditorSeed(null);
@@ -3507,6 +3519,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           >
             <MapEditor
               onClose={() => {
+                mapEditorRequest.cancel();
                 setIsMapEditorOpen(false);
                 setMapEditorScenario(null);
                 setMapEditorSeed(null);
