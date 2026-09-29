@@ -6,6 +6,7 @@
 import { STORES, idbGet, idbGetAll, idbPut, idbDelete, kvGet, kvUpdate } from "./idb.js";
 import { cloneJson, nowIso, normalizeId, ensureUniqueId, jsonResponse, errorResponse } from "./util.js";
 import { applyRegionDelta, isRegionDelta } from "../../../server/regionDelta.js";
+import { documentFieldsFromBody } from "../../../server/mapEditorFields.js";
 
 const MANIFEST_KEY = "mapeditor-manifest";
 
@@ -54,19 +55,10 @@ const createDocument = async (body = {}) => {
     name,
     version: 1,
     metadata: { name, ...(body.metadata && typeof body.metadata === "object" ? body.metadata : {}), createdAt: timestamp, updatedAt: timestamp },
-    types: Array.isArray(body.types) ? cloneJson(body.types) : [],
-    regions: body.regions && typeof body.regions === "object" ? cloneJson(body.regions) : { type: "FeatureCollection", features: [] },
-    features: Array.isArray(body.features) ? cloneJson(body.features) : [],
-    // Mirrors server/mapEditorStore.js:105-118 — the map-maker's palette and flags.
-    // Both stores build the record field by field, so a field added to one and not
-    // the other silently survives on desktop and vanishes on the website.
-    ownerSchema: Number(body.ownerSchema || 1),
-    colorOverrides: body.colorOverrides && typeof body.colorOverrides === "object" ? cloneJson(body.colorOverrides) : {},
-    flags: body.flags && typeof body.flags === "object" ? cloneJson(body.flags) : {},
-    tags: body.tags && typeof body.tags === "object" ? cloneJson(body.tags) : {},
-    polities: body.polities && typeof body.polities === "object" ? cloneJson(body.polities) : {},
-    units: Array.isArray(body.units) ? cloneJson(body.units) : [],
-    groups: body.groups && typeof body.groups === "object" ? cloneJson(body.groups) : {},
+    // Every other field the Workshop saves, from the one list both stores build
+    // a new document from (server/mapEditorFields.js), so a field cannot survive
+    // on desktop and vanish on the website.
+    ...cloneJson(documentFieldsFromBody(body)),
     createdAt: timestamp,
     updatedAt: timestamp,
   };

@@ -466,7 +466,7 @@ When the editor opens from a scenario, `onOpenMapEditor` (`libraryBar.jsx:2511`)
 
 ## 20b. Groups, puppet states and structures round-trip
 
-`libraryBar.jsx` hands the Workshop the scenario world's `groups`, `groupAreas` (stamped onto the regions with the disputes, `claimStamper`), `markers` and `puppets`, and `applyMapToScenario` writes back the Workshop's: it opened with the whole of each, so what it saves is the whole of each. The document keeps them as `doc.groups`, the regions' `group`, map features in `doc.features`, and `doc.puppets`; `buildDocumentFields` lists `units`, `groups` and `puppets` (units were missing there, so a document's units vanished on reopening it), and both stores' create whitelists now keep them too.
+`libraryBar.jsx` hands the Workshop the scenario world's `groups`, `groupAreas` (stamped onto the regions with the disputes, `claimStamper`), `markers` and `puppets`, and `applyMapToScenario` writes back the Workshop's: it opened with the whole of each, so what it saves is the whole of each. The document keeps them as `doc.groups`, the regions' `group`, map features in `doc.features`, and `doc.puppets`; `buildDocumentFields` lists `units`, `groups` and `puppets` (units were missing there, so a document's units vanished on reopening it), and both stores' creates keep every one of them, built from the one field list in `server/mapEditorFields.js` (`DOCUMENT_FIELDS`) — each store kept its own list, and neither named `puppets`, so puppet states set before a new map's first save were gone on reopening it. A field added to `buildDocumentFields` goes in that list too.
 
 ## 21. Document migration (`documentMigration.js`)
 

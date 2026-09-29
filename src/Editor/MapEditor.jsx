@@ -327,7 +327,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // doc field look like it works until the first reload.
   // This list is a whitelist and it drops anything not named here, silently. A
   // field left off does not fail to save — it fails to EXIST, and only when someone
-  // reopens the document.
+  // reopens the document. A field added here goes in DOCUMENT_FIELDS
+  // (server/mapEditorFields.js) too, the list both stores create a document from.
   const buildDocumentFields = () => ({
     name: d.name,
     metadata: d.metadata,
