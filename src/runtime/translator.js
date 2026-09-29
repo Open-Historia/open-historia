@@ -661,6 +661,15 @@ export const translateLabel = (text) => {
   return text;
 };
 
+// The language pack's translation of a name drawn outside the DOM, or null.
+// Unlike translateLabel it never queues: for names every player of a language
+// needs alike (the map's cities), which ship in the packs rather than cost
+// each player requests.
+export const lookupLabel = (text) => {
+  if (!translatorActive || typeof text !== "string") return null;
+  return book.get(text) ?? null;
+};
+
 // Proactively queue content that exists as data but may not be rendered yet
 // (e.g. freshly fetched Community-hub posts). Only unknown strings cost a call.
 export const enqueueStrings = (strings) => {

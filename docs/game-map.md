@@ -304,7 +304,7 @@ The MapLibre label sources (stock, and the live fallback) feed `type:"symbol"` l
 Custom scenarios never show the 70k modern database (anachronistic), and while the custom set loads they render nothing rather than flash modern names. Both paths use the same visual language and the same two layers (`minzoom 3.4`):
 
 - `cities-shapes` — a glyph per city: `★` capital / `◆` major / `■` other (transparent text, white halo, so only the outline shows).
-- `cities-labels` — the city name (`Open Sans Semibold`, white with dark halo, variable anchor).
+- `cities-labels` — the city name (`Open Sans Semibold`, white with dark halo, variable anchor): an AI rename (`world.cityRenames`) as written, else the language pack's name for it (`cityLabelExpression` in `src/runtime/cityFeatures.js`, names found with `lookupLabel`, which never asks the AI; see [i18n](i18n.md)), else the name in the data.
 
 A city in the scenario's `cities.geojson` may carry its **population by year** — a `populationByYear` object (`{"1950": 3400000}`, BC years negative), rows of `{year, population}`, or Natural Earth's flat `POP1950`-style fields (`src/runtime/cityPopulation.js`). `Cities.jsx` redraws those cities once a game year with the figure for the year (straight between the two years around it, the nearest year's outside them); the city card and the AI's city lookups read it for the exact date. A population the AI sets (`markerOps` `population` → `world.cityPopulations`), or the GM changes by hand in the Map Feature Editor, wins from then on, and the series is no longer read for that city.
 
