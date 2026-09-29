@@ -276,15 +276,16 @@ const CountryInfoPanel = () => {
         return sortEventsNewestFirst(loaded.allEvents.filter(involves));
     }, [identity, aliases, loaded, worldState]);
 
-    // The campaign, polity, round and prompt language a briefing answers for.
-    // callAI writes in the player's UI language (languageDirective), so a
-    // language switch asks afresh.
+    // The campaign, polity, round and prompt languages a briefing answers for.
+    // The prompt names the save's language ("Respond in ...") and callAI adds
+    // the player's UI language (languageDirective), so a change to either asks
+    // afresh.
     const briefingKeyFor = (game) => briefingCacheKey({
         gameId: getLibraryState()?.activeGameId ?? "",
         polity: polityKey || country?.code,
         date: game?.date,
         round: game?.round,
-        language: getStoredLanguage(),
+        language: `${getStoredLanguage()}/${worldState?.language || game?.language || "English"}`,
     });
     const reportKey = identity ? briefingKeyFor(loaded.game) : "";
 
