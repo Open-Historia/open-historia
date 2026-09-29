@@ -217,9 +217,21 @@ export const AI_TASK_ROUTING = [
     { key: "interactiveExecutor", label: "Interactive event execution", hint: "Mid-tier model", group: "Player" },
     { key: "interactiveSummary", label: "Interactive event summary", hint: "Small model", group: "Player" },
     { key: "spyIntercept", label: "Spy intercept", hint: "Small/mid-tier model", group: "Player" },
+    { key: "intelligenceAssessment", label: "Intelligence assessment", hint: "Mid-tier model", group: "Player" },
+    { key: "demandCheck", label: "Demand check", hint: "Small model: reads a leader's answer to a demand", group: "Player" },
+    { key: "translation", label: "Translation", hint: "Small/mid-tier: game text in your language", group: "Player" },
     { key: "advisor", label: "Advisor chat", hint: "Mid/high-tier: long conversational replies", group: "Chat" },
     { key: "diplomacy", label: "Leader chat", hint: "Mid/high-tier: in-character leaders", group: "Chat" },
+    { key: "chatActions", label: "Group chat", hint: "Mid/high-tier: group chats and councils, on the Leader chat model unless set", group: "Chat" },
 ];
+
+// A task with no pick of its own that starts where a related task's pick does:
+// both halves of one authored Political World bootstrap on the same model, and
+// a group chat or council on the model the player chose for leaders.
+const INHERITED_TASK_PICKS = Object.freeze({
+    politicalWorldVerification: "politicalWorldGeneration",
+    chatActions: "diplomacy",
+});
 
 // The host of an endpoint, for the diagnostics log: "localhost:11434" or
 // "openrouter.ai" says which server a report is about; the path, the query and
@@ -935,10 +947,10 @@ export function setTaskPick(taskKey, entryId) {
 }
 
 // Resolve the effective starting entry for a task without mutating the player's
-// stored Fallback list. Political World verification inherits the generation
-// task's pick when it has no dedicated choice so both halves of one authored
-// bootstrap use the same model by default. A dedicated verification pick still
-// wins. All other tasks keep Beta's ordinary Fallback-list behavior.
+// stored Fallback list. A task in INHERITED_TASK_PICKS with no dedicated choice
+// starts at its related task's pick (Political World verification at
+// generation's, a group chat at Leader chat's); a dedicated pick still wins.
+// All other tasks keep Beta's ordinary Fallback-list behavior.
 export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
     const key = String(taskKey ?? "").trim();
     const entries = Array.isArray(sourceEntries) ? [...sourceEntries] : getResolvedFallbackList();
@@ -949,10 +961,11 @@ export function resolveTaskFallbackEntries(taskKey, sourceEntries = null) {
         return { entries, preferredEntryId: explicitPick, implicit: false };
     }
 
-    if (key === "politicalWorldVerification") {
-        const generationPick = getTaskPick("politicalWorldGeneration");
-        if (generationPick && entries.some((entry) => entry.id === generationPick)) {
-            return { entries, preferredEntryId: generationPick, implicit: true };
+    const inheritedFrom = INHERITED_TASK_PICKS[key];
+    if (inheritedFrom) {
+        const inheritedPick = getTaskPick(inheritedFrom);
+        if (inheritedPick && entries.some((entry) => entry.id === inheritedPick)) {
+            return { entries, preferredEntryId: inheritedPick, implicit: true };
         }
     }
 

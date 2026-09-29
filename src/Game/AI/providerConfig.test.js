@@ -614,3 +614,37 @@ test("Political World generation and verification keep independent/inherited tas
   assert.equal(plan.preferredEntryId, verification);
   assert.equal(plan.implicit, false);
 });
+
+test("group chats, intelligence, demand checks and translation can have a model of their own", () => {
+  for (const key of ["chatActions", "intelligenceAssessment", "demandCheck", "translation"]) {
+    assert.ok(config.AI_TASK_ROUTING.some((entry) => entry.key === key), key);
+  }
+  const [top] = config.getResolvedFallbackList();
+  const small = config.addEntry({ connectionId: top.connectionId, model: "small-model" });
+  config.setTaskPick("translation", small);
+  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, small);
+  config.setTaskPick("translation", "");
+  assert.equal(config.resolveTaskFallbackEntries("translation").preferredEntryId, "");
+});
+
+test("a group chat starts on the Leader chat model until it is given its own", () => {
+  const [top] = config.getResolvedFallbackList();
+  const leaders = config.addEntry({ connectionId: top.connectionId, model: "leader-model" });
+  const councils = config.addEntry({ connectionId: top.connectionId, model: "council-model" });
+
+  assert.equal(config.resolveTaskFallbackEntries("chatActions").preferredEntryId, "", "no picks: the top of the list");
+
+  config.setTaskPick("diplomacy", leaders);
+  let plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, leaders);
+  assert.equal(plan.implicit, true);
+
+  config.setTaskPick("chatActions", councils);
+  plan = config.resolveTaskFallbackEntries("chatActions");
+  assert.equal(plan.preferredEntryId, councils);
+  assert.equal(plan.implicit, false);
+  assert.equal(config.resolveTaskFallbackEntries("diplomacy").preferredEntryId, leaders, "and the leaders keep theirs");
+
+  config.setTaskPick("chatActions", "");
+  config.setTaskPick("diplomacy", "");
+});

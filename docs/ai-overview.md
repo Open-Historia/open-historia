@@ -165,7 +165,7 @@ It is deliberately still **one global toggle**, not per task, and that is worth 
 
 ### Per-task model routing
 
-Ported from the abdulrahman-2005 fork. Every AI call names its task — the prompt-pack task key for `runJsonTask` calls (`jumpForward`, `timelineCurator`, `territoryDirector`…), the repair/briefing keys the direct calls pass, and `advisor` / `diplomacy` for the chats. A task with a pick (`getTaskPick(taskKey)`, `providerConfig.js`) tries that Fallback entry first, then the list from the top, so it only fails when every entry is used up; a task without one starts at the top. `AI_TASK_ROUTING` lists the tasks Settings → Advanced → **Per-task models** shows, each a choice among the list's entries.
+Ported from the abdulrahman-2005 fork. Every AI call names its task — the prompt-pack task key for `runJsonTask` calls (`jumpForward`, `timelineCurator`, `territoryDirector`…), the repair/briefing keys the direct calls pass, and `advisor` / `diplomacy` for the chats. A task with a pick (`getTaskPick(taskKey)`, `providerConfig.js`) tries that Fallback entry first, then the list from the top, so it only fails when every entry is used up; a task without one starts at the top. `AI_TASK_ROUTING` lists the tasks Settings → Advanced → **Per-task models** shows, each a choice among the list's entries. Group chats and institution councils (`chatActions`), intelligence assessments, demand checks and translation have rows too. A task with no pick of its own can start where a related task's pick does (`INHERITED_TASK_PICKS`, `resolveTaskFallbackEntries`): Political World verification at generation's, and a group chat at **Leader chat**'s.
 
 ### Connection templates and recent models
 
