@@ -7,22 +7,9 @@ import { getMarkerPresentation } from "./vnext/presentationPolicy.js";
 
 export const EMPTY_FEATURE_COLLECTION = { type: "FeatureCollection", features: [] };
 
-const MARKER_STATUS_LABEL = {
-  planned: "Planned",
-  under_construction: "Under construction",
-  active: "Active",
-  damaged: "Damaged",
-  inactive: "Inactive",
-  abandoned: "Abandoned",
-  destroyed: "Destroyed",
-};
-
-const normalizeMarkerStatus = (status) => {
-  const key = String(status || "").trim().toLowerCase();
-  return Object.prototype.hasOwnProperty.call(MARKER_STATUS_LABEL, key) ? key : "active";
-};
-
-const markerStatusOpacity = (status) => ({
+// A structure's lifecycle is drawn as its opacity; the popup (Selection/
+// Features.jsx) names the status. An unknown status reads as active.
+const MARKER_STATUS_OPACITY = Object.freeze({
   planned: 0.76,
   under_construction: 0.86,
   active: 1,
@@ -30,7 +17,12 @@ const markerStatusOpacity = (status) => ({
   inactive: 0.68,
   abandoned: 0.64,
   destroyed: 0.62,
-}[normalizeMarkerStatus(status)]);
+});
+
+export const markerStatusOpacity = (status) => {
+  const key = String(status || "").trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(MARKER_STATUS_OPACITY, key) ? MARKER_STATUS_OPACITY[key] : MARKER_STATUS_OPACITY.active;
+};
 
 // Unowned / unknown-owner structures read as neutral parchment, not an error.
 export const UNOWNED_MARKER_COLOR = "rgb(226, 222, 205)";
@@ -57,13 +49,13 @@ export const buildMarkerFeatureCollection = (markers, { colorMap = {}, polityOve
     features: markers
       .filter((marker) => Number.isFinite(marker.lng) && Number.isFinite(marker.lat) && marker.name)
       .map((marker) => {
-        const status = normalizeMarkerStatus(marker.status);
-        const statusLabel = MARKER_STATUS_LABEL[status];
         const presentation = getMarkerPresentation(marker);
         return {
           type: "Feature",
           id: marker.id,
           geometry: { type: "Point", coordinates: [marker.lng, marker.lat] },
+          // Only what a layer expression or the click handler (Nations.jsx)
+          // reads: this is rebuilt on every world update.
           properties: {
             id: marker.id,
             name: marker.name,
@@ -72,11 +64,7 @@ export const buildMarkerFeatureCollection = (markers, { colorMap = {}, polityOve
             displayName: marker.name,
             kind: marker.kind || "landmark",
             ownerCode: marker.ownerCode || "",
-            status,
-            statusLabel,
-            statusOpacity: markerStatusOpacity(status),
-            family: presentation.family,
-            priority: presentation.priority,
+            statusOpacity: markerStatusOpacity(marker.status),
             sortKey: presentation.sortKey,
             visibilityTier: presentation.visibilityTier,
             glyph: presentation.glyph,

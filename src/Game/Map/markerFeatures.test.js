@@ -6,6 +6,7 @@ import {
   UNOWNED_MARKER_COLOR,
   buildMarkerFeatureCollection,
   markerOwnerColor,
+  markerStatusOpacity,
 } from "./markerFeatures.js";
 import { parseColorToRgb } from "./cssColor.js";
 
@@ -75,6 +76,22 @@ test("markers without a name or a position are not drawn", () => {
   assert.deepEqual(data.features.map((feature) => feature.id), ["a"]);
   assert.deepEqual(buildMarkerFeatureCollection([]).features, []);
   assert.deepEqual(buildMarkerFeatureCollection(undefined).features, []);
+});
+
+test("a marker feature carries only what the layers and the click handler read", () => {
+  const [feature] = buildMarkerFeatureCollection([base({ status: "damaged", note: "x" })]).features;
+  assert.deepEqual(Object.keys(feature.properties).sort(), [
+    "displayName", "glyph", "id", "kind", "name", "ownerCode", "rgb", "sortKey", "statusOpacity", "visibilityTier",
+  ]);
+  assert.equal(feature.properties.statusOpacity, 0.95);
+});
+
+test("the status sets the opacity, and an unknown status reads as active", () => {
+  assert.equal(markerStatusOpacity("destroyed"), 0.62);
+  assert.equal(markerStatusOpacity(" Under_Construction "), 0.86);
+  assert.equal(markerStatusOpacity("rebuilt"), 1);
+  assert.equal(markerStatusOpacity("constructor"), 1);
+  assert.equal(markerStatusOpacity(undefined), 1);
 });
 
 test("CSS colours parse from hex, short hex and rgb()", () => {
