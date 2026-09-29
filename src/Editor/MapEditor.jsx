@@ -50,7 +50,7 @@ import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
-import { createSaveRunner, settleUnsavedWork } from "./documentSaving.js";
+import { createSaveRunner, isUnsavedStatus, saveRetryDelay, settleUnsavedWork } from "./documentSaving.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
@@ -447,6 +447,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   };
   // d.editCount() when the document last matched what is stored.
   const savedEditsRef = useRef(0);
+  // Why the last save failed (the store's own words), for the "Save failed"
+  // chip, and how many times it has been retried on its own since.
+  const [saveError, setSaveError] = useState("");
+  const autoRetriesRef = useRef(0);
   // Resolves true when the document is saved with no edit left over. An edit
   // made while the write was in flight is not in it: the status stays "dirty"
   // (it used to be overwritten with "saved", which also cancelled the autosave
@@ -474,10 +478,13 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       changes?.commit?.();
       if (d.editCount() !== edits) return false;
       savedEditsRef.current = edits;
+      autoRetriesRef.current = 0;
+      setSaveError("");
       d.setSaveStatus("saved");
       return true;
     } catch (e) {
       console.warn("[editor] save failed:", e);
+      setSaveError(e?.message || String(e));
       d.setSaveStatus("error");
       return false;
     }
@@ -531,6 +538,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   const markLoaded = (id) => {
     adoptDocId(id);
     savedEditsRef.current = d.editCount();
+    autoRetriesRef.current = 0;
+    setSaveError("");
     d.setSaveStatus("saved");
   };
 
@@ -593,9 +602,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // behind the way a field list does.
   useEffect(() => {
     if (!api || d.saveStatus !== "dirty") return;
-    const t = setTimeout(() => saveNow(), 2000);
+    const t = setTimeout(() => {
+      autoRetriesRef.current = 0;
+      saveNow();
+    }, 2000);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, d.saveStatus, docId, d.doc]);
 
 
@@ -616,10 +627,10 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // The browser shows its own generic wording and ignores ours; assigning
   // returnValue is what actually triggers the prompt (Chrome needs it even with
   // preventDefault). "saving" counts as unsaved: the write is in flight and has
-  // not landed in IndexedDB yet.
+  // not landed in IndexedDB yet, and so does "error": the work is still only in
+  // memory, and on the website the IndexedDB copy is the only copy.
   useEffect(() => {
-    const unsaved = d.saveStatus === "dirty" || d.saveStatus === "saving";
-    if (!unsaved) return;
+    if (!isUnsavedStatus(d.saveStatus)) return;
     const onBeforeUnload = (e) => {
       e.preventDefault();
       e.returnValue = "";
@@ -636,7 +647,8 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   useEffect(() => {
     if (!api) return;
     const flush = () => {
-      if (dRef.current.saveStatus === "dirty") saveNowRef.current();
+      const status = dRef.current.saveStatus;
+      if (status === "dirty" || status === "error") saveNowRef.current();
     };
     const onVisibility = () => { if (document.hidden) flush(); };
     document.addEventListener("visibilitychange", onVisibility);
@@ -646,6 +658,21 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       window.removeEventListener("pagehide", flush);
     };
   }, [api]);
+
+  // A failed save used to stay failed: the autosave and the hide flush ran only
+  // on "dirty". It is tried again on its own after 5 s, 15 s and 60 s, then left
+  // to the chip's Retry and the next edit. A retry of a map difference is safe:
+  // the record of what was written is committed only after a save lands.
+  useEffect(() => {
+    if (!api || d.saveStatus !== "error") return undefined;
+    const delay = saveRetryDelay(autoRetriesRef.current);
+    if (delay == null) return undefined;
+    const t = setTimeout(() => {
+      autoRetriesRef.current += 1;
+      saveNow();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [api, d.saveStatus]);
 
   // Hydrate the editor with the scenario's CURRENT map: its regions + owners
   // (custom geometry when it has one, else the stock world with the scenario's
@@ -1339,6 +1366,11 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         name={d.name}
         onNameChange={d.setName}
         saveStatus={d.saveStatus}
+        saveError={saveError}
+        onRetrySave={() => {
+          autoRetriesRef.current = 0;
+          void saveNow();
+        }}
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}

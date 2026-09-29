@@ -55,6 +55,9 @@ const BottomBar = ({
   name,
   onNameChange,
   saveStatus,
+  // Why the last save failed, and what the chip calls to try again.
+  saveError = "",
+  onRetrySave = null,
   scenarioDirty = false,
   openPanel,
   onOpenPanel,
@@ -121,10 +124,37 @@ const BottomBar = ({
         style={{ ...inputStyle, width: 190 }}
       />
 
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12 }}>
-        <span style={{ width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
-        {save.label}
-      </span>
+      {saveStatus === "error" && onRetrySave ? (
+        // A failed save says why and is its own Retry: the only other way was
+        // the Documents menu's Save now, which nothing pointed to.
+        <button
+          type="button"
+          onClick={onRetrySave}
+          title={saveError ? `Save failed: ${saveError}. Click to try again.` : "Save failed. Click to try again."}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            maxWidth: 360,
+            padding: 0,
+            background: "transparent",
+            border: "none",
+            color: "inherit",
+            fontSize: 12,
+            cursor: "pointer",
+          }}
+        >
+          <span style={{ flex: "0 0 auto", width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textDecoration: "underline" }}>
+            {saveError ? `Save failed: ${saveError} — Retry` : "Save failed — Retry"}
+          </span>
+        </button>
+      ) : (
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12 }}>
+          <span style={{ width: 9, height: 9, borderRadius: "50%", background: save.color, boxShadow: `0 0 8px ${save.color}` }} />
+          {save.label}
+        </span>
+      )}
       {scenarioDirty && (
         <span
           title="The editor document may be autosaved, but these changes have not yet been written into the scenario."
