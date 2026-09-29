@@ -672,8 +672,9 @@ export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set()
       owners.get(to).push(change);
       continue;
     }
-    const undo = applyMapChange(change, ctx, { renames: localRenames });
-    if (undo) undoers.set(change.id, undo);
+    // Every change accepted here gets an undo, even one with nothing to take
+    // back: only one accepted in an earlier review has none (canUndo).
+    undoers.set(change.id, applyMapChange(change, ctx, { renames: localRenames }) ?? (() => {}));
     if (change.kind === "polity-rename") localRenames[change.from] = change.to;
     ids.push(change.id);
   }

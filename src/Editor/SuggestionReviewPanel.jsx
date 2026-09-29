@@ -96,9 +96,15 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
 
   const reject = useCallback((list) => decide(list.map((change) => change.id), "rejected"), [decide]);
 
+  // An acceptance can be taken back only in the review that made it: one
+  // loaded from an earlier review has no undo, and clearing its decision
+  // would leave the change on the map marked undecided.
+  const canUndo = useCallback((id) => !decisions.accepted.has(id) || undoers.current.has(id), [decisions.accepted]);
+
   const undo = useCallback((change) => {
     if (decisions.accepted.has(change.id)) {
-      undoers.current.get(change.id)?.();
+      if (!undoers.current.has(change.id)) return;
+      undoers.current.get(change.id)();
       undoers.current.delete(change.id);
       if (change.kind === "polity-rename") {
         setRenames((current) => {
@@ -117,8 +123,8 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
   const pendingCount = changes.filter((change) => !decisionOf(change, decisions, statuses)).length;
 
   return useMemo(
-    () => ({ active: Boolean(review), changes, decisions, statuses, renames, focusId, setFocusId, accept, reject, undo, decisionsForSave, pendingCount, ctx }),
-    [review, changes, decisions, statuses, renames, focusId, accept, reject, undo, decisionsForSave, pendingCount, ctx],
+    () => ({ active: Boolean(review), changes, decisions, statuses, renames, focusId, setFocusId, accept, reject, undo, canUndo, decisionsForSave, pendingCount, ctx }),
+    [review, changes, decisions, statuses, renames, focusId, accept, reject, undo, canUndo, decisionsForSave, pendingCount, ctx],
   );
 };
 
@@ -302,7 +308,9 @@ const Decision = ({ change, review }) => {
         <span style={{ color: decided === "accepted" ? "#86efac" : "rgba(255,255,255,0.5)", fontSize: 11, fontWeight: 700 }}>
           {decided === "accepted" ? "Accepted" : "Rejected"}
         </span>
-        <button type="button" onClick={(event) => { event.stopPropagation(); review.undo(change); }} style={{ ...pillButton(false), padding: "3px 7px", fontSize: 11 }}>Undo</button>
+        {review.canUndo(change.id)
+          ? <button type="button" onClick={(event) => { event.stopPropagation(); review.undo(change); }} style={{ ...pillButton(false), padding: "3px 7px", fontSize: 11 }}>Undo</button>
+          : <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 10.5 }}>To undo it, change it back by hand.</span>}
       </span>
     );
   }

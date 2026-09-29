@@ -366,6 +366,10 @@ test("accepting a list: what it needs first, countries before regions, rows batc
   assert.equal(api.getRegionSummary("r3").owner, "Gamma");
   assert.ok(state.doc.polities.Gamma);
   assert.deepEqual(calls, [["r1", "r2"], ["r3"]], "one map step per country the rows go to");
+  assert.ok(result.accepted.every((id) => result.undoers.has(id)), "everything accepted here can be undone here");
+  const gone = { id: "city-remove:nowhere", area: "map", kind: "city-remove", name: "Nowhere", from: { name: "Nowhere", coord: [50, 50] } };
+  const nothing = acceptMapChanges([gone], ctx, { changes: [gone] });
+  assert.equal(typeof nothing.undoers.get(gone.id), "function", "even a change with nothing to take back");
 
   // Each row's undo puts back its own owner from before.
   result.undoers.get("region-owner:r1")();

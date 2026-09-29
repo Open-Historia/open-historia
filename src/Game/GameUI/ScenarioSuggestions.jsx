@@ -325,7 +325,7 @@ const DetailValue = ({ change, coverBefore }) => {
   );
 };
 
-const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, onReject, onUndo, coverBefore, touch }) => {
+const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, onReject, onUndo, canUndo = true, coverBefore, touch }) => {
   const label = describeDetailChange(change);
   return (
     <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, display: "grid", gap: "0.45rem", padding: "0.65rem 0.75rem" }}>
@@ -347,7 +347,9 @@ const DetailChangeRow = ({ change, status, decision, busy, readOnly, onAccept, o
               <span style={{ color: decision === "accepted" ? "#86efac" : "rgba(255,255,255,0.55)", fontSize: "0.78rem", fontWeight: 700 }}>
                 {decision === "accepted" ? "Accepted" : "Rejected"}
               </span>
-              <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+              {canUndo
+                ? <button type="button" className="oh-tap-row" disabled={busy} onClick={onUndo} style={tapFit(buttonStyle, touch)}>Undo</button>
+                : <span style={{ color: "rgba(255,255,255,0.55)", fontSize: "0.78rem" }}>To undo it, change it back by hand.</span>}
             </>
           ) : (
             <>
@@ -733,16 +735,19 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       setBusy(false);
     }
   };
+  // Only an acceptance made since the dialog opened can be taken back: the
+  // value it replaced is kept for this dialog only. Clearing the decision of
+  // an earlier one would leave the change in, marked undecided.
+  const canUndo = (change) => !decisions.accepted.has(change.id) || undoRef.current.has(change.id);
   const undo = async (change) => {
+    if (!canUndo(change)) return;
     setBusy(true);
     try {
       if (decisions.accepted.has(change.id)) {
         const inverse = undoRef.current.get(change.id);
-        if (inverse) {
-          await applyChanges([inverse]);
-          setDetailValueIn(snapshotRef.current, change, inverse.kind === "cover" ? inverse.to?.hash ?? null : inverse.to);
-          undoRef.current.delete(change.id);
-        }
+        await applyChanges([inverse]);
+        setDetailValueIn(snapshotRef.current, change, inverse.kind === "cover" ? inverse.to?.hash ?? null : inverse.to);
+        undoRef.current.delete(change.id);
       }
       const accepted = new Set(decisions.accepted);
       const rejected = new Set(decisions.rejected);
@@ -835,6 +840,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
                   onAccept={() => accept([change])}
                   onReject={() => reject([change])}
                   onUndo={() => undo(change)}
+                  canUndo={canUndo(change)}
                 />
               ))}
             </div>
