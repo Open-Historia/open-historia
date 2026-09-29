@@ -225,6 +225,7 @@ import {
   writeCanonicalTurnState,
 } from "../../runtime/gameState.js";
 import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
+import { refreshPowerStatusForTurn } from "../../runtime/powerStatus.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import {
   ACTION_OUTCOME_ASSOCIATION_SCHEMA,
@@ -7876,6 +7877,17 @@ const applySimulationResult = async ({
     date: nextGame.gameDate || nextGame.startDate || "",
     round: nextGame.round || 0,
   });
+
+  // Power tiers follow the turn's live Stats (two-round hysteresis). CPU-only.
+  try {
+    nextWorld = refreshPowerStatusForTurn(nextWorld, {
+      date: nextGame.gameDate || nextGame.startDate || "",
+      round: nextGame.round || 0,
+    });
+  } catch (error) {
+    console.warn("[power status] per-turn tier refresh failed; the completed turn is preserved.", error);
+    logDebugEvent("turn", "Power tier refresh failed; the tiers stay as they were.", error, { problem: true });
+  }
 
   // Re-read the chat list instead of writing the pre-turn snapshot back over it.
   // Turns take a while, and anything the player did to the list while one ran —

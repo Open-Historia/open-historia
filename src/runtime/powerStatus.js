@@ -550,6 +550,17 @@ export const refreshPowerStatus = (worldLike, { date = "", round = 0, immediate 
   return { ...world, powerStatus };
 };
 
+// Once per completed turn: tiers follow live GDP and population through the
+// two-round hysteresis above, so a country that collapses or wins a great war
+// stops carrying its generation tier into every AI leader's and time skip's
+// decision context. A world with no power ledger (no Round-Zero generation) is
+// left without one. Costs no AI request.
+export const refreshPowerStatusForTurn = (world, { date = "", round = 0 } = {}) => {
+  const byPolity = world?.powerStatus?.byPolity;
+  if (!byPolity || typeof byPolity !== "object" || !Object.keys(byPolity).length) return world;
+  return refreshPowerStatus(world, { date, round });
+};
+
 export const powerTierForPolity = (world, polityInput) => {
   const polity = canonicalPolity(polityInput, world);
   const source = world?.powerStatus?.byPolity && typeof world.powerStatus.byPolity === "object"

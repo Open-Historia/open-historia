@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { estimateNativePowerScore, powerTierForPolity, preparePowerStatusForGlobalCalibration, refreshPowerStatus, seedPowerBaselineScore, seedPowerTier } from "./powerStatus.js";
+import { estimateNativePowerScore, powerTierForPolity, preparePowerStatusForGlobalCalibration, refreshPowerStatus, refreshPowerStatusForTurn, seedPowerBaselineScore, seedPowerTier } from "./powerStatus.js";
 
 const makePeerWorld = () => ({
   polityOverrides: {
@@ -384,4 +384,18 @@ test("current war relevance changes strategic activity without rewriting materia
   assert.ok(record.strategicActivityScore > 0);
   assert.ok(record.strategicWeight > 45);
   assert.equal(record.tier, "minor-power");
+});
+
+test("the per-turn refresh moves tiers through hysteresis, and leaves a world with no power ledger alone", () => {
+  let world = seedPowerTier(makePeerWorld(), "Testland", "minor-power", { basis: "authored", date: "2014-01-01", round: 1 });
+  world = refreshPowerStatusForTurn(world, { date: "2014-02-01", round: 2 });
+  assert.equal(powerTierForPolity(world, "Testland"), "minor-power");
+  assert.equal(world.powerStatus.byPolity.Testland.candidateTier, "major-power");
+  world = refreshPowerStatusForTurn(world, { date: "2014-03-01", round: 3 });
+  assert.equal(powerTierForPolity(world, "Testland"), "major-power");
+
+  const bare = makePeerWorld();
+  assert.equal(refreshPowerStatusForTurn(bare, { date: "2014-02-01", round: 2 }), bare);
+  const empty = { ...makePeerWorld(), powerStatus: { schemaVersion: 1, byPolity: {} } };
+  assert.equal(refreshPowerStatusForTurn(empty, { date: "2014-02-01", round: 2 }), empty);
 });
