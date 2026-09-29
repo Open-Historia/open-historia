@@ -231,3 +231,8 @@ test("every job's field is required, so a job with nothing to do still answers",
     ]);
     assert.deepEqual(tool.schema.required, ["units", "board"]);
 });
+
+test("a review the request budget refused is a failure, though it was never asked", () => {
+    const refused = review({ asked: false, failure: new Error("this time skip used all 3 of its requests before the checks") });
+    assert.match(reviewFailure(refused), /used all 3 of its requests/);
+});

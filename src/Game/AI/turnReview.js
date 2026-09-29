@@ -242,6 +242,7 @@ export const remapBoardOps = ({ ops, shownEvents, visibleEvents, hiddenEvents, i
 // review: what gameplay.js runTurnReview returns —
 //   asked    false when nothing needed checking, so no request was made
 //   failure  the error, when the request itself failed (timeout, 503, no answer)
+//            or was never made because the skip's request budget ran out
 //   missing  the keys of the jobs asked whose part was absent or unusable
 //
 // Every job asked has a required field (buildTurnReviewTool), so a job with
@@ -250,8 +251,10 @@ export const remapBoardOps = ({ ops, shownEvents, visibleEvents, hiddenEvents, i
 
 // Why the review failed, or "" when it did not.
 export const reviewFailure = (review) => {
+  // Before `asked`: a review refused by the skip's request budget was never
+  // asked, and still leaves the turn unchecked.
+  if (review?.failure) return asText(review.failure.message) || "the request failed";
   if (!review?.asked) return "";
-  if (review.failure) return asText(review.failure.message) || "the request failed";
   const missing = asArray(review.missing).map(asText).filter(Boolean);
   return missing.length ? `no usable answer for ${missing.join(", ")}` : "";
 };

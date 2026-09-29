@@ -14349,7 +14349,14 @@ const runTurnReview = async ({ context, merged, signal, state, sections = null }
 
   const usable = jobs.filter((job) => job.schema);
   if (!usable.length || (requests && !requests.budget.take("review"))) {
-    if (usable.length) logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
+    if (usable.length) {
+      logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
+      // Something needed checking and was not: the turn would land with none of
+      // it done, as a failed review did. A Retry gives the checks a budget of
+      // their own (retryPendingChecksJump).
+      review.failure = new Error(`this time skip used all ${requests.budget.cap} of its requests before the checks`);
+      review.missing = usable.map((job) => job.key);
+    }
     return review;
   }
 
