@@ -3,6 +3,7 @@ import { callAI, providerSupportsBatch, restoreAIBatch, retrieveAIBatch, sendDip
 import { forgetBatch, readStoredBatches, rememberBatch } from "./batchRegistry.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import { clampTimelineDates, validateTimelineDates } from "./timelineDates.js";
+import { buildMilitaryFeasibilityText } from "./militaryFeasibility.js";
 import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets.js";
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
@@ -470,28 +471,6 @@ export { extractJsonPayload } from "./jsonSalvage.js";
 
 const loadPromptCatalog = async ({ force = false } = {}) =>
   normalizePromptPack(await readJson(JSON_URLS.prompts, { defaultValue: {}, force }));
-
-const MILITARY_ACTION_PATTERN =
-  /\b(troop|army|armies|attack|invade|invasion|deploy|fleet|navy|naval|air force|airforce|bomb|siege|offensive|battalion|regiment|garrison|blockade|mobiliz)/i;
-
-// Reach/logistics doctrine for the AI. Deliberately CONDITIONAL: it only
-// rides along when the turn actually involves forces (units on the map or
-// military-sounding orders), so peaceful turns don't pay the context cost.
-const buildMilitaryFeasibilityText = (world, actionsText) => {
-  const hasUnits = normalizeArray(world?.units).length > 0;
-  if (!hasUnits && !MILITARY_ACTION_PATTERN.test(actionsText || "")) {
-    return "";
-  }
-
-  return [
-    "",
-    "MILITARY FEASIBILITY — test every deploy request, move/attack order and your own unitOps against the era and the unit's type before honoring it:",
-    "- Era reach: before ~1500, armies march on foot or horse and cross water only by coastal shipping — intercontinental operations are impossible. ~1500–1850 (age of sail): overseas action needs fleets and friendly ports and takes months. 1850–1945: rail and steamships speed logistics; aircraft stay short-ranged until the 1940s. After 1945: global power projection belongs only to major powers with bases, carriers or allies along the route.",
-    "- Unit type: air units are fastest but need airbases or carriers within range and cannot hold ground; naval units move only by sea; infantry, armor and artillery crawl overland and need supply lines; garrisons do not travel.",
-    "- Distance: compare the unit's coordinates with the target's. An order beyond plausible reach or pace is NOT executed as given — reject it, or convert it into a partial advance with an event explaining the delay, the transport it would need, or why it failed.",
-    "- Never teleport units: each move op may only cover what that unit could actually travel in the elapsed time; long campaigns should progress across several turns.",
-  ].join("\n");
-};
 
 // International reputation the AI evolves each turn (world.internationalReputation),
 // surfaced to prompts. Falls back to the player's canonical stat sheet
@@ -1429,7 +1408,7 @@ const buildTemplateVariables = async (bundle, options = {}) => {
   if (wants("unitsSummary")) {
     variables.unitsSummary =
       normalizeString(variables.unitsSummary) +
-      buildMilitaryFeasibilityText(bundle.world, buildActionHistoryText(bundle.actions));
+      buildMilitaryFeasibilityText(bundle.world, bundle.actions);
   }
   if (isContextDiagnosticsEnabled()) {
     console.info(
