@@ -37,6 +37,8 @@ test("what the page sends is what the server accepts", () => {
 
 test("the page's goodbye clears the activity, and its heartbeat outpaces the server's timeout", () => {
   assert.equal(normalizePresence(JSON.parse(JSON.stringify(PRESENCE_GONE))), null);
+  // The beacon goes as text/plain, which the route's JSON parser leaves alone.
+  assert.equal(normalizePresence(undefined), null);
   // Two missed beats (a background tab's timers are throttled to a minute) must
   // not take a player who is still playing off Discord.
   assert.ok(PRESENCE_HEARTBEAT_MS * 2 < PRESENCE_STALE_MS);

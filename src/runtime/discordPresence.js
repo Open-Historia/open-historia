@@ -58,12 +58,14 @@ export const useDiscordPresence = (presence) => {
   }, [body]);
 
   // A beacon, because an ordinary request started while the page unloads is
-  // cancelled with it.
+  // cancelled with it. Sent as a plain string (text/plain): Chromium has
+  // refused a beacon Blob typed application/json, and the server reads a body
+  // it does not parse as JSON as nothing to show, which is the goodbye anyway.
   useEffect(() => {
     if (!onLocalServer() || typeof window === "undefined") return undefined;
     const leave = () => {
       try {
-        navigator.sendBeacon?.("/api/presence", new Blob([JSON.stringify(PRESENCE_GONE)], { type: "application/json" }));
+        navigator.sendBeacon?.("/api/presence", JSON.stringify(PRESENCE_GONE));
       } catch {
         /* the server's staleness timeout clears it instead */
       }
