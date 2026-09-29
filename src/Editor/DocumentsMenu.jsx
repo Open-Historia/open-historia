@@ -91,7 +91,7 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
           </button>
           <div style={{ height: 1, background: "rgba(255,255,255,0.1)", margin: "4px 0" }} />
           <button style={menuItem} onClick={() => { onSave(); close(); }}>
-            <Icon name="pin" size={15} /> Save now
+            <Icon name="save" size={15} /> Save now
           </button>
           <button style={menuItem} onClick={() => { onExport(); close(); }}>
             <Icon name="copy" size={15} /> Export JSON
