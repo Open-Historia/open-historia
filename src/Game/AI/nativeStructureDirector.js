@@ -195,6 +195,7 @@ export const directGeneratedStructureOps = async ({
   playerCountry = "",
   analyzeBatch,
   makeId,
+  signal = null,
 } = {}) => {
   const sourceEvents = normalizeArray(events);
   const input = buildStructureDirectorInput({ events: sourceEvents, world, playerCountry });
@@ -204,6 +205,8 @@ export const directGeneratedStructureOps = async ({
   try {
     analysis = await analyzeBatch(input);
   } catch (error) {
+    // The player's Cancel is not a failed analysis: it must reach the skip.
+    if (signal?.aborted) throw error;
     console.warn("[structure director] analysis failed; the events keep the structures they had.", error);
     return { events: sourceEvents, links: [] };
   }

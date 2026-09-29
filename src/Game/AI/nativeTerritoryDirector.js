@@ -481,6 +481,7 @@ export const directGeneratedTerritoryOps = async ({
   world = {},
   analyzeBatch,
   findPlaces = null,
+  signal = null,
 } = {}) => {
   const converted = convertLegacyWartimeTransfers(events);
   const sourceEvents = converted.events;
@@ -507,6 +508,9 @@ export const directGeneratedTerritoryOps = async ({
   try {
     analysis = await analyzeBatch(await territoryAnalyzerInput(territoryCandidateRows(sourceEvents), world, findPlaces));
   } catch (error) {
+    // The player's Cancel is not a failed analysis: it must reach the skip, or
+    // the cancelled turn goes on to be written.
+    if (signal?.aborted) throw error;
     console.warn("[territory director] analysis failed; preserving existing territory state changes.", error);
     return sourceEvents;
   }

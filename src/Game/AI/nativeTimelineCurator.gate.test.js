@@ -149,3 +149,19 @@ test("known opening: a process frame only the analyst sees", async () => {
     const dropped = result.dropped.find((row) => row.title === "Observatory opens on Mount Elbrus");
     assert.equal(dropped?.route, "NATIVE_PROCESS_FILLER");
 });
+
+test("the player's Cancel during the analyst's request reaches the skip; any other failure keeps everything", async () => {
+    const controller = new AbortController();
+    await assert.rejects(
+        curateGeneratedEventsWithHidden({
+            events: MIXED, priorEvents: PRIOR, mode: "jump", signal: controller.signal,
+            analyzeBatch: async () => {
+                controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+                throw controller.signal.reason;
+            },
+        }),
+        (error) => error?.name === "AbortError",
+    );
+    const kept = await curateWith(async () => { throw new Error("model unavailable"); });
+    assert.equal(kept.events.length, MIXED.length);
+});

@@ -3953,7 +3953,7 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest } = {}) => {
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest, signal } = {}) => {
   // The document this pass revises, and the revision it was read at: a pass
   // that lands against a different revision (a hand edit in the meantime)
   // appends rather than overwrites (applyHistoryDocumentUpdate).
@@ -3986,6 +3986,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     }),
     userMessage: "Consolidate the supplied campaign history with the required tool.",
     ...(typeof onRequest === "function" ? { onRequest } : {}),
+    ...(signal ? { signal } : {}),
     variables: { ...variables, historyDocumentContext },
     // Off the critical path when the caller supplies an applier: the summary
     // may land later through the batch poller.
@@ -4005,7 +4006,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null } = {}) => {
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, signal = null } = {}) => {
   const world = normalizeWorldState(bundle.world);
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
@@ -4044,6 +4045,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
     actionsToConsolidate,
     {
       onRequest: jumpTaskOptions(requests, "history").onRequest,
+      signal,
       // Batch routing (Settings → Batch background AI tasks): the summary lands
       // later through the poller and is written here out of band, while the
       // jump that asked for it carries on with the events unconsolidated.
@@ -7030,6 +7032,7 @@ const applySimulationResult = async ({
     mode: result.mode,
     analyzeBatch: curatorAnalyzeBatch,
     isSparedFromFiller: spareForFocus,
+    signal: projects?.signal,
   });
   let curatedEvents = mainCuration.events;
   for (const row of normalizeArray(mainCuration.dropped)) noteReceipt(receipt, "withheld", describeWithheldEvent(row));
@@ -7087,6 +7090,7 @@ const applySimulationResult = async ({
       actions: baseActions,
       mode: result.mode,
       analyzeBatch: curatorAnalyzeBatch,
+      signal: projects?.signal,
     });
     const repairCuratedEvents = repairCuration.events;
     timelineHiddenEvents.push(
@@ -7799,8 +7803,9 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests });
+      }, { requests, signal: projects?.signal });
     } catch (error) {
+      if (projects?.signal?.aborted) throw error;
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
     }
     // Everything after this is the writing of the turn itself.
@@ -7907,7 +7912,9 @@ const applySimulationResult = async ({
 
   // Last moment before anything is persisted. Everything above is pure, so a
   // turn generated for a campaign the player has since left is simply lost here
-  // rather than written over whichever campaign they opened instead.
+  // rather than written over whichever campaign they opened instead. So is a
+  // turn the player cancelled while a step above swallowed its own failure.
+  throwIfAborted(projects?.signal, "Timeline jump cancelled.");
   assertCampaignUnchanged(campaignId, activeCampaignId());
 
   // A time skip is shown one event at a time (time.jsx), its first on screen as
@@ -14051,6 +14058,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       // placesNamedIn), so the director can fill in fromCode without asking.
       // Not needed when the review already answered: the director never asks.
       findPlaces: review ? null : placeReaderFor(bundle),
+      signal,
       analyzeBatch: review
         ? async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } })
         : async (input) =>
@@ -14085,6 +14093,7 @@ const finishTimelineJump = async ({ context, signal, state }) => {
       events: territoryEvents,
       world: bundle.world,
       playerCountry: normalizeString(bundle.game?.country),
+      signal,
       analyzeBatch: review
         ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
         : requestSettings.reviewSection("structures")
@@ -14144,6 +14153,9 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // saved) and `requests` the skip's budget, for everything the apply still asks.
   applyArgs.projects = { bundle, signal, review, requests: state.requests };
   applyArgs.phases = state.phases;
+  // A Cancel pressed during a pass that falls back on its own failure ends the
+  // skip here, not in a committed turn.
+  throwIfAborted(signal, "Timeline jump cancelled.");
   state.phases?.enter("applying");
   try {
     const applied = await applySimulationResult(applyArgs);

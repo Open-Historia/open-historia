@@ -1270,6 +1270,7 @@ export const curateGeneratedEventsWithHidden = async ({
   mode = "",
   analyzeBatch = null,
   isSparedFromFiller = null,
+  signal = null,
 } = {}) => {
   const incoming = asArray(events);
 
@@ -1293,6 +1294,8 @@ export const curateGeneratedEventsWithHidden = async ({
           buildCuratorInput({ events: incoming, priorEvents, mode }),
         );
     } catch (error) {
+      // The player's Cancel is not a failed analyst: it must reach the skip.
+      if (signal?.aborted) throw error;
       analysisError =
         normalizeString(
           error?.message || error,

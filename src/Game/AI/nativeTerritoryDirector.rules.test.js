@@ -175,3 +175,16 @@ test("a failed analysis leaves the events as the simulator wrote them", async ()
   const out = await directGeneratedTerritoryOps({ events: [battle], world, analyzeBatch: async () => { throw new Error("model unavailable"); } });
   assert.deepEqual(out, [battle]);
 });
+
+test("the player's Cancel during the analysis reaches the skip instead of being kept as a failure", async () => {
+  const battle = event("Battle on the Marne", "French and British forces counterattack along the river.");
+  const controller = new AbortController();
+  const analyzeBatch = async () => {
+    controller.abort(new DOMException("Timeline jump cancelled.", "AbortError"));
+    throw controller.signal.reason;
+  };
+  await assert.rejects(
+    directGeneratedTerritoryOps({ events: [battle], world, analyzeBatch, signal: controller.signal }),
+    (error) => error?.name === "AbortError",
+  );
+});
