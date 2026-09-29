@@ -552,11 +552,12 @@ const scaleComponentPopulation = (components, predicate, targetPopulation) => {
   ));
 };
 
-// Population calibration is a bootstrap/reconstruction tool, not a second ledger.
-// The model still estimates the relative distribution across every live-map component;
-// native code then rescales those rows to ONE scenario-canonical population anchor so
-// map granularity cannot make a 300-province empire randomly gain/lose tens of millions.
-// The exact integer target is conserved with largest-remainder rounding.
+// Scales the selected component rows so their populations sum to exactly the
+// target. expandTerritorialMacroEstimates uses it to share each macro bucket's
+// population estimate out over that bucket's live-map components, in the
+// proportions it gives them, so map granularity cannot make a 300-province
+// empire gain or lose tens of millions. The exact integer target is conserved
+// with largest-remainder rounding.
 const scaleComponentPopulationExact = (components, predicate, targetPopulation) => {
   const target = Math.max(0, Math.round(Number(targetPopulation) || 0));
   const selected = components
@@ -566,7 +567,7 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
   if (!selected.length) {
     return target === 0
       ? { components, error: "" }
-      : { components, error: `population calibration target ${target} has no matching territorial component rows.` };
+      : { components, error: `its population estimate of ${target} has no component rows to go to.` };
   }
 
   const current = selected.reduce((sum, { component }) => sum + component.population, 0);
@@ -576,7 +577,7 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
           components: components.map((component) => (predicate(component) ? { ...component, population: 0 } : component)),
           error: "",
         }
-      : { components, error: `population calibration cannot allocate target ${target} because the matching component estimates sum to zero.` };
+      : { components, error: `its population estimate of ${target} cannot be shared out because its components' provisional populations sum to zero.` };
   }
 
   const ratio = target / current;
@@ -611,69 +612,6 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
         : component
     )),
     error: "",
-  };
-};
-
-export const calibrateTerritorialComponentPopulations = (componentsInput, calibration) => {
-  const components = normalizeTerritorialComponents(componentsInput);
-  if (!components.length) {
-    return { components: [], error: "population calibration requires at least one valid territorial component." };
-  }
-  if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)) {
-    return { components, error: "populationCalibration is required for this native Stats bootstrap/reconstruction." };
-  }
-
-  const total = parseStatNumber(calibration.totalPopulation);
-  const core = parseStatNumber(calibration.coreIntegratedPopulation);
-  const other = parseStatNumber(calibration.otherTerritoriesPopulation);
-  if (![total, core, other].every((value) => Number.isFinite(value) && value >= 0)) {
-    return { components, error: "populationCalibration must provide non-negative numeric totalPopulation, coreIntegratedPopulation, and otherTerritoriesPopulation." };
-  }
-
-  const targetTotal = Math.round(total);
-  const targetCore = Math.round(core);
-  const targetOther = Math.round(other);
-  if (!(targetTotal > 0)) {
-    return { components, error: "populationCalibration.totalPopulation must be greater than zero." };
-  }
-  if (targetCore + targetOther !== targetTotal) {
-    return {
-      components,
-      error: `populationCalibration group targets must sum exactly to totalPopulation (${targetCore} + ${targetOther} != ${targetTotal}).`,
-    };
-  }
-
-  const corePredicate = (component) => component.group !== "overseas/dependent";
-  const otherPredicate = (component) => component.group === "overseas/dependent";
-  const before = aggregateTerritorialEconomy(components);
-
-  let next = components;
-  const coreScaled = scaleComponentPopulationExact(next, corePredicate, targetCore);
-  if (coreScaled.error) return { components, error: coreScaled.error };
-  next = coreScaled.components;
-
-  const otherScaled = scaleComponentPopulationExact(next, otherPredicate, targetOther);
-  if (otherScaled.error) return { components, error: otherScaled.error };
-  next = otherScaled.components;
-
-  const after = aggregateTerritorialEconomy(next);
-  if (!after || after.population !== targetTotal || after.corePopulation !== targetCore || after.otherPopulation !== targetOther) {
-    return {
-      components,
-      error: `population calibration invariant failed after scaling (expected ${targetTotal}/${targetCore}/${targetOther}; got ${after?.population ?? "none"}/${after?.corePopulation ?? "none"}/${after?.otherPopulation ?? "none"}).`,
-    };
-  }
-
-  return {
-    components: next,
-    error: "",
-    diagnostics: {
-      beforeTotal: before?.population ?? null,
-      afterTotal: after.population,
-      coreTarget: targetCore,
-      otherTarget: targetOther,
-      totalTarget: targetTotal,
-    },
   };
 };
 
