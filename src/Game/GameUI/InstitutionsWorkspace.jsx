@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { institutionLogoUrl } from "../../runtime/institutionLogos.js";
 import { INSTITUTION_KINDS } from "../../runtime/institutions.js";
 import { commitInstitutionLifecycleCommand, ensureInstitutionLifecycleNegotiationChat, institutionLifecycleCasesForPolity } from "../../runtime/institutionLifecycle.js";
+import { institutionLifecycleConfirmText } from "../../runtime/institutionLifecycleCore.js";
 import { collectActiveScenarioPolityKeys } from "../../runtime/scenarioPolities.js";
 import { ensureInstitutionalChannel } from "../../runtime/institutionalChannels.js";
 import {
@@ -605,8 +606,19 @@ export default function InstitutionsWorkspace({ panelOpen = true, world = {}, pl
     }));
     if (result?.channel) onOpenLifecycleChat?.(result.channel, result);
   };
-  const withdraw = () => lifecycleCommand("withdraw", { type: "withdraw", polity: playerCountry, reason: clean(lifecycleReason), authority: "player" });
-  const proposeLifecycle = (type, polity = "") => lifecycleCommand(`${type}:${polity}`, { type, polity, initiatedBy: playerCountry, reason: clean(lifecycleReason) });
+  // Withdrawing can end a membership at once, so it asks first, saying what the
+  // charter makes of it; dissolution and expulsion only open a vote, and ask
+  // more lightly.
+  const confirmed = (type, polity = "") => {
+    const question = institutionLifecycleConfirmText(selectedView.institution, type, polity);
+    return !question || window.confirm(question);
+  };
+  const withdraw = () => (confirmed("withdraw")
+    ? lifecycleCommand("withdraw", { type: "withdraw", polity: playerCountry, reason: clean(lifecycleReason), authority: "player" })
+    : null);
+  const proposeLifecycle = (type, polity = "") => (confirmed(type, polity)
+    ? lifecycleCommand(`${type}:${polity}`, { type, polity, initiatedBy: playerCountry, reason: clean(lifecycleReason) })
+    : null);
 
   if (!selectedView) {
     return <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>

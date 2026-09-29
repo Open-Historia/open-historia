@@ -521,6 +521,28 @@ export const institutionPortfolioForPolity = (world = {}, polityInput = "", { vi
   return rows.sort((a, b) => clean(a.institution.name).localeCompare(clean(b.institution.name)));
 };
 
+// What the Institutions tab asks before a membership button acts, naming what
+// the charter makes of it: a unilateral withdrawal is immediate, and getting
+// back in takes an accession request and a vote. "" when there is nothing to
+// ask: the charter forbids it (the command says so) or the action is minor.
+export const institutionLifecycleConfirmText = (institution = {}, type = "", polity = "") => {
+  const name = clean(institution?.name || institution?.id);
+  const kind = lower(type);
+  if (kind === "withdraw") {
+    const rule = institution?.charter?.lifecycle?.withdrawal || {};
+    const mode = lower(rule.mode || "unilateral");
+    if (mode === "not-permitted") return "";
+    if (mode === "approval") return `Ask to withdraw from ${name}? The members will vote on it, and you stay a member until they agree.`;
+    const days = mode === "notice" ? Math.max(0, Math.trunc(Number(rule.noticeDays) || 0)) : 0;
+    if (days === 1) return `Withdraw from ${name}? You will leave after one day's notice, and rejoining means applying for membership again.`;
+    if (days > 1) return `Withdraw from ${name}? You will leave after ${days} days' notice, and rejoining means applying for membership again.`;
+    return `Withdraw from ${name}? You will leave immediately, and rejoining means applying for membership again.`;
+  }
+  if (kind === "dissolve") return `Propose dissolving ${name}? The members will vote on it.`;
+  if (kind === "expel" && clean(polity)) return `Propose expelling ${clean(polity)} from ${name}? The members will vote on it.`;
+  return "";
+};
+
 export const applyInstitutionLifecycleCommandCore = ({
   world: worldInput = {}, chats: chatsInput = [], events: eventsInput = [], playerCountry = "", date = "", command = {},
 } = {}) => {

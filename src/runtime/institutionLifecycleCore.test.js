@@ -4,6 +4,7 @@ import {
   applyInstitutionLifecycleCommandCore,
   buildInstitutionLifecycleDecisionContext,
   ensureInstitutionLifecycleNegotiationChatCore,
+  institutionLifecycleConfirmText,
   institutionLifecycleConversationState,
   institutionPortfolioForPolity,
 } from "./institutionLifecycleCore.js";
@@ -449,4 +450,30 @@ test("a founding negotiation is response-complete after every invitee accepts or
     institutionId: founded.institution.id, caseIds: founded.caseIds, actorPolities: ["Republic of Estonia", "Republic of Lithuania"], playerCountry: "Republic of Latvia",
   });
   assert.equal(context.text, "");
+});
+
+const foundWithWithdrawal = (withdrawalMode, withdrawalNoticeDays = 0) => applyInstitutionLifecycleCommandCore({
+  world: baseWorld(), playerCountry: "Republic of Latvia", date: "2014-08-20",
+  command: { type: "found", name: "Baltic Compact", minimumFoundingMembers: 1, withdrawalMode, withdrawalNoticeDays },
+}).institution;
+
+test("the withdrawal question says what the founded charter makes of it", () => {
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("unilateral"), "withdraw"),
+    "Withdraw from Baltic Compact? You will leave immediately, and rejoining means applying for membership again.");
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 180), "withdraw"), /leave after 180 days' notice/);
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 1), "withdraw"), /leave after one day's notice/);
+  assert.match(institutionLifecycleConfirmText(foundWithWithdrawal("notice", 0), "withdraw"), /leave immediately/, "no notice period is immediate, as the command treats it");
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("approval"), "withdraw"),
+    "Ask to withdraw from Baltic Compact? The members will vote on it, and you stay a member until they agree.");
+  assert.equal(institutionLifecycleConfirmText(foundWithWithdrawal("not-permitted"), "withdraw"), "", "the command refuses, and says so");
+  assert.match(institutionLifecycleConfirmText({ name: "Old League" }, "withdraw"), /leave immediately/, "a charter without rules is unilateral");
+});
+
+test("proposals that only open a vote ask lightly, and minor ones not at all", () => {
+  const institution = foundWithWithdrawal("unilateral");
+  assert.equal(institutionLifecycleConfirmText(institution, "dissolve"), "Propose dissolving Baltic Compact? The members will vote on it.");
+  assert.equal(institutionLifecycleConfirmText(institution, "expel", "Republic of Estonia"),
+    "Propose expelling Republic of Estonia from Baltic Compact? The members will vote on it.");
+  assert.equal(institutionLifecycleConfirmText(institution, "suspend", "Republic of Estonia"), "");
+  assert.equal(institutionLifecycleConfirmText(institution, "reinstate", "Republic of Estonia"), "");
 });
