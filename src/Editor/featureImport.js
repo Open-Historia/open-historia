@@ -18,7 +18,8 @@ import { populationByYearField } from "../runtime/cityPopulation.js";
 let sequence = 0;
 const newId = (prefix) => `${prefix}_${Date.now().toString(36)}${(sequence++).toString(36)}`;
 
-const SYMBOLS = new Set(["square", "circle", "triangle", "star"]);
+// "diamond" is what a map feature (mapFeatures.js) is drawn with.
+const SYMBOLS = new Set(["square", "circle", "triangle", "star", "diamond"]);
 
 const text = (value) => String(value ?? "").trim();
 const number = (value) => {
@@ -46,6 +47,33 @@ const readTags = (props) => {
   return joined ? [...new Set(joined.split(/[,;|]/).map((entry) => entry.trim()).filter(Boolean))] : [];
 };
 
+// A row of a Workshop document (it has `coord`) is one of the editor's own
+// features. A base, a port or a landmark (mapFeatures.js) keeps its kind,
+// state, note, holder and the marker it came from: without its kind it came
+// back as a city label, and its state and note were gone. Other files keep
+// their `kind` as a tag only (readTags), so a GeoJSON of towns stays cities.
+const workshopFields = (props) => {
+  if (!Array.isArray(props.coord)) return {};
+  const kind = text(props.kind);
+  if (!kind) return {};
+  return {
+    owner: text(props.owner) || null,
+    kind,
+    ...(typeof props.status === "string" ? { status: text(props.status) } : {}),
+    ...(props.note !== undefined ? { note: String(props.note ?? "") } : {}),
+    ...(text(props.createdAt) ? { createdAt: text(props.createdAt) } : {}),
+    ...(text(props.markerId) ? { markerId: text(props.markerId) } : {}),
+    ...(isRecord(props.markerExtra) ? { markerExtra: props.markerExtra } : {}),
+  };
+};
+
+// A city's size (CityPopup tiers: 1 town, 2 city, 3 major city), from a
+// Workshop document or a game's cities.geojson alike.
+const tierField = (props) => {
+  const tier = number(props.tier);
+  return tier !== null && tier >= 1 && tier <= 3 ? { tier: Math.round(tier) } : {};
+};
+
 const toFeature = (props, coord, index) => {
   const symbol = text(props.symbol).toLowerCase();
   return {
@@ -61,6 +89,8 @@ const toFeature = (props, coord, index) => {
     tags: readTags(props),
     // A population by year, in any of the shapes the game reads.
     ...populationByYearField(props),
+    ...tierField(props),
+    ...workshopFields(props),
   };
 };
 
