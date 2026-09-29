@@ -500,15 +500,6 @@ const ApiProviderSelector = ({ provider, onProviderChange }) => {
     );
 };
 
-// How to ask this provider for structured data. "Auto" tries the strongest
-// method and steps down when a gateway ignores it, which is right for almost
-// everyone — but that discovery costs a full generation per rung, and on a slow
-// endpoint that accepts tool calling without honouring it, re-learning it on
-// every call has been measured at half a turn. Setting it explicitly skips
-// straight to what works.
-//
-// Never a lock: whatever is chosen, the ladder can still step down from it, so a
-// setting made months ago cannot strand a campaign when a provider changes.
 // What each model has said about its context window (contextWindow.js), read
 // from the same storage the AI calls keep it in (main.jsx contextWindows).
 const contextWindowMemory = createContextWindowMemory({
@@ -545,6 +536,15 @@ const ContextWindowField = ({ entry }) => {
     );
 };
 
+// How to ask this provider for structured data. "Auto" tries the strongest
+// method and steps down when a gateway ignores it, which is right for almost
+// everyone — but that discovery costs a full generation per rung, and on a slow
+// endpoint that accepts tool calling without honouring it, re-learning it on
+// every call has been measured at half a turn. Setting it explicitly skips
+// straight to what works.
+//
+// Never a lock: whatever is chosen, the ladder can still step down from it, so a
+// setting made months ago cannot strand a campaign when a provider changes.
 const StructuredModeSelect = ({ onChange, value }) => {
     const mode = normalizeStructuredMode(value);
     return (
