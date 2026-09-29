@@ -2080,7 +2080,10 @@ const DateWidget = ({
     }
 
     function togglePanel(panelName) {
-        if (isLoading && panelName !== "skip") {
+        // While a skip runs, only its own panels: the Timeline, and the Events
+        // panel a watched skip streams into, so the player can go back to it
+        // after looking for Cancel.
+        if (isLoading && panelName !== "skip" && !(panelName === "history" && skipInFlight)) {
             return;
         }
 
