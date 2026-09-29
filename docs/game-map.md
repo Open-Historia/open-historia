@@ -45,7 +45,7 @@ Fields `useWorldState` derives from `world.json`:
 | `markers` | `state.markers` | `MarkersLayer.jsx` |
 | `labelFont` / `labelHaloColor` / `labelTextColor` | same | Label styling |
 
-> **Note on the `customRegions` flag:** `readRuntimeJsonAsset` / `normalizeRuntimeWorld` forces `customRegions:true` onto every world it serves. In practice the game is *always* on the custom render path (`customFlag` true); the stock-country path (`showStockCountries`) is effectively dead — see [§4](#4-owner-colouring--the-single-resolver) and the `countries-source` note.
+> **Note on the `customRegions` flag:** `readRuntimeJsonAsset` / `normalizeRuntimeWorld` forces `customRegions:true` onto every world it serves. In practice the game is *always* on the custom render path (`customFlag` true); the stock-country layer that path would have drawn (`countries-source`) was removed as dead code — see [§4](#4-owner-colouring--the-single-resolver).
 
 ---
 
@@ -143,13 +143,12 @@ Two constants (`World.jsx:44`) give the image-source corners:
 
 | Source id | Type | Data | Gated on | Layers |
 |---|---|---|---|---|
-| `countries-source` | vector | `PMTILES_PROTOCOL_URLS.countries`, `maxzoom 8` | `!customFlag` | `countries-fill`, `countries-outline` |
 | `regions-source` | vector | `PMTILES_PROTOCOL_URLS.regions`, `maxzoom 8` | **never gated** | `regions-fill`, `regions-disputed`, `regions-outline` |
 | `custom-regions-source` | geojson | the authored regions URL itself (`regionsGeojsonUrl`, `promoteId: id`, `tolerance 0.6`); live ownership reaches it through feature-state | mounted whenever `customFlag` | `custom-regions-fill-far`, `custom-regions-fill`, `custom-regions-local-outline` |
 | `country-curved-label-source` | geojson | `activeCurvedLabelData` | — | `country-curved-labels` |
 | `country-point-label-source` | geojson | `activePointLabelData` | — | `country-labels` |
 
-**`countries-source` is dead code by design.** Its `countries-fill` uses `fillStyle`, whose `match` is the only expression that keys on a country **code** (`["get","GID_0"]`). Because `customRegions` is forced true everywhere, `showStockCountries` (`worldKnown && !customFlag`) is always false and the source never mounts. It's left intact (not half-fixed) for a future dead-code sweep. The layer that actually paints the political map is `regions-fill` via `stockRegionsFillPaint`, which matches `GID_1` (a region id) and needs no code→name bridge.
+**There is no stock-countries layer.** The old `countries-source` (`countries-fill`, `countries-outline`) coloured by country **code** (`["get","GID_0"]`) and could never mount, because `customRegions` is forced true everywhere; it was removed with its `fillStyle`, `buildFallbackColorExpression` and `HIDDEN_COUNTRIES_FILL_PAINT`. The `countries.pmtiles` archive stays: the country index and labels still read it (`preload.js`). The layer that paints the political map is `regions-fill` via `stockRegionsFillPaint`, which matches `GID_1` (a region id) and needs no code→name bridge.
 
 **`regions-source` is NOT gated on `customFlag`** — this is load-bearing. On a re-ownership scenario (Modern Day, Rome, WWII: stock GADM geometry, nothing hand-drawn) `regions-fill` is the *only* thing painting owners above z6.5, because `custom-regions-fill-far` stops at `maxzoom 7` and `FAR_FILL_FADE` has already faded it to 0 by z6.5. Unmounting it once left every such map blank past 6.5 and (via the `getLayer()` filter in the click handler) unclickable too.
 
@@ -191,7 +190,7 @@ There is **one** owner→rgb resolver, `resolveOwnerRgb(owner)` (`Nations.jsx:72
 
 The two-namespace merge is the whole point: a polity can be correctly *named* by the registry while `colors.json` has no key for it (shipped example: "British Empire" owns 426 regions in `world-war-ii-1939-copy` with its colour only in `polityOverrides`). Resolving the name but not the colour painted those regions a muddy procedural fallback — reading to players as "the map didn't annex it."
 
-`ownerColorCss(owner)` wraps it into a `rgb(...)` string (or `NEUTRAL_LAND_COLOR`). `fallbackRgbFromOwner` strips to A–Z first so accented/two-word names hash usefully instead of collapsing to a dark corner; it's the JS twin of `buildFallbackColorExpression` (which still hashes the *code* off the stock tiles, because tile properties are baked GADM and never become names).
+`ownerColorCss(owner)` wraps it into a `rgb(...)` string (or `NEUTRAL_LAND_COLOR`). `fallbackRgbFromOwner` strips to A–Z first so accented/two-word names hash usefully instead of collapsing to a dark corner.
 
 ### Palette live-reload
 
@@ -349,7 +348,7 @@ Sun/star/lighting math is in `globeSunMath.js`, `globeCanvasLighting.js`, `globe
 | `minZoom 2.25` | `<Map>` | World-view floor |
 | `maxZoom 16` | `<Map>` | Camera ceiling; past PMTiles' z8 the tiles overzoom |
 | `maxBounds` lat `-80…85` | `<Map>` | Keep the camera in the usable latitude band |
-| PMTiles `maxzoom 8` | `countries-source`, `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
+| PMTiles `maxzoom 8` | `regions-source` | **Not the archive's z10.** `extract-regions.mjs` can't stitch a z10 seed (dies in `JSON.stringify` past V8's 512 MB max string); z9's 4.1 M vertices OOM'd the editor renderer; z8's 2.6 M is stable — and rendering finer than the editor can author only draws detail no map can be built against. MapLibre overzooms past z8. |
 | `custom-regions-fill-far maxzoom 7` | seed-GeoJSON far layer | Stops just past the z5.5–6.5 crossfade; the stock tiles own the crisp zoom |
 | Polity names end at z7.5 | `LABEL_MAX_ZOOM` (every label layer's `maxzoom` and ramp, `Nations.jsx`), `POLITY_TEXT_MAX_ZOOM` (`labels/polityTextLayout.js`) | Names fade over the last half zoom and stop at 7.5; past that the map is provinces and cities |
 | Crossfade band z5.5–6.5 | `FAR_FILL_FADE`/`TILE_FILL_FADE` | Seed extracted at tile-zoom 5; hand off just past it |

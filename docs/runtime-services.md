@@ -10,8 +10,7 @@ Related pages: [World state](world-state.md) · [Game state](world-state.md) · 
 
 | Service | File | Owns | Consumed by |
 |---|---|---|---|
-| Library store | `src/runtime/library.js` | games + scenarios + active-game catalog, country-name overrides | `src/App.jsx`, `src/Game/GameUI/libraryBar.jsx`, `scenarios.jsx` |
-| Scenario store | `src/runtime/scenarios.js` | scenario-only catalog (parallel, editor/standalone) | editor / scenario-picker contexts |
+| Library store | `src/runtime/library.js` | games + scenarios + active-game catalog, country-name overrides | `src/App.jsx`, `src/Game/GameUI/libraryBar.jsx` |
 | Country-name resolver | `src/runtime/assets.js` (+ `polityNames.js`) | code→display-name plumbing, runtime asset endpoints/token | every map/name renderer |
 | Language setting | `src/runtime/i18n.js` | UI language choice, `LANGUAGES`, RTL, `languageDirective` | Settings UI, `translator.js`, `callAI` |
 | Translator | `src/runtime/translator.js` (+ `phraseBook.js`, `promptTranslations.js`) | shipped packs applied to the live DOM; content translated by the AI | `src/main.jsx` (boot), map labels, content writers |
@@ -97,38 +96,13 @@ All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws 
 3. by **normalized (uppercased) name** — `overrides["RUSSIA"]`
 4. otherwise the original `name`
 
-Two exits into the shared asset layer:
+The exit into the shared asset layer:
 
 - `syncLibraryRuntime()` (`library.js:68`) runs on every `setLibraryState` and once at module load (`library.js:388`). It pushes the token to `setRuntimeAssetEndpoints({ token })` and installs the resolver via `setCountryNameResolver((name, code) => resolveCountryNameOverride(runtimeScenario.countryNameOverrides, name, code))`. From then on every `resolveCountryDisplayName` call inside `assets.js`/`countryLabels.js`/`polityNames.js` honors the active scenario's renames.
-- `resolveScenarioCountryName(name, code)` (`library.js:385`) is the direct synchronous export for callers that already have a `name`/`code` pair.
 
 ### Boot / data flow
 
 `src/App.jsx` calls `ensureLibraryCatalog()` and reads `useLibraryState()` (only `activeGameId` in that file). On any library mutation the token changes → `setRuntimeAssetEndpoints` sweeps and rotates all runtime URLs (see [resolver plumbing](#country-name-resolver-plumbing--srcruntimeassetsjs)) → components subscribed to the store re-render → asset fetches now carry the new `?v=<token>`.
-
----
-
-## Scenario store — `src/runtime/scenarios.js`
-
-A **parallel, scenario-only** variant of the library store for contexts that have no concept of "games" (the editor / standalone scenario flows). Structurally it mirrors `library.js` — same `parseApiResponse`/`requestJson`/`toUploadBuffer`, same `resolveCountryNameOverride` (identical 3-step code→name→normalized lookup) — but its state centers on a single active scenario.
-
-### State (`INITIAL_SCENARIO_STATE`, `scenarios.js:9`)
-
-`activeScenario`, `activeScenarioId`, `baseSaves`, `error`, `loaded`, `loading`, `scenarios`, `token`. There is no `games`, `activeGame`, `countryNames`, `selectedScenario`, or `runtimeScenario`; the resolver and token both read from `activeScenario` instead.
-
-### API differences vs. library store
-
-| Export | HTTP | Route |
-|---|---|---|
-| `getScenarioState` / `subscribeToScenarioState` / `useScenarioState` | — | Store accessors (same pattern) |
-| `refreshScenarioCatalog({force})` / `ensureScenarioCatalog()` | GET | `/api/scenarios` |
-| `createScenario` / `saveScenario` | POST / PUT | `/api/scenarios`, `/api/scenarios/:id` (no `enqueueContentStrings` here) |
-| `activateScenario(id)` | PUT | `/api/scenarios/active` (body `{ scenarioId }`) — cf. library's `selectScenario` → `/selected` |
-| `removeScenario(id)` | DELETE | `/api/scenarios/:id` |
-| `uploadScenarioAsset` / `clearScenarioAsset` | PUT / DELETE | `/api/scenarios/:id/assets/:key` |
-| `resolveScenarioCountryName(name, code)` | — | Reads `activeScenario.countryNameOverrides` |
-
-`syncScenarioRuntime()` (`scenarios.js:59`) does the same `setRuntimeAssetEndpoints` + `setCountryNameResolver` wiring as the library store, keyed on `activeScenario`. Only one of the two stores should be driving `assets.js` at a time (whichever build is mounted), since both call the same global setters.
 
 ---
 

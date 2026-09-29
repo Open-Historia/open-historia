@@ -482,9 +482,9 @@ One engine call at a time; a failed step changes nothing and its reason shows in
 
 ---
 
-## 12. Legacy: `src/Game/GameUI/scenarios.jsx`
+## 12. The old scenario deck (removed)
 
-`ScenarioTopBar` (`scenarios.jsx:686`) is an **older, standalone** scenario deck + editor (full-width top bar z 10030, deck z 10029, editor z 10031) that reads from a separate `../../runtime/scenarios.js` store (`useScenarioState`) rather than `library.js`. It is **not imported anywhere** in `src/` — it has been superseded by `LibraryTopBar` + `EditorDrawer` in `libraryBar.jsx`. Its `ScenarioEditor` still shows the older flat prompt fields (Advisor Prompt / Leader Prompt / **Advanced AI Prompt Pack** JSON textarea) rather than the sectioned `PromptSectionEditor`. Treat it as reference/dead code unless you're wiring the old top-bar mode back in; new work goes in `libraryBar.jsx`.
+The standalone `ScenarioTopBar` (`scenarios.jsx`) and its `runtime/scenarios.js` store, which nothing imported, were deleted; the scenario deck and editor are `LibraryTopBar` + `EditorDrawer` in `libraryBar.jsx`.
 
 ---
 

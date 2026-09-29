@@ -516,7 +516,4 @@ export const removeGame = async (gameId) => {
   return applyLibraryCatalog(catalog);
 };
 
-export const resolveScenarioCountryName = (name, code) =>
-  resolveCountryNameOverride(libraryState.runtimeScenario?.countryNameOverrides, name, code);
-
 syncLibraryRuntime();

@@ -222,13 +222,6 @@ const STOCK_LABEL_RAMP = Object.freeze([4, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX
 const CUSTOM_CURVED_LABEL_RAMP = Object.freeze([3.85, 0, 4.15, 0.98, 5.8, 0.90, 7.0, 0.52, LABEL_MAX_ZOOM, 0]);
 const LIVE_LABEL_RAMP = Object.freeze([2.0, 0.90, 3.2, 0.985, 5.8, 0.96, 6.95, 0.72, LABEL_MAX_ZOOM, 0]);
 
-const buildFallbackColorExpression = () => ([
-  "rgb",
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 0, 1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 2, 3], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-  ["+", 64, ["*", ["index-of", ["slice", ["get", "GID_0"], 1, 2], "ABCDEFGHIJKLMNOPQRSTUVWXYZ"], 5]],
-]);
-
 // Procedural colour for an owner with no entry in the palette. Takes the owner —
 // a country NAME now ("Russia", "Roman Empire"), not a GID_0 code.
 //
@@ -238,10 +231,6 @@ const buildFallbackColorExpression = () => ([
 // accented or two-word name would collapse toward the same dark corner of the
 // space. Stripping gives "COTEDIVOIRE" and a colour that actually differs from its
 // neighbours'.
-//
-// NOTE this is the JS twin of buildFallbackColorExpression above, which reads
-// GID_0 off the stock tiles and must keep hashing the CODE — tile properties are
-// baked GADM and never become names.
 const fallbackRgbFromOwner = (owner = "") => {
   const normalized = String(owner ?? "").toUpperCase().replace(/[^A-Z]/g, "");
   if (normalized.length < 3) {
@@ -470,11 +459,6 @@ const buildPaxPoliticalFillOpacity = (hiddenExpression = null) => [
 ];
 
 const PAX_POLITICAL_FILL_OPACITY = buildPaxPoliticalFillOpacity();
-// What fillStyle returns when the stock-countries layer cannot be shown.
-const HIDDEN_COUNTRIES_FILL_PAINT = {
-  "fill-color": NEUTRAL_LAND_COLOR,
-  "fill-opacity": 0,
-};
 const DISPUTED_STRIPE_OPACITY = 0.22;
 
 // Experiment F: stop drawing the stock GeoJSON fallback and the stock vector
@@ -650,7 +634,6 @@ const WorldMap = ({ isGlobe = false }) => {
   regionClaimantsRef.current = regionClaimants;
   const [acknowledgedBoundaryOwnership, setAcknowledgedBoundaryOwnership] = useState(null);
   const [boundaryWorkerEpoch, setBoundaryWorkerEpoch] = useState(0);
-  const countriesUrl = PMTILES_PROTOCOL_URLS.countries;
   const regionsUrl = PMTILES_PROTOCOL_URLS.regions;
   const regionsGeojsonUrl = JSON_URLS.regionsGeojson;
   // What the MapLibre source and the cartography worker actually fetch: the
@@ -2235,48 +2218,6 @@ const WorldMap = ({ isGlobe = false }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customFlag, ownedCodesKey, labelEpoch]);
 
-  // DEAD as it stands, and deliberately left alone rather than half-fixed. It is
-  // the only expression in the game that matches a country CODE — ["get", "GID_0"]
-  // off the stock tiles — and it cannot fire: readRuntimeJsonAsset forces
-  // customRegions:true onto every world it serves (normalizeRuntimeWorld), so
-  // showStockCountries is always false and countries-source never mounts.
-  //
-  // Its stops would need a code->name bridge to work, which is exactly the thing
-  // this rename exists to remove. It belongs in the dead-code sweep with
-  // countries-source, not in a patch that keeps codes alive to colour nothing.
-  // The layer that DOES paint the political map (stockRegionsFillPaint) matches
-  // GID_1 — a region id, not a country — and needs no bridge at all.
-  const fillStyle = useMemo(() => {
-    // Its only consumer is the stock-countries layer, which showStockCountries
-    // pins to zero opacity whenever customFlag is set. Gated on the FLAG for the
-    // same reason that is: customActive additionally waits for geometry.
-    if (customFlag) return HIDDEN_COUNTRIES_FILL_PAINT;
-
-    const stops = Object.entries(colorMap).flatMap(([owner, rgb]) => {
-      const displayRgb = normalizePoliticalRgb(rgb);
-      return [owner, `rgb(${displayRgb[0]}, ${displayRgb[1]}, ${displayRgb[2]})`];
-    });
-    const fallback = buildFallbackColorExpression();
-    const regionOverrideStops = Object.entries(regionOwnershipOverrides).flatMap(([regionId, ownerCode]) => [
-      regionId,
-      ownerColorCss(ownerCode),
-    ]);
-
-    return {
-      "fill-color": regionOverrideStops.length > 0
-        ? [
-          "match",
-          ["get", "GID_1"],
-          ...regionOverrideStops,
-          stops.length > 0 ? ["match", ["get", "GID_0"], ...stops, fallback] : fallback,
-        ]
-        : stops.length > 0
-        ? ["match", ["get", "GID_0"], ...stops, fallback]
-        : fallback,
-      "fill-opacity": PAX_POLITICAL_FILL_OPACITY,
-    };
-  }, [colorMap, customFlag, regionOwnershipOverrides, ownerColorCss]);
-
   const enrichedDisputedRegionData = useMemo(() => {
     if (!disputedRegionData?.features?.length) return EMPTY_FEATURE_COLLECTION;
     return {
@@ -3189,17 +3130,6 @@ const WorldMap = ({ isGlobe = false }) => {
   const customFarFillOpacity = transitionAwareFillOpacity;
   const customAuthoredFillOpacity = transitionAwareFillOpacity;
 
-  // Stock country fills/borders render ONLY once the world is known to be a
-  // stock world. Gating on the customRegions FLAG (not customActive, which
-  // additionally waits for geometry) means a custom world never flashes the
-  // modern map — not before the world loads, and not while its geometry does.
-  const showStockCountries = worldKnown && !customFlag;
-  const countriesFillPaint = showStockCountries ? fillStyle : { ...fillStyle, "fill-opacity": 0 };
-  const countriesOutlinePaint = {
-    "line-color": "rgba(7, 10, 14, 0.90)",
-    "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.62, 8, 0.96, 12, 1.25],
-    "line-opacity": showStockCountries ? 0.82 : 0,
-  };
   // Scenario geometry owns its grid; never stack stock outlines on top of it.
   // Both paths use the same close-zoom hairline policy, and stay hidden until
   // the world is known. Political frontiers remain visible independently.
@@ -3335,30 +3265,14 @@ const WorldMap = ({ isGlobe = false }) => {
           while the machine still had 3GB free, because the cap is per-renderer.
           z8's 2.6M is stable. Rendering finer than the editor can edit only draws
           detail no map can be built against. Past z8 MapLibre overzooms, exactly
-          as it already did past z10. */}
-      {!customFlag && (
-      <Source id="countries-source" type="vector" url={countriesUrl} maxzoom={8}>
-        <Layer
-          id="countries-fill"
-          type="fill"
-          source-layer="countries"
-          paint={countriesFillPaint}
-        />
-        <Layer
-          id="countries-outline"
-          type="line"
-          source-layer="countries"
-          paint={countriesOutlinePaint}
-        />
-      </Source>
-      )}
+          as it already did past z10.
 
-      {/* Deliberately NOT gated on customFlag, unlike countries-source above —
-          this source is not decoration on a custom map, it is the close-detail
-          political layer for re-ownership scenarios. The seed GeoJSON now stays
-          underneath as a fallback if a vector tile is late, while regions-fill
-          sharpens the map once the tile is present. Keeping this source mounted
-          also preserves high-zoom hit-testing and the stock-region hairlines. */}
+          Deliberately NOT gated on customFlag: this source is not decoration on
+          a custom map, it is the close-detail political layer for re-ownership
+          scenarios. The seed GeoJSON now stays underneath as a fallback if a
+          vector tile is late, while regions-fill sharpens the map once the tile
+          is present. Keeping this source mounted also preserves high-zoom
+          hit-testing and the stock-region hairlines. */}
       {shouldMountStockRegions && (
       <Source id="regions-source" type="vector" url={regionsUrl} maxzoom={8} promoteId="GID_1">
         <Layer
