@@ -309,7 +309,9 @@ export const isDetailFieldPath = (path) => {
     const definition = FEATURE_DEFINITIONS.find((entry) => entry.key === key);
     return path.length === 3 && Boolean(definition) && (setting === "enabled" || definition.settings.some((entry) => entry.key === setting));
   }
-  if (area === "prompts") return GUIDANCE_PATH_SET.has(path.slice(1).join("."));
+  // One part per step, as the diff splits them: ["prompts", "advisor.role"]
+  // joins to a listed passage too, but would be written as a section of its own.
+  if (area === "prompts") return path.slice(1).every((part) => part && !part.includes(".")) && GUIDANCE_PATH_SET.has(path.slice(1).join("."));
   return false;
 };
 

@@ -33,6 +33,8 @@ const HOSTILE = [
   field(["features", "notAFeature", "enabled"], true),
   field(["prompts", "advisor", "notASegment"]),
   field(["prompts", "hubOrigin"]),
+  field(["prompts", "advisor.role"]),
+  field(["prompts", "tasks", "jumpForward.history"]),
   field(["somewhere", "else"]),
   politics("regionOwnershipOverrides"),
   politics("groups"),
