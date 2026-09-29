@@ -27,6 +27,7 @@ const {
     clearDebugLog,
     debugLogFilename,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogEntries,
     getLoggingFileEntries,
     installDebugLogCapture,
@@ -40,6 +41,7 @@ const {
     setDebugLogContext,
     setDebugLogEnabled,
     setDebugLogVerbose,
+    subscribeToDebugLog,
     utcOffsetLabel,
     withConsoleCaptureMuted,
 } = await import("./debugLog.js");
@@ -1033,7 +1035,7 @@ test("K2 the offset is written the way a person reads it", () => {
     assert.equal(utcOffsetLabel(at(-330)), "UTC+05:30", "and half hours");
 });
 
-// ---- Group B: what one entry may cost ---------------------------------------
+// ---- Group E: what one entry may cost ---------------------------------------
 //
 // The console capture passed a warning's whole first argument as the message,
 // and only the detail was ever cut: a failed JSON task put up to 12,000
@@ -1041,7 +1043,7 @@ test("K2 the offset is written the way a person reads it", () => {
 // read every value in localStorage, the log's own megabyte included, several
 // times over to find the stored keys.
 
-test("B1 a long console warning is cut to the entry limit, as a detail is", () => {
+test("E1 a long console warning is cut to the entry limit, as a detail is", () => {
     reset();
     installDebugLogCapture();
     const prose = `[ai] campaign JSON could not be parsed: ${"The legions crossed the Rhine at dawn. ".repeat(320)}`;
@@ -1062,7 +1064,7 @@ test("B1 a long console warning is cut to the entry limit, as a detail is", () =
     assert.equal(getDebugLogEntries().at(-1).message, prose);
 });
 
-test("B2 a key the cut runs through is still redacted", () => {
+test("E2 a key the cut runs through is still redacted", () => {
     reset();
     store.set("gateway_api_key", "correcthorsebatterystaple");
     logDebugEvent("warn", `${"x".repeat(590)} correcthorsebatterystaple and more`);
@@ -1070,7 +1072,7 @@ test("B2 a key the cut runs through is still redacted", () => {
     assert.equal(entry.message.includes("correcthor"), false, entry.message.slice(580));
 });
 
-test("B3 redaction reads only the entries named like secrets, never the log itself", () => {
+test("E3 redaction reads only the entries named like secrets, never the log itself", () => {
     reset();
     store.set("oh_debug_log_v1", "x".repeat(200_000));
     store.set("i18n_v2_de", "{}");
@@ -1093,7 +1095,7 @@ test("B3 redaction reads only the entries named like secrets, never the log itse
     assert.equal(`${entry.message} ${entry.detail}`.includes("hunter2"), false);
 });
 
-test("B4 a key replaced in place is redacted at once, and one key inside another is redacted whole", () => {
+test("E4 a key replaced in place is redacted at once, and one key inside another is redacted whole", () => {
     reset();
     store.set("gateway_api_key", "firstsecretword1");
     assert.equal(redactSecrets("a firstsecretword1 b").includes("firstsecret"), false);
@@ -1103,4 +1105,23 @@ test("B4 a key replaced in place is redacted at once, and one key inside another
     store.set("other_token", "secondsecretword2andmore");
     const out = redactSecrets("x secondsecretword2andmore y");
     assert.equal(out.includes("andmore"), false, out);
+});
+
+test("E5 the dropped count the Diagnostics panel shows is what the cap rolled off, and the panel hears it change", () => {
+    reset();
+    assert.equal(getDebugLogDroppedCount(), 0);
+    let heard = 0;
+    const unsubscribe = subscribeToDebugLog(() => { heard += 1; });
+    try {
+        setDebugLogVerbose(true);
+        for (let index = 0; index < 2000; index += 1) logDebugEvent("ai", `entry ${index}`, "y".repeat(1000));
+    } finally {
+        unsubscribe();
+    }
+    const dropped = getDebugLogDroppedCount();
+    assert.ok(dropped > 0, "the cap rolled entries off");
+    assert.equal(dropped + getDebugLogEntries().length, 2000 + 1, "every entry is either kept or counted (plus the switch's own line)");
+    assert.ok(heard >= 2000, "each entry notifies the panel, which reads the count on the same tick");
+    clearDebugLog({ silent: true });
+    assert.equal(getDebugLogDroppedCount(), 0, "a cleared log has dropped nothing");
 });

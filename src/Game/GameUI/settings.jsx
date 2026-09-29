@@ -75,6 +75,7 @@ import {
     fetchDesktopLog,
     formatLogSize,
     getDebugLogBytes,
+    getDebugLogDroppedCount,
     getDebugLogLimitBytes,
     getDebugLogSize,
     getLoggingFileEntries,
@@ -1517,6 +1518,9 @@ const DiagnosticsPanel = () => {
     // player should say so, rather than pasting an empty report.
     const [count, setCount] = useState(() => getDebugLogSize());
     const [bytes, setBytes] = useState(() => getDebugLogBytes());
+    // How many of the oldest entries the size cap has rolled off: a log that
+    // no longer reaches back to the bug should say so before it is sent.
+    const [dropped, setDropped] = useState(() => getDebugLogDroppedCount());
     // Both toggles are read from the module rather than held only here, because
     // the module is where the persisted answer lives — this panel is unmounted
     // every time the menu closes, and a useState default would otherwise be a
@@ -1527,6 +1531,7 @@ const DiagnosticsPanel = () => {
     useEffect(() => subscribeToDebugLog(() => {
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     }), []);
 
     const toggleEnabled = () => {
@@ -1535,6 +1540,7 @@ const DiagnosticsPanel = () => {
         setEnabled(next);
         setCount(getDebugLogSize());
         setBytes(getDebugLogBytes());
+        setDropped(getDebugLogDroppedCount());
     };
 
     const toggleVerbose = () => {
@@ -1667,6 +1673,11 @@ const DiagnosticsPanel = () => {
             : cleared
             ? "Cleared."
             : `${count} ${count === 1 ? "entry" : "entries"} · ${formatLogSize(bytes)} of ${formatLogSize(getDebugLogLimitBytes())}`}
+        {enabled && !cleared && dropped > 0 && (
+            <span style={{ display: "block" }}>
+            {dropped === 1 ? "1 older entry dropped to stay within the limit" : `${dropped} older entries dropped to stay within the limit`}
+            </span>
+        )}
         </span>
         <button
         type="button"
