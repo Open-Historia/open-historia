@@ -12,7 +12,7 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 
 const participantNameKey = (value) => clean(value)
   .normalize("NFD")
-  .replace(/[̀-ͯ]/g, "")
+  .replace(/[\u0300-\u036f]/g, "")
   .toLowerCase()
   .replace(/\s+/g, " ");
 
@@ -47,16 +47,24 @@ export const logGeneratedChat = (built, outcome) => {
 
 // A lifecycle negotiation (an institution's invitation, application or
 // discipline case) is its own channel, tied to its case. It never takes an
-// ordinary note, and it never becomes one: it joins only the open negotiation
-// for the same institution, bringing its cases with it, or opens its own. An
-// invitation from Germany used to be appended to the player's ordinary Germany
-// thread, and the open case was left with no channel.
+// ordinary note, and it never becomes one: it joins only an open negotiation
+// for the same institution that already holds one of its cases, bringing its
+// other cases with it, or opens its own. An invitation from Germany used to be
+// appended to the player's ordinary Germany thread, and the open case was left
+// with no channel.
+// Sharing a case is the lifecycle code's own test for the same channel
+// (institutionLifecycleCore.js): one institution can hold several negotiations
+// at once, such as a hearing for each of two applicants, and each keeps its own
+// participants and title.
 // The lifecycle code may hand back a negotiation it already had (an accession
 // hearing reopened on a new case) as the SAME chat, old messages included: that
 // one replaces its stored copy rather than joining another.
-const sameNegotiation = (chat, built) => chat?.status !== "closed"
-  && isLifecycleNegotiationChat(chat)
-  && clean(chat.lifecycleInstitutionId) === clean(built.lifecycleInstitutionId);
+const sameNegotiation = (chat, built) => {
+  if (chat?.status === "closed" || !isLifecycleNegotiationChat(chat)) return false;
+  if (clean(chat.lifecycleInstitutionId) !== clean(built.lifecycleInstitutionId)) return false;
+  const cases = new Set(asArray(chat.lifecycleCaseIds).map(clean).filter(Boolean));
+  return asArray(built.lifecycleCaseIds).some((id) => cases.has(clean(id)));
+};
 
 const messageKey = (msg) => [msg?.role, msg?.speaker, msg?.text, msg?.time].map(clean).join("\u001f");
 
@@ -108,7 +116,7 @@ export const foldGeneratedChatsIntoStorage = (storageChats, builtChats, { stampT
       }
       const storedIdx = chats.findIndex((chat) => sameNegotiation(chat, built));
       if (storedIdx !== -1) {
-        logGeneratedChat(built, "joined the open negotiation for its institution");
+        logGeneratedChat(built, "joined the open negotiation that holds its case");
         chats = chats.map((chat, index) => (index === storedIdx ? withCases(chat, built, stamp(asArray(built.messages))) : chat));
         continue;
       }

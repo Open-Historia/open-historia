@@ -42,14 +42,38 @@ test("an institution invitation is its own negotiation, not a message in the ord
   assert.equal(chats.find((chat) => chat.id === "chat-germany").messages.length, 1, "the ordinary thread is untouched");
 });
 
-test("a second case for the same institution joins its open negotiation and brings its case", () => {
+test("a negotiation that shares a case with an open one joins it and brings its other cases", () => {
   const stored = [germanyThread, { ...invitation(), messages: [{ role: "leader", speaker: "Germany", text: "First.", time: "1950-05-09" }] }];
-  const next = invitation({ id: "institution-invite-ecsc-france-1950-06-01", lifecycleCaseIds: ["case-invite-france-2"], messages: [{ role: "leader", speaker: "Germany", text: "Second.", time: "1950-06-01" }] });
+  const next = invitation({ id: "institution-invite-ecsc-france-1950-06-01", lifecycleCaseIds: ["case-invite-france", "case-invite-france-2"], messages: [{ role: "leader", speaker: "Germany", text: "Second.", time: "1950-06-01" }] });
   const chats = foldGeneratedChatsIntoStorage(stored, [next]);
   assert.equal(chats.length, 2);
   const negotiation = chats.find((chat) => chat.lifecycleInstitutionId === "ecsc");
   assert.deepEqual(negotiation.lifecycleCaseIds, ["case-invite-france", "case-invite-france-2"]);
   assert.deepEqual(negotiation.messages.map((msg) => msg.text), ["First.", "Second."]);
+});
+
+test("two hearings at one institution keep their own chats", () => {
+  // Sweden's and Finland's applications to NATO: each hearing has its own
+  // case, participants and title, and must not be folded into the other's.
+  const hearing = (polity, caseId) => ({
+    id: `institution-accession-nato-${polity.toLowerCase()}-${caseId}`,
+    countries: [{ name: "Germany" }, { name: "Norway" }, { name: polity }],
+    status: "open",
+    source: "institution-lifecycle",
+    title: `NATO accession hearing — ${polity}`,
+    institutionId: "nato",
+    lifecycleInstitutionId: "nato",
+    lifecycleCaseIds: [caseId],
+    messages: [{ role: "leader", speaker: polity, text: `${polity} formally applies for member status in NATO.`, time: "2022-05-18" }],
+  });
+  const sweden = hearing("Sweden", "case-sweden");
+  const finland = hearing("Finland", "case-finland");
+  const stored = foldGeneratedChatsIntoStorage([sweden], [finland]);
+  assert.equal(stored.length, 2);
+  assert.deepEqual(stored.find((chat) => chat.id === sweden.id).lifecycleCaseIds, ["case-sweden"]);
+  assert.deepEqual(stored.find((chat) => chat.id === finland.id).lifecycleCaseIds, ["case-finland"]);
+  const samePass = foldGeneratedChatsIntoStorage([], [sweden, finland]);
+  assert.equal(samePass.length, 2, "two hearings made in one pass stay apart too");
 });
 
 test("a negotiation handed back whole replaces its stored copy without doubling its messages", () => {
