@@ -66,7 +66,7 @@ import { findScenarioCopyOfBundle } from "../../runtime/importedScenarioCopy.js"
 import { createLatestRequest } from "../../runtime/latestRequest.js";
 import { followSavedFields } from "../../runtime/editorForm.js";
 import { createActivationHandOff } from "../../runtime/afterActivation.js";
-import { buildScenarioCountryOptions, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
+import { buildScenarioCountryOptions, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "../../runtime/newGameWorld.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
@@ -1916,6 +1916,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     }
   };
 
+  // The world a new game was seeded with, read to merge the player's polity
+  // into; a read that fails stops the start (seededWorldOf).
+  const readNewGameWorld = async (gameId, name) =>
+    seededWorldOf(await loadGameDetails(gameId).catch(() => null), name);
+
   // Create a game led by a player-invented faction. It is written into the game's
   // OWN world/colors/flags — a game carries its own copies and falls back to the
   // scenario only for what it doesn't set, so the scenario is never touched.
@@ -1943,8 +1948,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // saveGame writes `world` whole (a worldPatch would SHALLOW-merge, replacing
       // polityOverrides/ownerCodes/regionOwnershipOverrides outright and wiping
       // every other country on the map).
-      const gameDetails = await loadGameDetails(gameId).catch(() => null);
-      const { world, name, color: hexColor } = worldWithFaction(gameDetails?.data?.world ?? {}, faction);
+      const { world, name, color: hexColor } = worldWithFaction(await readNewGameWorld(gameId, faction.name), faction);
 
       await saveGame(gameId, { world, gamePatch: { country: name, ...(difficulty ? { difficulty } : null) } });
 
@@ -2011,8 +2015,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       gameId = details.game.id;
       // The same read-merge-write as a faction (see startGameForFaction): saveGame
       // writes `world` whole.
-      const gameDetails = await loadGameDetails(gameId).catch(() => null);
-      const { world, key, color: hexColor } = worldWithPlayerGroup(gameDetails?.data?.world ?? {}, group);
+      const { world, key, color: hexColor } = worldWithPlayerGroup(await readNewGameWorld(gameId, name), group);
 
       await saveGame(gameId, { world, gamePatch: { country: key, ...(difficulty ? { difficulty } : null) } });
 

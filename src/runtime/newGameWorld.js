@@ -68,6 +68,18 @@ export const buildScenarioCountryOptions = (world, allCountries, nameOverrides =
     .sort((left, right) => left.name.localeCompare(right.name));
 };
 
+// The world a new game's details (loadGameDetails) hold, to merge the player's
+// polity into. A read that failed must stop the start: merged into an empty
+// world and written back whole, it replaced the seeded world with the player's
+// polity alone, and the campaign began on an empty map.
+export const seededWorldOf = (details, name) => {
+  const world = details?.data?.world;
+  if (!world || typeof world !== "object" || Array.isArray(world)) {
+    throw new Error(`The game was created, but its world could not be read, so ${name} was not added to it. Delete this game and start a new one.`);
+  }
+  return world;
+};
+
 // The world of a game led by a player-invented faction: the faction joins the
 // polity registry under its exact name, takes the regions it claimed, and is
 // listed as playable even when it holds none. Everything else is kept. A

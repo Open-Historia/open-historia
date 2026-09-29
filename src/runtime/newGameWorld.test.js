@@ -11,7 +11,7 @@
 //   - the country list offers what the scenario holds, and nothing technical.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildScenarioCountryOptions, worldWithFaction, worldWithPlayerGroup } from "./newGameWorld.js";
+import { buildScenarioCountryOptions, seededWorldOf, worldWithFaction, worldWithPlayerGroup } from "./newGameWorld.js";
 
 const seeded = () => ({
   ownerCodes: ["Japan", "Korea"],
@@ -111,4 +111,12 @@ test("a scenario with no owner list offers every country it is given", () => {
   const options = buildScenarioCountryOptions({}, [{ code: "FRA", name: "France" }, { code: "DEU", name: "DEU" }, { code: "DEU", name: "Germany" }, { code: "XCA", name: "Caspian" }]);
   assert.deepEqual(options, [{ code: "FRA", name: "France" }, { code: "DEU", name: "Germany" }]);
   assert.deepEqual(buildScenarioCountryOptions(null, null, null), []);
+});
+
+test("a new game's world that could not be read stops the start instead of being merged into nothing", () => {
+  const world = seeded();
+  assert.equal(seededWorldOf({ data: { world } }, "Ezo Republic"), world);
+  for (const details of [null, {}, { data: {} }, { data: { world: [] } }, { data: { world: "{}" } }]) {
+    assert.throws(() => seededWorldOf(details, "Ezo Republic"), /its world could not be read, so Ezo Republic was not added to it/);
+  }
 });
