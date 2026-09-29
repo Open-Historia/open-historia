@@ -2825,9 +2825,8 @@ async function buildPromptVariables({
 // Lets the advisor create/edit/remove the player's queued Actions (the same
 // queue the Actions panel manages) as part of an ordinary chat reply, instead
 // of only through the separate "Get AI suggestions" flow. Appended at call
-// time (not baked into defaultPrompts.json's `advisor` text) so it reaches
-// games that carry their own frozen/scenario-authored advisor prompt too —
-// see the frozen-prompt caveat in gameplay.js's runJsonTask.
+// time rather than written into defaultPrompts.json's `advisor` text: it is
+// the contract advisor.jsx parses, and it lives beside the code that reads it.
 const buildAdvisorActionsDirective = (plannedActionsWithIds) => `[Action Planning]
 You can create, edit, or remove the player's queued Actions directly from this conversation — the same queue the Actions panel manages, with no separate confirmation step. Because of that, only propose actions the two of you have actually settled on together in this conversation; never invent or queue one on your own initiative from an open-ended question, and never re-propose something the player already turned down.
 
@@ -2849,8 +2848,8 @@ ${plannedActionsWithIds}`;
 
 // Lets the UI offer a real "Send message to X" button for a drafted diplomatic
 // message instead of the player copy-pasting your blockquote into the
-// Diplomacy panel themselves. Appended at call time for the same frozen-prompt
-// reason as buildAdvisorActionsDirective above.
+// Diplomacy panel themselves. Appended at call time, like
+// buildAdvisorActionsDirective above.
 //
 // Deliberately does NOT ask the model to retype the letter's text into the
 // JSON field — an earlier version did, and asking a model to duplicate
@@ -2897,19 +2896,14 @@ Example:
 [{"type":"table-proposal","institutionId":"mitteleuropa","proposalType":"resolution","title":"Danube Transport Coordination","summary":"Adopt a common Mitteleuropa framework for cross-border rail scheduling and customs clearance."}]
 \`\`\``;
 
-// The advisor has always been handed the whole world's unit list, but under a
-// heading reading "Player polity, X, details: ... Military Units:" — so it read
-// them as the player's own army and never used them to answer a question about
-// anyone else. defaultPrompts.json now frames it properly for new games; this is
-// what reaches the campaigns whose advisor prompt is already frozen.
-const buildAdvisorForcesDirective = (forcePosture) => `[Forces on the Map]
-This is EVERY power's forces, not just the player's — what your services can see of the world's armies, fleets and squadrons, including where each one is, what it is doing, whose territory it is in or how far from whose border, and what it is already under orders to do. Use it whenever the player asks about anyone's military position, their own or a rival's. Answer like an intelligence chief: name the formations, say what they are doing and how close they are to what, and say plainly what you think it means. A formation marked unconfirmed has been detected without a known line of support — treat it as real, but say confidence is limited.
-${forcePosture}`;
+// The whole world's forces reach the advisor through its template alone:
+// defaultPrompts.json's [Forces on the Map] carries ${ALL_FORCES_POSTURE} in the
+// technical text every game composes from, so it is never repeated here.
 
 // Lets the advisor turn "put two divisions on the eastern frontier" into a real
 // button that places the unit, instead of the player reading coordinates off the
-// screen and clicking the map themselves. Appended at call time for the same
-// frozen-prompt reason as the two directives above.
+// screen and clicking the map themselves. Appended at call time, like the two
+// directives above.
 // The advisor must not offer what the UI cannot deliver: the player places
 // formations and states intent for them, and never moves or fights them by hand.
 const ADVISOR_DEPLOY_DIRECTIVE = `[Placing Forces]
@@ -2928,9 +2922,7 @@ Example:
 // so it improvised, and the player saw the improvisation raw: literal <br> tags
 // where it wanted a line break, and pipe-and-dash tables that never parsed. It
 // now has a real vocabulary, and this is where it is told what is in it and what
-// each part is FOR. Appended at call time for the same frozen-prompt reason as
-// the directives above: the campaigns that most need this already carry their
-// own copy of the advisor prompt.
+// each part is FOR. Appended at call time, like the directives above.
 //
 // The two prohibitions matter more than the permissions. Raw HTML is not
 // rendered (deliberately — this is model output going into the DOM), so a tag is
@@ -2965,11 +2957,8 @@ Example of a table that earns its place:
 
 // Lets the advisor open and maintain the player's Projects & Operations board
 // from an ordinary chat reply, the same way the ```actions block manages the
-// action queue. Appended at call time for the same frozen-prompt reason as the
-// directives above: every save carries its own copy of the prompt pack, so a
-// defaultPrompts.json edit would only ever reach NEW games — and the single most
-// important thing this feature has to do is populate the board of a campaign
-// that is already fifty rounds deep.
+// action queue. Appended at call time, like the directives above: it carries
+// the live board, and it is the contract advisor.jsx parses.
 //
 // The player cannot create a project by hand anywhere in the UI. That is
 // deliberate (the board reflects the narrative, not a wishlist), but it does mean
@@ -3195,7 +3184,6 @@ async function buildAdvisorSystemPrompt() {
         ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
         ADVISOR_DEPLOY_DIRECTIVE,
         buildAdvisorProjectsDirective(variables.projectsSummary),
-        buildAdvisorForcesDirective(variables.forcePosture),
         // Subordinations as the PLAYER knows them (runtime/puppets.js). worldData
         // is already the world as the player has been shown it (viewAsSeen), so a
         // subordination a still-unrevealed event installed is not on it yet —
