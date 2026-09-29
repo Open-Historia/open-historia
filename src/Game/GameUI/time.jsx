@@ -2078,6 +2078,10 @@ const DateWidget = ({
     // transition (main.jsx).
     dockStyle = null,
     topOffset = "0.5rem",
+    // Opens and closes the player's country drawer (main.jsx). On a phone the
+    // country badge is hidden, so the name and date here are what opens it.
+    onToggleCountry = null,
+    countryOpen = false,
 }) => {
     // Shared store rather than three local copies on a 5s poll of their own.
     const gameData = useRuntimeState("game");
@@ -2162,6 +2166,8 @@ const DateWidget = ({
     // letters.
     const touch = useTouchPrimary();
     const stackCountry = isMobile || touch;
+    const countryButton = isMobile && typeof onToggleCountry === "function";
+    const CountryStack = countryButton ? "button" : "div";
     const disableEventCamera = useMapSetting(MAP_SETTING_KEYS.disableEventCamera);
 
     useEffect(() => {
@@ -3271,13 +3277,18 @@ const DateWidget = ({
             // On a touch screen the country sits over the date: the buttons are
             // finger-sized, and side by side the name was cut down to its first
             // few letters.
-            <div style={stackCountry
-                ? { alignItems: "center", display: "flex", flexDirection: "column", gap: "0.1rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }
-                : { alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }}
+            <CountryStack
+            {...(countryButton ? { type: "button", onClick: onToggleCountry, "aria-expanded": countryOpen } : null)}
+            style={{
+                ...(stackCountry
+                    ? { alignItems: "center", display: "flex", flexDirection: "column", gap: "0.1rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }
+                    : { alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "center", maxWidth: "100%", minWidth: 0 }),
+                ...(countryButton ? { background: "none", border: 0, color: "inherit", cursor: "pointer", font: "inherit", padding: 0 } : null),
+            }}
             >
             <span
             style={{
-                color: "rgba(147,197,253,0.88)",
+                color: countryButton && countryOpen ? "#bfdbfe" : "rgba(147,197,253,0.88)",
                 fontSize: isMobile ? "0.68rem" : "0.8rem",
                 fontWeight: 700,
                 letterSpacing: "0.05em",
@@ -3295,7 +3306,7 @@ const DateWidget = ({
             <span style={{ color: "rgba(255,255,255,0.94)", flexShrink: 0, fontSize: isMobile ? "0.82rem" : "0.95rem", letterSpacing: "0.02em", whiteSpace: "nowrap" }}>
             {displayDate}
             </span>
-            </div>
+            </CountryStack>
         ) : (
             <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.95rem", letterSpacing: "0.02em" }}>
             {displayDate}

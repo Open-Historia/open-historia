@@ -293,7 +293,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 | Render | Flag/initials header, national stability bar, 6 strategic indices (`INDEX_ROWS`), economy cards (`compactEconomyValue` trims 30000000000→30.0B), GDP breakdown bar | — |
 | Flag logic | author flag (`flags.json`) > polity flag > code-derived — but a **landless player** never borrows a code-derived flag (`isPolityLandless`) | `src/runtime/countryFlags.js` |
 
-`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because the date widget already shows the country). It polls `JSON_URLS.game` + world every 5 s and applies the same landless-suppression logic; falls back emoji → `FallbackBadge` initials for non-ISO polities.
+`Other` (`other.jsx`) is the standalone player-country flag badge at bottom-right (desktop only; hidden on mobile because it would cover the date widget, where the country name opens the same drawer). It polls `JSON_URLS.game` + world every 5 s and applies the same landless-suppression logic; falls back emoji → `FallbackBadge` initials for non-ISO polities.
 
 ---
 
@@ -303,7 +303,7 @@ The drag handler lives in the drawer (`advisor.jsx:202`): on `pointerdown` it ca
 
 ### 6.1 The pill
 
-Shows player country + formatted date (`«` opens Events history, `»` opens the Skip panel; `»` becomes a spinner during a jump). `rightShift`/`topOffset` come from `Main`. Polls `readGameData`/`readEventsState`/`readWorldState` every 5 s, but **never regresses** — a stale poll with a lower round/date than what's on screen is skipped (`gameStampRef`), so a just-completed jump is never reverted.
+Shows player country + formatted date (`«` opens Events history, `»` opens the Skip panel; `»` becomes a spinner during a jump). On a phone (`useIsMobile`) the country and date are a button that opens and closes the country drawer (`onToggleCountry`), since the flag badge is hidden there. `rightShift`/`topOffset` come from `Main`. Polls `readGameData`/`readEventsState`/`readWorldState` every 5 s, but **never regresses** — a stale poll with a lower round/date than what's on screen is skipped (`gameStampRef`), so a just-completed jump is never reverted.
 
 ### 6.2 Timeline skip panel (`»`)
 

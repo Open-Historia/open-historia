@@ -442,6 +442,12 @@ const Main = ({
   // (Either way it keeps clear of a notch or rounded corner on the right, like
   // the drawer; the inset is 0 on a desktop.)
   const rightDrawerOpen = isAdvisorOpen || isCountryOpen;
+  // The country badge opens the drawer; on a phone, where the badge is hidden,
+  // the country name in the date widget does.
+  const toggleCountry = () => {
+    setIsAdvisorOpen(false);
+    setIsCountryOpen((open) => !open);
+  };
   const advisorDockStyle = useMemo(() => (isMobile
     ? { right: `calc(0.5rem + ${SAFE_RIGHT})`, transform: "none", transition: `transform ${ADVISOR_SLIDE}` }
     : {
@@ -512,6 +518,8 @@ const Main = ({
         onTogglePanel={toggleBottomPanel}
         dockStyle={advisorDockStyle}
         topOffset={TOP_BAR_OFFSET}
+        onToggleCountry={toggleCountry}
+        countryOpen={isCountryOpen}
       />
       <Toolbar
         onOpenAdvisor={openAdvisor}
@@ -522,10 +530,7 @@ const Main = ({
       <Other
         dockStyle={advisorDockStyle}
         active={isCountryOpen}
-        onToggle={() => {
-          setIsAdvisorOpen(false);
-          setIsCountryOpen((open) => !open);
-        }}
+        onToggle={toggleCountry}
       />
       <Search mapRef={mapRef} />
       <ForcesPanel

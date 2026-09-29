@@ -53,7 +53,7 @@ const FallbackBadge = ({ label }) => (
 // dockStyle places the standalone badge beside the advisor drawer (main.jsx).
 const DEFAULT_DOCK_STYLE = { right: "0.5rem" };
 
-const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = false, active = false, onToggle = null }) {
+const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, active = false, onToggle = null }) {
     const { activeGame } = useLibraryState();
     const activeGameId = String(activeGame?.id || "");
     const activeGameCountry = String(activeGame?.country || "").trim();
@@ -143,9 +143,9 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         setImageFailed(false);
     }, [country]);
 
-    // In dock mode the badge is part of the responsive bottom command surface.
-    // The old standalone badge still stays hidden on phones.
-    if ((!embedded && isMobile) || !country) return null;
+    // Hidden on phones, where it would cover the date: there the country name
+    // in the date widget opens the drawer (time.jsx).
+    if (isMobile || !country) return null;
 
     // Landless → never borrow the code-derived country flag; fall through to the
     // neutral FallbackBadge (both null makes the render pick it).
@@ -159,25 +159,13 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
     const flagUrl = landless ? null : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
     const flagEmoji = landless ? null : flagEmojiFromGid(country);
 
-    const Root = embedded ? "div" : "button";
     return (
-        <Root
-        type={embedded ? undefined : "button"}
-        className={embedded ? "oh-dock-polity" : undefined}
-        title={embedded ? displayName : `${displayName} · Open country panel`}
-        aria-label={embedded ? undefined : `Open ${displayName} country panel`}
-        onClick={embedded ? undefined : onToggle}
-        style={embedded ? {
-            alignItems: "center",
-            display: "flex",
-            gap: "0.58rem",
-            minWidth: 0,
-            maxWidth: isMobile ? "3.2rem" : "13.2rem",
-            padding: isMobile ? "0 0.22rem" : "0 0.72rem 0 0.34rem",
-            color: "white",
-            fontFamily: "inherit",
-            overflow: "hidden",
-        } : {
+        <button
+        type="button"
+        title={`${displayName} · Open country panel`}
+        aria-label={`Open ${displayName} country panel`}
+        onClick={onToggle}
+        style={{
             ...baseStyle,
             ...dockStyle,
             bottom: `calc(4.75rem + ${SAFE_BOTTOM})`,
@@ -197,15 +185,6 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
             transition: `${dockStyle.transition || ""}${dockStyle.transition ? ", " : ""}background 0.15s ease`,
         }}
         >
-        <div style={embedded ? {
-            alignItems: "center",
-            display: "flex",
-            flex: "0 0 auto",
-            height: "1.5rem",
-            justifyContent: "center",
-            overflow: "hidden",
-            width: "2.25rem",
-        } : { display: "contents" }}>
         {flagUrl && !imageFailed ? (
             <img
             src={flagUrl}
@@ -218,18 +197,7 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
         ) : (
             <FallbackBadge label={displayName} />
         )}
-        </div>
-        {embedded && !isMobile && (
-            <div className="oh-dock-polity-meta" style={{ minWidth: 0, lineHeight: 1.05 }}>
-                <div style={{ color: "rgba(255,255,255,0.94)", fontSize: "0.75rem", fontWeight: 850, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {displayName}
-                </div>
-                <div style={{ color: "rgba(216,216,219,0.42)", fontSize: "0.58rem", fontWeight: 700, letterSpacing: "0.04em", marginTop: "0.18rem", textTransform: "uppercase" }}>
-                    Player polity
-                </div>
-            </div>
-        )}
-        </Root>
+        </button>
     );
 });
 
