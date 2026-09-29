@@ -238,7 +238,7 @@ Four optional strings, one record per line, fields separated by `~`. They delibe
 
 | Transport | Line | Ops |
 |---|---|---|
-| `warUpdates` | `warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note` | start, join-a, join-b, leave, ceasefire, resume, end |
+| `warUpdates` | `warId~op~actorsCSV~opponentsCSV~eventNumbersCSV~note` (a start's note may open `Title: <the war's name>;`, then the cause — `splitWarStartNote`; without it the war is called "A–B War") | start, join-a, join-b, leave, ceasefire, resume, end |
 | `relationUpdates` | `A~B~score~status~eventNumbersCSV~summary` | absolute score; a blank status is derived from it |
 | `agreementUpdates` | `agreementId~op~type~partiesCSV~eventNumbersCSV~title~terms` | start, update, suspend, resume, end, expire |
 | `puppetUpdates` | `op~overlord~puppet~kind~loyalty~secrecy~eventNumbersCSV~note` | install, reclassify, loyalty, reveal, release, annex, revolt, suppress |

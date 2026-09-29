@@ -12,6 +12,7 @@ import {
   eventNarratesHardCombat,
   reconcileCombatWarState,
   repairWarLedgerPayload,
+  splitWarStartNote,
   validateWarLedgerPayload,
 } from "./nativeWarLedger.js";
 
@@ -51,6 +52,29 @@ test("a declaration starts a canonical war bound to its event", () => {
   assert.deepEqual(merge.wars[0].sourceEventIds, ["e1"]);
   assert.deepEqual(activeWarIdsForPolity(merge.world, "France"), ["war-france-germany-1914"]);
   assert.match(buildCanonicalWarContext(merge.world), /war-france-germany-1914 \| ACTIVE \| SIDE A: Germany \| SIDE B: France/);
+});
+
+// Every war the model opened used to be called "A–B War": the record had no
+// place for the name the model gave it.
+test("a start's note can name the war; the rest of it is the cause", () => {
+  const events = declaration();
+  const named = applyWarUpdates({
+    world,
+    updates: "war-france-germany-1914~start~Germany~France~1~Title: The Great War; The ultimatum to Paris expired unanswered",
+    events,
+    stopDate: "1914-08-31",
+    round: 2,
+  });
+  assert.equal(named.wars[0].title, "The Great War");
+  assert.equal(named.wars[0].cause, "The ultimatum to Paris expired unanswered");
+  assert.equal(named.wars[0].note, "The ultimatum to Paris expired unanswered");
+
+  const unnamed = applyWarUpdates({ world, updates: "war-france-germany-1914~start~Germany~France~1~Declaration of war", events, stopDate: "1914-08-31", round: 2 });
+  assert.equal(unnamed.wars[0].title, "Germany–France War");
+  assert.equal(unnamed.wars[0].cause, "Declaration of war");
+
+  assert.deepEqual(splitWarStartNote("title: Winter War"), { title: "Winter War", cause: "" });
+  assert.deepEqual(splitWarStartNote("The title: a pretext"), { title: "", cause: "The title: a pretext" }, "only a leading Title: names the war");
 });
 
 test("a declaration with no matching warUpdates record is rejected", () => {

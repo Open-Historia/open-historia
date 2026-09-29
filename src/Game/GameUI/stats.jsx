@@ -416,6 +416,14 @@ const agreementStatusTone = (status) => {
 
 const warStatusTone = (status) => (lowerText(status) === "active" ? "#f87171" : "#fbbf24");
 
+// A war the engine opened from a battle the model narrated records that fact as
+// its cause (nativeWarLedger.js reconcileCombatWarState), which is bookkeeping,
+// not a reason a player can read.
+const warCauseForDisplay = (cause) => {
+    const text = cleanText(cause);
+    return /^native bootstrap\b/i.test(text) ? "" : text;
+};
+
 const RelationMeter = ({ score, tone }) => {
     const value = Math.max(-100, Math.min(100, Number(score) || 0));
     const width = `${Math.abs(value) / 2}%`;
@@ -486,7 +494,10 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
                 const onB = sideB.some((party) => lowerText(party) === targetKey);
                 if (!onA && !onB) return null;
                 const opponents = (onA ? sideB : sideA).map((party) => polityDisplayName(world, party));
-                return { ...war, opponents };
+                const allies = (onA ? sideA : sideB)
+                    .filter((party) => lowerText(party) !== targetKey)
+                    .map((party) => polityDisplayName(world, party));
+                return { ...war, opponents, allies, causeText: warCauseForDisplay(war?.cause) };
             })
             .filter(Boolean)
             .sort((left, right) => compareGameDates(right.lastUpdatedDate || right.startedDate || "", left.lastUpdatedDate || left.startedDate || ""));
@@ -657,6 +668,16 @@ const DiplomacySection = ({ world, targetCountry, viewerPolity }) => {
                 <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
                 {war.title || "Canonical conflict"}{war.startedDate ? ` · since ${war.startedDate}` : ""}
                 </div>
+                {war.allies.length ? (
+                    <div style={{ color: "rgba(255,255,255,0.58)", fontSize: "0.61rem", marginTop: "0.14rem" }}>
+                    {`Fighting alongside ${war.allies.join(" · ")}`}
+                    </div>
+                ) : null}
+                {war.causeText ? (
+                    <div style={{ color: "rgba(255,255,255,0.38)", fontSize: "0.61rem", lineHeight: 1.35, marginTop: "0.14rem" }}>
+                    {`Why it began: ${war.causeText}`}
+                    </div>
+                ) : null}
                 </div>
                 <span style={statusBadgeStyle(tone)}>{prettyToken(war.status || "active")}</span>
                 </div>

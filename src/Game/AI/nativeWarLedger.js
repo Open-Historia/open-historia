@@ -54,6 +54,19 @@ const deriveWarTitle = (war) => {
   return normalizeString(war?.id) || "Unnamed conflict";
 };
 
+// A start's note may open with the war's own name — "Title: The Winter War;
+// Soviet demands on the Karelian isthmus" — and the rest is its cause. Without
+// it every war the model opened was called "A–B War" and the model's own name
+// for it was lost.
+const WAR_TITLE_NOTE_RE = /^title\s*:\s*([^;]+?)\s*(?:;\s*([\s\S]*))?$/i;
+export const splitWarStartNote = (note) => {
+  const text = normalizeString(note);
+  const match = text.match(WAR_TITLE_NOTE_RE);
+  return match
+    ? { title: normalizeString(match[1]), cause: normalizeString(match[2]) }
+    : { title: "", cause: text };
+};
+
 const normalizeWar = (entry, index = 0) => {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const id = normalizeString(entry.id) || `war-${index}`;
@@ -242,12 +255,13 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
   const eventDate = sortDate(date);
   const eventIds = linkedEvents.map((event) => normalizeString(event?.id)).filter(Boolean);
   const storylineIds = linkedEvents.flatMap((event) => normalizeArray(event?.storylineIds)).map(normalizeString).filter(Boolean);
+  const startNote = op === "start" ? splitWarStartNote(update.note) : null;
 
   const save = (war) => {
     const normalized = normalizeWar({
       ...war,
       id,
-      note: normalizeString(update.note) || normalizeString(war.note),
+      note: (startNote ? startNote.cause : normalizeString(update.note)) || normalizeString(war.note),
       sourceEventIds: [...new Set([...normalizeArray(war.sourceEventIds), ...eventIds])],
       storylineIds: [...new Set([...normalizeArray(war.storylineIds), ...storylineIds])],
       lastUpdatedDate: eventDate || war.lastUpdatedDate,
@@ -268,12 +282,13 @@ const applyUpdateToWarMap = ({ map, update, date = "", round = 0, linkedEvents =
     if (!sideA.length || !sideB.length) return { error: `War ${id} start requires non-empty opposing actors and opponents.` };
     return save({
       id,
+      title: startNote.title,
       status: "active",
       sideA,
       sideB,
       startedDate: eventDate,
       endedDate: "",
-      cause: normalizeString(update.note),
+      cause: startNote.cause,
       createdRound: Math.max(0, Math.trunc(Number(round) || 0)),
     });
   }
