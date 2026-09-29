@@ -498,9 +498,10 @@ export const assessRecentWorldConsequenceLiveness = ({
 };
 
 // Fix 07 — an active high-pressure process may be quiet, but it may not vanish
-// from causal simulation for months at a time. 35 days forces a fresh endogenous
-// reappraisal; 70 days adds an objective anti-stasis backstop. Neither threshold
-// is an event quota or a demand for territorial movement.
+// from causal simulation for months at a time. STAGNATION_REAPPRAISAL_DAYS
+// forces a fresh endogenous reappraisal; STAGNATION_BACKSTOP_DAYS adds an
+// objective anti-stasis backstop. Neither threshold is an event quota or a
+// demand for territorial movement.
 const HIGH_PRESSURE_STAGNATION_THRESHOLD = 55;
 const STAGNATION_REAPPRAISAL_DAYS = 21;
 const STAGNATION_BACKSTOP_DAYS = 45;
@@ -1131,10 +1132,11 @@ const storylineAttentionScore = (storyline, originDate, targetDate, world = null
 const storylineNeedsAttentionWithin = (storyline, originDate, targetDate, world = null) => {
   if (!storyline || storyline.status === "resolved") return false;
 
-  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after ~35 days
-  // since its last semantic review regardless of numerical pressure. This is hidden
-  // simulation attention, not a demand for a battle/event. Non-war storylines keep
-  // the existing high-pressure visible-stagnation override.
+  // Fix 07.4: every canonical ACTIVE war gets a causal reappraisal after
+  // STAGNATION_REAPPRAISAL_DAYS since its last semantic review regardless of
+  // numerical pressure. This is hidden simulation attention, not a demand for a
+  // battle/event. Non-war storylines keep the existing high-pressure
+  // visible-stagnation override.
   const stagnationAgeAtHorizon = storylineStagnationAgeDays(storyline, targetDate);
   const reviewAgeAtHorizon = storylineReviewAgeDays(storyline, targetDate);
   const activeWar = Boolean(activeCanonicalWarForStoryline(storyline, world));
