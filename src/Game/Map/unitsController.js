@@ -1,10 +1,12 @@
 /*! Open Historia — unit orders & deployment controller © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // Shared troop interaction state + mutations.
 //
-// Holds the current unit list in memory (refreshed from world.json every 5s so
-// AI-spawned/moved units appear) and applies player mutations immediately for
-// snappy feedback, persisting them to world.json. A tiny pub/sub lets the map
-// layer, the selection popup and the Forces panel re-render on change.
+// Holds the current unit list in memory (read once, then refreshed from each
+// oh:world-updated / oh:game-updated event a write dispatches, so AI-spawned
+// and moved units appear; there is no poll) and applies player mutations
+// immediately for snappy feedback, persisting them to world.json. A tiny
+// pub/sub lets the map layer, the selection popup and the Forces panel
+// re-render on change.
 //
 // Player deploy is purely local (you place your own pieces) and queues a
 // machine-readable order (as an action) so the AI confirms or rejects it on the

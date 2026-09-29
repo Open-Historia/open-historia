@@ -2,12 +2,12 @@
 // Units are the map's way of showing what the events say, so they have to read
 // as forces in motion rather than counters that blink from place to place.
 //
-// Positions are TWEENED: the controller emits a new list (its 5s poll, or a
-// commit), and the counters glide to their new positions over ~1.2s. The tween
-// runs entirely outside React — one render per data change to declare the
-// layers, then per-frame setData straight on the MapLibre source. Re-rendering
-// React sixty times a second to move a dot would be an obvious way to make the
-// whole map stutter.
+// Positions are TWEENED: the controller emits a new list (a world write it
+// heard through oh:world-updated, or its own commit), and the counters glide
+// to their new positions over ~1.2s. The tween runs entirely outside React —
+// one render per data change to declare the layers, then per-frame setData
+// straight on the MapLibre source. Re-rendering React sixty times a second to
+// move a dot would be an obvious way to make the whole map stutter.
 //
 // Alongside the counters: a dashed heading line to wherever a unit is under
 // orders to go, and a ring around a patrol's station. Those are what let you
@@ -193,8 +193,8 @@ const Units = () => {
   // Published by the effect below so the flag loaders can fold a late-arriving
   // flag in and repaint, without owning any of the tween state themselves.
   const flagRefreshRef = useRef(() => {});
-  // Last set of polity flag URLs seen, so a world poll that changed something
-  // else does not re-run the flag pass every 5 seconds.
+  // Last set of polity flag URLs seen, so a registry change that touched
+  // something else (a colour, a name) does not re-run the flag pass.
   const polityFlagSignatureRef = useRef("");
 
   useEffect(() => {
@@ -263,8 +263,8 @@ const Units = () => {
 
   useEffect(() => {
     flagSourcesRef.current = { ...flagSourcesRef.current, polities: polityOverrides ?? {} };
-    // world.json is re-read every 5s and comes back as fresh objects, so react to
-    // the flags actually changing rather than to the poll.
+    // polityOverrides changes whenever any polity's entry does, so react to
+    // the flags actually changing rather than to every registry edit.
     const signature = Object.entries(polityOverrides ?? {})
       .map(([code, polity]) => `${code}:${polity?.flag || ""}`)
       .sort()
@@ -322,13 +322,18 @@ const Units = () => {
 
     // react-map-gl creates the source in its own effect, which may not have run
     // when the first sync lands, and the source also disappears for a beat after
-    // a style or projection change. Retry on the next few frames rather than
-    // leaving the map blank until the controller's 5s poll comes round again.
+    // a style or projection change. Retry on the next few frames. Nothing else
+    // would fill it: the controller has no poll, only world writes.
     let retryHandle = 0;
+    // The source object last filled. The source is declared empty, so when
+    // MapLibre rebuilds the style (3D Terrain, a lost WebGL context) it comes
+    // back as a new, empty object; styledata below refills it.
+    let paintedSource = null;
     const paint = (progress, attempt = 0) => {
       const target = source();
       if (target?.setData) {
         target.setData(featuresAt(progress));
+        paintedSource = target;
         return;
       }
       if (attempt >= 60) return;
@@ -419,18 +424,26 @@ const Units = () => {
       rafRef.current = requestAnimationFrame(tick);
     };
 
-    // map.setStyle() empties the image atlas, so put the flags back as soon as
-    // the new style lands rather than leaving counters on the glyph fallback
-    // until the controller's 5s poll comes round. Cheap when nothing is missing:
-    // a hasImage() check per owner and no refetch either way.
+    // map.setStyle() empties the image atlas and rebuilds the sources, so put
+    // the flags back and refill a new units-source as soon as the new style
+    // lands, rather than leaving the counters on the glyph fallback, or gone,
+    // until the next world write. Cheap when nothing is missing: a hasImage()
+    // check per owner, no refetch, and no setData for the source already filled.
+    // A running tween repaints every frame and reaches the new source itself.
+    const onStyleData = () => {
+      refreshFlagIcons();
+      if (rafRef.current) return;
+      const current = source();
+      if (current && current !== paintedSource) paint(1);
+    };
     const mapInstance = map?.getMap?.() ?? map;
-    mapInstance?.on?.("styledata", refreshFlagIcons);
+    mapInstance?.on?.("styledata", onStyleData);
 
     const stop = startUnitsSync();
     const unsubscribe = subscribeUnits(sync);
     sync();
     return () => {
-      mapInstance?.off?.("styledata", refreshFlagIcons);
+      mapInstance?.off?.("styledata", onStyleData);
       flagRefreshRef.current = () => {};
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (retryHandle) cancelAnimationFrame(retryHandle);
