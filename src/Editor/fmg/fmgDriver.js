@@ -35,6 +35,23 @@ const resolveTemplate = (params) => {
   return WORLD_TEMPLATES[idx];
 };
 
+// Whether this build serves the generator at all. /fmg/ exists only where
+// scripts/fetch-fmg.mjs has been run by hand (a source checkout on the local
+// server): no installer packages it, and the web and Android builds have no
+// server. Anywhere else /fmg/index.html is a 404 or the app's own page, and
+// Generate would load the whole game again in a hidden frame and give up after
+// READY_TIMEOUT_MS — so the Workshop asks once and hides the tab instead.
+export const isFmgIndexPage = (html) => /fantasy map generator/i.test(String(html || ""));
+export const checkFmgAvailable = async (fetchImpl = globalThis.fetch) => {
+  try {
+    const res = await fetchImpl(FMG_PATH, { cache: "no-store" });
+    if (!res?.ok) return false;
+    return isFmgIndexPage(await res.text());
+  } catch {
+    return false;
+  }
+};
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const evalIn = (win, expr) => { try { return win.eval(expr); } catch { return undefined; } };
 
@@ -203,7 +220,7 @@ export const generateFmgWorld = async (params = {}, onLog = () => {}) => {
     onLog("Starting the generator…");
     if (!(await waitUntil(win, fmgReady))) {
       if (evalIn(win, "typeof d3!=='undefined'") !== true) {
-        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — it isn't vendored yet. Run the updater (or `node scripts/fetch-fmg.mjs`), then restart the server.");
+        throw new Error("The /fmg/ page isn't the Fantasy Map Generator — it isn't vendored yet. Run `node scripts/fetch-fmg.mjs`, then restart the server.");
       }
       throw new Error("FMG scripts didn't finish loading in time.");
     }

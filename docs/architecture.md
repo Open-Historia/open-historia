@@ -19,7 +19,7 @@ This page is the map of the codebase. Each subsystem has its own page; follow th
 | Charts | Chart.js 4 (stats panel) | `src/Game/GameUI/stats.jsx` |
 | Desktop/mobile server | Express 5 | `server/server.js`, `mobile/nodejs-project/` |
 | Signing / trust | `@noble/ed25519` (content manifests, node directory) | `trust/`, `src/runtime/web/contentTrust.js` |
-| Bundled tools | Azgaar Fantasy Map Generator (vendored) | `fmg/`, `scripts/fetch-fmg.mjs` |
+| Optional tools (source checkouts only) | Azgaar Fantasy Map Generator (vendored by hand; no build ships it, and the Workshop hides its Generate tab without it) | `fmg/`, `scripts/fetch-fmg.mjs` |
 | Basemap raster tiles | ESRI/ArcGIS Online (public, token-free) + terrarium DEM (AWS) | `src/runtime/assets.js:82` |
 
 The heavy map binaries (`regions.pmtiles` ~101 MB, `countries.pmtiles`, `cities.pmtiles`, plus editor seed geojson) are **never bundled** — see [Map assets & PMTiles](assets-and-data.md). They live in `public/assets/`, are gitignored, and are fetched from a GitHub "map-data" Release on first launch. A Vite plugin (`dropMapBinaries`, `vite.config.ts:43`) deletes them from every build output so Cloudflare Pages' 25 MiB/file limit is never hit.

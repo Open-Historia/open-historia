@@ -364,6 +364,8 @@ A semi-transparent image above the region fills (z40) that a map-maker aligns a 
 
 A right-edge **🗺 GENERATE** drawer (`FmgPanel.jsx`) with inputs: seed, landmass template (`continents`/`archipelago`/`pangea`/…), detail (points), countries, cultures, cities, and "regions from provinces". **Generate** calls `generateFromFmg` (`MapEditor.jsx:123`), which runs Azgaar's Fantasy Map Generator headlessly (`fmgDriver.js`, vendored FMG at `/fmg`) and converts the result via `fmgToEditorSeed`. The import: `api.loadRegions(seed.regions)`, cities → `doc.features`, `mergeColors(seed.colors)`, and the biome basemap saved as a vector custom background (also added to "Your basemaps"). Marks the doc dirty and fits the view.
 
+**Source checkouts only.** `/fmg/` is served only when `fmg/dist` exists, which only `node scripts/fetch-fmg.mjs` creates; no installer packages it, nothing in the updater or the release workflows runs the script, and the web and Android builds have no server at all. So the Workshop asks once when it opens (`checkFmgAvailable` in `fmgDriver.js`: fetch `/fmg/index.html` and check it is the generator's page, not a 404 or the app's own page from the SPA fallback) and renders the GENERATE tab only when it is. Before this, every build showed the tab, and pressing Generate loaded the whole game a second time in a hidden 1920×1080 frame and gave up after about 90 seconds. Shipping the generator in the desktop installer (adding `fmg/dist` to the build files and running the script in the release workflow) is a separate decision.
+
 ---
 
 ## 16. Geometry operations (`geometry.js`)

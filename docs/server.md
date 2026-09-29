@@ -116,7 +116,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 ### Static / SPA
 | Path | Purpose | Handler |
 | --- | --- | --- |
-| `/fmg/*` | Vendored Fantasy Map Generator (`../fmg/dist`), mounted only if it exists | `server/server.js:813-814` |
+| `/fmg/*` | Vendored Fantasy Map Generator (`../fmg/dist`), mounted only if it exists (only `node scripts/fetch-fmg.mjs` creates it; the Workshop hides its Generate tab otherwise) | `server/server.js:813-814` |
 | `/*` (files) | `express.static(dist)` | `server/server.js:816` |
 | `GET *splat` | SPA fallback → `dist/index.html` | `server/server.js:818` |
 
