@@ -64,7 +64,18 @@ const boundedCallModel = (baseCallModel, consumeModelCall, maxCalls = 1) => {
     }
     await consumeModelCall();
     calls += 1;
-    return await baseCallModel(...args);
+    try {
+      return await baseCallModel(...args);
+    } catch (error) {
+      // Marks a failure of the provider call itself (quota, network, key), which
+      // pauses the run without penalizing the targets. A throw without this mark
+      // happened after an answer came back, and the runner counts it as an attempt.
+      const marked = error && typeof error === "object" && Object.isExtensible(error)
+        ? error
+        : new Error(String(error?.message || error), { cause: error });
+      marked.politicalWorldV2ProviderCall = true;
+      throw marked;
+    }
   };
 };
 

@@ -142,7 +142,10 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
     clearAttempts(next, task.type, []);
   } else if (task.type === "institution-membership-resolution") {
     const institutionId = clean(task?.payload?.institutionId || task?.targets?.[0]);
-    if (institutionId) {
+    const unresolvedIds = new Set(array(result?.unresolvedInstitutionIds).map(clean).filter(Boolean));
+    if (institutionId && unresolvedIds.has(institutionId)) {
+      bumpAttempts(next, task.type, [institutionId]);
+    } else if (institutionId) {
       const resolved = new Set(array(next.membership.resolvedInstitutionIds).map(clean).filter(Boolean));
       resolved.add(institutionId);
       next.membership.resolvedInstitutionIds = [...resolved];
@@ -188,6 +191,12 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
   return next;
 };
 
+const recordTaskFailure = (checkpoint, task, error) => {
+  const message = clean(error?.message || error) || "Political World v2 task could not use the AI answer";
+  bumpAttempts(checkpoint, task.type, taskTargets(task));
+  checkpoint.warnings = uniqueClean([...array(checkpoint.warnings), `${task.type}: ${message}`]);
+};
+
 export const runSimplePoliticalWorldV2 = async ({
   checkpoint,
   inputs,
@@ -198,6 +207,8 @@ export const runSimplePoliticalWorldV2 = async ({
   reconcileDeterministic = null,
   evaluateQuality = evaluatePoliticalWorldV2Quality,
   onCheckpoint = null,
+  // Test seam: the executor that turns a task into a result.
+  createExecutor = createPoliticalWorldV2Executor,
 } = {}) => {
   let current = normalizePoliticalWorldV2Checkpoint(checkpoint);
   if (!current) throw new Error("Invalid Political World v2 checkpoint");
@@ -206,7 +217,7 @@ export const runSimplePoliticalWorldV2 = async ({
   const sessionLimit = startCalls + budget;
   const totalLimit = Math.max(0, Math.trunc(Number(current.totalModelCallCeiling) || 0));
 
-  const executor = createPoliticalWorldV2Executor({ inputs, allowEntityExpansion, ...(callModel ? { callModel } : {}), signal });
+  const executor = createExecutor({ inputs, allowEntityExpansion, ...(callModel ? { callModel } : {}), signal });
 
   const persist = async () => {
     if (typeof reconcileDeterministic === "function") current = reconcileDeterministic(current, inputs);
@@ -284,6 +295,7 @@ export const runSimplePoliticalWorldV2 = async ({
     current.lastError = "";
     await persist();
 
+    let taskModelCalls = 0;
     const consumeModelCall = async () => {
       const used = Number(current.modelCalls) || 0;
       if (used >= totalLimit) {
@@ -297,6 +309,7 @@ export const runSimplePoliticalWorldV2 = async ({
         throw error;
       }
       current = recordPoliticalWorldV2ModelCall(current, { type: task.type, stage: task.stage });
+      taskModelCalls += 1;
       await persist();
     };
 
@@ -324,11 +337,22 @@ export const runSimplePoliticalWorldV2 = async ({
         await persist();
         return current;
       }
-      // Native/model validation failures are returned as a normal job result and
-      // retried with corrective feedback. A thrown error is therefore transport,
-      // provider, cancellation-adjacent or executor failure and must pause the
-      // session immediately. Treating it as a bad polity burns quota while no
-      // canonical result can possibly be accepted.
+      // The answer came back and was paid for, but the task could not use it
+      // (an unreadable payload, a job that needed a second call). Count the
+      // attempt like any failed result, so the bounded retry shrinks the batch
+      // and defers the target; pausing here repeated the same paid call on
+      // every Resume forever.
+      if (taskModelCalls > 0 && error?.politicalWorldV2ProviderCall !== true) {
+        recordTaskFailure(current, task, error);
+        current.currentTask = null;
+        await persist();
+        continue;
+      }
+      // Validation failures are returned as a normal job result and retried with
+      // corrective feedback. What is left is transport, provider,
+      // cancellation-adjacent or an executor failure before any call, and must
+      // pause the session immediately. Treating it as a bad polity burns quota
+      // while no canonical result can possibly be accepted.
       current.status = "paused";
       current.pauseReason = providerPauseReason(error);
       current.lastError = clean(error?.message || error || "Political World v2 task failed before producing a validation result");

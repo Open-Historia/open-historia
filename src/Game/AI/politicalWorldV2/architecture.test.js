@@ -70,10 +70,11 @@ test("bounded domain failures defer targets without silently reopening them on o
   assert.match(panel, /Retry Deferred Targets/);
 });
 
+// Behaviour (a failed provider call pauses; an unusable answer counts an
+// attempt) is covered by simpleRunner.test.js.
 test("provider/executor throws pause the deterministic session instead of penalizing polity attempts", () => {
   assert.match(runner, /current\.pauseReason = providerPauseReason\(error\)/);
   assert.match(runner, /return current;/);
-  assert.doesNotMatch(runner, /catch \(error\)[\s\S]{0,500}bumpAttempts\(current, task\.type/);
 });
 
 test("v2 owns retries at the checkpoint boundary so one work item can spend only one provider call", () => {

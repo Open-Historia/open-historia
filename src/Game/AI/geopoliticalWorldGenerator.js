@@ -757,14 +757,38 @@ export const generateGeopoliticalInstitutionMembersJob = async ({
     signal,
     logLabel: `geopolitical institution members ${institution.id}`,
   });
-  const rows = parseArrayText(source.membersJson ?? source.members);
+  // A bad answer is an ordinary failed result, never a throw: the v2 runner
+  // counts the attempt, so the bounded retry and deferral move past an
+  // institution the model keeps answering wrongly instead of paying for the
+  // same call on every Resume.
+  const failed = (reason) => ({
+    schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION,
+    phase: "institution-membership-resolution",
+    institutionId: institution.id,
+    records: [],
+    acceptedInstitutionIds: [],
+    unresolvedInstitutionIds: [institution.id],
+    warnings: [...warnings, `${institution.name}: ${reason}`],
+    returned: 0,
+  });
+  const field = source.membersJson ?? source.members;
+  if (field == null) return failed("the answer carried no membersJson; nothing was recorded.");
+  let rows;
+  try {
+    rows = parseArrayText(field);
+  } catch (error) {
+    return failed(`membersJson could not be read (${clean(error?.message || error)}); nothing was recorded.`);
+  }
   const records = [];
   const seen = new Set();
   let invalidRows = 0;
   for (const raw of rows) {
     const polityKey = canonicalPolity(raw?.polityKey, world, allowedByLower);
     if (!polityKey) {
-      invalidRows += 1;
+      // A real member the scenario's map does not have cannot be a member in
+      // this scenario. Leaving it out is the correct membership, so it must
+      // not refuse the institution's other members.
+      warnings.push(`${institution.name}: left out ${clean(raw?.polityKey) || "<blank>"}, which is not a polity in this scenario.`);
       continue;
     }
     // Duplicate positive rows do not make an exhaustive member list
@@ -789,7 +813,7 @@ export const generateGeopoliticalInstitutionMembersJob = async ({
     records.push({ polityKey, regimeCharacter: "", memberships: [membership] });
   }
   if (invalidRows) {
-    throw new Error(`${institution.name}: institution-centric membership result contained ${invalidRows} invalid/duplicate row(s); refusing incomplete positive-member canon.`);
+    return failed(`institution-centric membership result contained ${invalidRows} invalid row(s); refusing incomplete positive-member canon.`);
   }
   return {
     schemaVersion: GEOPOLITICAL_WORLD_SCHEMA_VERSION,
@@ -858,6 +882,7 @@ export const generateGeopoliticalPowerEvidenceJob = async ({
     && Number.isFinite(Number(source?.strategicWeight ?? source?.weight ?? source?.score))
     ? [source]
     : null;
+  const warnings = [];
   let rows;
   if (directSingleton) {
     rows = directSingleton;
@@ -873,7 +898,15 @@ export const generateGeopoliticalPowerEvidenceJob = async ({
       rows = [];
     }
   } else {
-    rows = parseGeopoliticalArrayText(source?.powerJson ?? source?.power);
+    // A truncated or malformed batch accepts nothing and leaves every target
+    // unresolved, so the v2 attempt is counted and the next retry is smaller.
+    // Throwing paused the session and repeated the same call on every Resume.
+    try {
+      rows = parseGeopoliticalArrayText(source?.powerJson ?? source?.power);
+    } catch (error) {
+      rows = [];
+      warnings.push(`Power calibration answer could not be read (${clean(error?.message || error)}); no power evidence was recorded for this batch.`);
+    }
   }
   const accepted = [];
   const acceptedKeys = new Set();
@@ -890,6 +923,7 @@ export const generateGeopoliticalPowerEvidenceJob = async ({
     powerCalibration: accepted,
     acceptedPolities: [...acceptedKeys],
     unresolvedPolities: requested.filter((polity) => !acceptedKeys.has(polity)),
+    warnings,
     returned: rows.length,
   };
 };
