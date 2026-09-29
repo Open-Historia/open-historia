@@ -164,6 +164,7 @@ import {
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
   countWords,
+  deferredConsolidationStillDue,
   planHistoryConsolidation,
 } from "./historyConsolidation.js";
 import {
@@ -301,7 +302,7 @@ import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
-import { assertCampaignUnchanged } from "../../runtime/campaignGuard.js";
+import { assertCampaignUnchanged, campaignChanged } from "../../runtime/campaignGuard.js";
 import { getLibraryState } from "../../runtime/library.js";
 import { getActivePlayerFocus, getActiveWorldDirection, idleDiplomacyChancePerMinute, isActiveFeatureEnabled } from "../../runtime/gameFeatures.js";
 import { describeIntervention, journalTurn, truncateTurn } from "./intervene.js";
@@ -3012,6 +3013,9 @@ const runJsonTask = async (taskKey, {
   // fails. Everything else takes the normal synchronous path, unchanged.
   sync = true,
   onBatchResult,
+  // The campaign a batched task belongs to. The poller holds its answer while
+  // another campaign is open, and applies it when that one is open again.
+  batchCampaignId = "",
   // Lookup functions for this task (buildTaskLookups): { tools, execute,
   // maxRounds? }. Declared beside the output function on every provider; the
   // model's calls are answered inside callAI and the answers go back as the
@@ -3073,7 +3077,7 @@ const runJsonTask = async (taskKey, {
         tool: batchTool,
       });
       if (submitted) {
-        registerPendingBatch({ customId, fallback, onBatchResult, record: submitted.record ?? null, taskKey, validatePayload });
+        registerPendingBatch({ campaignId: batchCampaignId || activeCampaignId(), customId, fallback, onBatchResult, record: submitted.record ?? null, taskKey, validatePayload });
         return { deferred: true, generation: { source: "batch", fallbackReason: "", deferred: true }, payload: null };
       }
       // Submission refused (no key, provider hiccup): the synchronous path
@@ -3953,7 +3957,7 @@ const attachProjectOpsToEvents = (events, ops) => {
   return attached;
 };
 
-const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest } = {}) => {
+const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { onBatchResult, onRequest, campaignId = "" } = {}) => {
   // The document this pass revises, and the revision it was read at: a pass
   // that lands against a different revision (a hand edit in the meantime)
   // appends rather than overwrites (applyHistoryDocumentUpdate).
@@ -3991,6 +3995,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
     // may land later through the batch poller.
     sync: typeof onBatchResult !== "function",
     onBatchResult,
+    batchCampaignId: campaignId,
   });
   if (deferred) return { deferred: true, generation, summary: "", document: "", baseRevision };
   return {
@@ -4005,7 +4010,7 @@ const consolidateHistoryBatch = async (bundle, events, chats, actions = [], { on
 // world.consolidatedHistory (whose throughEventId is the boundary the prompt
 // reads from, getUnconsolidatedEvents) and rewrites the living history document
 // the AI is shown in place of the folded events. Every event stays in the save.
-const compactHistoryIfNeeded = async (bundle, { force = false, requests = null } = {}) => {
+const compactHistoryIfNeeded = async (bundle, { force = false, requests = null, campaignId = activeCampaignId() } = {}) => {
   const world = normalizeWorldState(bundle.world);
   // What to fold — the thresholds, the retained tail, the closed chats and the
   // resolved orders riding along — is the planner's call, shared with the
@@ -4044,22 +4049,23 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
     actionsToConsolidate,
     {
       onRequest: jumpTaskOptions(requests, "history").onRequest,
+      campaignId,
       // Batch routing (Settings → Batch background AI tasks): the summary lands
       // later through the poller and is written here out of band, while the
-      // jump that asked for it carries on with the events unconsolidated.
+      // jump that asked for it carries on with the events unconsolidated. It
+      // belongs to the campaign that asked: while another one is open it waits
+      // (false keeps it pending), because the runtime endpoints follow the
+      // open campaign and would fold this campaign's history into that one.
       onBatchResult: async (resultPayload, source) => {
-        if (isSimulationBusy()) return false;
+        if (isSimulationBusy() || leftCampaign(campaignId)) return false;
         const summaryText = normalizeString(resultPayload?.summary);
         if (!summaryText) return true;
         const current = await readGameStateBundle({ force: true });
+        if (leftCampaign(campaignId)) return false;
         const currentWorld = normalizeWorldState(current.world);
         // Superseded when a synchronous consolidation covered these events
-        // in the meantime: two summaries of the same weeks would double the
-        // campaign's memory of them.
-        const stillOpen = throughEvent
-          ? getUnconsolidatedEvents(current.events, currentWorld).some((event) => event.id === throughEvent.id)
-          : true;
-        if (!stillOpen) return true;
+        // (or, for a chats-only pass, these chats) in the meantime.
+        if (!deferredConsolidationStillDue({ throughEvent, closedChats }, current)) return true;
         const entry = entryFor(summaryText, source, currentWorld.consolidatedHistory);
         const documentUpdate = applyHistoryDocumentUpdate(currentWorld, {
           document: resultPayload?.document,
@@ -4070,6 +4076,7 @@ const compactHistoryIfNeeded = async (bundle, { force = false, requests = null }
           throughRound: entry.throughRound,
           baseRevision,
         });
+        if (isSimulationBusy() || leftCampaign(campaignId)) return false;
         await writeWorldState(normalizeWorldState({
           ...currentWorld,
           consolidatedHistory: [...currentWorld.consolidatedHistory, entry],
@@ -4149,6 +4156,13 @@ const activeCampaignId = () => {
   }
 };
 
+// The same check for work nobody is waiting on — the idle pulse, spy reports,
+// suggestions, stat sheets, a batch that lands minutes later: stamp the
+// campaign before the model call and ask this before every write. True once
+// the player has switched to another campaign; the write is then dropped
+// rather than landed on the campaign they switched to.
+const leftCampaign = (campaign) => campaignChanged(campaign, activeCampaignId());
+
 // activeSimulations, pendingProjectsJump and pendingJumpSegment moved to
 // simulationStatus.js so the HUD can poll isSimulationBusy() without importing
 // this module. Reached through the accessors below; see that file for why.
@@ -4214,7 +4228,7 @@ const segmentHeldError = ({ cause, completedSegments, segmentCount, segmentIndex
 // consolidation — nothing is lost, and there is no stale handle to migrate.
 const batchBackgroundTasksEnabled = () => getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks);
 const BATCH_POLL_INTERVAL_MS = 60000;
-const pendingBatches = new Map(); // customId -> { taskKey, fallback, validatePayload, onBatchResult }
+const pendingBatches = new Map(); // customId -> { campaignId, taskKey, fallback, validatePayload, onBatchResult }
 let batchPollerTimer = null;
 
 const registerPendingBatch = (entry) => {
@@ -4230,6 +4244,10 @@ export const pendingBatchCount = () => pendingBatches.size;
 export const pollPendingBatches = async () => {
   if (pendingBatches.size === 0 || isSimulationBusy()) return;
   for (const [customId, entry] of [...pendingBatches]) {
+    // A batch waits, unretrieved, while a campaign other than the one that
+    // submitted it is open: its applier writes through the open campaign's
+    // endpoints.
+    if (leftCampaign(entry.campaignId)) continue;
     const outcome = await retrieveAIBatch(customId);
     if (outcome.status === "pending") continue;
     pendingBatches.delete(customId);
@@ -7799,7 +7817,7 @@ const applySimulationResult = async ({
         events: nextEvents,
         game: nextGame,
         world: worldWithImpacts,
-      }, { requests });
+      }, { requests, campaignId });
     } catch (error) {
       console.warn("[ai] campaign history consolidation failed; the completed turn will still be saved.", error);
     }

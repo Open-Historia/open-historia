@@ -15,6 +15,7 @@ import {
   applyHistoryDocumentUpdate,
   buildHistoryDocumentDirective,
   countWords,
+  deferredConsolidationStillDue,
   describeHistoryConsolidation,
   planHistoryConsolidation,
   seedHistoryDocumentText,
@@ -97,6 +98,25 @@ test("resolved orders ride along once; planned ones and folded ones do not", () 
   const world = { consolidatedHistory: [{ summary: "Earlier.", actionIds: ["order-folded"], throughEventId: "", throughDate: "2000-12-01" }] };
   const plan = planHistoryConsolidation(bundle({ events: events(sizeThreshold + 1), actions, world }));
   assert.deepEqual(plan.actionsToConsolidate.map((action) => action.id), ["order-done"]);
+});
+
+test("a batched pass that comes back later is dropped once another pass has folded its events", () => {
+  const log = events(sizeThreshold + 1);
+  const plan = planHistoryConsolidation(bundle({ events: log }));
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: log })), true, "nothing folded meanwhile");
+  const folded = { consolidatedHistory: [{ summary: "Folded synchronously.", throughEventId: plan.throughEvent.id, throughDate: plan.throughEvent.date }] };
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: log, world: folded })), false);
+});
+
+test("a batched chats-only pass is dropped once its chats were folded, not applied twice", () => {
+  // No events were due, so there is no boundary event to test against; the
+  // chats it folds are what say whether it is still wanted.
+  const chats = [{ id: "chat-done", status: "closed", countries: ["France"], messages: [] }];
+  const plan = planHistoryConsolidation(bundle({ events: events(5), chats }));
+  assert.equal(plan.throughEvent, null);
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: events(5), chats })), true);
+  const folded = { consolidatedHistory: [{ summary: "Folded.", chatIds: ["chat-done"], throughEventId: "" }] };
+  assert.equal(deferredConsolidationStillDue(plan, bundle({ events: events(5), chats, world: folded })), false);
 });
 
 test("the boundary is the last pass's event, and the log itself is untouched", () => {
