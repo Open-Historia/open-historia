@@ -25,7 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { extractTree } from "./extractStrings.mjs";
+import { catalogText, extractTree } from "./extractStrings.mjs";
 
 const ROOT = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../..");
 const LANG_DIR = path.join(ROOT, "public", "lang");
@@ -129,7 +129,7 @@ const main = async () => {
     } catch { /* first run */ }
   }
 
-  const catalog = [...strings].map((s) => s.trim()).filter((s) => s.length > 1 && /[A-Za-z]{2}/.test(s)).sort();
+  const catalog = [...strings].map(catalogText).filter(Boolean).sort();
   fs.mkdirSync(LANG_DIR, { recursive: true });
   fs.writeFileSync(path.join(LANG_DIR, "catalog-en.json"), `${JSON.stringify([...new Set(catalog)], null, 1)}\n`);
   const patterns = catalog.filter((s) => s.includes("{{")).length;

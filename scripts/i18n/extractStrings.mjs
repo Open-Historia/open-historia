@@ -661,3 +661,11 @@ export const extractTree = (root) => {
   }
   return { exact, patterns, errors };
 };
+
+// How an extracted string is written into public/lang/catalog-en.json, or null
+// when it is not worth a catalog entry (build-catalog.mjs, and the test that
+// keeps the committed catalog in step with the source).
+export const catalogText = (text) => {
+  const trimmed = String(text).trim();
+  return trimmed.length > 1 && /[A-Za-z]{2}/.test(trimmed) ? trimmed : null;
+};
