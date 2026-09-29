@@ -6,7 +6,7 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM } from "../../runtime/mobileUi.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid, flagImageUrlFromGid } from "../../runtime/countryFlags.js";
-import { resolvePolityFlag } from "../../runtime/polityFlags.js";
+import { resolveChosenPolityFlag, resolvePolityFlag } from "../../runtime/polityFlags.js";
 import { useLibraryState } from "../../runtime/library.js";
 
 const baseStyle = {
@@ -147,16 +147,16 @@ const Other = memo(function Other({ dockStyle = DEFAULT_DOCK_STYLE, embedded = f
     // The old standalone badge still stays hidden on phones.
     if ((!embedded && isMobile) || !country) return null;
 
-    // Landless → never borrow the code-derived country flag; fall through to the
+    // Landless → only a flag chosen for the polity (a new faction's or group's),
+    // never the code-derived country flag; without one, fall through to the
     // neutral FallbackBadge (both null makes the render pick it).
-    const resolvedFlag = landless
-        ? { imageUrl: null }
-        : resolvePolityFlag({
-            polity: { polityKey: country, code: country, name: displayName || country },
-            world: worldState || {},
-            flags: flagCatalog || {},
-        });
-    const flagUrl = landless ? null : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
+    const flagArgs = {
+        polity: { polityKey: country, code: country, name: displayName || country },
+        world: worldState || {},
+        flags: flagCatalog || {},
+    };
+    const resolvedFlag = landless ? resolveChosenPolityFlag(flagArgs) : resolvePolityFlag(flagArgs);
+    const flagUrl = landless ? resolvedFlag.imageUrl : (resolvedFlag?.imageUrl || flagImageUrlFromGid(country));
     const flagEmoji = landless ? null : flagEmojiFromGid(country);
 
     const Root = embedded ? "div" : "button";

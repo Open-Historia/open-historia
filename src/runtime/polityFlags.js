@@ -201,6 +201,17 @@ export const resolvePolityFlag = ({ polity, world, flags = {} } = {}) => {
   };
 };
 
+// A landless polity's flag: only one chosen for it (flags.json, or the flag on
+// its record) — never one derived from a code (map-ref, stock, the record's
+// stock bridge), since a stateless actor is not the country its code resolves
+// to. A faction or group the player founds is landless and keeps the flag they
+// picked for it.
+export const resolveChosenPolityFlag = (args = {}) => {
+  const resolved = resolvePolityFlag(args);
+  if (resolved.source === "custom" || resolved.source === "legacy-polity") return resolved;
+  return { imageUrl: null, polityKey: resolved.polityKey, source: "none" };
+};
+
 export const canonicalizeFlagMap = (flags, world) => {
   const source = flags && typeof flags === "object" && !Array.isArray(flags) ? flags : {};
   const out = {};
