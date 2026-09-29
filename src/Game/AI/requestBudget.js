@@ -345,6 +345,24 @@ export const describeDay = ({ settings, ledger }) => {
     };
 };
 
+// Today's requests by task, most first, for Settings → AI. `labels` names the
+// task keys the caller knows ({ jumpForward: "Time skip" }); a key it does not
+// is shown as it was counted, with `named: false`. Keys under one name (two
+// spellings of "other") make one row.
+export const requestsByTask = (byTask, labels = {}) => {
+    const rows = new Map();
+    for (const [key, total] of Object.entries(byTask ?? {})) {
+        const count = wholeNumber(total, { min: 0, max: Number.MAX_SAFE_INTEGER, fallback: 0 });
+        if (!count) continue;
+        const named = Object.prototype.hasOwnProperty.call(labels, key) && Boolean(labels[key]);
+        const label = named ? labels[key] : key;
+        const row = rows.get(label) ?? { label, named, count: 0 };
+        row.count += count;
+        rows.set(label, row);
+    }
+    return [...rows.values()].sort((a, b) => b.count - a.count || Number(b.named) - Number(a.named) || a.label.localeCompare(b.label));
+};
+
 // --- The game's own ---
 //
 // One ledger and one set of settings for the running game, over localStorage

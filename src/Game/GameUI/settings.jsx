@@ -37,7 +37,7 @@ import {
     updateEntry,
 } from "../AI/providerConfig.js";
 import { formatResetTime } from "../AI/fallbackRunner.js";
-import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
+import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings, requestsByTask } from "../AI/requestBudget.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
 import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
@@ -1069,8 +1069,19 @@ const useRequestDay = () => {
     return day;
 };
 
+// Task keys the request count holds that are not per-task models
+// (AI_TASK_ROUTING): the translator's requests, and a call that named no task.
+const OTHER_REQUEST_TASKS = [
+    { key: "translation", label: "Translation" },
+    { key: "other", label: "Other" },
+    { key: "direct", label: "Other" },
+];
+const REQUEST_TASK_LABELS = Object.fromEntries([...AI_TASK_ROUTING, ...OTHER_REQUEST_TASKS].map(({ key, label }) => [key, label]));
+
 const RequestBudgetSection = () => {
     const day = useRequestDay();
+    const touch = useTouchPrimary();
+    const tasks = requestsByTask(day.byTask, REQUEST_TASK_LABELS);
     const [saving, setSaving] = useState(() => requestSettings.saveRequests());
     const [background, setBackground] = useState(() => requestSettings.backgroundAi());
     const [dailyLimit, setDailyLimit] = useState(() => String(requestSettings.dailyLimit()));
@@ -1107,8 +1118,23 @@ const RequestBudgetSection = () => {
                     {day.lastJump ? <>Your last time skip used <span data-no-translate>{day.lastJump.used}</span>. </> : null}
                     {day.background > 0 ? <>Background AI has used <span data-no-translate>{day.background}</span> of its <span data-no-translate>{day.backgroundCap}</span>. </> : null}
                     {day.refused > 0 ? <>The provider turned away <span data-no-translate>{day.refused}</span> for coming too fast; those cost a wait, not allowance. </> : null}
+                    {day.failed > 0 ? <>{day.failed === 1 ? "1 request failed with an error." : `${day.failed} requests failed with an error.`} </> : null}
                     Counted on this device, from midnight Pacific time, which is when a Gemini key&apos;s day begins.
                 </div>
+                {tasks.length > 0 && (
+                    <details style={{ marginTop: "0.4rem" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "0.74rem", color: "rgba(255,255,255,0.62)", ...(touch ? TOUCH_SUMMARY : null) }}>Used today, by task</summary>
+                        <div style={{ display: "grid", gap: "0.15rem", marginTop: "0.3rem" }}>
+                            {tasks.map((row) => (
+                                <div key={row.label} style={{ color: "rgba(255,255,255,0.72)", display: "flex", fontSize: "0.72rem", gap: "0.5rem", justifyContent: "space-between" }}>
+                                    {/* A task this table does not name is shown as it was counted. */}
+                                    <span data-no-translate={row.named ? undefined : true} style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                                    <span data-no-translate>{row.count}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </details>
+                )}
             </div>
 
             <Toggle
