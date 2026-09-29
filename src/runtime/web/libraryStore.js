@@ -42,6 +42,8 @@ import {
   rekeyOwnerMap,
 } from "../../../server/ownerMigration.js";
 import { coverObjectUrl } from "./coverUrls.js";
+import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
+import { onMemoryPressure } from "../memoryPressure.js";
 
 const SCENARIO_MANIFEST_KEY = "scenario-manifest";
 const GAME_MANIFEST_KEY = "game-manifest";
@@ -467,6 +469,22 @@ const fetchDefaultRegionsGeojson = () => {
   }
   return defaultRegionsGeojsonPromise;
 };
+
+// The coarse copy of a scenario's regions, for the scenario being looked at (see
+// coarseRegionsCache.js).
+const coarseRegions = createCoarseRegionsCache((source) => serializeJsonValue(coarsenFeatureCollection(parseJsonValue(source, null))));
+
+// Everything above is a session cache of something that can be read again — the
+// built-in and stock maps from the build's own assets, the coarse copies rebuilt
+// from them. When Android asks for memory back, let all of it go; the next read
+// fetches and builds afresh.
+onMemoryPressure(() => {
+  coarseRegions.clear();
+  builtInCoarseTextPromise = null;
+  builtInRegionsTextPromise = null;
+  builtInRegionsPromise = null;
+  defaultRegionsGeojsonPromise = null;
+});
 
 
 const inferRecordCustomGeometry = (record) => {
@@ -953,6 +971,7 @@ const deleteScenario = async (id) => {
   if ((usage.get(id) ?? 0) > 0) throw new Error("This scenario is still used by one or more games.");
   await idbDelete(STORES.scenarios, id);
   try { await idbDelete(STORES.scenarioMeta, id); } catch { /* reconcile drops it next build */ }
+  coarseRegions.forget(id);
   const manifest = await getScenarioManifest();
   const remaining = resolveOrderedIds(manifest.order.filter((e) => e !== id), await listScenarioIds(), DEFAULT_SCENARIO_ID);
   const selectedScenarioId = manifest.selectedScenarioId === id ? (remaining[0] ?? "") : manifest.selectedScenarioId;
@@ -1116,18 +1135,7 @@ const removeScenarioAsset = async (id, key) => {
   return getScenarioDetails(id);
 };
 
-// The coarse regions copy the desktop server keeps beside the upload, here
-// computed on demand and cached against the stored value, so a re-upload
-// (a new value) rebuilds it and the same value never does twice.
-const coarseRegionsCache = new Map(); // scenario id -> { source, text }
-const coarseRegionsText = (record) => {
-  const source = record.geojson?.regionsGeojson;
-  const cached = coarseRegionsCache.get(record.id);
-  if (cached && cached.source === source) return cached.text;
-  const text = serializeJsonValue(coarsenFeatureCollection(parseJsonValue(source, null)));
-  coarseRegionsCache.set(record.id, { source, text });
-  return text;
-};
+const coarseRegionsText = (record) => coarseRegions.text(record.id, record.geojson?.regionsGeojson);
 
 const scenarioAssetResponse = async (record, key, rangeHeader, { coarse = false } = {}) => {
   if (key === COVER_IMAGE_ASSET_KEY) {
