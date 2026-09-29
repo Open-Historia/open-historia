@@ -32,6 +32,36 @@ test("parseStatNumber accepts the number forms old saves and prompts produce", (
   assert.equal(parseStatNumber(Number.NaN), null);
 });
 
+test("parseStatNumber scales a number only by the word written right after it", () => {
+  assert.equal(parseStatNumber("€3.1tn"), 3.1e12);
+  assert.equal(parseStatNumber("48.5bn"), 48.5e9);
+  assert.equal(parseStatNumber("850mn"), 850e6);
+  assert.equal(parseStatNumber("12k"), 12e3);
+  assert.equal(parseStatNumber("2.5 thousand"), 2500);
+  assert.equal(parseStatNumber("€520 billion (about $0.6 trillion)"), 520e9);
+  assert.equal(parseStatNumber("12 months"), 12);
+  assert.equal(parseStatNumber("3 tonnes of grain, 2 million people"), 3);
+});
+
+test("an event's stats patch cannot rescale a GDP ledger by more than the limit", () => {
+  const base = { territorialComponents: ledger() };
+  const before = mergeCountryStatPatch(base, {});
+  assert.equal(before.economy.gdp, 52000);
+
+  const misread = mergeCountryStatPatch(base, { economy: { gdp: "3.1" } }, { maxAggregateRescale: 10 });
+  assert.equal(misread.economy.gdp, 52000, "a thousandfold collapse is ignored");
+  assert.deepEqual(misread.territorialComponents.map((component) => component.gdpPerCapita), [50, 20]);
+
+  const inflated = mergeCountryStatPatch(base, { economy: { gdpPerCapita: 5.2e14 } }, { maxAggregateRescale: 10 });
+  assert.equal(inflated.economy.gdp, 52000);
+
+  const war = mergeCountryStatPatch(base, { economy: { gdp: 26000 } }, { maxAggregateRescale: 10 });
+  assert.equal(war.economy.gdp, 26000, "a halving is within the limit");
+
+  const gm = mergeCountryStatPatch(base, { economy: { gdp: 5000 } });
+  assert.ok(Math.abs(gm.economy.gdp - 5000) < 10, "an exact correction with no limit still applies");
+});
+
 test("territorial aggregation splits core and overseas rows and drops unusable rows", () => {
   const aggregate = aggregateTerritorialEconomy([
     ...ledger(),

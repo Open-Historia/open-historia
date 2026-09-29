@@ -21,7 +21,7 @@ import { normalizeInteractiveOffer } from "./interactiveOffer.js";
 import { normalizeSpyOp } from "./spycraft.js";
 import { eventsFromLegacyChat, normalizeChatEvents, projectChatThread, withUnloggedMessages } from "./chatThreads.js";
 import { latestTurnEventIds, unseenEvents, withoutUnseenChats, withoutUnseenEvents, withoutUnseenReports } from "./unseenEvents.js";
-import { mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
+import { COUNTRY_STATS_EVENT_RESCALE_LIMIT, mergeCountryStatPatch, normalizeCountryStatSheet } from "./countryStats.js";
 import {
   canonicalInstitutionIdentity,
   institutionChannelParticipants,
@@ -5065,6 +5065,7 @@ const applyPolityAndTerritoryImpacts = ({
     if (change.stats && typeof change.stats === "object") {
       const merged = applyCountryStatPatchToWorld(world, code, change.stats, {
         continuity: eventId ? { accountedEventIds: [eventId] } : null,
+        maxAggregateRescale: COUNTRY_STATS_EVENT_RESCALE_LIMIT,
       });
       const rep = Number(merged?.indices?.internationalReputation);
       if (Number.isFinite(rep)) {

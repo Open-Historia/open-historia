@@ -10,6 +10,9 @@ export const COUNTRY_STATS_HISTORY_MAX_SAMPLES = 1200;
 export const COUNTRY_STATS_TRACKING_VERSION = 1;
 export const COUNTRY_STATS_TRACKING_MAX_POLITIES = 8;
 export const COUNTRY_STATS_TRACKING_INTERVALS = Object.freeze([0, 3, 6, 12, 24]);
+// How far one event's stats patch may move a polity's GDP or GDP per head
+// (mergeCountryStatPatch maxAggregateRescale): tenfold up or down.
+export const COUNTRY_STATS_EVENT_RESCALE_LIMIT = 10;
 
 export const COUNTRY_STATS_COMPONENT_GROUPS = Object.freeze([
   "core",
@@ -133,6 +136,14 @@ export const countryStatsTrackingMonthsElapsed = (fromDate, toDate) => {
   return Math.max(0, months);
 };
 
+const STAT_SCALES = Object.freeze({
+  trillion: 1e12, tn: 1e12, t: 1e12,
+  billion: 1e9, bn: 1e9, b: 1e9,
+  million: 1e6, mn: 1e6, m: 1e6,
+  thousand: 1e3, k: 1e3,
+});
+const STAT_SCALE_AFTER_NUMBER = /^\s*(trillion|tn|t|billion|bn|b|million|mn|m|thousand|k)(?![a-z])/;
+
 export const parseStatNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value !== "string") return null;
@@ -146,24 +157,16 @@ export const parseStatNumber = (value) => {
     .replace(/−/g, "-")
     .toLowerCase();
 
+  // The first number and the scale word written right after it, read together:
+  // "48.5 billion", "$48.5B", "€3.1tn", "850mn", "1.2 trillion". Only that
+  // number's own suffix scales it, so "€520 billion (about $0.6 trillion)" is
+  // 520 billion, and a unit word that merely starts with a scale letter
+  // ("5 months", "3 tonnes") scales nothing.
   const match = normalized.match(/[-+]?\d+(?:\.\d+)?/);
   if (!match) return null;
 
-  let number = Number(match[0]);
-  if (!Number.isFinite(number)) return null;
-
-  // Accept the common forms produced by old saves and older AI prompts:
-  // "48.5 billion", "$48.5B", "1.2 trillion", "850 million".
-  if (/\btrillion\b|\btn\b/.test(normalized) || /\d(?:\.\d+)?\s*t\b/.test(normalized)) {
-    number *= 1e12;
-  } else if (/\bbillion\b|\bbn\b/.test(normalized) || /\d(?:\.\d+)?\s*b\b/.test(normalized)) {
-    number *= 1e9;
-  } else if (/\bmillion\b|\bmn\b/.test(normalized) || /\d(?:\.\d+)?\s*m\b/.test(normalized)) {
-    number *= 1e6;
-  } else if (/\bthousand\b/.test(normalized) || /\d(?:\.\d+)?\s*k\b/.test(normalized)) {
-    number *= 1e3;
-  }
-
+  const scale = normalized.slice(match.index + match[0].length).match(STAT_SCALE_AFTER_NUMBER);
+  const number = Number(match[0]) * (scale ? STAT_SCALES[scale[1]] : 1);
   return Number.isFinite(number) ? number : null;
 };
 
@@ -1001,7 +1004,7 @@ const mergeComponentsByGeography = (base, patch) => {
 export const mergeCountryStatPatch = (
   baseValue,
   patchValue,
-  { replaceComponents = false, continuity = null } = {},
+  { replaceComponents = false, continuity = null, maxAggregateRescale = 0 } = {},
 ) => {
   const base = normalizeCountryStatSheet(baseValue) || {};
   const patch = patchValue && typeof patchValue === "object" && !Array.isArray(patchValue)
@@ -1114,10 +1117,21 @@ export const mergeCountryStatPatch = (
 
   if (components.length && patch.economy && typeof patch.economy === "object" && !Array.isArray(patch.economy)) {
     const before = aggregateTerritorialEconomy(components);
-    const requestedGdp = parseStatNumber(patch.economy.gdp);
-    const requestedWholePc = parseStatNumber(patch.economy.gdpPerCapita);
-    const requestedCorePc = parseStatNumber(patch.economy.coreGdpPerCapita);
-    const requestedOtherPc = parseStatNumber(patch.economy.otherGdpPerCapita);
+    // `maxAggregateRescale`: a target that would multiply or divide the ledger's
+    // current value by more than this is ignored. An event's figure is prose the
+    // model wrote ("€3.1tn"); one misread must not rescale every component of a
+    // polity to a GDP per head of 1. Exact GM and editor corrections pass none.
+    const plausible = (requested, current) => {
+      if (!Number.isFinite(requested) || !(requested > 0)) return null;
+      const limit = Number(maxAggregateRescale);
+      if (!(limit > 1) || !(Number(current) > 0)) return requested;
+      const ratio = requested / Number(current);
+      return ratio > limit || ratio < 1 / limit ? null : requested;
+    };
+    const requestedGdp = plausible(parseStatNumber(patch.economy.gdp), before?.gdp);
+    const requestedWholePc = plausible(parseStatNumber(patch.economy.gdpPerCapita), before?.gdpPerCapita);
+    const requestedCorePc = plausible(parseStatNumber(patch.economy.coreGdpPerCapita), before?.coreGdpPerCapita);
+    const requestedOtherPc = plausible(parseStatNumber(patch.economy.otherGdpPerCapita), before?.otherGdpPerCapita);
 
     // Total GDP is the strongest aggregate authority. If both GDP and GDP/capita
     // are supplied inconsistently, GDP wins and per-capita is recomputed.
