@@ -298,7 +298,7 @@ import {
 import { beginTurnPerfStage, endTurnPerfStage, measureTurnPerfStage, recordTurnPerfAiAttempt } from "../../runtime/turnPerf.js";
 import { difficultyDirective, difficultyMeta } from "../../runtime/difficulty.js";
 import { MAP_SETTING_KEYS, getMapSetting, getMapSettingDefaultOn } from "../../runtime/mapSettings.js";
-import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline } from "./idleDeadline.js";
+import { AI_FIRST_BYTE_TIMEOUT_MS, AI_IDLE_TIMEOUT_MS, createIdleDeadline, runWithIdleDeadline } from "./idleDeadline.js";
 import { REPAIR_STOP_TIME_BUDGET, runBoundedRepairCall } from "./repairCall.js";
 import { isDebugLogVerbose, logDebugEvent } from "../../runtime/debugLog.js";
 import { isFallbackListConfigured } from "./providerConfig.js";
@@ -1825,6 +1825,29 @@ export const EMPTY_RESPONSE_BODY_NOTE = "(the provider returned an empty respons
 // and an absent key — means "wait as long as the model needs".
 const taskIdleTimeoutMs = () =>
   (getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? AI_IDLE_TIMEOUT_MS : 0);
+
+// A direct callAI (not through runJsonTask) under the same setting: the same two
+// windows, on a local controller chained to the caller's signal, so the player's
+// Cancel still cancels. A stall rejects with an ordinary error, which the
+// callers already treat as a failed call. Off, the windows are inert and the
+// call waits as long as the model needs. These calls used to pass a stopwatch
+// "deadline" instead, which callAI reads only to cap a busy-retry and which
+// never aborted anything.
+const callAIWithTaskLimit = (systemPrompt, history, options = {}) => {
+  const idleMs = taskIdleTimeoutMs();
+  return runWithIdleDeadline(
+    ({ signal, deadline, onActivity }) => callAI(systemPrompt, history, { ...options, signal, deadline, onActivity }),
+    {
+      idleMs,
+      firstByteMs: idleMs ? AI_FIRST_BYTE_TIMEOUT_MS : 0,
+      signal: options.signal ?? null,
+      timeoutError: new Error(
+        `AI task "${options.taskKey || "ai"}" timed out: the model stopped answering. `
+          + "Turn off \"Limit AI generation\" in Settings to wait as long as the model needs.",
+      ),
+    },
+  );
+};
 
 // Difficulty 2.0 carries one directive per scope; chat-shaped tasks get the
 // diplomacy reading, interactive events their own, everything else the simulation one.
@@ -10227,7 +10250,7 @@ For each country include only values that genuinely changed.`;
   ].join("\n");
 
   try {
-    const response = await callAI(
+    const response = await callAIWithTaskLimit(
       systemPrompt,
       [{ role: "user", parts: [{ text: userMessage }] }],
       {
@@ -10235,7 +10258,6 @@ For each country include only values that genuinely changed.`;
         reasoningEnabled: false,
         taskKey: "countryStatSheet",
         ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
-        ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration) ? { deadline: Date.now() + 90000 } : {}),
       },
     );
     const rawText = typeof response === "string" ? response : normalizeString(response?.rawText);
@@ -10426,7 +10448,7 @@ You may omit a field when the existing value should remain exactly unchanged.`;
   ].join("\n");
 
   try {
-    const response = await callAI(
+    const response = await callAIWithTaskLimit(
       systemPrompt,
       [{ role: "user", parts: [{ text: userMessage }] }],
       {
@@ -10434,9 +10456,6 @@ You may omit a field when the existing value should remain exactly unchanged.`;
         reasoningEnabled: false,
         taskKey: "countryStatSheet",
         ...(requests ? { onRequest: jumpTaskOptions(requests, "stats").onRequest } : {}),
-        ...(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration)
-          ? { deadline: Date.now() + 90000 }
-          : {}),
       },
     );
     const rawText = typeof response === "string"
@@ -10748,7 +10767,7 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     `WORLD STATE:\n${variables.worldSummary || variables.grandMapDescription || "(no summary)"}\n\n` +
     `RECENT EVENTS:\n${variables.recentEvents || "(none)"}\n\n` +
     `Respond in ${variables.language || "English"} as 4-6 short bullet points, each prefixed with "- ". No preamble, no closing remarks.`;
-  const raw = await callAI(system, [
+  const raw = await callAIWithTaskLimit(system, [
     { role: "user", parts: [{ text: `Give me the intelligence briefing on ${target}.` }] },
   ], { taskKey: "countryStatSheet" });
   return String(raw || "").trim();

@@ -125,3 +125,27 @@ export function createIdleDeadline({ idleMs, firstByteMs = idleMs }, onExpire) {
         cancel,
     };
 }
+
+// One call under the two windows, for code that calls the model directly rather
+// than through runJsonTask. `call` receives { signal, deadline, onActivity } and
+// returns the provider's promise. The abort is on a local controller chained to
+// the caller's `signal`, so the caller's Cancel still cancels and a stall
+// rejects with `timeoutError` — an ordinary failure — rather than looking like a
+// cancel. Windows of 0 (the setting off) wait as long as the call takes.
+export async function runWithIdleDeadline(call, { idleMs, firstByteMs = idleMs, signal = null, timeoutError = new Error("The model stopped answering.") } = {}) {
+    const controller = new AbortController();
+    if (signal) {
+        if (signal.aborted) controller.abort(signal.reason);
+        else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
+    const idle = createIdleDeadline({ idleMs, firstByteMs }, () => controller.abort(timeoutError));
+    idle.start();
+    try {
+        return await call({ signal: controller.signal, deadline: idle.deadline, onActivity: idle.note });
+    } catch (error) {
+        // A provider may surface the abort as a generic AbortError; name the stall.
+        throw !signal?.aborted && controller.signal.reason === timeoutError ? timeoutError : error;
+    } finally {
+        idle.cancel();
+    }
+}
