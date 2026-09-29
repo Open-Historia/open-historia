@@ -962,6 +962,13 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
     appendBoundedLine(lines, `Domestic pressure: ${compactDecisionRelevantJoined(context.political.domesticPressures, decisionFocusText, { limit: 1, itemChars: 160, ignoredFocusTerms })}`, cap, { reserve: marker.length + 2 });
   }
 
+  // The native pressure ledger, strongest first (selectPressureIssues): the
+  // Disposition line above is partly derived from it, and without it the
+  // model saw the verdict but never the pressures behind it.
+  const pressureRows = array(context.political.pressureIssues).slice(0, 2)
+    .map((row) => pressureLine(row).replace(/^-\s*/, ""));
+  appendBoundedLine(lines, pressureRows.length ? `Pressure ledger: ${pressureRows.join(" | ")}` : "", cap, { reserve: marker.length + 2 });
+
   if (counterpart) {
     const publicKnowledge = knowledgeSummaryLines(context.counterpartKnowledge)
       .map((line) => clean(line.replace(/^[-•]\s*/, "")))
@@ -998,6 +1005,27 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
   }
   appendBoundedLine(lines, relationBits.length ? `Objective relations: ${relationBits.slice(0, 3).join("; ")}` : "", cap, { reserve: marker.length + 2 });
 
+  // Wars and agreements: with the counterpart when there is one (warRows and
+  // agreementRows already scope them), otherwise the actor's own first ones.
+  // A leader that never saw its alliance with the player could not honour it.
+  const commitmentBits = [
+    ...array(context.bilateral?.wars).slice(0, 2).map((war) =>
+      `war ${clippedText(war.title || war.id || "untitled", 80)} (${war.status || "active"}${war.relationship && war.relationship !== "actor-involved" ? `, ${war.relationship}` : ""}): ${war.sideA.slice(0, 3).join(", ")} vs ${war.sideB.slice(0, 3).join(", ")}`),
+    ...array(context.bilateral?.agreements).slice(0, 2).map((agreement) =>
+      `agreement ${clippedText(agreement.title || agreement.id || "untitled", 80)} (${agreement.type || "other"}, ${agreement.status || "active"})`),
+  ];
+  appendBoundedLine(lines, commitmentBits.length ? `Wars and agreements: ${commitmentBits.join("; ")}` : "", cap, { reserve: marker.length + 2 });
+
+  const opposition = context.political.entities.opposition?.[0];
+  const oppositionHead = opposition ? [
+    opposition.name,
+    opposition.ideology,
+    Number.isFinite(Number(opposition.supportPercent)) ? `${opposition.supportPercent}% support` : "",
+    Number.isFinite(Number(opposition.influencePercent)) ? `${opposition.influencePercent}% influence` : "",
+    opposition.privateGoal ? `private goal: ${clippedText(opposition.privateGoal, 150)}` : "",
+  ].filter(Boolean).join(" | ") : "";
+  appendBoundedLine(lines, oppositionHead ? `Lead opposition: ${oppositionHead}` : "", cap, { reserve: marker.length + 2 });
+
   // If anything material could not fit, make that explicit without pretending
   // the capsule was complete. Core decision drivers above are always attempted
   // before this marker.
@@ -1008,8 +1036,11 @@ const formatCompactDecisionContextText = (context, { maxChars, decisionFocusText
     context.political.entities.governing.length,
     context.political.perceptions.length,
     context.political.domesticPressures.length,
+    pressureRows.length,
     institutionNames.length,
     relationBits.length,
+    commitmentBits.length,
+    oppositionHead,
   ].some(Boolean);
   const text = lines.join("\n");
   if (fullSignals && text.length + marker.length + 1 <= cap) lines.push(marker);

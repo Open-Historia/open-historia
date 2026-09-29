@@ -550,3 +550,18 @@ test("compact decision capsule keeps continuous power evidence inside the bounde
   assert.match(context.text, /power regional-power; sovereign 54\/100; weight/);
   assert.match(context.text, /Power leverage: institutions \+/);
 });
+
+test("compact capsules carry the pressure ledger, the wars and agreements, and the lead opposition", () => {
+  const focused = buildPoliticalDecisionContext(makeWorld(), "Actor Republic", {
+    counterpartPolity: "Counterpart State",
+    maxChars: 2600,
+  });
+  assert.ok(focused.text.length <= 2600);
+  assert.match(focused.text, /Pressure ledger: Security: very high salience, high strain; pressure leans toward hardline\/security-first; [^|]+ \| War Weariness: moderate salience/);
+  assert.match(focused.text, /Wars and agreements: agreement Mutual Consultation Pact \(alliance, active\)/);
+  assert.doesNotMatch(focused.text, /war Regional War/, "a war without the counterpart is not this conversation's");
+  assert.match(focused.text, /Lead opposition: Opposition Front \| National populism \| 31% support \| private goal: Force an early election/);
+
+  const open = buildPoliticalDecisionContext(makeWorld(), "Actor Republic", { maxChars: 2600 });
+  assert.match(open.text, /Wars and agreements: war Regional War \(active\): The Actor Republic vs Third State; agreement Mutual Consultation Pact/);
+});
