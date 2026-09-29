@@ -1177,6 +1177,20 @@ export const buildIncidentReport = (incident) => {
     return redactSecrets([...lines, "", ...formatReportFields(incident.fields)].join("\n"));
 };
 
+// A render crash as a report, for the crash screen's Save button
+// (ErrorBoundary.jsx): the error, its own stack and React's component stack,
+// all of them whole. Its log entry keeps a few frames of each, which names the
+// panel; the report is where the rest goes.
+export const buildRenderCrashIncident = (error, componentStack = "") => ({
+    kind: "render-crash",
+    title: "Render crash",
+    fields: [
+        ["Error", `${error?.name || "Error"}: ${error?.message || String(error)}`],
+        ["Stack", String(error?.stack || "").trim()],
+        ["Component stack", String(componentStack || "").trim()],
+    ],
+});
+
 // A filename that sorts by time and says what it was saved for, because the
 // first thing that happens to these is being dragged into a Discord thread with
 // three others. `tag` is the incident's kind ("turn-fallback", "advisor-error");

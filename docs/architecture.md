@@ -82,7 +82,7 @@ The one place the flag is read at boot is `src/main.jsx:28` (below). Because the
 | URL | Renders | Notes |
 |---|---|---|
 | `?editor=1` | `<MapEditor/>` (lazy, `src/App.jsx:7`) | OpenLayers only fetched here; wrapped in `<Suspense>`. See [Map editor](map-editor.md) |
-| anything else | `<ErrorBoundary><GameApp/></ErrorBoundary>` | `ErrorBoundary` (`src/runtime/ErrorBoundary.jsx`) shows a recoverable Reload screen on a render throw instead of a blank page |
+| anything else | `<ErrorBoundary><GameApp/></ErrorBoundary>` | `ErrorBoundary` (`src/runtime/ErrorBoundary.jsx`) shows a recoverable Reload screen on a render throw instead of a blank page, with a Save logging file button that attaches the crash's full stacks |
 
 ### 3c. `GameApp` — startup preload & first render
 

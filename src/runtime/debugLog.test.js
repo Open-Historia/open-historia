@@ -23,6 +23,7 @@ const {
     buildDebugLogReport,
     buildIncidentReport,
     buildLoggingFile,
+    buildRenderCrashIncident,
     clearDebugLog,
     debugLogFilename,
     getDebugLogBytes,
@@ -584,6 +585,25 @@ test("I6 the copied incident report carries the context and every field", () => 
     assert.match(report, /^Round: 4$/m);
     assert.match(report, /Raw model response: \{"events": \[/);
     assert.equal(buildIncidentReport(null), "");
+});
+
+test("I7 a render crash's report keeps the whole stack and component stack", () => {
+    reset();
+    // The crash screen had only Reload, and its log entry keeps four frames of
+    // the component stack and none of the error's own.
+    const error = new TypeError("Cannot read properties of undefined (reading 'map')");
+    error.stack = [`TypeError: ${error.message}`, ...Array.from({ length: 12 }, (_, index) => `    at frame${index} (Panel.jsx:${index + 1}:1)`)].join("\n");
+    const componentStack = Array.from({ length: 9 }, (_, index) => `    at Component${index}`).join("\n");
+    const incident = buildRenderCrashIncident(error, componentStack);
+    assert.equal(incident.kind, "render-crash");
+    const report = buildDebugLogReport({ incident });
+    assert.ok(report.includes("-- Reported problem: Render crash --"));
+    assert.ok(report.includes("Error: TypeError: Cannot read properties of undefined (reading 'map')"));
+    assert.ok(report.includes("at frame11 (Panel.jsx:12:1)"), "the last frame of the error's stack");
+    assert.ok(report.includes("at Component8"), "the last frame of the component stack");
+    // With logging off the copy carries the same.
+    assert.ok(buildIncidentReport(incident).includes("at frame11 (Panel.jsx:12:1)"));
+    assert.ok(debugLogFilename(incident.kind).endsWith("-render-crash.txt"));
 });
 
 // ---- Group D: the Desktop log merged into the Logging file -----------------

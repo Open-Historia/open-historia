@@ -444,7 +444,7 @@ Always recorded:
 | `src/Game/AI/providerConfig.js` | `setting` | Provider switches, every provider field (model, per-task models, key set/cleared, endpoint host, custom-parameter size, structured output, strict tool schema), reasoning toggle, AI profiles; syncs provider + model into the header |
 | `src/Game/GameUI/main.jsx`, `settings.jsx` | `setting` | Fullscreen, 3D Globe, 3D Terrain; UI and chat language, telemetry, ratings, LAN sharing |
 | `src/Game/AI/gameplay.js` | `ai` | **Every AI task that failed**, with its reason and the error (and whether it was aborted), marked as a problem |
-| `src/runtime/ErrorBoundary.jsx` | `crash` | Render crashes with the component stack, then flushes |
+| `src/runtime/ErrorBoundary.jsx` | `crash` | Render crashes with the first frames of the error's stack and of the component stack, then flushes. The crash screen's **Save logging file** button (`useFailureReportButton`, copy when logging is off) attaches both stacks whole (`buildRenderCrashIncident`) |
 | `window` / `console` | `crash`, `error`, `warn` | Uncaught errors, unhandled rejections, and everything the game already logged |
 
 Detailed mode only (`{ verbose: true }`):
