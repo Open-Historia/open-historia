@@ -1361,7 +1361,7 @@ export const buildTargetDossierKernel = ({ bundle, code, scenarioCatalog = [], f
     lines.push(
       overrides.length > 0
         ? `Territory: no regions on the current map are recorded as held by ${code}.`
-        : `Territory: holds its modern-day territory (no territorial changes recorded).`,
+        : `Territory: holds its starting territory on this map (no territorial changes recorded).`,
     );
   }
 

@@ -99,7 +99,8 @@ import {
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
-import { buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
+import { buildTargetDossierKernel, buildTargetStatsTerritorialBasisKernel } from "./countryStatsWorkerKernel.js";
+import { buildTargetLedgerLines } from "./targetDossier.js";
 import { IO_CONFIG, IO_REQUEST, serveWorkerIo } from "./runtimeIoBridge.js";
 import {
   decodeGameMasterTransportPayload,
@@ -8172,63 +8173,51 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   return topics;
 };
 
-// Freeform AI intelligence briefing on a specific country/polity, grounded in the
-// current world state. Returned as plain-text bullet points for the region popup.
 // Everything the game state actually records about ONE polity — the target's
-// dossier for intelligence briefings. The generic world summary truncates hard
-// (24 of possibly thousands of region overrides, 16 polities), so without this
-// the target usually isn't in the prompt at all and the AI can only shrug.
-const buildTargetDossier = async (bundle, code, normalizedWorld = null) => {
-  const world = normalizedWorld || normalizeWorldState(bundle.world);
-  const lines = [];
+// dossier for intelligence briefings, spy reports, the intelligence assessment,
+// the motion repair and the stat sheets. The generic world summary truncates
+// hard (24 of possibly thousands of region overrides, 16 polities), so without
+// this the target usually isn't in the prompt at all and the AI can only shrug.
+//
+// The polity, its territory and its forces are the Stats worker's own lines
+// (countryStatsWorkerKernel.js buildTargetDossierKernel), so the two paths can
+// no longer drift apart; its wars, its standing with the player, who directs
+// it, the groups in its land, its reputation, its service and its stat sheet
+// are the ledgers' (targetDossier.js), added here on the main thread for both.
+const buildTargetDossierBase = async (bundle, code, world) => {
+  // The catalog only names held regions, so it is read only when there are some.
+  const holdsOverrides = Boolean(code) && Object.values(world.regionOwnershipOverrides ?? {}).includes(code);
+  const fallbackCatalog = holdsOverrides ? await loadRegionCatalog().catch(() => []) : [];
+  return buildTargetDossierKernel({ bundle: { ...bundle, world }, code, fallbackCatalog });
+};
 
-  const polity = code ? world.polityOverrides?.[code] : null;
-  if (polity) {
-    lines.push(
-      `Polity: ${polity.name || code} (code ${code})${
-        polity.aliases?.length > 0 ? ` — also known as ${polity.aliases.join(", ")}` : ""
-      }`,
-    );
-    if (polity.note) lines.push(`Notes: ${polity.note}`);
-  }
-
-  const overrides = Object.entries(world.regionOwnershipOverrides ?? {});
-  const owned = code ? overrides.filter(([, owner]) => owner === code) : [];
-  if (owned.length > 0) {
-    const regionCatalog = await loadRegionCatalog();
-    const regionLookup = new Map(regionCatalog.map((region) => [region.id, region]));
-    const names = owned.slice(0, 40).map(([regionId]) => {
-      const region = regionLookup.get(regionId);
-      return region ? `${region.name}${region.country ? ` (${region.country})` : ""}` : regionId;
-    });
-    lines.push(
-      `Territory: holds ${owned.length} regions${owned.length > names.length ? ", including" : ""}: ${names.join(", ")}${
-        owned.length > names.length ? ", …" : ""
-      }`,
-    );
-  } else if (code) {
-    lines.push(
-      overrides.length > 0
-        ? `Territory: no regions on the current map are recorded as held by ${code}.`
-        : `Territory: holds its modern-day territory (no territorial changes recorded).`,
-    );
-  }
-
-  const units = normalizeArray(bundle.world?.units).filter((unit) => unit?.ownerCode === code);
-  if (units.length > 0) {
-    const byType = new Map();
-    let strength = 0;
-    for (const unit of units) {
-      byType.set(unit.type, (byType.get(unit.type) || 0) + 1);
-      strength += Number(unit.strength) || 0;
+// `statSheet: false` for the tasks that write the sheet themselves.
+const buildTargetLedger = async (bundle, code, world, { statSheet = true } = {}) => {
+  if (!code) return "";
+  // Who holds a region: an override, else the map's own owner. The catalog is
+  // read only when groups hold ground somewhere.
+  const regionOwner = new Map();
+  if (Object.keys(world.groupAreas ?? {}).length) {
+    for (const region of normalizeArray(await loadRegionCatalog().catch(() => []))) {
+      regionOwner.set(region.id, normalizeString(region.country));
     }
-    const composition = Array.from(byType.entries()).map(([type, n]) => `${n} ${type}`).join(", ");
-    lines.push(`Deployed forces: ${units.length} units (${composition}), combined strength ${strength}.`);
-  } else {
-    lines.push("Deployed forces: none currently on the map.");
   }
+  return buildTargetLedgerLines(world, code, {
+    playerPolity: normalizeString(bundle?.game?.country),
+    ownerOf: (regionId) => world.regionOwnershipOverrides?.[regionId] ?? regionOwner.get(regionId) ?? "",
+    puppetStates: isActiveFeatureEnabled("puppetStates"),
+    espionage: isActiveFeatureEnabled("espionage"),
+    statSheet,
+  }).join("\n");
+};
 
-  return lines.join("\n");
+const buildTargetDossier = async (bundle, code, normalizedWorld = null, { statSheet = true } = {}) => {
+  const world = normalizedWorld || normalizeWorldState(bundle.world);
+  const [base, ledger] = await Promise.all([
+    buildTargetDossierBase(bundle, code, world),
+    buildTargetLedger(bundle, code, world, { statSheet }),
+  ]);
+  return [base, ledger].filter(Boolean).join("\n");
 };
 
 const canonicalStatsPolity = (token, world) => {
@@ -9644,7 +9633,7 @@ const buildCountryStatsPreparationBackground = async (
       normalizedWorld,
       { signal },
     );
-    const dossier = await buildTargetDossier(bundle, code, normalizedWorld);
+    const dossier = await buildTargetDossierBase(bundle, code, normalizedWorld || normalizeWorldState(bundle.world));
     return {
       territorialBasis,
       dossier,
@@ -9770,7 +9759,7 @@ const buildCountryStatsPreparationBackground = async (
       normalizedWorld,
       { signal },
     );
-    const dossier = await buildTargetDossier(bundle, code, normalizedWorld);
+    const dossier = await buildTargetDossierBase(bundle, code, normalizedWorld || normalizeWorldState(bundle.world));
     return {
       territorialBasis,
       dossier,
@@ -10780,7 +10769,12 @@ const statsTerritorialPlanMatchesSheet = (sheet, plan = []) => {
 
 export const generateCountryStats = async ({ code, name } = {}) => {
   const bundle = await readGameStateBundle({ force: true });
-  const variables = await buildTemplateVariables(bundle, { lookups: true });
+  // Only what the briefing below reads: without a list every ledger context was
+  // built and thrown away.
+  const variables = await buildTemplateVariables(bundle, {
+    lookups: true,
+    requiredKeys: ["date", "playerPolity", "language", "worldSummary", "grandMapDescription", "recentEvents"],
+  });
   const target = name || code || "the polity";
   const playerPolity = variables.playerPolity || bundle?.game?.country || "the player";
   const dossier = await buildTargetDossier(bundle, normalizeString(code));
@@ -10789,7 +10783,7 @@ export const generateCountryStats = async ({ code, name } = {}) => {
     `You are the intelligence advisor in an alternate-history strategy game. ` +
     `The current date is ${variables.date || "unknown"}. The player leads ${playerPolity}. ` +
     `Give a concise intelligence briefing on ${target}${code ? ` (code ${code})` : ""}. ` +
-    `Treat the TARGET DOSSIER and WORLD STATE below as ground truth. Where specifics are not recorded, ` +
+    `Treat the TARGET DOSSIER and WORLD STATE below as ground truth; where the dossier gives a STAT SHEET, quote its figures rather than estimating. Where specifics are not recorded, ` +
     `give your best historical estimate for this era, people and region — you are the advisor, and ` +
     `plausible estimates are your job. Never answer with "unknown", "no data" or "not specified"; ` +
     `mark guesses with "(est.)" instead. ` +
@@ -11267,7 +11261,7 @@ export const assessIntelligenceService = async (target, { signal, requestKind } 
     ...(await buildTemplateVariables(bundle, { taskKey: "intelligenceAssessment" })),
     targetPolity: name,
   };
-  const dossier = await buildTargetDossier(bundle, name, world);
+  const dossier = await buildTargetDossier(bundle, name, world, { statSheet: false });
   const era = normalizeString(world.simulationRules).slice(0, 700);
   const statSheet = normalizeString(buildCompactEconomicContext(world.countryStats?.[name], { name }));
   const { payload } = await runJsonTask("intelligenceAssessment", {
@@ -11341,7 +11335,7 @@ const generateScenarioCustomStatSheet = async ({
   const currentRound = Math.max(0, Math.trunc(Number(bundle?.game?.round) || 0));
   const previous = normalizeCountryStatSheet(worldAtStart?.countryStats?.[statCode]);
   const previousValues = normalizeCustomStatValues(previous?.customStats, definition, { partial: true });
-  const dossier = await buildTargetDossier(bundle, target, worldAtStart);
+  const dossier = await buildTargetDossier(bundle, target, worldAtStart, { statSheet: false });
   const variables = await buildTemplateVariables(bundle, {
     lookups: true,
     taskKey: "countryStatSheet",
@@ -11472,7 +11466,12 @@ export const generateCountryStatSheet = async ({ code, name, forceReassess = fal
     { signal, forceReassess },
   );
   const territorialBasis = statsPreparation.territorialBasis;
-  const dossier = statsPreparation.dossier;
+  // The worker's lines, and the ledgers' beside them — without the old sheet,
+  // which this request is writing.
+  const dossier = [
+    statsPreparation.dossier,
+    await buildTargetLedger(bundle, statCode, worldAtStart, { statSheet: false }),
+  ].filter(Boolean).join("\n");
   throwIfAborted(signal);
   await statsYieldToMainThread(signal);
 
