@@ -133,6 +133,28 @@ test("the baseline stops asking once a phase has already blocked Apply", async (
   ]);
   assert.equal(result.modelCalls, 3);
   assert.deepEqual(result.unresolvedMembershipPolities, polities);
+  assert.ok(result.warnings.includes("Skipped the membership and standing-agreement requests because the baseline was already blocked."));
+});
+
+test("a failed institution catalog skips power calibration as well", async () => {
+  const polities = ["Avalon", "Borduria"];
+  const tools = [];
+  const result = await generateGeopoliticalWorldBaseline({
+    scenarioDate: "2014-03-22",
+    polities,
+    world: {},
+    callModel: async (systemPrompt, messages, options) => {
+      tools.push(options.tool.name);
+      throw new Error("provider unavailable");
+    },
+  });
+
+  assert.equal(result.blockingErrors.length, 1);
+  assert.match(result.blockingErrors[0], /Institution catalog failed/);
+  // Only the two catalog attempts; power, memberships and agreements are skipped.
+  assert.deepEqual(tools, ["submit_geopolitical_institution_catalog", "submit_geopolitical_institution_catalog"]);
+  assert.equal(result.modelCalls, 2);
+  assert.ok(result.warnings.includes("Skipped the power, membership and standing-agreement requests because the baseline was already blocked."));
 });
 
 test("power and membership prompts show the scenario author's country tags, with live tags winning", async () => {

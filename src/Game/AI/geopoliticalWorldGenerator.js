@@ -1128,7 +1128,11 @@ export const generateGeopoliticalWorldBaseline = async ({
   };
 
   const skipRemainingPhases = blockingErrors.length > 0;
-  if (skipRemainingPhases) warnings.push("Skipped the membership and standing-agreement requests because the baseline was already blocked.");
+  if (skipRemainingPhases) {
+    warnings.push(catalogBlocked
+      ? "Skipped the power, membership and standing-agreement requests because the baseline was already blocked."
+      : "Skipped the membership and standing-agreement requests because the baseline was already blocked.");
+  }
   const membershipCoverage = skipRemainingPhases ? {
     records: [],
     diagnostics: [],
