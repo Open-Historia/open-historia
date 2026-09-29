@@ -2,7 +2,9 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMap } from "react-map-gl/maplibre";
-import { useWorldState } from "../Map/useWorldState.js";
+import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
+import { getPlayerCode, setInteractionMode } from "../Map/unitsController.js";
+import { approximateMark, canSettleStructure, saveSettledStructure } from "../../runtime/structurePlacement.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { APP_HEIGHT, MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useShortTouchScreen } from "../../runtime/mobileUi.js";
@@ -134,6 +136,18 @@ const SIDEWAYS_SHEET_PLACEMENT = {
 };
 const SIDEWAYS_SHEET_MAX_HEIGHT = `calc(${APP_HEIGHT} - 4.5rem - ${SAFE_TOP} - 7.75rem - ${SAFE_BOTTOM})`;
 
+const settleButton = {
+  flex: 1,
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: "6px",
+  color: "white",
+  cursor: "pointer",
+  fontSize: "11px",
+  fontWeight: 700,
+  padding: "5px 8px",
+};
+
 const DetailRow = ({ label, value }) => (
   <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", fontSize: "11px", color: "rgba(255,255,255,0.6)", marginTop: "3px" }}>
     <span style={{ flexShrink: 0 }}>{label}</span>
@@ -259,6 +273,12 @@ const FeaturePopup = () => {
     : selection;
 
   const isCity = selection.source === "city";
+  // A structure given an approximate placement because its town is not on the
+  // map (AI/placement.js): everyone sees the note; the player settles their own,
+  // or their puppets', with Accept or Move (runtime/structurePlacement.js).
+  const approximate = isCity ? null : approximateMark(liveMarker);
+  const settleable = Boolean(approximate)
+    && canSettleStructure(liveMarker, { playerCountry: getPlayerCode(), world: getWorldStateSnapshot() ?? {} });
   const kind = isCity
     ? (feature.capital === "primary" ? "Capital city" : TIER_LABEL[feature.tier] || "City")
     : titleCase(feature.kind || "Landmark");
@@ -360,6 +380,39 @@ const FeaturePopup = () => {
           {feature.note ? (
             <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,255,255,0.75)" }}>
               {feature.note}
+            </div>
+          ) : null}
+          {!isCity && approximate ? (
+            // Each case one whole sentence, so a language can reorder it (docs/i18n.md).
+            <div style={{ marginTop: "8px", fontSize: "11px", lineHeight: 1.45, color: "rgba(255,210,120,0.9)" }}>
+              {approximate.unnamed
+                ? (approximate.near
+                  ? `No place was given for this, so it was placed near ${approximate.near} in ${approximate.country}.`
+                  : `No place was given for this, so it was placed in ${approximate.country}.`)
+                : approximate.near
+                  ? `${approximate.asked} isn't on this map, so this was placed near ${approximate.near} in ${approximate.country}.`
+                  : `${approximate.asked} isn't on this map, so this was placed in ${approximate.country}.`}
+            </div>
+          ) : null}
+          {!isCity && settleable ? (
+            <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+              <button
+                className="oh-tap"
+                onClick={() => { void saveSettledStructure(feature.id); }}
+                style={settleButton}
+              >
+                Accept
+              </button>
+              <button
+                className="oh-tap"
+                onClick={() => {
+                  setInteractionMode({ kind: "structure-place", markerId: feature.id });
+                  setDismissing(true);
+                }}
+                style={settleButton}
+              >
+                Move
+              </button>
             </div>
           ) : null}
         </div>

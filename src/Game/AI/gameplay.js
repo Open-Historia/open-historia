@@ -5,7 +5,7 @@ import { describePuppetBriefing, puppetBriefingFor } from "../../runtime/puppets
 import { answerableDemandOf, demandCheckContext, demandCheckPrompt, interpretDemandCheck, openDemandOf } from "../../runtime/demandCheck.js";
 import { NATIVE_GAME_MASTER_PROMPT, normalizePromptPack } from "./gameplayPrompts.js";
 import { collectFoundedPolities, foundingPolityChange } from "../../runtime/polityFounding.js";
-import { describeBasisAction, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
+import { describeBasisAction, sameRegionChange, screenTerritoryBasis } from "../../runtime/territoryBasis.js";
 import { describeGroupsForPrompt, normalizeGroupOp } from "../../runtime/groups.js";
 import { effectiveCityPopulation } from "../../runtime/cityPopulation.js";
 import {
@@ -19,9 +19,10 @@ import {
   withReceiptDraft,
 } from "../../runtime/applicationReceipt.js";
 import { normalizeFiledEvents, previewFiledMark, toFiledEvent } from "../../runtime/filedEvents.js";
-import { buildUnitDirectorInput, directGeneratedUnitOps } from "./nativeUnitDirector.js";
-import { buildTerritoryDirectorInput, directGeneratedTerritoryOps } from "./nativeTerritoryDirector.js";
-import { buildStructureDirectorInput, directGeneratedStructureOps } from "./nativeStructureDirector.js";
+import { buildUnitDirectorInput } from "./nativeUnitDirector.js";
+import { applyMapConsequences, markOrderedEvents, markSceneOutcome } from "./mapConsequences.js";
+import { buildTerritoryDirectorInput } from "./nativeTerritoryDirector.js";
+import { buildStructureDirectorInput } from "./nativeStructureDirector.js";
 import {
   buildPlayerFocusDirective,
   citeNarratedOrders,
@@ -117,7 +118,8 @@ import {
 import { buildOwnerAliasMap, canonicalOwnerName, toCountryName } from "../../runtime/ownerNames.js";
 import { countryGidFromIdentity } from "../../runtime/countryFlags.js";
 import { editDistance, foldRegionKey, matchRegionName, stripRegionAffixes } from "./regionMatch.js";
-import { PLACEMENT_DIRECTIVE, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
+import { describeRefusedPost, isMilitaryPost, postWantsFormation } from "./militaryPosts.js";
+import { PLACEMENT_DIRECTIVE, describeApproximatePlacement, distanceKm as placementDistanceKm, nearestInteriorPoint, pointInGeometry, resolvePlacement, resolveRegionPlacement } from "./placement.js";
 import { FOOTPRINT_KM, obstaclesOf, spaceOut } from "../../runtime/featureSpacing.js";
 import { LOOKUP_DIRECTIVE, LOOKUP_TOOLS, buildLookupContext, executeLookup, placesNamedIn } from "./lookupTools.js";
 import {
@@ -2261,16 +2263,19 @@ const buildPlacementGazetteer = (context, world) => {
   // The nearest region to a point that is in none, within maxKm, and the spot
   // inside it nearest that point: where something put in the sea comes ashore.
   const nearestLand = (point, maxKm) => {
+    // The bbox only rules a region out: most of the world is nowhere near. It is
+    // no measure of how near the land is — a large region's bbox can take in the sea off
+    // another's coast, and ranking by it put a division ashore on the far side.
+    // Of the regions whose bbox is in reach, the one whose land is nearest wins.
     let best = null; let bestKm = maxKm;
     for (const row of withGeometry) {
-      // The bbox first: most of the world is nowhere near.
       const clamped = [Math.min(Math.max(point[0], row.bbox[0]), row.bbox[2]), Math.min(Math.max(point[1], row.bbox[1]), row.bbox[3])];
-      const km = placementDistanceKm(point, clamped);
-      if (km < bestKm) { bestKm = km; best = row; }
+      if (placementDistanceKm(point, clamped) >= bestKm) continue;
+      const ashore = nearestInteriorPoint(row.geometry, point);
+      const km = ashore ? placementDistanceKm(point, ashore) : Infinity;
+      if (km < bestKm) { bestKm = km; best = { point: ashore, region: asRegion(row) }; }
     }
-    if (!best) return null;
-    const ashore = nearestInteriorPoint(best.geometry, point);
-    return ashore ? { point: ashore, region: asRegion(best) } : null;
+    return best;
   };
   // Whether a polity, by any of its names, holds any land on the map right now;
   // null for a name the map does not know at all — a polity this very turn
@@ -2280,7 +2285,45 @@ const buildPlacementGazetteer = (context, world) => {
     if (!owner) return null;
     return (context.ownerRows.get(owner) ?? []).length > 0;
   };
-  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand };
+  // A country's capital as the Scenario's cities mark it ("primary"), held by that
+  // country now: where approximate placement (AI/placement.js) puts a thing whose
+  // town the map does not know.
+  const capitalOf = (name) => {
+    const owner = context.resolveOwner(name) || normalizeString(name);
+    const key = fold(owner);
+    if (!key) return null;
+    const held = context.cityRows.filter((city) => city.capital && fold(context.regionOfCity(city)?.owner) === key);
+    // A country of several nations marks each one's capital "primary" (London,
+    // Cardiff, Edinburgh, Belfast): the largest is the country's own.
+    const byPopulation = (list) => [...list].sort((a, b) => b.population - a.population);
+    const city = byPopulation(held.filter((entry) => fold(entry.capital) === "primary"))[0] ?? byPopulation(held)[0];
+    return city ? { name: city.name, point: city.coordinates } : null;
+  };
+  // The provinces and cities a text names that `country` holds, in the order it
+  // names them, as anchors for approximate placement (AI/placement.js). Whole
+  // words only, and names of four letters or more, so "Ure" is not found in
+  // "secure".
+  const placesNamedIn = (text, country) => {
+    const owner = fold(context.resolveOwner(country) || country);
+    const haystack = ` ${fold(text).replace(/[^\p{L}\p{N}]+/gu, " ")} `;
+    if (!owner || haystack.trim().length === 0) return [];
+    const at = (name) => {
+      const key = fold(name).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      return key.length >= 4 ? haystack.indexOf(` ${key} `) : -1;
+    };
+    const found = [
+      ...withGeometry.filter((row) => fold(row.owner) === owner).map((row) => ({ kind: "region", name: row.name, region: asRegion(row), at: at(row.name) })),
+      ...context.cityRows.filter((city) => fold(context.regionOfCity(city)?.owner) === owner)
+        .map((city) => ({ kind: "city", name: city.name, point: city.coordinates, at: at(city.name) })),
+    ];
+    return found.filter((place) => place.at >= 0).sort((a, b) => a.at - b.at);
+  };
+  // Whether two names are one polity as the map knows them (an alias, a code).
+  const samePolity = (a, b) => {
+    const key = (name) => fold(context.resolveOwner(name) || name);
+    return Boolean(key(a)) && key(a) === key(b);
+  };
+  return { find, findRegionId, suggest, sharedName, regionAt, nearestLand, holdsLand, capitalOf, placesNamedIn, samePolity };
 };
 
 const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
@@ -2295,19 +2338,29 @@ const LAND_UNIT_TYPES = new Set(["infantry", "armor", "artillery", "garrison"]);
 // who holds the ground it landed on (`groundOwner`) and whether the owner it was
 // given holds any land at all (`ownerHoldsLand`) — what the director's rules
 // need to catch a structure credited to a polity that no longer has a country.
-const resolvePlacements = async (containers, world, { receipt = null, noteGround = false } = {}) => {
+// `formations` are [{ owner, point }] the caller knows will stand by the end of
+// this turn besides the world's units: a unit Director's moves, for the
+// structure Director's posts (militaryPosts.js).
+const resolvePlacements = async (containers, world, { receipt = null, noteGround = false, formations = [] } = {}) => {
   const placing = [];
   for (const { event, impacts, path } of normalizeArray(containers)) {
     if (!impacts || typeof impacts !== "object") continue;
     const title = normalizeString(event?.title);
+    // What the event itself says, for a place the map does not know: a province
+    // the event names puts a garrison the model sited at an unknown town in that
+    // province rather than by the capital.
+    const context = [title, normalizeString(event?.description)].filter(Boolean).join(". ");
     for (const op of normalizeArray(impacts.unitOps)) {
       const kind = normalizeString(op?.op).toLowerCase();
       if (kind === "spawn") {
         const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
-        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
+        placing.push({ family: "unit", target: unit, phrase: normalizeString(unit.at ?? op.at), regionId: normalizeString(unit.regionId ?? op.regionId), lngKey: "lng", latKey: "lat", name: normalizeString(unit.name), id: "", raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(unit.type).toLowerCase()), title, context, path, spawn: true, owner: normalizeString(unit.ownerCode ?? unit.owner ?? op.ownerCode) });
       } else if (kind === "move") {
         const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
-        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: false, title, path, owner: normalizeString(mover?.ownerCode) });
+        // A land formation's march ends on land, as its raising does: seen in a
+        // player's Game (2026-09-29), an armoured division sent to a coastal
+        // town stood in the sea, the model's guess a kilometre offshore.
+        placing.push({ family: "unit", target: op, phrase: normalizeString(op.at), regionId: normalizeString(op.regionId), lngKey: "toLng", latKey: "toLat", name: normalizeString(mover?.name) || normalizeString(op.unitId), id: normalizeString(op.unitId), raisedOnLand: LAND_UNIT_TYPES.has(normalizeString(mover?.type).toLowerCase()), title, context, path, owner: normalizeString(mover?.ownerCode) });
       }
     }
     for (const op of normalizeArray(impacts.markerOps)) {
@@ -2318,7 +2371,7 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       // An update that names no new place is not a placement.
       if (kind === "update" && !phrase && !Number.isFinite(Number(marker.lng))) continue;
       // `owner`: the polity building it, which decides which Montana "Montana" is.
-      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" });
+      placing.push({ family: "marker", target: marker, phrase, lngKey: "lng", latKey: "lat", name: normalizeString(marker.name), id: normalizeString(op.markerId || marker.id), raisedOnLand: false, title, context, path, owner: normalizeString(marker.ownerCode ?? op.ownerCode), markerOwner: normalizeString(marker.ownerCode), build: kind === "build" || kind === "found" });
     }
   }
   if (!placing.length) return { placed: 0, spaced: 0 };
@@ -2336,6 +2389,18 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
   let placed = 0; let spaced = 0;
   for (const entry of placing) {
     const { target, lngKey, latKey } = entry;
+    // A new unit or structure given no place at all is put where its own event
+    // says it is, in its owner's land. Seen in a replayed turn (2026-09-29): the
+    // structure director built a forward operating base with no `at` while its
+    // event named where it was, and it was dropped.
+    if (!entry.phrase && !entry.regionId && (entry.spawn || entry.build)
+      && !(Number.isFinite(Number(target[lngKey])) && Number.isFinite(Number(target[latKey])))) {
+      const named = entry.context && entry.owner ? normalizeArray(gazetteer.placesNamedIn(entry.context, entry.owner))[0] : null;
+      if (named) {
+        entry.phrase = named.name;
+        noteReceipt(receipt, "adjusted", `${entry.title ? `Event "${entry.title}": ` : ""}${entry.name || "a new thing"} was given no place, so it was placed in ${named.name}, where its event says it is. Give every new unit and structure \`at\`.`);
+      }
+    }
     // `at` first: a phrase says more than an id can — "off Sevastopol" is at sea,
     // the region it belongs to is not. `regionId` is the fallback, and for an
     // operation that gives only an id it is the whole answer. It used to be
@@ -2356,7 +2421,20 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
     // turns, to "northern frontier with Colombia" and then "northern border with
     // Colombia". A moved unit is not treated so: a move that cannot be placed
     // leaves the unit where it stands.
-    const homeland = !resolved && !hasCoordinates && entry.spawn && entry.owner
+    //
+    // A NEW unit or structure whose place is not on the map at all gets an
+    // approximate placement (AI/placement.js): by a province or city the phrase or
+    // the event names, near the country's capital, inside it, or in its owner's
+    // own land. Seen in a live game (2026-09-27): a base at "Djibo, Burkina Faso"
+    // was dropped because the map has no Djibo.
+    const approximated = (() => {
+      // A structure given no place at all still goes into its owner's land, marked
+      // so (placement.js `unnamed`); a unit with none is raised at home, below.
+      if (resolved || hasCoordinates || !(entry.spawn || entry.build) || !(entry.phrase || (entry.build && !entry.regionId))) return null;
+      const attempt = resolvePlacement(entry.phrase, gazetteer, { seedText: entry.name, owner: entry.owner, approximate: true, context: entry.context });
+      return attempt?.approximate && !attempt.error ? attempt : null;
+    })();
+    const homeland = !resolved && !approximated && !hasCoordinates && entry.spawn && entry.owner
       ? resolvePlacement(entry.owner, gazetteer, { seedText: entry.name })
       : null;
     if (resolved) {
@@ -2382,6 +2460,17 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       target[lngKey] = resolved.lng;
       target[latKey] = resolved.lat;
       if (entry.family === "unit" && resolved.regionId) target.regionId = resolved.regionId;
+      placed += 1;
+    } else if (approximated) {
+      noteReceipt(receipt, "adjusted", describeApproximatePlacement({
+        title: entry.title, name: entry.name, phrase: entry.phrase, reason: byPhrase?.error, placed: approximated,
+      }));
+      target[lngKey] = approximated.lng;
+      target[latKey] = approximated.lat;
+      if (entry.family === "unit" && approximated.regionId) target.regionId = approximated.regionId;
+      // The player settles an approximate structure of their own: Accept or Move
+      // (runtime/structurePlacement.js). A unit carries no mark; it moves anyway.
+      if (entry.family === "marker") target.approximate = approximated.approximate;
       placed += 1;
     } else if (homeland && !homeland.error) {
       const tried = byPhrase?.error
@@ -2420,9 +2509,9 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
 
     // An army is not raised at sea. This is what a guessed longitude looks like:
     // a rifle division standing in the Black Sea, forty kilometres off the city
-    // it was meant for. Only a land formation being CREATED, and only close to a
-    // shore — one that moves may be at sea in transit, and a point in mid-ocean
-    // is not a near miss.
+    // it was meant for. Only a land formation, raised or sent somewhere, and only
+    // close to a shore: its destination is land, while the steps of its march may
+    // cross water, and a point in mid-ocean is not a near miss.
     if (entry.raisedOnLand && !gazetteer.regionAt([lng, lat])) {
       const ashore = gazetteer.nearestLand([lng, lat], 150);
       if (ashore) {
@@ -2461,10 +2550,51 @@ const resolvePlacements = async (containers, world, { receipt = null, noteGround
       if (holds !== null) target.ownerHoldsLand = holds;
     }
   }
+  refuseUndeployedPosts({ containers, placing, world, gazetteer, formations, receipt });
   if (placed || spaced) {
     logDebugEvent("turn", `Placement: ${placed} thing(s) placed by name, ${spaced} moved clear of something already there.`, undefined, { verbose: true });
   }
   return { placed, spaced };
+};
+
+// A garrison or base on another power's land needs one of its owner's
+// formations there to deploy it (militaryPosts.js): standing within reach, or
+// sent or raised there by this same payload or turn. One that has none is taken
+// out of its payload, and the model is told to move a formation there first. A
+// post on its owner's own land is placed as ordered.
+const refuseUndeployedPosts = ({ containers, placing, world, gazetteer, formations, receipt }) => {
+  const pointOf = (lng, lat) => (Number.isFinite(Number(lng)) && Number.isFinite(Number(lat)) ? [Number(lng), Number(lat)] : null);
+  const posts = placing.filter((entry) => (entry.spawn || entry.build) && isMilitaryPost(entry.target, entry.family));
+  if (!posts.length) return;
+  const deployed = [
+    ...normalizeArray(world?.units)
+      .filter((unit) => normalizeString(unit?.type).toLowerCase() !== "garrison")
+      .map((unit) => ({ owner: unit.ownerCode, point: pointOf(unit.lng, unit.lat) })),
+    ...placing
+      .filter((entry) => entry.family === "unit" && !posts.includes(entry))
+      .map((entry) => ({ owner: entry.owner, point: pointOf(entry.target[entry.lngKey], entry.target[entry.latKey]) })),
+    ...normalizeArray(formations),
+  ].filter((formation) => formation.point);
+  let refused = 0;
+  for (const entry of posts) {
+    const point = pointOf(entry.target[entry.lngKey], entry.target[entry.latKey]);
+    const owner = entry.markerOwner || entry.owner;
+    const groundOwner = point ? normalizeString(gazetteer.regionAt(point)?.owner) : "";
+    if (!point || !postWantsFormation({ owner, groundOwner, point, formations: deployed, same: gazetteer.samePolity })) continue;
+    entry.target.refusedPost = true;
+    refused += 1;
+    noteReceipt(receipt, "dropped", describeRefusedPost({ title: entry.title, name: entry.name, owner, groundOwner }));
+  }
+  if (!refused) return;
+  // Out of the payload in place, as the rest of placement edits it.
+  const isRefused = (op, key) => ((op?.[key] && typeof op[key] === "object") ? op[key] : op)?.refusedPost === true;
+  for (const { impacts } of normalizeArray(containers)) {
+    for (const [list, key] of [[impacts?.unitOps, "unit"], [impacts?.markerOps, "marker"]]) {
+      if (!Array.isArray(list)) continue;
+      for (let index = list.length - 1; index >= 0; index -= 1) if (isRefused(list[index], key)) list.splice(index, 1);
+    }
+  }
+  logDebugEvent("turn", `Placement: ${refused} garrison(s) or base(s) on another power's land refused, with none of the owner's formations there.`);
 };
 
 // The system prompt a task is sent: its template rendered with the variables,
@@ -2574,6 +2704,14 @@ ${continuity}`);
 The engine carries these orders out every turn — a move continues toward its destination, a patrol keeps its station. Do not move these units again; give one a unit op only when an event redirects it or ends its order, and say why.
 ${pending}`);
   }
+
+  // Always sent, whatever the player's prompts say: without it the map stays
+  // empty while the story raises armies and builds bases. Seen in a live game
+  // (2026-09-27): thirteen rounds of military and construction events carried
+  // not one unit or structure change. The shortest form of the unit guidance
+  // the skip template used to carry, not a copy of it.
+  blocks.push(`[Units and Structures on the Map]
+When an event raises, moves, reinforces or wears down a force, that event carries the unitOps that show it. When an event builds or establishes something that stands in one place, it carries a markerOps build at a place the map knows, with its country.`);
 
   const board = buildJumpProjectsDirective(variables.projectsSummary);
   if (board) blocks.push(board);
@@ -2913,6 +3051,13 @@ So use the wider picture to choose the sender and the moment — never to give t
   if (["unitDirector", "structureDirector", "gameMaster", "idleDiplomacy", "interactiveExecutor"].includes(taskKey)) {
     systemPrompt = `${systemPrompt}\n\n${PLACEMENT_DIRECTIVE}`;
   }
+  // A Scene can hand land over by agreement; its outcome carries that as
+  // regionTransfers, checked as a jump's are. Anything won in fighting is left to
+  // the territory Director, which marks it occupied from the description.
+  if (taskKey === "interactiveSummary") {
+    systemPrompt = `${systemPrompt}\n\n[Land Changing Hands]\nIf the scene ended with land handed over by agreement (a treaty, a cession, a sale or a trade), list each region in regionTransfers with its new owner's full name as toCode, its previous owner's as fromCode, and basis. Name the regions as the map does. Leave regionTransfers out for anything taken or held by force: say in the description what was captured or occupied, and the map will show it as occupied.`;
+  }
+
   if (taskKey === "unitDirector") {
     const directorUnits = normalizeString(variables.unitDirectorUnits) || "[]";
     const directorCandidates = normalizeString(variables.unitDirectorCandidates) || "[]";
@@ -5319,13 +5464,7 @@ const resolveRegionTransfers = async (containers, world, {
     const toCode = regionKey(transfer?.toCode);
     if (!id || !toCode) return;
 
-    const duplicate = target.some(
-      (entry) =>
-        normalizeString(entry?.regionId) === id &&
-        regionKey(entry?.toCode) === toCode,
-    );
-
-    if (!duplicate) target.push(transfer);
+    if (!target.some((entry) => sameRegionChange(entry, transfer, regionKey))) target.push(transfer);
   };
 
   const unresolved = [];
@@ -12901,13 +13040,16 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
   if (failed) throw failed;
   const lastSummary = normalizeString(normalizeArray(history).at(-1)?.summary);
 
-  const interactiveEvent = normalizeGeneratedEvent({
+  const outcome = normalizeGeneratedEvent({
     date: bundle.game.gameDate,
     description: normalizeString(summaryPayload?.description) || lastSummary,
     impacts: {
       createdChats: [],
       polityChanges: [],
-      regionTransfers: [],
+      // Land the Scene handed over by agreement. Checked below as a jump's
+      // transfers are; land won in fighting is marked occupied by the territory
+      // Director instead.
+      regionTransfers: normalizeArray(summaryPayload?.regionTransfers),
     },
     importance: normalizeString(summaryPayload?.importance) || "major",
     kind: "interactive",
@@ -12916,8 +13058,25 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
     title: normalizeString(summaryPayload?.title) || interactive.title || "Interactive event resolved",
     source: summaryGeneration.source,
   });
+  if (outcome && normalizeArray(outcome.impacts?.regionTransfers).length) {
+    const transferError = await validateGeneratedWorldChanges({ events: [outcome] }, bundle.world, {
+      captureGuard: true,
+      playerCountry: normalizeString(bundle.game?.country),
+    }).catch((error) => error?.message || "the transfers could not be checked");
+    if (transferError) {
+      logDebugEvent("turn", "Scene outcome: its land transfers did not pass the checks a jump's must, so the Scene changes no borders.", transferError, { problem: true });
+      outcome.impacts.regionTransfers = [];
+    }
+  }
 
-  return applySimulationResult({
+  // The Scene outcome reaches the map as a jump's events do (mapConsequences.js):
+  // units, occupied land and Structures, and the Board. Seen in a live game
+  // (2026-09-27): a Scene established a headquarters in Ouagadougou and nothing
+  // appeared, because a Scene outcome never reached a Director.
+  const scene = outcome ? await sceneMapConsequences({ bundle, outcome: markSceneOutcome(outcome, history), generation: summaryGeneration }) : null;
+  const sceneOutcome = scene?.events?.[0] ?? outcome;
+
+  const applyScene = (withBoard) => applySimulationResult({
     baseActions: bundle.actions,
     baseChats: bundle.chats,
     baseColors,
@@ -12928,15 +13087,87 @@ const resolveInteractiveScene = async ({ bundle, baseColors, campaignId, interac
       ...bundle.world,
       activeInteractive: null,
     },
+    // The Board moves with a Scene too: from the review's answer when one request
+    // asked everything, otherwise by its own request, as after a jump.
+    projects: withBoard ? { bundle, signal: null, review: scene.review, requests: null } : null,
     result: {
       clearActions: false,
-      events: interactiveEvent ? [interactiveEvent] : [],
+      events: sceneOutcome ? [sceneOutcome] : [],
+      structureLinks: scene?.structureLinks ?? [],
       mode: "interactive",
       stopDate: bundle.game.gameDate,
       summary: normalizeString(summaryPayload?.description) || lastSummary,
       generation: summaryGeneration,
+      receipt: scene?.receipt ?? null,
     },
   });
+  // A Board that fails holds a jump for the player to retry; a Scene is not held
+  // for its Board. Its outcome is written without the Board moving, and the next
+  // jump's Board pass reads it with the rest.
+  try {
+    return await applyScene(Boolean(scene?.board));
+  } catch (error) {
+    if (!error?.projectsHeld) throw error;
+    logDebugEvent("turn", "Scene outcome: the Board did not update, so the Scene was written without it.", error, { problem: true });
+    return applyScene(false);
+  }
+};
+
+// The checks a Scene outcome goes through: units, territory, Structures and the
+// Board — never the timeline, agent reports or order attribution. While requests
+// are being saved they are ONE review request, and none when nothing in the Scene
+// qualifies; otherwise each check that has something to look at makes its own,
+// as after a jump. A check that fails leaves the Scene outcome as written.
+const SCENE_REVIEW_SECTIONS = Object.freeze(["units", "territory", "structures", "board"]);
+const sceneMapConsequences = async ({ bundle, outcome, generation }) => {
+  const saving = savingRequests();
+  // Approximate placements are told to the model like a jump's. The last jump's
+  // notes are carried over, because only the newest entry in the history keeps
+  // its notes; the receipt is written only when this Scene added one.
+  const previous = normalizeArray(normalizeWorldState(bundle.world).simulationHistory)[0]?.receipt;
+  const receipt = createApplicationReceipt();
+  for (const note of normalizeArray(previous?.notes)) noteReceipt(receipt, note?.kind, note?.text);
+  const carried = receipt.notes.length;
+  const merged = { events: [outcome], stopDate: normalizeString(bundle.game?.gameDate), clearActions: false };
+  let review = null;
+  if (saving) {
+    try {
+      review = await runTurnReview({
+        context: { bundle, mode: "interactive", targetDate: merged.stopDate },
+        merged,
+        signal: null,
+        state: { requests: null, generation, hiddenEvents: [] },
+        sections: SCENE_REVIEW_SECTIONS,
+      });
+    } catch (error) {
+      logDebugEvent("turn", "Scene outcome: the map check failed; the Scene stands as written.", error, { problem: true });
+      return null;
+    }
+  }
+  const { events, structureLinks } = await applyMapConsequences({
+    events: merged.events,
+    world: bundle.world,
+    game: bundle.game,
+    playerCountry: normalizeString(bundle.game?.country),
+    analyze: directorAnalyzers({ bundle, review, signal: null, requests: null, gameDate: merged.stopDate, sections: SCENE_REVIEW_SECTIONS, receipt }),
+    findPlaces: review ? null : placeReaderFor(bundle),
+    resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: null }),
+  });
+  // The Board moves only when the Scene concerns an entry on it: from the review's
+  // part while saving, otherwise by its own request only then — a Scene that
+  // touches nothing on the Board costs nothing for it. The calendar never asks
+  // after a Scene; that is a jump's.
+  const board = requestSettings.reviewSection("board") && (saving
+    ? Boolean(review?.parts?.board)
+    : boardPassReasons({
+      board: normalizeArray(bundle.world?.projects),
+      events,
+      gameDate: merged.stopDate,
+      round: Math.max(1, Number(bundle.game?.round) || 0),
+      reviewedRound: Math.max(1, Number(bundle.game?.round) || 0),
+      playerCountry: normalizeString(bundle.game?.country),
+    }).length > 0);
+  return { events, structureLinks, review: review ?? null, board, receipt: receipt.notes.length > carried ? receipt : null };
 };
 
 // End the scene where it stands (the panel's End the scene). With no beat
@@ -13679,6 +13910,11 @@ const UNIT_DIRECTOR_INSTRUCTION =
   // that makes a ship or a squadron a NEW formation sat only in the system
   // prompt. It is the last thing the model reads before answering.
   + "A ship, submarine or squadron COMMISSIONED, delivered, stood up or entering service is a new formation that does not exist yet: spawn it for the power that commissioned it, at its named port or base, even when that power already has units. "
+  // A player's order to place a garrison became a march of the one
+  // armoured division there (2026-09-29): a garrison is fixed where it is put.
+  + "A garrison placed, stationed or established at a named place is likewise new: spawn it there with type \"garrison\"; never march an existing field formation in its place. "
+  // A player asked for it (2026-09-29), and placement enforces it (militaryPosts.js).
+  + "On the power's own land a garrison is placed directly. On another power's land one of the power's formations must stand there or arrive there in the same event: when none does, move a formation there and place the garrison on a later turn. "
   + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
@@ -13689,7 +13925,21 @@ const unitDirectorUnavailable = () => ({ eventOrders: [], summary: "Unit directo
 
 // The director's orders may say where in words too. Placed here, before the
 // director's own rules measure the move, because those rules read coordinates.
-const placeDirectorOrders = async (payload, world, events) => {
+// Where the events' own units stand once they are applied: the formations a
+// Director's garrison or base may be deployed by (militaryPosts.js).
+const formationsInEvents = (events, world) => normalizeArray(events).flatMap((event) => normalizeArray(event?.impacts?.unitOps).map((op) => {
+  const kind = normalizeString(op?.op).toLowerCase();
+  if (kind === "spawn") {
+    const unit = op.unit && typeof op.unit === "object" ? op.unit : op;
+    if (normalizeString(unit.type).toLowerCase() === "garrison") return null;
+    return { owner: unit.ownerCode, point: [Number(unit.lng), Number(unit.lat)] };
+  }
+  if (kind !== "move") return null;
+  const mover = normalizeArray(world?.units).find((unit) => normalizeString(unit?.id) === normalizeString(op.unitId));
+  return mover ? { owner: mover.ownerCode, point: [Number(op.toLng), Number(op.toLat)] } : null;
+})).filter((formation) => formation && formation.point.every(Number.isFinite));
+
+const placeDirectorOrders = async (payload, world, events, receipt = null) => {
   const orders = normalizeArray(payload?.eventOrders);
   if (!orders.length) return payload;
   const containers = orders.map((order, index) => ({
@@ -13698,7 +13948,7 @@ const placeDirectorOrders = async (payload, world, events) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt: null });
+    await resolvePlacements(containers, world, { receipt, formations: formationsInEvents(events, world) });
   } catch (error) {
     console.warn("[unit director] the orders' places could not be resolved; the orders stand as written.", error);
   }
@@ -13710,7 +13960,10 @@ const territoryDirectorUnavailable = () => ({
 });
 
 const STRUCTURE_DIRECTOR_INSTRUCTION =
-  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. Return JSON only.";
+  "Put on the map the physical structures the supplied events built, opened or completed, placed with `at` where each event says it is. Return no structures when none of them built anything. "
+  // Enforced in placement (militaryPosts.js); said here so the model plans for it.
+  + "A garrison, base or fort on another power's land stands only where one of its owner's formations is there or arriving; on the owner's own land it needs none. "
+  + "Return JSON only.";
 const structureDirectorUnavailable = () => ({ eventOrders: [], summary: "Structure director unavailable; no structures added." });
 
 const structureDirectorVariables = (input, game) => ({
@@ -13723,7 +13976,7 @@ const structureDirectorVariables = (input, game) => ({
 
 // Same as the unit director's: every `at` becomes coordinates before the
 // director's rules, which need a point, look at the structures.
-const placeStructureOrders = async (payload, world, events) => {
+const placeStructureOrders = async (payload, world, events, receipt = null) => {
   const orders = normalizeArray(payload?.eventOrders);
   if (!orders.length) return payload;
   const containers = orders.map((order, index) => ({
@@ -13732,11 +13985,57 @@ const placeStructureOrders = async (payload, world, events) => {
     path: `$.eventOrders[${index}]`,
   }));
   try {
-    await resolvePlacements(containers, world, { receipt: null, noteGround: true });
+    await resolvePlacements(containers, world, { receipt, noteGround: true, formations: formationsInEvents(events, world) });
   } catch (error) {
     console.warn("[structure director] the structures' places could not be resolved; they stand as written.", error);
   }
+  // A post refused for want of a formation to deploy it (refuseUndeployedPosts).
+  for (const order of orders) {
+    if (Array.isArray(order?.structures)) order.structures = order.structures.filter((marker) => marker?.refusedPost !== true);
+  }
   return payload;
+};
+
+// How each Director is answered, for mapConsequences.js: from the turn review's
+// part when one request already asked everything (`review`), otherwise by a
+// request of its own. Each analyser is handed the events as they stand when its
+// Director runs, since an answer is placed against those, and approximate
+// placements are noted on `receipt` for the next turn. `sections` is a Scene's
+// list of checks, each also subject to its setting; a jump passes none and runs
+// the unit and territory Directors whatever the settings, as it always has.
+const directorAnalyzers = ({ bundle, review, signal, requests = null, gameDate = "", sections = null, receipt = null }) => {
+  const runs = (key) => !sections || (sections.includes(key) && requestSettings.reviewSection(key));
+  const asked = (taskKey, fallback, userMessage, variables) => runJsonTask(taskKey, {
+    lookups: buildTaskLookups(bundle),
+    fallback,
+    signal,
+    userMessage,
+    variables,
+    ...jumpTaskOptions(requests, "review"),
+  });
+
+  const units = !runs("units") ? null : async (input, events) => {
+    const answer = review
+      ? { payload: review.parts.units ?? unitDirectorUnavailable(), generation: { source: review.parts.units ? "ai" : "fallback" } }
+      : await asked("unitDirector", unitDirectorUnavailable, UNIT_DIRECTOR_INSTRUCTION, unitDirectorVariables(input, bundle.game));
+    await placeDirectorOrders(answer?.payload, bundle.world, events, receipt);
+    return answer;
+  };
+
+  const territory = !runs("territory") ? null : async (input) => (review
+    ? { payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } }
+    : asked("territoryDirector", territoryDirectorUnavailable, TERRITORY_DIRECTOR_INSTRUCTION, await territoryDirectorVariables(input, bundle.world)));
+
+  const structuresRun = sections ? runs("structures") : (review || requestSettings.reviewSection("structures"));
+  const structures = !structuresRun ? null : async (input, events) => {
+    const answer = review
+      ? { payload: review.parts.structures ?? structureDirectorUnavailable() }
+      : await asked("structureDirector", structureDirectorUnavailable, STRUCTURE_DIRECTOR_INSTRUCTION,
+        structureDirectorVariables(input, { ...bundle.game, gameDate: gameDate || normalizeString(bundle.game?.gameDate) }));
+    return { payload: await placeStructureOrders(answer?.payload, bundle.world, events, receipt) };
+  };
+
+  return { units, territory, structures };
 };
 // Every candidate kept: what the curator does with no analyst.
 const curatorUnavailable = (candidates) => ({
@@ -13814,7 +14113,11 @@ const BOARD_HIDDEN_NOTE = "\n\nEvents marked (kept off the timeline) happened, b
   + "Move the board from them exactly like any other event, and write lastUpdate so it stands on its own "
   + "without pointing at a timeline entry.";
 
-const runTurnReview = async ({ context, merged, signal, state }) => {
+// `sections`: only these checks are asked about (a Scene asks units, territory,
+// structures and the board; never the timeline, agents or order attribution).
+// A Scene has no time skip's request budget (`state.requests` is null) and is
+// simply one request when anything qualifies.
+const runTurnReview = async ({ context, merged, signal, state, sections = null }) => {
   const { bundle, mode } = context;
   const requests = state.requests;
   const review = { asked: false, parts: {}, reasons: [], boardShownEvents: [], agentReports: [] };
@@ -13822,7 +14125,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // cost a request to learn that again.
   if (normalizeString(state.generation?.source) === "fallback") return review;
 
-  const wants = (section) => requestSettings.reviewSection(section);
+  const wants = (section) => (!sections || sections.includes(section)) && requestSettings.reviewSection(section);
   const round = (Number(bundle.game?.round) || 1) + 1;
   const stopDate = normalizeString(merged.stopDate) || context.targetDate;
   const playerCountry = normalizeString(bundle.game?.country);
@@ -13880,7 +14183,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   // but it is cheap to repair semantically while this combined review request
   // is already available. The plan exposes only exact current ids + numbered
   // retained candidates; native code validates the returned pairings again.
-  const actionOutcomePlan = merged.clearActions === false ? null : buildActionOutcomeAssociationPlan({
+  const actionOutcomePlan = merged.clearActions === false || sections ? null : buildActionOutcomeAssociationPlan({
     actions: bundle.actions,
     events: candidates,
   });
@@ -13987,7 +14290,7 @@ const runTurnReview = async ({ context, merged, signal, state }) => {
   }
 
   const usable = jobs.filter((job) => job.schema);
-  if (!usable.length || !requests.budget.take("review")) {
+  if (!usable.length || (requests && !requests.budget.take("review"))) {
     if (usable.length) logDebugEvent("turn", `Turn review not made: this time skip has used its ${requests.budget.cap} requests.`, { reasons });
     return review;
   }
@@ -14181,6 +14484,11 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // director then runs exactly as it always has, with its part of that answer in
   // place of the request it would have made. `review` is null when saving is off,
   // and each check makes its own request as before.
+  // An event answering the player's order to raise or build is the Directors' to
+  // read whatever its wording (mapConsequences.js). Marked here so the review asks
+  // about it, and again when the Directors run, because the order attribution
+  // below may give an event its order only after the review.
+  merged.events = markOrderedEvents(merged.events, context.bundle?.actions);
   const review = state.requests?.saving ? await runTurnReview({ context, merged, signal, state }) : null;
 
   // A current order whose outcome event omitted actionIds gets one bounded
@@ -14204,106 +14512,34 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // only the plausible ones, and they ride the same application path as the
   // simulator's own unitOps (a long move becomes a standing order). A failed or
   // unavailable director never costs the turn — the events pass through as written.
+  //
+  // Then the territory director marks who holds the ground (occupation only: it
+  // never pretends a capture is international law, and an unresolved place fails
+  // safe by disappearing), and the structure director builds what the events
+  // built. All three run in mapConsequences.js, which a Scene outcome goes
+  // through too; each Structure that belongs to a Project is linked to it once
+  // the turn is written (structureLinks).
   state.phases?.enter("placing");
-  let directedEvents = merged.events;
-  try {
-    directedEvents = await directGeneratedUnitOps({
-      events: merged.events,
-      game: bundle.game,
-      world: bundle.world,
-      analyzeBatch: review
-        ? async () => ({ payload: await placeDirectorOrders(review.parts.units ?? unitDirectorUnavailable(), bundle.world, merged.events), generation: { source: review.parts.units ? "ai" : "fallback" } })
-        : async (input) => {
-          const answer = await runJsonTask("unitDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: unitDirectorUnavailable,
-            signal,
-            userMessage: UNIT_DIRECTOR_INSTRUCTION,
-            variables: unitDirectorVariables(input, bundle.game),
-            ...jumpTaskOptions(state.requests, "review"),
-          });
-          await placeDirectorOrders(answer?.payload, bundle.world, merged.events);
-          return answer;
-        },
-    });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH unit director] pass failed; the simulator's unit operations stand.", error);
-    directedEvents = merged.events;
-  }
-
-
-  // Second narrow pass: the surviving prose and front state become the native
-  // disputed-region machinery (regionControlOps) without pretending every
-  // occupation is international law. Its additions go through the same
-  // geography resolver as the simulator's own ops, bounded by current control;
-  // an unresolved place fails safe by disappearing rather than minting a
-  // phantom region key. A failed pass never costs the turn.
-  let territoryEvents = directedEvents;
-  try {
-    territoryEvents = await directGeneratedTerritoryOps({
-      events: directedEvents,
-      world: bundle.world,
-      // The places the events name, with who holds each (lookupTools.js
-      // placesNamedIn), so the director can fill in fromCode without asking.
-      // Not needed when the review already answered: the director never asks.
-      findPlaces: review ? null : placeReaderFor(bundle),
-      analyzeBatch: review
-        ? async () => ({ payload: review.parts.territory ?? territoryDirectorUnavailable(), generation: { source: review.parts.territory ? "ai" : "fallback" } })
-        : async (input) =>
-          runJsonTask("territoryDirector", {
-            lookups: buildTaskLookups(bundle),
-            fallback: territoryDirectorUnavailable,
-            signal,
-            userMessage: TERRITORY_DIRECTOR_INSTRUCTION,
-            variables: await territoryDirectorVariables(input, bundle.world),
-            ...jumpTaskOptions(state.requests, "review"),
-          }),
-    });
-    const containers = territoryEvents.map((event, index) => ({
-      event,
-      impacts: event?.impacts,
-      path: `$.events[${index}].impacts`,
-    }));
-    await resolveRegionControlOps(containers, bundle.world, { requests: state.requests });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH territory director] pass failed; the simulator's territorial operations stand.", error);
-    territoryEvents = directedEvents;
-  }
-
-  // Third: the structures the events built (nativeStructureDirector.js), which
-  // the simulator almost never puts on the map by itself. Each one that belongs
-  // to a Project is linked to it once the turn is written (structureLinks).
-  let builtEvents = territoryEvents;
-  let structureLinks = [];
-  try {
-    const built = await directGeneratedStructureOps({
-      events: territoryEvents,
-      world: bundle.world,
-      playerCountry: normalizeString(bundle.game?.country),
-      analyzeBatch: review
-        ? async () => ({ payload: await placeStructureOrders(review.parts.structures ?? structureDirectorUnavailable(), bundle.world, territoryEvents) })
-        : requestSettings.reviewSection("structures")
-          ? async (input) => {
-            const answer = await runJsonTask("structureDirector", {
-              lookups: buildTaskLookups(bundle),
-              fallback: structureDirectorUnavailable,
-              signal,
-              userMessage: STRUCTURE_DIRECTOR_INSTRUCTION,
-              variables: structureDirectorVariables(input, { ...bundle.game, gameDate: normalizeString(merged.stopDate) || context.targetDate }),
-              ...jumpTaskOptions(state.requests, "review"),
-            });
-            return { payload: await placeStructureOrders(answer?.payload, bundle.world, territoryEvents) };
-          }
-          : null,
-    });
-    builtEvents = built.events;
-    structureLinks = built.links;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn("[OH structure director] pass failed; the events keep the structures they had.", error);
-  }
+  const { events: builtEvents, structureLinks } = await applyMapConsequences({
+    events: markOrderedEvents(merged.events, bundle.actions),
+    world: bundle.world,
+    game: bundle.game,
+    playerCountry: normalizeString(bundle.game?.country),
+    analyze: directorAnalyzers({
+      bundle,
+      review,
+      signal,
+      requests: state.requests,
+      gameDate: normalizeString(merged.stopDate) || context.targetDate,
+      receipt: state.receipt,
+    }),
+    // The places the events name, with who holds each (lookupTools.js
+    // placesNamedIn), so the territory director can fill in fromCode without
+    // asking. Not needed when the review already answered: it never asks.
+    findPlaces: review ? null : placeReaderFor(bundle),
+    resolveControl: (containers) => resolveRegionControlOps(containers, bundle.world, { requests: state.requests }),
+    signal,
+  });
 
   const result = {
     clearActions: merged.clearActions,

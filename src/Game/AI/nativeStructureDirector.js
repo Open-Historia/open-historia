@@ -53,8 +53,15 @@ const eventText = (event) =>
 
 export const eventNeedsStructureDirector = (event) => {
   if (!event || typeof event !== "object") return false;
-  const text = eventText(event);
-  return FACILITY_PATTERN.test(text) && CONSTRUCTION_CUE_PATTERN.test(text);
+  return event.ordered?.build === true || orderBuildsStructure(eventText(event));
+};
+
+// Text that builds or establishes something that stands in one place: an event's,
+// or a player's order's (mapConsequences.js markOrderedEvents), whose outcome
+// event is then the structure Director's to read however it is worded.
+export const orderBuildsStructure = (text) => {
+  const value = String(text ?? "");
+  return FACILITY_PATTERN.test(value) && CONSTRUCTION_CUE_PATTERN.test(value);
 };
 
 const isOrbital = (text) => ORBITAL_PATTERN.test(text) && !GROUND_SEGMENT_PATTERN.test(text);
@@ -187,6 +194,8 @@ export const sanitizeStructureOrders = ({ events, orders, world, playerCountry =
         lat,
         note: normalizeString(raw?.note),
         foundedAt: normalizeString(event?.date),
+        // An approximate placement: its town is not on the map (AI/placement.js).
+        ...(raw?.approximate ? { approximate: raw.approximate } : {}),
       };
       budget -= 1;
       taken.add(nameKey(name));
