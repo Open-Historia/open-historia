@@ -467,10 +467,21 @@ export const revertUnitOrder = async (revert) => {
   if (revert.remove) {
     return Boolean(await commit((list) => list.filter((u) => u.id !== unitId)));
   }
-  // A disband the player took back: the formation stands again as it was.
+  // A disband the player took back: the formation stands again as it was, but
+  // for its standing order, which went with it when it left the map (every
+  // world write drops the orders of units that are gone). Brought back still
+  // "moving" under an order that no longer exists, it would march nowhere.
   if (revert.restore) {
+    const { restore } = revert;
+    const unit = {
+      ...restore,
+      id: unitId,
+      ...(restore.orderId
+        ? { orderId: "", posture: "", ...(restore.status === "moving" ? { status: "idle" } : {}) }
+        : {}),
+    };
     return Boolean(await commit((list) =>
-      (list.some((u) => u.id === unitId) ? list : [...list, { ...revert.restore, id: unitId }])));
+      (list.some((u) => u.id === unitId) ? list : [...list, unit])));
   }
   return Boolean(await commit((list) =>
     list.map((u) => {

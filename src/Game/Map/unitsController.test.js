@@ -116,6 +116,17 @@ test("disbanding a unit tells the next jump, and deleting that order brings the 
   assert.deepEqual([back.lng, back.lat], [-3, 56]);
 });
 
+test("a unit brought back from a disband is not left marching under an order that went with it", async () => {
+  await reset();
+  const marching = { ...fleet, status: "moving", posture: "advancing", orderId: "order-1" };
+  assert.deepEqual(await disbandUnit("fleet-1"), { ok: true });
+  assert.equal(await revertUnitOrder({ unitId: "fleet-1", restore: marching }), true);
+  const back = savedUnits().find((entry) => entry.id === "fleet-1");
+  assert.equal(back?.status, "idle");
+  assert.equal(back?.orderId, "");
+  assert.equal(back?.posture, "");
+});
+
 test("a disband that cannot be saved keeps the unit and queues nothing", async () => {
   await reset();
   failing.add("world");
