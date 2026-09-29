@@ -95,14 +95,26 @@ const FeatureManager = ({ features, setFeatures, api, selection = [], setSelecti
     setSelection?.([]);
   };
 
+  // The city seed, merged like a file import. It says what it added, and says
+  // so when the seed could not be downloaded, rather than adding nothing.
   const doImport = async (mode) => {
     setImporting(true);
-    const cities = mode === "all" ? await importAllCities() : await importMajorCities();
-    setFeatures((list) => {
-      const have = new Set(list.map((f) => `${f.name}|${f.coord?.join(",")}`));
-      return [...list, ...cities.filter((c) => !have.has(`${c.name}|${c.coord?.join(",")}`))];
-    });
-    setImporting(false);
+    setImportNote("");
+    try {
+      const cities = mode === "all" ? await importAllCities() : await importMajorCities();
+      const added = mergeImportedFeatures(features, cities).added;
+      setFeatures((list) => mergeImportedFeatures(list, cities).features);
+      setImportNote(
+        added === 0
+          ? "Every one of those cities is already on this map."
+          : added === 1 ? "Added 1 city." : `Added ${added} cities.`,
+      );
+    } catch (e) {
+      console.warn("[editor] city import failed:", e);
+      setImportNote("Import failed: the city list could not be downloaded. Check the connection and try again.");
+    } finally {
+      setImporting(false);
+    }
   };
 
   // The author's own features from a file — GeoJSON points, a Workshop document,
