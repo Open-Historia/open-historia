@@ -1579,8 +1579,29 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 const newEvents = outcome?.newEvents ?? [];
                 const spoken = newEvents.filter((event) => event.kind === "message");
                 const lifecycleApplied = Array.isArray(outcome?.lifecycle) && outcome.lifecycle.length > 0;
-                if (!newEvents.length && !lifecycleApplied) return false;
+                // What this batch got wrong goes to the next one even when it
+                // produced nothing: that is when it is most needed.
                 actionFeedbackRef.current = outcome?.feedback ?? "";
+                if (!newEvents.length && !lifecycleApplied) {
+                    // Nothing came back to show. Said, with why, rather than
+                    // leaving the player's line unanswered: the request is spent.
+                    const refused = Array.isArray(outcome?.rejected) ? outcome.rejected.length : 0;
+                    const unreachable = outcome?.generation?.source === "fallback";
+                    const why = unreachable
+                        ? "The AI could not be reached, so nobody at the table answered."
+                        : refused === 1 ? "Nobody at the table answered: the AI's action was refused."
+                            : refused > 1 ? `Nobody at the table answered: ${refused} of the AI's actions were refused.`
+                                : "Nobody at the table chose to answer.";
+                    logDebugEvent("diplomacy", `Chat #${chat.id}: the table's turn produced nothing.`, {
+                        refused,
+                        fallbackReason: unreachable ? outcome.generation.fallbackReason || "" : "",
+                    }, { problem: unreachable || refused > 0 });
+                    pushMessages([...messagesRef.current, {
+                        role: "error", speaker: "System", text: why, time: asked?.time || gameDate,
+                        ...(text ? { retry: { group: true, text } } : {}),
+                    }]);
+                    return false;
+                }
                 if (lifecycleApplied) {
                     setLifecycleCaseOverrides((previous) => {
                         const next = { ...previous };
@@ -1661,6 +1682,11 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
                 logDebugEvent("diplomacy", `The one-request chat turn failed in chat #${chat.id}; no legacy sequential fallback exists.`, error, { problem: true });
                 pushMessages([...nextMessages, {
                     role: "error", speaker: "System", text: message, time: asked?.time || gameDate,
+                    // A line the player typed is asked again from the bubble,
+                    // not typed again: a second copy of it would change what
+                    // every leader answers. A hearing's or a Council's own
+                    // request has its own button for that.
+                    ...(text ? { retry: { group: true, text } } : {}),
                 }]);
                 return true;
             } finally {
@@ -1855,6 +1881,15 @@ const ConversationView = ({ chat, playerCountry, gameDate, world = {}, onDelete,
             if (isLoading) return;
             const retry = messagesRef.current[index]?.retry;
             if (!retry) return;
+            if (retry.group) {
+                // The table's turn again, answering the player's line as it
+                // stands in the thread: no second copy of it is added.
+                logDebugEvent("diplomacy", `Retrying the table's turn in chat #${chat.id}.`, undefined, { verbose: true });
+                const rest = messagesRef.current.filter((_, i) => i !== index);
+                pushMessages(rest);
+                await runGroupTurn(retry.text, rest);
+                return;
+            }
             logDebugEvent("diplomacy", `Retrying ${retry.country?.name || "a leader"}'s reply in chat #${chat.id}.`, undefined, { verbose: true });
             pushMessages(messagesRef.current.filter((_, i) => i !== index));
             await fetchLeaderResponse(retry.country, retry.playerMessage);

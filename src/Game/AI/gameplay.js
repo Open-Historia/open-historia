@@ -12298,7 +12298,7 @@ export const runChatActionBatch = async ({
     CHAT_ACTION_FEEDBACK: normalizeString(chat?.actionFeedback) ? `\n${chat.actionFeedback}` : "",
   };
 
-  const { payload } = await runJsonTask("chatActions", {
+  const { payload, generation } = await runJsonTask("chatActions", {
     fallback: () => ({ actions: [] }),
     signal,
     userMessage: [
@@ -12462,6 +12462,9 @@ export const runChatActionBatch = async ({
     feedback: describeChatActionFeedback(feedbackOutcome),
     cursors: nextCursors,
     actions: rawActions,
+    // Whether the model answered or the canned { actions: [] } stood in: the
+    // panel says "could not be reached" for the second, not silence.
+    generation,
     formalActions: partitioned.formal,
     lifecycleActions,
     ...((committedInstitution || committedLifecycle) ? { committed: true } : {}),
