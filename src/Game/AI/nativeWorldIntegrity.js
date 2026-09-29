@@ -2122,6 +2122,10 @@ export const bindWorldEventAuthorityRefs = (candidate, {
 
     let eventWithAgency = event;
     let rawAgency = event?.agency;
+    // The jump never writes event.actors; the parties of a commitment this
+    // event starts are who acted. Used only to derive agency, never stored.
+    const ledgerActors = semanticActorTokens(event).length ? [] : agreementPartiesStartedByEvent(candidate, event, eventIndex);
+    const derivationEvent = ledgerActors.length ? { ...event, actors: ledgerActors } : event;
     const rawStructureReason = eventAgencyStructureReason(rawAgency);
     const rawNormalized = rawStructureReason ? null : normalizeEventAgency(rawAgency);
 
@@ -2131,7 +2135,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     // player sovereignty is never overwritten here; it must pass the hard player
     // authority checks below.
     if (!rawNormalized || rawStructureReason) {
-      const derived = deriveNativeEventAgency(event, {
+      const derived = deriveNativeEventAgency(derivationEvent, {
         world,
         resolver,
         playerCanonical,
@@ -2442,6 +2446,18 @@ const actorFamilyMentioned = (textValue, aliases = []) => {
 };
 
 const semanticActorTokens = (event) => uniqueStrings(normalizeArray(event?.actors).map(normalizeString).filter(Boolean));
+
+// The parties of every agreement the event starts (agreementUpdates op
+// "start", bound to it by id or index): the governments that jointly chose it.
+// Relation parties are not actors (a sanction's target is a party too).
+const agreementPartiesStartedByEvent = (candidate, event, eventIndex) => {
+  const eventId = normalizeString(event?.id);
+  return uniqueStrings(normalizeArray(candidate?.agreementUpdates)
+    .filter((update) => normalizeString(update?.op).toLowerCase() === "start")
+    .filter((update) => (eventId && normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
+      || normalizeArray(update?.eventIndexes).map(Number).includes(eventIndex))
+    .flatMap((update) => normalizeArray(update?.parties)));
+};
 
 const semanticActorPolities = (event, resolver) => uniqueStrings(
   semanticActorTokens(event).map((actor) => resolver.knownCanonical(actor)).filter(Boolean),
@@ -3495,6 +3511,9 @@ export const screenGeneratedWorldEvents = ({
   actions = [],
   chats = [],
   analysis = null,
+  // The segment's agreement records, bound to its events by id: the parties
+  // of a treaty an event starts are who made that choice.
+  agreementUpdates = [],
 } = {}) => {
   const kept = [];
   const dropped = [];
@@ -3532,7 +3551,15 @@ export const screenGeneratedWorldEvents = ({
     );
     strippedNoOpRegionControlOps += controlSanitized.removed;
 
-    const eventWrapper = { events: [controlSanitized.event] };
+    const eventId = normalizeString(controlSanitized.event?.id);
+    const eventWrapper = {
+      events: [controlSanitized.event],
+      agreementUpdates: eventId
+        ? normalizeArray(agreementUpdates)
+          .filter((update) => normalizeArray(update?.eventIds).map(normalizeString).includes(eventId))
+          .map((update) => ({ ...update, eventIndexes: [] }))
+        : [],
+    };
     const binding = bindWorldEventAuthorityRefs(eventWrapper, {
       world,
       gameCountry: normalizeString(game?.country),

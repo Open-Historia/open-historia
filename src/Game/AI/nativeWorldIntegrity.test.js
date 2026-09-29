@@ -182,3 +182,45 @@ test("another power's sovereign act that only names the player's country stays",
   assert.equal(screened.events.length, 2);
   assert.deepEqual(screened.dropped, []);
 });
+
+// --- The parties of a treaty are who signed it ---
+
+const pactRecord = (eventId, parties) => ({
+  id: "baltic-pact",
+  op: "start",
+  type: "mutual_defense",
+  parties,
+  eventIds: [eventId],
+  eventIndexes: [0],
+  title: "Baltic Defence Pact",
+});
+
+test("a treaty's agreement record makes the player a signatory even when another state heads the title", () => {
+  const pact = latviaEvent("Estonia Signs Defence Pact With Latvia", "Estonia and Latvia sign a mutual defence pact in Tallinn.");
+  const withoutRecord = screenLatvia([pact]);
+  assert.equal(withoutRecord.events.length, 1, "read from the title alone, Estonia signed it");
+
+  const screened = screenLatvia([pact], {
+    agreementUpdates: [pactRecord(pact.id, ["Republic of Estonia", "Republic of Latvia"])],
+  });
+  assert.equal(screened.events.length, 0);
+  assert.equal(screened.dropped[0].route, "PLAYER_AGENCY_AUTHORITY");
+  assert.match(screened.dropped[0].reason, /^joint-player-sovereign-choice-without-authority/);
+});
+
+test("a treaty between two other states names both as sovereign actors and no one else", () => {
+  const pact = latviaEvent(
+    "Estonia and Russia Sign Border Treaty",
+    "Estonia and Russia sign a border treaty, a move watched closely in Latvia.",
+    { playerRelated: false },
+  );
+  const screened = screenLatvia([pact], {
+    agreementUpdates: [pactRecord(pact.id, ["Republic of Estonia", "Russian Federation"])],
+  });
+  assert.equal(screened.events.length, 1);
+  assert.deepEqual(
+    screened.events[0].agency.sovereignActors.map((row) => [row.polity, row.authority]),
+    [["Republic of Estonia", "autonomous"], ["Russian Federation", "autonomous"]],
+  );
+  assert.equal(screened.events[0].actors, undefined, "derived actors are never stored on the event");
+});

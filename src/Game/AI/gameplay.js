@@ -1098,6 +1098,7 @@ const screenSegmentPayload = (payload, {
     actions,
     chats,
     analysis,
+    agreementUpdates: payload?.agreementUpdates,
   });
   if (screened.dropped?.length) {
     console.warn(
