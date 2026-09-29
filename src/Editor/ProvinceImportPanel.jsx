@@ -1022,10 +1022,23 @@ const ProvinceImportPanel = ({ api, polities = {}, flags = {}, importPolityRoste
       const backup = api.serializeRegions?.();
       if (backup) {
         const pointBackups = (currentPointFeatures || []).map(cityFeatureToGeoJSON).filter(Boolean);
-        downloadGeoJSON(
-          { ...backup, features: [...(backup.features || []), ...pointBackups] },
-          `continuum-pre-province-import-${safeStamp()}.geojson`,
-        );
+        // Awaited: the import replaces the whole map with no undo, so a backup
+        // that failed to save (the app's file write can fail on a full disk, or
+        // run out of memory encoding a large map) has to stop it or be waved
+        // through knowingly.
+        try {
+          await downloadGeoJSON(
+            { ...backup, features: [...(backup.features || []), ...pointBackups] },
+            `open-historia-pre-province-import-${safeStamp()}.geojson`,
+          );
+        } catch (e) {
+          const reason = e?.message || String(e);
+          if (!window.confirm(`The backup of the current map could not be saved (${reason}). Replace the map anyway, with no backup and no undo?`)) {
+            setProgress({ fraction: 0, message: "" });
+            setStatus("Nothing was replaced: the backup of the current map could not be saved.");
+            return;
+          }
+        }
       }
 
       setProgress({ fraction: 0.45, message: "Replacing region geometry…" });
