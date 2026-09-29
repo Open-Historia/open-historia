@@ -97,6 +97,7 @@ import {
   buildJumpProjectsDirective,
 } from "./projectsDirective.js";
 import { filterBoundLedgerUpdatesToKeptEvents } from "./ledgerEventBinding.js";
+import { createTurnReplay, replayAnswer } from "./heldTurnReplay.js";
 import { extractJsonPayload, unwrapMimickedToolCall } from "./jsonSalvage.js";
 import { isChatVisibleTo, withoutPlayerParticipant } from "./chatVisibility.js";
 import { SIMULATION_AUDIENCE } from "./audience.js";
@@ -3891,7 +3892,9 @@ export const retryPendingProjectsJump = async ({ signal } = {}) => {
     // Re-running the whole apply is safe and is why this is one call rather than
     // a second code path to keep in step: it is pure until its final writes, and
     // every step in between is deterministic — espionage included, since its rolls
-    // are seeded on the round.
+    // are seeded on the round. The requests before the board (the curator, the
+    // breadth repair) are answered from applyArgs.replay, so the board call is
+    // the only one sent again (heldTurnReplay.js).
     return await applySimulationResult(applyArgs);
   } catch (error) {
     if (error?.projectsHeld) {
@@ -6924,9 +6927,14 @@ const applySimulationResult = async ({
   // "staged": a time skip the player will be shown event by event. "shown":
   // events they have already seen (an Intervene re-applying the kept ones).
   reveal = "staged",
+  // A time skip's answers so far (heldTurnReplay.js): a held turn's retry gets
+  // the curator's and the breadth repair's first answers back instead of asking
+  // again, so only the board call is repeated. Null everywhere else.
+  replay = null,
   baseWorld,
   result,
 }) => {
+  replay?.rewind();
   // Only a jump keeps one: a resolved interactive event comes through here too, and it is
   // not an answer the simulator will be asked to build on. Every call below is a
   // no-op on null. A copy, because a turn held on its projects pass runs this
@@ -6975,7 +6983,7 @@ const applySimulationResult = async ({
       payload: review.parts.timeline ?? curatorUnavailable(candidates),
       generation: { source: review.parts.timeline ? "ai" : "fallback" },
     })
-    : (input) =>
+    : (input) => replayAnswer(replay, "timelineCurator", () =>
       runJsonTask("timelineCurator", {
         lookups: buildTaskLookups({ world: baseWorld, events: baseEvents, chats: baseChats, game: baseGame }),
         fallback: () => curatorUnavailable(input.candidates),
@@ -6983,7 +6991,7 @@ const applySimulationResult = async ({
         userMessage: TIMELINE_CURATOR_INSTRUCTION,
         variables: curatorVariables(input),
         ...jumpTaskOptions(requests, "review"),
-      });
+      }));
 
   // The curator decides whether an event exists BEFORE impacts, chats, history
   // and persistence see it: the model judges each candidate against recent
@@ -7027,14 +7035,18 @@ const applySimulationResult = async ({
   // and a curator pass after it — to pad a skip that came back thin, and a thin
   // skip is still a skip: the lanes it neglected are the ones the world director
   // selects first next turn.
-  const breadthRepair = review ? null : await maybeRepairWorldBreadthAfterCuration({
+  const breadthRepair = review ? null : await replayAnswer(replay, "breadthRepair", () => maybeRepairWorldBreadthAfterCuration({
     survivingEvents: curatedEvents,
     mainEvents: dedupedEvents,
     bundle: { actions: baseActions, chats: baseChats, events: priorEvents, game: baseGame, world: baseWorld },
     context: result?.breadthRepairContext,
     mode: result.mode,
     signal: projects?.signal,
-  });
+  }));
+  // The round's storyline records, with the repair's added. A local rather than
+  // result.storylineUpdates: a held turn's retry runs this again on the same
+  // result, and the first run's repair records must not ride along twice.
+  let roundStorylineUpdates = result.storylineUpdates;
   if (breadthRepair?.events?.length) {
     // New storyline ids ride on their own repair events before any filtering,
     // so a surviving event carries its continuity exactly like a main event.
@@ -7082,7 +7094,7 @@ const applySimulationResult = async ({
     const repairStorylineUpdates = normalizeArray(breadthRepair.storylineUpdates)
       .filter((update) => survivingRepairStorylineIds.has(normalizeString(update?.id)));
     if (repairStorylineUpdates.length) {
-      result.storylineUpdates = [
+      roundStorylineUpdates = [
         ...decodeWorldStorylineUpdates(result.storylineUpdates),
         ...repairStorylineUpdates,
       ];
@@ -7098,7 +7110,7 @@ const applySimulationResult = async ({
   const keptRelationUpdates = filterBoundLedgerUpdatesToKeptEvents(result.relationUpdates, dedupedEvents, curatedEvents);
   const keptAgreementUpdates = filterBoundLedgerUpdatesToKeptEvents(result.agreementUpdates, dedupedEvents, curatedEvents);
   const keptPuppetUpdates = filterBoundLedgerUpdatesToKeptEvents(result.puppetUpdates, dedupedEvents, curatedEvents);
-  const keptStorylineUpdates = filterBoundLedgerUpdatesToKeptEvents(result.storylineUpdates, dedupedEvents, curatedEvents);
+  const keptStorylineUpdates = filterBoundLedgerUpdatesToKeptEvents(roundStorylineUpdates, dedupedEvents, curatedEvents);
 
   // Canonical, round-scoped event ids (event-ai-r0007-19140801-003): unique
   // across the whole save, so a ledger or history reference is never ambiguous.
@@ -14124,6 +14136,9 @@ const finishTimelineJump = async ({ context, signal, state }) => {
   // saved) and `requests` the skip's budget, for everything the apply still asks.
   applyArgs.projects = { bundle, signal, review, requests: state.requests };
   applyArgs.phases = state.phases;
+  // Held with the turn, so a retry of the board gets the curator's and the
+  // breadth repair's answers back rather than asking for them again.
+  applyArgs.replay = createTurnReplay();
   state.phases?.enter("applying");
   try {
     const applied = await applySimulationResult(applyArgs);
