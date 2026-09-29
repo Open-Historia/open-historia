@@ -477,3 +477,22 @@ test("proposals that only open a vote ask lightly, and minor ones not at all", (
   assert.equal(institutionLifecycleConfirmText(institution, "suspend", "Republic of Estonia"), "");
   assert.equal(institutionLifecycleConfirmText(institution, "reinstate", "Republic of Estonia"), "");
 });
+
+test("a portfolio lists current memberships before former ones, each by name", () => {
+  const world = {
+    ...baseWorld(),
+    institutions: {
+      schemaVersion: 1,
+      ledgerVersion: 1,
+      byId: {
+        "alpha-pact": { id: "alpha-pact", name: "Alpha Pact", kind: "security_alliance", members: [], membershipHistory: [{ id: "h1", polity: "Republic of Latvia", action: "left", date: "1995-01-01" }] },
+        "beta-league": { id: "beta-league", name: "Beta League", kind: "regional_bloc", members: [], membershipHistory: [{ id: "h2", polity: "Republic of Latvia", action: "expelled", date: "2001-01-01" }] },
+        "zeta-union": { id: "zeta-union", name: "Zeta Union", kind: "regional_bloc", members: [{ polity: "Republic of Latvia", status: "member" }] },
+        "united-nations": { id: "united-nations", name: "United Nations", kind: "universal_organization", members: [{ polity: "Republic of Latvia", status: "member" }] },
+      },
+    },
+  };
+  const rows = institutionPortfolioForPolity(world, "Republic of Latvia");
+  assert.deepEqual(rows.map((row) => row.institution.name), ["United Nations", "Zeta Union", "Alpha Pact", "Beta League"]);
+  assert.deepEqual(rows.map((row) => Boolean(row.member)), [true, true, false, false]);
+});

@@ -518,7 +518,10 @@ export const institutionPortfolioForPolity = (world = {}, polityInput = "", { vi
     if (!member && !history.length && !cases.length) continue;
     rows.push({ institution, member, history, cases });
   }
-  return rows.sort((a, b) => clean(a.institution.name).localeCompare(clean(b.institution.name)));
+  // Current memberships first, so a list cut short never hides the United
+  // Nations behind a membership that ended decades ago.
+  return rows.sort((a, b) => Number(Boolean(b.member)) - Number(Boolean(a.member))
+    || clean(a.institution.name).localeCompare(clean(b.institution.name)));
 };
 
 // What the Institutions tab asks before a membership button acts, naming what
