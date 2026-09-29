@@ -30,9 +30,10 @@ import Panel from "./Panel.jsx";
 import { labelDim, pillButton } from "./editorStyles.js";
 import {
   REVIEW_SECTIONS,
-  applyMapChange,
-  changeDependencies,
+  acceptMapChanges,
   changeTargets,
+  decisionOf,
+  decisionsFor,
   mapChangeStatus,
   sectionOfChange,
 } from "./suggestionReview.js";
@@ -41,19 +42,11 @@ const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 
 // ---- the review's state ---------------------------------------------------------
 
-// Countries and groups first: the rest of a suggestion's changes may need them.
-const APPLY_ORDER = ["polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
-const applyRank = (change) => {
-  const index = APPLY_ORDER.indexOf(change.kind);
-  return index < 0 ? APPLY_ORDER.length : index;
-};
-
 export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch }) => {
   const changes = useMemo(
     () => (review?.suggestion?.changes ?? []).filter((change) => change.area === "map"),
     [review?.suggestion],
   );
-  const byId = useMemo(() => new Map(changes.map((change) => [change.id, change])), [changes]);
   const [decisions, setDecisions] = useState(() => ({
     accepted: new Set(review?.decisions?.accepted ?? []),
     rejected: new Set(review?.decisions?.rejected ?? []),
@@ -90,51 +83,16 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
     });
   }, []);
 
-  // Accept a list of changes: what they need first, then each in turn, the
-  // ownership rows batched by the country they go to (one map step each).
+  // Accept a list of changes (acceptMapChanges: what they need first, the
+  // ownership rows batched by the country they go to).
   const accept = useCallback((list) => {
     if (!api) return;
-    const done = new Set([...decisions.accepted]);
-    const order = [];
-    const visit = (change, depth = 0) => {
-      if (!change || done.has(change.id) || depth > 6) return;
-      for (const id of changeDependencies(change, changes, ctxRef.current)) visit(byId.get(id), depth + 1);
-      if (done.has(change.id)) return;
-      done.add(change.id);
-      order.push(change);
-    };
-    [...list].sort((a, b) => applyRank(a) - applyRank(b)).forEach((change) => visit(change));
-    if (!order.length) return;
-    const localRenames = { ...renamesRef.current };
-    const accepted = [];
-    const owners = new Map(); // target owner -> changes
-    for (const change of order) {
-      if (change.kind === "region-owner") {
-        const to = clean(change.to);
-        if (!owners.has(to)) owners.set(to, []);
-        owners.get(to).push(change);
-        continue;
-      }
-      const undo = applyMapChange(change, ctxRef.current, { renames: localRenames });
-      if (undo) undoers.current.set(change.id, undo);
-      if (change.kind === "polity-rename") localRenames[change.from] = change.to;
-      accepted.push(change.id);
-    }
-    for (const [to, group] of owners) {
-      let target = to;
-      for (let guard = 0; guard < 8 && localRenames[target]; guard += 1) target = localRenames[target];
-      const ids = group.map((change) => String(change.regionId));
-      const before = ids.map((id) => [id, api.getRegionSummary(id)?.owner ?? null]);
-      api.setRegionAttrs(ids, { owner: target || null });
-      for (const [index, change] of group.entries()) {
-        const [id, owner] = before[index];
-        undoers.current.set(change.id, () => api.setRegionAttrs([id], { owner }));
-        accepted.push(change.id);
-      }
-    }
-    setRenames(localRenames);
-    decide(accepted, "accepted");
-  }, [api, byId, changes, decide, decisions.accepted]);
+    const result = acceptMapChanges(list, ctxRef.current, { changes, accepted: decisions.accepted, renames: renamesRef.current });
+    if (!result.accepted.length) return;
+    for (const [id, undo] of result.undoers) undoers.current.set(id, undo);
+    setRenames(result.renames);
+    decide(result.accepted, "accepted");
+  }, [api, changes, decide, decisions.accepted]);
 
   const reject = useCallback((list) => decide(list.map((change) => change.id), "rejected"), [decide]);
 
@@ -153,20 +111,10 @@ export const useSuggestionReview = ({ review, api, d, setBackground, regionEpoch
     decide([change.id], null);
   }, [decide, decisions.accepted]);
 
-  // What a save should record: the author's decisions, with what is already on
-  // the map counted as accepted and what is no longer on it as rejected.
-  const decisionsForSave = useCallback(() => {
-    const accepted = new Set(decisions.accepted);
-    const rejected = new Set(decisions.rejected);
-    for (const change of changes) {
-      if (accepted.has(change.id) || rejected.has(change.id)) continue;
-      if (statuses[change.id] === "applied") accepted.add(change.id);
-      else if (statuses[change.id] === "missing") rejected.add(change.id);
-    }
-    return { accepted: [...accepted], rejected: [...rejected] };
-  }, [changes, decisions, statuses]);
+  // What a save should record (decisionsFor).
+  const decisionsForSave = useCallback(() => decisionsFor(changes, decisions, statuses), [changes, decisions, statuses]);
 
-  const pendingCount = changes.filter((change) => !decisions.accepted.has(change.id) && !decisions.rejected.has(change.id) && statuses[change.id] !== "applied" && statuses[change.id] !== "missing").length;
+  const pendingCount = changes.filter((change) => !decisionOf(change, decisions, statuses)).length;
 
   return useMemo(
     () => ({ active: Boolean(review), changes, decisions, statuses, renames, focusId, setFocusId, accept, reject, undo, decisionsForSave, pendingCount, ctx }),
@@ -219,13 +167,8 @@ const markupStyle = (feature) => {
   return style;
 };
 
-const stateOf = (change, review) => {
-  if (review.decisions.accepted.has(change.id)) return "accepted";
-  if (review.decisions.rejected.has(change.id)) return "rejected";
-  if (review.statuses[change.id] === "applied") return "accepted";
-  if (review.statuses[change.id] === "missing") return "rejected";
-  return review.statuses[change.id] === "conflict" ? "conflict" : "pending";
-};
+const stateOf = (change, review) => decisionOf(change, review.decisions, review.statuses)
+  || (review.statuses[change.id] === "conflict" ? "conflict" : "pending");
 
 // The markup layer: a region outline per change about a region on this map,
 // the suggested shape of every border change, a dot per city, unit or feature.
@@ -431,7 +374,7 @@ const OwnershipGroups = ({ changes, review, doc, onFocus }) => {
     return [...byPair.values()].sort((a, b) => b.items.length - a.items.length);
   }, [changes]);
   return groups.map((group) => {
-    const pending = group.items.filter((change) => !review.decisions.accepted.has(change.id) && !review.decisions.rejected.has(change.id) && !["applied", "missing"].includes(review.statuses[change.id]));
+    const pending = group.items.filter((change) => !decisionOf(change, review.decisions, review.statuses));
     const fromLabel = group.from ? polityName(doc, group.from) : "Unowned";
     const toLabel = group.to ? polityName(doc, group.to) : "Unowned";
     return (
@@ -463,8 +406,7 @@ const OwnershipGroups = ({ changes, review, doc, onFocus }) => {
 
 const SuggestionReviewPanel = ({ review, doc, api, suggestion, onClose }) => {
   const [hideDecided, setHideDecided] = useState(false);
-  const decided = (change) => review.decisions.accepted.has(change.id) || review.decisions.rejected.has(change.id)
-    || ["applied", "missing"].includes(review.statuses[change.id]);
+  const decided = (change) => Boolean(decisionOf(change, review.decisions, review.statuses));
   const visible = hideDecided ? review.changes.filter((change) => !decided(change)) : review.changes;
   const total = review.changes.length;
   const settled = review.changes.filter(decided).length;

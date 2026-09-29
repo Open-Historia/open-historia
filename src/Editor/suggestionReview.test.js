@@ -10,13 +10,15 @@
 //   - accepting makes the map say what the change says, and Undo puts back
 //     what was there — regions, countries, cities, units, features, puppets;
 //   - a change that names a country or group the suggestion adds needs that
-//     addition first.
+//     addition first;
+//   - a list is accepted in that order, ownership rows after every rename, and
+//     a save counts what the map already has as accepted.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { renamePolityInDocument } from "../../server/polityRename.js";
-import { applyMapChange, changeDependencies, changeTargets, mapChangeStatus } from "./suggestionReview.js";
+import { acceptMapChanges, applyMapChange, changeDependencies, changeTargets, decisionOf, decisionsFor, mapChangeStatus, planAccept } from "./suggestionReview.js";
 import { canonicalJson, hashText, measureGeometry } from "../runtime/scenarioChanges.js";
 import { withoutPolities } from "./scenarioPuppets.js";
 
@@ -335,4 +337,51 @@ test("cities, units, map features, puppets and groups: applied and taken back", 
   applyMapChange(area, ctx);
   assert.equal(api.getRegionSummary("r1").group, "Raiders");
   assert.equal(mapChangeStatus(area, ctx), "applied");
+});
+
+test("accepting a list: what it needs first, countries before regions, rows batched after the renames", () => {
+  const { api, state, ctx } = setup();
+  const addGamma = { id: "polity-add:Gamma", area: "map", kind: "polity-add", key: "Gamma", record: { name: "Gamma" }, color: null, flag: null, tags: null };
+  const rename = { id: "polity-rename:Beta", area: "map", kind: "polity-rename", from: "Beta", to: "Beta Republic", record: { name: "Beta Republic" }, color: null, flag: null, tags: null };
+  const toGamma = { id: "region-owner:r3", area: "map", kind: "region-owner", regionId: "r3", from: "Beta", to: "Gamma" };
+  // Written against the old name, accepted in the same list as the rename.
+  const toBeta = { id: "region-owner:r1", area: "map", kind: "region-owner", regionId: "r1", from: "Alpha", to: "Beta" };
+  const toBeta2 = { id: "region-owner:r2", area: "map", kind: "region-owner", regionId: "r2", from: "Alpha", to: "Beta" };
+  const puppet = { id: "puppet-add:p1", area: "map", kind: "puppet-add", key: "p1", to: { id: "p1", overlord: "Gamma", puppet: "Alpha", kind: "satellite", secrecy: "open", loyalty: 50, status: "active" } };
+  const changes = [toBeta, toGamma, puppet, toBeta2, rename, addGamma];
+
+  // A change pulls in what it needs, however it is reached, once.
+  assert.deepEqual(planAccept([puppet, toGamma], ctx, { changes }).map((change) => change.id), ["polity-add:Gamma", "puppet-add:p1", "region-owner:r3"]);
+  assert.deepEqual(planAccept([toGamma], ctx, { changes, accepted: new Set(["polity-add:Gamma"]) }).map((change) => change.id), ["region-owner:r3"]);
+
+  const calls = [];
+  const setRegionAttrs = api.setRegionAttrs;
+  api.setRegionAttrs = (ids, patch) => { calls.push([...ids]); setRegionAttrs(ids, patch); };
+  const result = acceptMapChanges([toBeta, toBeta2, toGamma, rename], ctx, { changes });
+  assert.deepEqual(result.accepted.slice(0, 2), ["polity-rename:Beta", "polity-add:Gamma"], "the rename and the country the rows need go first");
+  assert.deepEqual(new Set(result.accepted), new Set(["polity-rename:Beta", "polity-add:Gamma", "region-owner:r1", "region-owner:r2", "region-owner:r3"]));
+  assert.deepEqual(result.renames, { Beta: "Beta Republic" });
+  assert.equal(api.getRegionSummary("r1").owner, "Beta Republic", "a row written against the old name lands on the new one");
+  assert.equal(api.getRegionSummary("r2").owner, "Beta Republic");
+  assert.equal(api.getRegionSummary("r3").owner, "Gamma");
+  assert.ok(state.doc.polities.Gamma);
+  assert.deepEqual(calls, [["r1", "r2"], ["r3"]], "one map step per country the rows go to");
+
+  // Each row's undo puts back its own owner from before.
+  result.undoers.get("region-owner:r1")();
+  assert.equal(api.getRegionSummary("r1").owner, "Alpha");
+  assert.equal(api.getRegionSummary("r2").owner, "Beta Republic");
+
+  // A rename accepted earlier in the review still applies to a later list.
+  const later = acceptMapChanges([toBeta], ctx, { changes, accepted: new Set(result.accepted.filter((id) => id !== "region-owner:r1")), renames: result.renames });
+  assert.deepEqual(later.accepted, ["region-owner:r1"]);
+  assert.equal(api.getRegionSummary("r1").owner, "Beta Republic");
+});
+
+test("a save records what the map already has as accepted and what it lost as rejected", () => {
+  const changes = ["a", "b", "c", "d", "e"].map((id) => ({ id }));
+  const decisions = { accepted: new Set(["c"]), rejected: new Set(["e"]) };
+  const statuses = { a: "applied", b: "missing", c: "applied", d: "conflict", e: "applied" };
+  assert.deepEqual(decisionsFor(changes, decisions, statuses), { accepted: ["c", "a"], rejected: ["e", "b"] }, "the author's own decision stands over the map's");
+  assert.deepEqual(changes.map((change) => decisionOf(change, decisions, statuses)), ["accepted", "rejected", "accepted", null, "rejected"]);
 });

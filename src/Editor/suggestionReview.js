@@ -628,6 +628,93 @@ export const applyMapChange = (change, ctx, { renames = {} } = {}) => {
   }
 };
 
+// ---- accepting a list, and what a save records --------------------------------
+
+// Countries and groups first: the rest of a suggestion's changes may need them.
+const APPLY_ORDER = ["polity-add", "polity-rename", "group-add", "polity-change", "group-change"];
+const applyRank = (change) => {
+  const index = APPLY_ORDER.indexOf(change.kind);
+  return index < 0 ? APPLY_ORDER.length : index;
+};
+
+// The order a list of changes is accepted in: countries and groups first, and
+// before each change what it needs (changeDependencies), skipping what is
+// already accepted.
+export const planAccept = (list, ctx, { changes = [], accepted = new Set() } = {}) => {
+  const byId = new globalThis.Map(changes.map((change) => [change.id, change]));
+  const done = new Set(accepted);
+  const order = [];
+  const visit = (change, depth = 0) => {
+    if (!change || done.has(change.id) || depth > 6) return;
+    for (const id of changeDependencies(change, changes, ctx)) visit(byId.get(id), depth + 1);
+    if (done.has(change.id)) return;
+    done.add(change.id);
+    order.push(change);
+  };
+  [...list].sort((a, b) => applyRank(a) - applyRank(b)).forEach((change) => visit(change));
+  return order;
+};
+
+// Accept a list of changes: what they need first, then each in turn, the
+// ownership rows batched by the country they go to (one map step each, after
+// every rename, so a row written against an old name lands on the new one).
+// Returns the ids accepted, each one's undo, and the renames now in force.
+export const acceptMapChanges = (list, ctx, { changes = [], accepted = new Set(), renames = {} } = {}) => {
+  const order = planAccept(list, ctx, { changes, accepted });
+  const localRenames = { ...renames };
+  const undoers = new globalThis.Map();
+  const ids = [];
+  const owners = new globalThis.Map(); // target owner -> changes
+  for (const change of order) {
+    if (change.kind === "region-owner") {
+      const to = clean(change.to);
+      if (!owners.has(to)) owners.set(to, []);
+      owners.get(to).push(change);
+      continue;
+    }
+    const undo = applyMapChange(change, ctx, { renames: localRenames });
+    if (undo) undoers.set(change.id, undo);
+    if (change.kind === "polity-rename") localRenames[change.from] = change.to;
+    ids.push(change.id);
+  }
+  for (const [to, group] of owners) {
+    const target = renamed(to, localRenames);
+    const regionIds = group.map((change) => String(change.regionId));
+    const before = regionIds.map((id) => [id, ctx.api.getRegionSummary(id)?.owner ?? null]);
+    ctx.api.setRegionAttrs(regionIds, { owner: target || null });
+    for (const [index, change] of group.entries()) {
+      const [id, owner] = before[index];
+      undoers.set(change.id, () => ctx.api.setRegionAttrs([id], { owner }));
+      ids.push(change.id);
+    }
+  }
+  return { accepted: ids, undoers, renames: localRenames };
+};
+
+// How a change stands once the author's decisions are counted: theirs, else
+// accepted when the map already has it and rejected when what it changes is
+// gone, else null (still to decide).
+export const decisionOf = (change, decisions, statuses) => {
+  if (decisions.accepted.has(change.id)) return "accepted";
+  if (decisions.rejected.has(change.id)) return "rejected";
+  if (statuses[change.id] === "applied") return "accepted";
+  if (statuses[change.id] === "missing") return "rejected";
+  return null;
+};
+
+// What a save should record: the author's decisions, with what is already on
+// the map counted as accepted and what is no longer on it as rejected.
+export const decisionsFor = (changes, decisions, statuses) => {
+  const accepted = new Set(decisions.accepted);
+  const rejected = new Set(decisions.rejected);
+  for (const change of changes) {
+    const decision = decisionOf(change, decisions, statuses);
+    if (decision === "accepted") accepted.add(change.id);
+    else if (decision === "rejected") rejected.add(change.id);
+  }
+  return { accepted: [...accepted], rejected: [...rejected] };
+};
+
 // ---- where a change is on the map ---------------------------------------------
 
 // What to outline and zoom to for a change: region ids on this map, suggested
