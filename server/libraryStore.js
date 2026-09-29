@@ -5,15 +5,9 @@ import path from "path";
 import url from "url";
 import { resolveChildPath as resolveWithinDirectory } from "./security.js";
 import {
-  buildOwnerRenameMap,
-  buildPolityMapRefs,
-  migrateChat,
-  migrateEvents,
-  migrateGame,
-  migrateRegions,
-  migrateWorld as migrateOwnerWorld,
+  inheritedMapRefsOf,
+  migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
-  rekeyOwnerMap,
 } from "./ownerMigration.js";
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -2799,39 +2793,27 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
   const events = paths.events && fs.existsSync(paths.events) ? readJsonFile(paths.events, null) : null;
   const chat = paths.chat && fs.existsSync(paths.chat) ? readJsonFile(paths.chat, null) : null;
 
-  const migrationContext = {
-    polityOverrides: world.polityOverrides,
-    countryNameOverrides: meta?.countryNameOverrides,
-    registry: COUNTRY_NAME_REGISTRY,
-    features: regions?.features,
-    ownershipOverrides: world.regionOwnershipOverrides,
-    sovereigntyOverrides: world.regionSovereigntyOverrides,
-    regionClaimants: world.regionClaimants,
-    ownerCodes: world.ownerCodes,
-    colors,
-    flags,
-    tags,
-    units: world.units,
-    countryTags: world.countryTags,
-    internationalReputation: world.internationalReputation,
-    gameCountry: game?.country,
-    inheritedMapRefs: paths.inheritedMapRefs ?? null,
-    deriveMapRefsFromFeatures: paths.deriveMapRefsFromFeatures !== false,
-  };
-  const renames = buildOwnerRenameMap(migrationContext);
-  const mapRefs = buildPolityMapRefs(migrationContext, renames);
   const warn = (message) => console.warn(`[owner-migration] ${label}: ${message}`);
+  // The same resolution the web store runs (server/ownerMigration.js). regionsReadOnly:
+  // a game borrows its scenario's regions purely as resolver context. Writing them
+  // back from here would rewrite another record's map using this record's renames —
+  // the scenario migrates its own map, with its own.
+  const migrated = migrateOwnerRecord({
+    world, game, meta, colors, flags, tags, regions, events, chat,
+    regionsReadOnly: Boolean(paths.regionsReadOnly),
+    registry: COUNTRY_NAME_REGISTRY,
+    inheritedMapRefs: paths.inheritedMapRefs,
+    deriveMapRefsFromFeatures: paths.deriveMapRefsFromFeatures,
+  }, { warn });
+  const { renames } = migrated;
 
-  if (colors) writeJsonFile(paths.colors, rekeyOwnerMap(colors, renames, "colors", warn));
-  if (flags) writeJsonFile(paths.flags, rekeyOwnerMap(flags, renames, "flags", warn));
-  if (tags) writeJsonFile(paths.tags, rekeyOwnerMap(tags, renames, "tags", warn));
-  // regionsReadOnly: a game borrows its scenario's regions purely as resolver
-  // context. Writing them back from here would rewrite another record's map using
-  // this record's renames — the scenario migrates its own map, with its own.
-  if (regions && !paths.regionsReadOnly) writeJsonFile(paths.regions, migrateRegions(regions, renames));
-  if (events) writeJsonFile(paths.events, migrateEvents(events, renames));
-  if (chat) writeJsonFile(paths.chat, migrateChat(chat, renames));
-  if (game) writeJsonFile(paths.game, migrateGame(game, renames));
+  if (migrated.colors) writeJsonFile(paths.colors, migrated.colors);
+  if (migrated.flags) writeJsonFile(paths.flags, migrated.flags);
+  if (migrated.tags) writeJsonFile(paths.tags, migrated.tags);
+  if (migrated.regions) writeJsonFile(paths.regions, migrated.regions);
+  if (migrated.events) writeJsonFile(paths.events, migrated.events);
+  if (migrated.chat) writeJsonFile(paths.chat, migrated.chat);
+  if (migrated.game) writeJsonFile(paths.game, migrated.game);
 
   // Roll-back points hold a full nested copy of world+game+colors+chat+events and
   // are blind-written back over live state on restore, with no marker of their own
@@ -2846,7 +2828,7 @@ const migrateOwnerRecordAtPaths = (label, paths) => {
 
   // World last: it carries the marker, so a crash mid-migration leaves the record
   // unmarked and the next read simply redoes it.
-  writeJsonFile(paths.world, migrateOwnerWorld(world, renames, warn, mapRefs));
+  writeJsonFile(paths.world, migrated.world);
   console.log(`[owner-migration] ${label}: ${renames.size} owner(s) -> ${new Set(renames.values()).size} name(s)`);
   return true;
 };
@@ -2911,12 +2893,7 @@ const ensureGameOwnerSchema = (gameId) => {
     // later conquest could teach the identity resolver that the conquered country's
     // modern GADM code now "means" the conqueror. The scenario migration above has
     // already derived/persisted these refs from the starting political map.
-    const parentWorld = readJsonFile(getScenarioJsonPath(parentId, "world"), {});
-    const inheritedMapRefs = Object.fromEntries(
-      Object.entries(parentWorld?.polityOverrides ?? {})
-        .map(([polityKey, polity]) => [polityKey, polity?.mapRefs])
-        .filter(([, refs]) => Array.isArray(refs?.gadm0) && refs.gadm0.length > 0),
-    );
+    const inheritedMapRefs = inheritedMapRefsOf(readJsonFile(getScenarioJsonPath(parentId, "world"), {}));
 
     migrateOwnerRecordAtPaths(key, {
       world: getGameJsonPath(gameId, "world"),

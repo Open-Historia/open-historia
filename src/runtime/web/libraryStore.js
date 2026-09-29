@@ -5,7 +5,7 @@
 // (src/runtime/library.js, assets.js) works exactly as against the real server.
 // Web build only.
 
-import { STORES, idbGet, idbGetAll, idbPut, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
+import { STORES, idbGet, idbGetAll, idbPutPair, idbDelete, kvGet, kvPut, reconcileMetaIndex } from "./idb.js";
 import { serializeWrite } from "./writeQueue.js";
 import { coarsenFeatureCollection } from "../../../server/coarseGeometry.js";
 import {
@@ -32,14 +32,9 @@ import { normalizeFeatureOverrides, normalizeFeatureSettings } from "../../../se
 // imports, so Vite bundles it into the web build. One implementation of the
 // resolver rather than two hand-kept copies that drift.
 import {
-  buildOwnerRenameMap,
-  migrateChat,
-  migrateEvents,
-  migrateGame,
-  migrateRegions,
-  migrateWorld as migrateOwnerWorld,
+  inheritedMapRefsOf,
+  migrateOwnerRecord,
   needsMigration as needsOwnerMigration,
-  rekeyOwnerMap,
 } from "../../../server/ownerMigration.js";
 import { coverObjectUrl } from "./coverUrls.js";
 import { createCoarseRegionsCache } from "./coarseRegionsCache.js";
@@ -507,9 +502,14 @@ const inferRecordCustomGeometry = (record) => {
 // Synchronous and in-place — a web record holds world/game/colors/geojson together,
 // so unlike the server there is nothing to keep in step across files. The caller
 // persists the record it was already going to persist.
+//
+// `context` is what the record is resolved against beyond itself, gathered by
+// ownerMigrationContext below exactly as the desktop store gathers it; without it
+// a record resolves against its own parts only.
 const migratedRecords = new Set();
+const ownJsonValue = (value) => (typeof value === "string" ? parseJsonValue(value, null) : value);
 
-const ensureOwnerSchema = (record, kind) => {
+const ensureOwnerSchema = (record, kind, context = {}) => {
   if (!record?.id) return false;
   // `kind` is explicit rather than read off the record: a scenario and a game may
   // both be called "default", and one cache key for the two would migrate whichever
@@ -524,31 +524,34 @@ const ensureOwnerSchema = (record, kind) => {
   try {
     // colors / flags / tags / snapshots are TOP-LEVEL on a record, not inside
     // record.json — only JSON_ASSET_KEYS live there (see runtimeValueFromRecord).
-    const regions = parseJsonValue(record.geojson?.regionsGeojson, null);
-    const renames = buildOwnerRenameMap({
-      polityOverrides: world.polityOverrides,
-      countryNameOverrides: record.meta?.countryNameOverrides,
-      registry: COUNTRY_NAME_REGISTRY,
-      features: regions?.features,
-      ownershipOverrides: world.regionOwnershipOverrides,
-      ownerCodes: world.ownerCodes,
-      colors: record.colors,
-      flags: record.flags,
-      tags: record.tags,
-      units: world.units,
-      countryTags: world.countryTags,
-      internationalReputation: world.internationalReputation,
-      gameCountry: record.json?.game?.country,
-    });
+    // An uploaded asset may be stored as its raw JSON text.
+    const ownRegions = parseJsonValue(record.geojson?.regionsGeojson, null);
     const warn = (message) => console.warn(`[owner-migration] ${key}: ${message}`);
+    // The same resolution the desktop store runs (server/ownerMigration.js).
+    const migrated = migrateOwnerRecord({
+      world,
+      game: record.json?.game,
+      meta: context.meta ?? record.meta,
+      colors: ownJsonValue(record.colors),
+      flags: ownJsonValue(record.flags),
+      tags: ownJsonValue(record.tags),
+      events: record.json.events,
+      chat: record.json.chat,
+      regions: context.regions ?? ownRegions,
+      regionsReadOnly: Boolean(context.regions),
+      registry: COUNTRY_NAME_REGISTRY,
+      inheritedMapRefs: context.inheritedMapRefs,
+      deriveMapRefsFromFeatures: context.deriveMapRefsFromFeatures,
+    }, { warn });
+    const { renames } = migrated;
 
-    if (record.colors) record.colors = rekeyOwnerMap(record.colors, renames, "colors", warn);
-    if (record.flags) record.flags = rekeyOwnerMap(record.flags, renames, "flags", warn);
-    if (record.tags) record.tags = rekeyOwnerMap(record.tags, renames, "tags", warn);
-    if (record.json.events) record.json.events = migrateEvents(record.json.events, renames);
-    if (record.json.chat) record.json.chat = migrateChat(record.json.chat, renames);
-    if (record.json.game) record.json.game = migrateGame(record.json.game, renames);
-    if (regions) record.geojson.regionsGeojson = migrateRegions(regions, renames);
+    if (migrated.colors) record.colors = migrated.colors;
+    if (migrated.flags) record.flags = migrated.flags;
+    if (migrated.tags) record.tags = migrated.tags;
+    if (migrated.events) record.json.events = migrated.events;
+    if (migrated.chat) record.json.chat = migrated.chat;
+    if (migrated.game) record.json.game = migrated.game;
+    if (migrated.regions) record.geojson.regionsGeojson = migrated.regions;
     // Roll-back points hold a full nested copy of every owner-keyed structure and
     // are blind-written back over live state, with no marker to catch a stale one.
     if (record.snapshots) {
@@ -557,7 +560,7 @@ const ensureOwnerSchema = (record, kind) => {
     }
     // World last: it carries the marker, so a failure leaves the record unmarked
     // and the next read simply redoes it.
-    record.json.world = migrateOwnerWorld(world, renames, warn);
+    record.json.world = migrated.world;
     migratedRecords.add(key);
     console.log(`[owner-migration] ${key}: ${renames.size} owner(s) -> ${new Set(renames.values()).size} name(s)`);
     return true;
@@ -567,18 +570,67 @@ const ensureOwnerSchema = (record, kind) => {
   }
 };
 
+// What the desktop store resolves a record against beyond itself
+// (server/libraryStore.js ensureScenarioOwnerSchema / ensureGameOwnerSchema):
+//  - a GAME resolves against its SCENARIO: the scenario's countryNameOverrides
+//    (rule 2) and regions (rule 4) as read-only context, and the scenario's polity
+//    mapRefs inherited rather than derived from the campaign's front lines. A web
+//    game record carries neither regions nor name overrides of its own, so alone it
+//    resolved with neither, and a legacy save could name a country differently here
+//    than on desktop (wwii-1939's THA: "Thailand" in the save, "Siam" on the map).
+//    The scenario migrates first, so a game never resolves against an unmigrated one.
+//  - a SCENARIO without a map of its own borrows the stock world as read-only
+//    context, as the desktop store does.
+const ownerMigrationContext = async (record, kind) => {
+  if (kind === "game") {
+    const parent = await getScenario(readGameMeta(record.id, record.meta ?? {}).scenarioId || DEFAULT_SCENARIO_ID);
+    if (!parent) return {};
+    await migrateOwnerSchema(parent, "scenario");
+    return {
+      meta: parent.meta ?? {},
+      regions: parseJsonValue(parent.geojson?.regionsGeojson, null),
+      inheritedMapRefs: inheritedMapRefsOf(parent.json?.world),
+      deriveMapRefsFromFeatures: false,
+    };
+  }
+  if (record.id !== DEFAULT_SCENARIO_ID && record.geojson?.regionsGeojson == null) {
+    const stock = await fetchDefaultRegionsGeojson();
+    return stock ? { regions: stock } : {};
+  }
+  return {};
+};
+
+// ensureOwnerSchema with the desktop's context, persisted. Every async path runs
+// this before anything reads or rewrites the record's owners; the synchronous
+// ensureOwnerSchema in applyJsonMutations then finds the record already done.
+const migrateOwnerSchema = async (record, kind) => {
+  if (!record?.id || migratedRecords.has(`${kind}:${record.id}`) || !needsOwnerMigration(record.json?.world)) {
+    return ensureOwnerSchema(record, kind);
+  }
+  let context;
+  try {
+    context = await ownerMigrationContext(record, kind);
+  } catch (error) {
+    // Resolving without the context would name countries differently from the
+    // desktop; leave the record unmigrated and let the next read try again.
+    console.warn(`[owner-migration] ${kind}:${record.id} context failed: ${error.message}`);
+    return false;
+  }
+  const migrated = ensureOwnerSchema(record, kind, context);
+  if (migrated) await (kind === "game" ? putGame(record) : putScenario(record));
+  return migrated;
+};
+
 // --- Runtime JSON read/write (mirror readRuntimeJsonAsset/writeRuntimeJsonAsset) ---
 const readRuntimeJsonAsset = async (assetKey) => {
   // Above the geojson branch: it returns before anything else runs, and it is the
   // branch that serves the file `owner` physically lives in.
   const activeForMigration = await getActiveGameRecord();
-  if (activeForMigration && ensureOwnerSchema(activeForMigration, "game")) {
-    await idbPut(STORES.games, activeForMigration);
-  }
+  if (activeForMigration) await migrateOwnerSchema(activeForMigration, "game");
   if (SCENARIO_GEOJSON_ASSET_KEYS.includes(assetKey)) {
     const scenario = await getActiveRuntimeScenarioRecord();
     // The scenario owns its geometry; migrate it as its OWN record.
-    if (scenario && ensureOwnerSchema(scenario, "scenario")) await idbPut(STORES.scenarios, scenario);
+    if (scenario) await migrateOwnerSchema(scenario, "scenario");
     let value = scenario?.geojson?.[assetKey];
     if (value === undefined && assetKey === "regionsGeojson" && scenario && usesBuiltInMap(scenario)) {
       value = await fetchBuiltInRegionsGeojson();
@@ -590,7 +642,7 @@ const readRuntimeJsonAsset = async (assetKey) => {
       // scenario calls that token. This scenario's own ownership is in its
       // world.regionOwnershipOverrides, migrated with its own record above.
       const fallback = await getScenario(DEFAULT_SCENARIO_ID);
-      if (fallback && ensureOwnerSchema(fallback, "scenario")) await idbPut(STORES.scenarios, fallback);
+      if (fallback) await migrateOwnerSchema(fallback, "scenario");
       value = fallback?.geojson?.[assetKey];
     }
     // Web build: the default scenario's regions.geojson isn't in the seed (too
@@ -906,6 +958,7 @@ const updateScenario = async (id, body = {}) => {
   const provenance = pickHubProvenance(body);
   const edits = SCENARIO_EDIT_KEYS.some((key) => body[key] !== undefined);
   if (edits || !Object.keys(provenance).length) {
+    await migrateOwnerSchema(record, "scenario");
     writeScenarioMeta(record, pickMetaUpdates(body));
     applyJsonMutations(record, body, /*canonicalizeCountry*/ true, "scenario");
   }
@@ -1039,6 +1092,7 @@ const createGame = async (body = {}) => {
 const updateGame = async (id, body = {}) => {
   const record = await getGame(id);
   if (!record) throw new Error(`Game not found: ${id}`);
+  await migrateOwnerSchema(record, "game");
   writeGameMeta(record, pickMetaUpdates(body));
   applyJsonMutations(record, body, true, "game");
   await putGame(record);

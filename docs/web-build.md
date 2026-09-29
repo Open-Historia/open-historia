@@ -154,7 +154,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 ### Owner-schema migration (`ensureOwnerSchema`, `:357`)
 
-Rewrites a record whose owners are GADM codes into one keyed by country **names**. It *imports* `server/ownerMigration.js` (pure ESM, so Vite bundles it) rather than re-implementing it — one resolver, no drift. Runs lazily on read, once per `kind:id` (`migratedRecords` set), and discards roll-back `snapshots` (they predate the rename and are blind-written back with no staleness marker).
+Rewrites a record whose owners are GADM codes into one keyed by country **names**. It *imports* `server/ownerMigration.js` (pure ESM, so Vite bundles it) and calls the same `migrateOwnerRecord` the desktop store does — one resolver, one context, no drift. `migrateOwnerSchema` gathers that context first (`ownerMigrationContext`), as `server/libraryStore.js` does: a **game** resolves against its **scenario's** `countryNameOverrides` and regions (read-only) and inherits the scenario's polity `mapRefs`, after the scenario itself migrates (a web game record carries neither regions nor name overrides, so alone it named e.g. wwii-1939's THA "Thailand" while the map said "Siam"); a **scenario** without a map of its own borrows the stock world as read-only context. It runs on read and before an update, once per `kind:id` (`migratedRecords` set), persists through `putGame`/`putScenario` so the menu's meta rows follow, and discards roll-back `snapshots` (they predate the rename and are blind-written back with no staleness marker).
 
 ### Export / import bundles
 
@@ -298,7 +298,7 @@ The interceptor also answers these through the same `ctx` handler pattern (retur
 | Backend | real Express server, same-origin | `window.fetch` interceptor (`router.js`), no server |
 | Persistence | files on disk (`server/libraryStore.js` etc.) | one IndexedDB record per item (`idb.js`) |
 | Record layout | scenario split across many files | `world`/`game`/`colors`/`geojson`/`cover` in **one** record |
-| Owner migration | must keep files in step; async | synchronous, in-place; **imports** `server/ownerMigration.js` |
+| Owner migration | must keep files in step | in-place on one record; the **same** `migrateOwnerRecord` and context (`server/ownerMigration.js`) |
 | Cover image URL | fetchable `/api/.../assets/cover?token=` | `blob:` object URL (bypasses the fetch interceptor) — see §6 |
 | PMTiles hosting | served by the server | Worker CORS+range proxy + hash-verified node swarm; default `regions.geojson` fetched from the content origin, not seeded |
 | Default scenario | full data on disk | seeded from `generated/defaultScenario.js`; big geometry fetched on demand |
