@@ -443,6 +443,23 @@ test("a code-keyed game migrates to names on first read, once, and drops its res
   assert.deepEqual(db.get("games").get(id), migrated, "a second read changes nothing");
 });
 
+test("a game and a scenario that share an id each migrate as their own record", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { name: "Twin Map" })).scenario.id;
+  const id = await newGame("Twin", { id: scenarioId, scenarioId });
+  assert.equal(id, scenarioId);
+  const legacyWorld = () => ({ regionOwnershipOverrides: { r1: "USA" }, ownerCodes: ["USA"] });
+  db.get("games").get(id).json.world = legacyWorld();
+  db.get("scenarios").get(scenarioId).json.world = legacyWorld();
+
+  ok(await runtime("GET", "world")); // migrates the game
+  ok(await runtime("GET", "regionsGeojson")); // migrates the scenario, which owns the geometry
+  for (const record of [db.get("games").get(id), db.get("scenarios").get(scenarioId)]) {
+    assert.equal(record.json.world.ownerSchema, 4);
+    assert.equal(record.json.world.regionOwnershipOverrides.r1, "United States");
+  }
+});
+
 test("a turn commit is what every runtime read then sees", async () => {
   await reset();
   await newGame("Committed");
