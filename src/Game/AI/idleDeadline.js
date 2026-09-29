@@ -54,7 +54,8 @@ export const AI_IDLE_TIMEOUT_MS = 300000;
 // backstop against hanging forever, not a performance limit.
 //
 // A relayed call (every local model behind /api/ai/relay) also has the relay's
-// own OH_RELAY_TIMEOUT_MS, 10 minutes by default, which reaches it first.
+// own OH_RELAY_TIMEOUT_MS, 10 minutes of silence by default, which reaches it
+// first.
 export const AI_FIRST_BYTE_TIMEOUT_MS = 900000;
 
 // The world repairs (motion and breadth) use the two windows above WHATEVER

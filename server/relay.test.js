@@ -176,6 +176,75 @@ describe("AI relay", () => {
     assert.ok(Date.now() - startedAt < 10000, "the deadline must fire promptly");
   });
 
+  // Reads a relayed body to the end. Resolves with the text, or rejects the way
+  // the game's own stream readers would.
+  const readAll = async (response) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text;
+      text += decoder.decode(value, { stream: true });
+    }
+  };
+
+  // Once the first chunk has gone out there is no status left to set. The relay
+  // used to res.end() here, a clean end of stream, so the game took half an
+  // answer for a whole one.
+  test("an answer the relay's deadline cuts off does not end like a complete one", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: {\"n\":1}\n\n");
+      /* then silence */
+    });
+    const port = await startServer({ OH_RELAY_TIMEOUT_MS: "1200" });
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 200);
+    await assert.rejects(readAll(response));
+
+    // What the game's reader sees on that path.
+    const { withRelayCutoffHint, RELAY_CUT_OFF_MESSAGE } = await import("../src/Game/AI/relayResponse.js");
+    const hinted = withRelayCutoffHint(await relay(port, upstream));
+    await assert.rejects(readAll(hinted), (error) => error.message === RELAY_CUT_OFF_MESSAGE && /OH_RELAY_TIMEOUT_MS/.test(error.message));
+  });
+
+  test("an endpoint that drops mid-answer breaks the relayed stream too", async () => {
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: {\"n\":1}\n\n");
+      setTimeout(() => res.socket.destroy(), 200);
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream);
+    assert.equal(response.status, 200);
+    await assert.rejects(readAll(response));
+  });
+
+  test("a model still streaming is not cut off for being slow overall", async () => {
+    // The deadline is on silence: eight chunks 300 ms apart run well past a
+    // 1.2 s window, and none of the gaps comes near it.
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      let n = 0;
+      const tick = setInterval(() => {
+        n += 1;
+        res.write(`data: {"n":${n}}\n\n`);
+        if (n === 8) {
+          clearInterval(tick);
+          res.end("data: [DONE]\n\n");
+        }
+      }, 300);
+    });
+    const port = await startServer({ OH_RELAY_TIMEOUT_MS: "1200" });
+    const text = await readAll(await relay(port, upstream));
+    assert.match(text, /"n":8/);
+    assert.match(text, /\[DONE\]/);
+  });
+
   test("a named endpoint resolves through the metadata guard and is relayed", async () => {
     // The relay checks where a NAME resolves (security.js metadataGuardedLookup);
     // an ordinary name — here localhost — must pass straight through it.

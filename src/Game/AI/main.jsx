@@ -25,6 +25,7 @@ import {
 } from "./contextWindow.js";
 import { splitSystemPromptForCache } from "./promptLayout.js";
 import { looksLikeModelFilePath, resolveServedModelId } from "./modelIds.js";
+import { withRelayCutoffHint } from "./relayResponse.js";
 import { attachLookupRound, attachCallMetrics, finishAiRecord, isTelemetryEnabled, startAiRecord  } from "./telemetry.js";
 import { JSON_URLS, loadRegionCatalog, readJson } from "../../runtime/assets.js";
 import { describePlayerGroupForPrompt, normalizeGroups } from "../../runtime/groups.js";
@@ -489,13 +490,15 @@ function isLocalEndpoint(url) {
     }
 }
 
-const relayFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
-    fetch("/api/ai/relay", {
+// A stream the relay has to cut off partway reads as a bare network error;
+// withRelayCutoffHint makes it say what happened (relayResponse.js).
+const relayFetch = async (url, { method = "POST", headers = {}, payload, signal } = {}) =>
+    withRelayCutoffHint(await fetch("/api/ai/relay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, method, headers, payload }),
         signal,
-    });
+    }), signal);
 
 const directFetch = (url, { method = "POST", headers = {}, payload, signal } = {}) =>
     fetch(url, {
