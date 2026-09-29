@@ -195,6 +195,41 @@ test("null fallback power scores remain actionable instead of counting as comple
 });
 
 
+// An actor missing only party support goes to the generator's separate fast
+// call; a task mixing it with a new actor made two calls against a one-call
+// ceiling and failed every time.
+const landscapeOnlyActor = (polityKey) => ({
+  ...completeActor(polityKey),
+  parties: [{ id: "gov", name: "Government Party", ideology: "Pragmatic", publicPriorities: ["Maintain stability"] }],
+});
+
+test("actors missing only their landscape never share a task with other actors", () => {
+  const checkpoint = base(["A", "C"]);
+  checkpoint.stagedWorld.politicalActors.byPolity.A = landscapeOnlyActor("A");
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.stagedWorld.politicalActors.byPolity.B = completeActor("B");
+  checkpoint.coverage["political-actor"] = ["B"];
+  let task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.equal(task.type, "political-actor");
+  assert.deepEqual(task.targets, ["A"]);
+
+  checkpoint.attempts["political-actor:A"] = 2;
+  task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs });
+  assert.deepEqual(task.targets, ["C"]);
+
+  delete checkpoint.attempts["political-actor:A"];
+  const summary = summarizePoliticalWorldV2Worklist({ checkpoint, inputs });
+  assert.equal(summary.total, 2, "one landscape call and one generation call");
+});
+
+test("landscape-only actors take the fast call's 48-polity batch", () => {
+  const polities = Array.from({ length: 60 }, (_, index) => `P${index + 1}`);
+  const checkpoint = base([]);
+  checkpoint.stagedWorld.politicalActors.byPolity = Object.fromEntries(polities.map((polity) => [polity, landscapeOnlyActor(polity)]));
+  const task = deriveNextPoliticalWorldV2Task({ checkpoint, inputs: { polities } });
+  assert.deepEqual(task.targets, polities.slice(0, 48));
+});
+
 test("stale 202/202 coverage reopens an Other-heavy generated electoral roster", () => {
   const checkpoint = base();
   checkpoint.coverage["political-actor"] = ["A", "B", "C"];

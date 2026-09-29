@@ -7,7 +7,7 @@
 
 import { normalizeInstitutions, validateInstitutionTemporalBaseline } from "../../../runtime/institutions.js";
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
-import { buildPoliticalGenerationPlan } from "../../../runtime/politicalWorldGeneration.js";
+import { POLITICAL_GENERATION_NEEDS, buildPoliticalGenerationPlan } from "../../../runtime/politicalWorldGeneration.js";
 
 const clean = (value) => String(value ?? "").replace(/\s+/g, " ").trim();
 const array = (value) => Array.isArray(value) ? value : [];
@@ -17,6 +17,9 @@ const chunkCount = (count, size) => count > 0 ? Math.ceil(count / Math.max(1, si
 export const SIMPLE_V2_BATCH = Object.freeze({
   politicalActor: 12,
   politicalActorRetry: 6,
+  // Actors missing only their numeric landscape go to the generator's compact
+  // fast call, which takes 48 in one request.
+  landscapeBackfill: 48,
   governingAlignment: 48,
   governingAlignmentRetry: 6,
   powerEvidence: 24,
@@ -63,14 +66,29 @@ const politicalWorldV2ActorCompleteness = ({ checkpoint, inputs } = {}) => {
       requireRepresentationCoverage: true,
     });
     const incomplete = new Set(array(plan?.items).map((item) => clean(item?.polityKey)).filter(Boolean));
-    return { ok: true, incomplete: expected.filter((polity) => incomplete.has(polity)) };
+    // The generator sends an actor that lacks only its numeric landscape to a
+    // separate fast call. A task that mixed those with other actors made two
+    // calls against a one-call ceiling, so the worklist keeps them apart.
+    const landscapeOnly = new Set(array(plan?.items)
+      .filter((item) => array(item?.needs).length === 1 && item.needs[0] === POLITICAL_GENERATION_NEEDS.QUANTITATIVE_LANDSCAPE)
+      .map((item) => clean(item?.polityKey))
+      .filter(Boolean));
+    return { ok: true, incomplete: expected.filter((polity) => incomplete.has(polity)), landscapeOnly };
   } catch {
     // Preserve the legacy coverage fallback for diagnostic/old-job consumers
     // whose fixtures predate a valid scenario date. The *acceptance* seam below
     // still fails closed so a live provider result cannot be marked complete
     // merely because the native planner itself failed.
-    return { ok: false, incomplete: [] };
+    return { ok: false, incomplete: [], landscapeOnly: new Set() };
   }
+};
+
+// One provider call per actor task: landscape-only actors and the rest never
+// share a batch. The first open target decides which kind this task takes.
+const oneCallActorTargets = (targets, landscapeOnly) => {
+  if (!targets.length) return [];
+  const landscape = landscapeOnly.has(targets[0]);
+  return targets.filter((polity) => landscapeOnly.has(polity) === landscape);
 };
 
 export const behaviorallyIncompletePoliticalWorldV2Actors = ({ checkpoint, inputs } = {}) => (
@@ -142,7 +160,10 @@ export const deriveNextPoliticalWorldV2Task = ({ checkpoint, inputs } = {}) => {
   const actorReadyPolities = expected.filter((polity) => !missingActorSet.has(polity));
   const retryableActors = retryableTargets(missingActors, checkpoint, "political-actor");
   if (retryableActors.length) {
-    const targets = firstBatch(retryableActors, SIMPLE_V2_BATCH.politicalActor, SIMPLE_V2_BATCH.politicalActorRetry, checkpoint, "political-actor");
+    const { landscapeOnly } = politicalWorldV2ActorCompleteness({ checkpoint, inputs });
+    const sameKind = oneCallActorTargets(retryableActors, landscapeOnly);
+    const normalSize = landscapeOnly.has(sameKind[0]) ? SIMPLE_V2_BATCH.landscapeBackfill : SIMPLE_V2_BATCH.politicalActor;
+    const targets = firstBatch(sameKind, normalSize, SIMPLE_V2_BATCH.politicalActorRetry, checkpoint, "political-actor");
     return { id: `simple:actor:${targets.join("|")}`, type: "political-actor", stage: "politics", targets, payload: {} };
   }
 
@@ -266,7 +287,10 @@ export const summarizePoliticalWorldV2Worklist = ({ checkpoint, inputs } = {}) =
   // institutional surface. Power/verification can still progress independently.
   let institutionChainBlocked = false;
   if (actorRetryable.length) {
-    pending += chunkCount(actorRetryable.length, SIMPLE_V2_BATCH.politicalActor);
+    const { landscapeOnly } = politicalWorldV2ActorCompleteness({ checkpoint, inputs });
+    const landscapeRetryable = actorRetryable.filter((polity) => landscapeOnly.has(polity)).length;
+    pending += chunkCount(landscapeRetryable, SIMPLE_V2_BATCH.landscapeBackfill)
+      + chunkCount(actorRetryable.length - landscapeRetryable, SIMPLE_V2_BATCH.politicalActor);
   } else if (alignmentRetryable.length) {
     pending += chunkCount(alignmentRetryable.length, SIMPLE_V2_BATCH.governingAlignment);
   } else {

@@ -161,6 +161,32 @@ test("the real executor marks a failed provider call so the run pauses without p
   assert.equal(result.attempts["institution-membership-resolution:pact"], undefined);
 });
 
+test("a landscape-only actor and a new actor are two one-call tasks, not one task that breaks its ceiling", async () => {
+  const checkpoint = readyCheckpoint();
+  checkpoint.stagedWorld.politicalActors.byPolity.A = {
+    ...completeActor("A"),
+    parties: [{ id: "gov", name: "Government Party", ideology: "Pragmatic", publicPriorities: ["Maintain stability"] }],
+  };
+  delete checkpoint.stagedWorld.politicalActors.byPolity.C;
+  checkpoint.coverage["political-actor"] = ["B"];
+  const tools = [];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 2,
+    callModel: async (_system, _history, options) => {
+      tools.push(options?.tool?.name);
+      if (options?.tool?.name === "submit_political_world_quantitative_landscapes") {
+        return { toolInput: { landscapes: [{ polityKey: "A", landscapeJson: "{\"gov\":92}" }] } };
+      }
+      return { toolInput: { proposals: [] } };
+    },
+  });
+  assert.deepEqual(tools, ["submit_political_world_quantitative_landscapes", "submit_political_world_generation"]);
+  assert.ok(result.coverage["political-actor"].includes("A"));
+  assert.ok(!result.warnings.some((warning) => /provider-call ceiling/.test(warning)));
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),
