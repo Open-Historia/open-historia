@@ -54,18 +54,14 @@ import { DIFFICULTY_LEVELS } from "../../runtime/difficulty.js";
 import { POLITICAL_WORLD_CAPABILITY, politicalWorldCapability } from "../../runtime/politicalWorldCapability.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { flagEmojiFromGid } from "../../runtime/countryFlags.js";
-import {
-  splitScenarioBundleImage,
-  embedScenarioBundleImage,
-  embedScenarioBundleVector,
-} from "../../runtime/communityBasemaps.js";
-import { zipBundle, unzipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
-import { restoreBundleFiles, splitBundleFiles } from "../../runtime/bundleFiles.js";
+import { splitScenarioBundleImage } from "../../runtime/communityBasemaps.js";
+import { zipBundle, looksLikeZip } from "../../runtime/bundleZip.js";
+import { splitBundleFiles } from "../../runtime/bundleFiles.js";
 import { buildGameZipBlob, formatZipSize, readGameZip, saveGameZipToDisk } from "../../runtime/gameZip.js";
 import { saveBlobToDisk } from "../../runtime/saveFile.js";
 import { acceptFor } from "../../runtime/fileAccept.js";
 import { playerCountryAfterSave } from "../../Editor/playerCountryAfterSave.js";
-import { fetchHubPosts, fetchPostComments, refreshPublishedRecord } from "../../runtime/hubPosts.js";
+import { fetchHubPosts, fetchPostComments, readScenarioBundleBytes, refreshPublishedRecord } from "../../runtime/hubPosts.js";
 import { isBlockedContributor, withContributorBlocked } from "../../../server/hubProvenance.js";
 import { readSuggestionFile } from "../../runtime/scenarioSuggestion.js";
 import {
@@ -2897,27 +2893,10 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setIsBusy(true);
 
     try {
-      // A scenario exported with a custom basemap arrives as a .zip (scenario.json +
-      // the raw basemap file); everything else is a plain JSON bundle. Detect the zip
-      // by its magic bytes so a renamed file still works, then re-embed the basemap so
-      // the importer sees a normal self-contained bundle.
-      const buffer = await file.arrayBuffer();
-      let bundle;
-      if (looksLikeZip(new Uint8Array(buffer))) {
-        const zip = await unzipBundle(buffer);
-        const scenarioText = await zip.text("scenario.json");
-        if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-        bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-        const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-        if (imageName) {
-          embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-        } else {
-          const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-          if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-        }
-      } else {
-        bundle = JSON.parse(new TextDecoder().decode(buffer));
-      }
+      // A .zip or a plain JSON bundle, read the way a hub download is
+      // (runtime/hubPosts.js) — so a post's .zip downloaded by hand and imported
+      // here still fetches the community basemap it references.
+      const bundle = await readScenarioBundleBytes(await file.arrayBuffer());
       const details = await importScenarioBundle(bundle);
       setActiveTab("scenarios");
       setMenuOpen(true);

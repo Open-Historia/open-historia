@@ -10,7 +10,7 @@
 // and the suggestions left on them without loading the Community tab.
 
 import { restoreBundleFiles } from "./bundleFiles.js";
-import { unzipBundle } from "./bundleZip.js";
+import { looksLikeZip, unzipBundle } from "./bundleZip.js";
 import {
   embedScenarioBundleImage,
   embedScenarioBundleVector,
@@ -163,38 +163,45 @@ export const downloadHubFile = async (fileUrl) => {
   return response.arrayBuffer();
 };
 
-// Download + assemble a hub post's scenario bundle, ready for import: fetches
-// through the server's allowlisted /api/hub/file proxy, unpacks a .zip (re-
-// embedding the basemap that rides alongside scenario.json), and inlines a
-// referenced community basemap. Shared by the Community tab's Import button,
-// the Scenarios tab's Update button and Suggest changes (the post's file is
-// what a suggestion is measured against).
-export const downloadHubBundle = async (bundleUrl) => {
-  const bytes = await downloadHubFile(bundleUrl);
-  // A scenario with a custom basemap ships as a .zip (scenario.json + the raw
-  // basemap file + preview); everything else is a plain JSON bundle. The basemap
-  // is an image (basemap.png/jpg…) or a generated vector (basemap.geojson).
-  let bundle;
-  if (/\.zip(\?|$)/i.test(bundleUrl)) {
-    const zip = await unzipBundle(bytes);
-    const scenarioText = await zip.text("scenario.json");
-    if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
-    bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
-    const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
-    if (imageName) {
-      embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
-    } else {
-      const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
-      if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
-    }
+// A scenario file's bytes as one self-contained bundle, ready for import. A
+// scenario ships as a .zip (scenario.json, the raw basemap file, a preview and
+// its heavy assets as real entries); an older one is a plain JSON bundle. Told
+// apart by the bytes, never the file name, so a renamed download still reads.
+// The basemap is an image (basemap.png/jpg…) or a generated vector
+// (basemap.geojson), re-embedded here.
+export const unpackScenarioBundle = async (bytes) => {
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (!looksLikeZip(view)) return JSON.parse(new TextDecoder().decode(view));
+  const zip = await unzipBundle(view);
+  const scenarioText = await zip.text("scenario.json");
+  if (!scenarioText) throw new Error("That .zip is missing scenario.json.");
+  const bundle = await restoreBundleFiles(JSON.parse(scenarioText), zip);
+  const imageName = zip.names().find((n) => /(^|\/)basemap\.(png|jpe?g|webp|gif|svg)$/i.test(n));
+  if (imageName) {
+    embedScenarioBundleImage(bundle, await zip.bytes(imageName), imageName);
   } else {
-    bundle = JSON.parse(new TextDecoder().decode(bytes));
+    const vectorName = zip.names().find((n) => /(^|\/)basemap\.geojson$/i.test(n));
+    if (vectorName) embedScenarioBundleVector(bundle, await zip.bytes(vectorName));
   }
-  // A shared scenario may reference a community basemap instead of embedding
-  // it — fetch and inline it before importing so the map isn't blank.
+  return bundle;
+};
+
+// unpackScenarioBundle, then the one step a hub scenario may still need: a
+// shared scenario can reference a community basemap instead of embedding it,
+// so fetch and inline it before importing or the map is blank. Every way a
+// hub scenario arrives goes through here — downloaded by the game, or a
+// post's .zip the player downloaded and imported from disk.
+export const readScenarioBundleBytes = async (bytes) => {
+  const bundle = await unpackScenarioBundle(bytes);
   await resolveScenarioBundleBackground(bundle);
   return bundle;
 };
+
+// Download + assemble a hub post's scenario bundle, ready for import, through
+// the server's allowlisted /api/hub/file proxy. Shared by the Community tab's
+// Import button, the Scenarios tab's Update button and Suggest changes (the
+// post's file is what a suggestion is measured against).
+export const downloadHubBundle = async (bundleUrl) => readScenarioBundleBytes(await downloadHubFile(bundleUrl));
 
 // ---- suggestions: comments on a post that carry a suggestion file ------------
 
