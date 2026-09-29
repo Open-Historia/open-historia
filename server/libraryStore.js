@@ -3793,11 +3793,14 @@ const exportGameBundle = (gameId) => {
   const scenario = getGameScenarioSummary(game.scenarioId);
   const data = {};
 
+  // A game with no file of its own for an optional key leaves it out, so the
+  // importer falls back to the scenario's (web twin: the same rule). Exported as
+  // {}, it became the imported game's own file and hid the scenario's colours,
+  // flags or tags.
   for (const assetKey of GAME_BUNDLE_DATA_KEYS) {
-    data[assetKey] = readJsonFile(
-      getGameJsonPath(gameId, assetKey),
-      cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {}),
-    );
+    const filePath = getGameJsonPath(gameId, assetKey);
+    if (OPTIONAL_GAME_BUNDLE_KEYS.has(assetKey) && !fs.existsSync(filePath)) continue;
+    data[assetKey] = readJsonFile(filePath, cloneJson(JSON_ASSET_DEFAULTS[assetKey] ?? {}));
   }
 
   // Stats definitions are scenario-authored while the source scenario exists.

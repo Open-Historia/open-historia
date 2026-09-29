@@ -433,3 +433,26 @@ test("the campaign's own dates travel, and arrival is recorded separately", () =
   assert.equal(result.landedCreatedAt, result.sentCreatedAt, "which the import keeps rather than minting its own");
   assert.ok(result.landedImportedAt > result.sentCreatedAt, "arrival is recorded separately, and is later");
 });
+
+test("an optional file the game does not have stays out of the bundle, so the scenario's shows through", () => {
+  // The game has its own colours but no flags file: it reads the scenario's
+  // flags. Exported as {}, the flags became the imported game's own and hid them.
+  const root = buildDataDir();
+  writeJson(path.join(root, "scenarios", "default", "flags.json"), { Testland: "data:image/png;base64,AAAA" });
+  const result = runStore(root, `
+    const bundle = store.exportGameBundle("test-campaign");
+    const imported = store.importGameBundle(bundle);
+    store.setActiveGame(imported.game.id);
+    ${report(`{
+      keys: Object.keys(bundle.data),
+      colors: bundle.data.colors,
+      flags: store.readRuntimeJsonAsset("flags").data,
+    }`)}
+  `);
+
+  assert.deepEqual(result.colors, { Testland: [1, 2, 3] }, "a file the game has travels");
+  for (const key of ["flags", "tags", "institutionLogos"]) {
+    assert.equal(result.keys.includes(key), false, `${key} is not exported as an empty object`);
+  }
+  assert.deepEqual(result.flags, { Testland: "data:image/png;base64,AAAA" }, "the imported game reads the scenario's flags");
+});
