@@ -620,10 +620,27 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     const saved = await saveScenario(scenario.id, { hubReviews: reviews });
     onChanged?.(saved?.scenario ?? null);
   };
+  // A decision shows once it is saved: a save that fails leaves the rows
+  // as they were, and the error says why.
   const decide = async (nextDecisions, nextStatus) => {
+    await persist(nextDecisions, nextStatus ?? status);
     setDecisions(nextDecisions);
     if (nextStatus) setStatus(nextStatus);
-    await persist(nextDecisions, nextStatus ?? status);
+  };
+  const errorText = (nextError) => nextError?.message || String(nextError);
+  // Reject, Mark as reviewed and Dismiss only record decisions.
+  const record = async (nextDecisions, nextStatus) => {
+    setBusy(true);
+    setError("");
+    try {
+      await decide(nextDecisions, nextStatus);
+      return true;
+    } catch (nextError) {
+      setError(errorText(nextError));
+      return false;
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Accepting applies the change at once, like accepting a tracked change;
@@ -646,6 +663,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
     const pending = list.filter((change) => !decided.has(change.id) && statuses[change.id] !== "applied");
     if (!pending.length) return;
     setBusy(true);
+    setError("");
     try {
       for (const change of pending) {
         const before = change.kind === "cover" ? coverRef.current : detailValueIn(snapshotRef.current, change);
@@ -656,9 +674,11 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       await applyChanges(pending);
       for (const change of pending) applyToSnapshot(snapshotRef.current, change);
       setStatuses((current) => ({ ...current, ...Object.fromEntries(pending.map((change) => [change.id, "applied"])) }));
-      await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected });
+      // Applied already: a review that fails to save cannot take it back.
+      await decide({ accepted: new Set([...decisions.accepted, ...pending.map((change) => change.id)]), rejected: decisions.rejected })
+        .catch((nextError) => { throw new Error(`Your scenario was changed, but the decision could not be saved: ${errorText(nextError)}`); });
     } catch (nextError) {
-      setError(nextError?.message || String(nextError));
+      setError(errorText(nextError));
     } finally {
       setBusy(false);
     }
@@ -666,15 +686,11 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
   const reject = async (list) => {
     const pending = list.filter((change) => !decided.has(change.id));
     if (!pending.length) return;
-    setBusy(true);
-    try {
-      await decide({ accepted: decisions.accepted, rejected: new Set([...decisions.rejected, ...pending.map((change) => change.id)]) });
-    } finally {
-      setBusy(false);
-    }
+    await record({ accepted: decisions.accepted, rejected: new Set([...decisions.rejected, ...pending.map((change) => change.id)]) });
   };
   const undo = async (change) => {
     setBusy(true);
+    setError("");
     try {
       // An accepted change is undone only by putting back what was there; one
       // accepted before the game was last closed has nothing to put back,
@@ -690,10 +706,11 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       accepted.delete(change.id);
       rejected.delete(change.id);
       setStatuses((current) => ({ ...current, [change.id]: detailChangeStatus(change, snapshotRef.current) }));
-      await decide({ accepted, rejected }, "reviewing");
+      await decide({ accepted, rejected }, "reviewing")
+        .catch((nextError) => { throw new Error(inverse ? `Your scenario was changed back, but the decision could not be saved: ${errorText(nextError)}` : errorText(nextError)); });
       undoes.delete(change.id);
     } catch (nextError) {
-      setError(nextError?.message || String(nextError));
+      setError(errorText(nextError));
     } finally {
       setBusy(false);
     }
@@ -712,7 +729,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       </span>
       <span style={{ flex: 1 }} />
       {phase === "ready" && status !== "done" && (
-        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => decide(decisions, "done")} style={tapFit(buttonStyle, touch)}>Mark as reviewed</button>
+        <button type="button" className="oh-tap-row" disabled={busy} onClick={() => record(decisions, "done")} style={tapFit(buttonStyle, touch)}>Mark as reviewed</button>
       )}
       {/* Someone flooding the post with bad edits: everything they suggested
           goes, on every post of this player's, and what they suggest later is hidden. */}
@@ -723,7 +740,7 @@ export const SuggestionReviewDialog = ({ scenario, source, onClose, onReviewMap,
       )}
       {/* A suggestion that cannot be read can still be put away. */}
       {phase !== "loading" && status !== "dismissed" && (
-        <button type="button" className="oh-tap-row" disabled={busy} onClick={async () => { await decide(decisions, "dismissed"); onClose(); }} style={tapFit(buttonStyle, touch)}>Dismiss</button>
+        <button type="button" className="oh-tap-row" disabled={busy} onClick={async () => { if (await record(decisions, "dismissed")) onClose(); }} style={tapFit(buttonStyle, touch)}>Dismiss</button>
       )}
       <button type="button" className="oh-tap-row" onClick={onClose} style={tapFit(primaryButtonStyle, touch)}>Done</button>
     </>
