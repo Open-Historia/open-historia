@@ -283,7 +283,7 @@ Reads flags shared by other players **straight from the hub repo's GitHub Issues
 | `fetchCommunityFlags({ force })` | Fetches both endpoints (scenarios best-effort), parses, filters to installable, caches. Returns `[...dedicatedFlagPosts, ...scenarioFlagPacks]` |
 | `flagPostInstallable(post)` | True if a payload can be extracted: `imageUrl` for a flag post, `packUrl` for a scenario pack |
 | `loadCommunityFlagDataUrl(post)` | Downloads a flag image **through the hub proxy** (`/api/hub/file?url=`, since GitHub attachments send no CORS) and returns a chunked base64 `data:` URL |
-| `loadCommunityFlagPack(post)` | Downloads a scenario bundle via the proxy, finds `scenario.json` (zip or bare JSON), returns custom `{ code, dataUrl }` flags from `assets.flags` (flagcdn/built-in URLs skipped) |
+| `loadCommunityFlagPack(post)` | Downloads a scenario bundle via the proxy, finds `scenario.json` (zip or bare JSON; flags the export lifted into a zip entry of their own are put back with `restoreBundleFiles`), returns custom `{ code, dataUrl }` flags from `assets.flags` (flagcdn/built-in URLs skipped) |
 | `communityFlagsHubUrl()` | Link to the filtered hub issue list |
 | `openFlagPublishForm({name, author, code})` | Opens the prefilled `flag.yml` issue form in a new tab (image left for the user to drag in) |
 

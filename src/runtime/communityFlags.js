@@ -11,6 +11,7 @@
 // Kept free of React/OpenLayers deps so the editor and the game can both use it.
 
 import { unzipBundle, looksLikeZip } from "./bundleZip.js";
+import { restoreBundleFiles } from "./bundleFiles.js";
 
 const HUB_OWNER = "Open-Historia";
 const HUB_REPO = "Open-historia-scenarios";
@@ -182,7 +183,12 @@ export const loadCommunityFlagPack = async (post) => {
     const zip = await unzipBundle(buffer);
     const text = await zip.text("scenario.json");
     if (!text) throw new Error("That .zip is missing scenario.json.");
-    bundle = JSON.parse(text);
+    // A scenario with many custom flags carries them as a zip entry of their
+    // own (bundleFiles.js lifts any asset over 64 KB). Put back only that one:
+    // the rest of the bundle — geometry, tile archives — is not needed here.
+    const parsed = JSON.parse(text);
+    const restored = await restoreBundleFiles({ assets: { flags: parsed?.assets?.flags } }, zip);
+    bundle = { ...parsed, assets: { ...(parsed?.assets ?? {}), flags: restored.assets.flags } };
   } else {
     bundle = JSON.parse(new TextDecoder().decode(buffer));
   }

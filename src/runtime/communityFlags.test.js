@@ -9,6 +9,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { zipBundle } from "./bundleZip.js";
+import { splitBundleFiles } from "./bundleFiles.js";
 import { fetchCommunityFlags, flagPostInstallable, loadCommunityFlagPack } from "./communityFlags.js";
 
 const ISSUES_FLAGS = /issues\?state=open&labels=flag/;
@@ -88,6 +89,16 @@ test("a pack yields the scenario's custom flags, from a zip or a bare JSON bundl
   const expected = [{ code: "Rome", dataUrl: RED }, { code: "Carthage", dataUrl: BLUE }];
   assert.deepEqual(await loadCommunityFlagPack({ packUrl: PACK_ZIP }), expected, "built-in flagcdn flags are left out");
   assert.deepEqual(await loadCommunityFlagPack({ packUrl: PACK_JSON }), expected);
+});
+
+test("a pack whose flags ride in the zip as their own entry still yields them", async () => {
+  // Past 64 KB the exporter lifts the flags out of scenario.json (bundleFiles.js).
+  const heavy = `data:image/png;base64,${"A".repeat(70 * 1024)}`;
+  const lifted = splitBundleFiles(flagsAsset({ Rome: heavy, Carthage: BLUE }));
+  assert.equal(lifted.bundle.assets.flags.mode, "file");
+  const url = "https://github.com/user-attachments/files/207/heavy-scenario.zip";
+  files.set(url, new Uint8Array(await (await zipBundle({ ...lifted.files, "scenario.json": JSON.stringify(lifted.bundle) })).arrayBuffer()));
+  assert.deepEqual(await loadCommunityFlagPack({ packUrl: url }), [{ code: "Rome", dataUrl: heavy }, { code: "Carthage", dataUrl: BLUE }]);
 });
 
 test("a pack with no custom flags, or no bundle, says so", async () => {
