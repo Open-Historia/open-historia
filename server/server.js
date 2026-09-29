@@ -1,5 +1,6 @@
 /*! Open Historia — portions (CORS, AI relay, shutdown endpoint, hub proxy) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import crypto from "crypto";
+import dns from "dns";
 import express from "express";
 import fs from "fs";
 import http from "http";
@@ -64,7 +65,9 @@ import {
   crossOriginWriteAllowed,
   isAllowedHubUrl,
   isLoopbackAddress,
+  metadataGuardedLookup,
   parseByteRange,
+  RELAY_BLOCKED_CODE,
   relayTargetAllowed,
   sanitizeRelayHeaders,
 } from "./security.js";
@@ -1006,8 +1009,9 @@ const setHubFileGuards = (res) => {
 //      browser on the host all come from loopback and are unaffected; a phone
 //      talking to a desktop needs OH_ALLOW_REMOTE_RELAY=1, which is a deliberate
 //      "yes, proxy for my LAN" and is stated as such.
-//   2. Cloud metadata endpoints refused (relayTargetAllowed) — never an AI
-//      endpoint, always credentials.
+//   2. Cloud metadata endpoints refused (relayTargetAllowed on the URL, and
+//      relayLookup on where a name resolves) — never an AI endpoint, always
+//      credentials.
 //   3. Caller headers filtered, redirects not followed, response size and time
 //      bounded, so it cannot be aimed at an internal service and used to walk a
 //      redirect chain or stream something unbounded back.
@@ -1032,6 +1036,8 @@ const RELAY_TIMEOUT_MS = Number(process.env.OH_RELAY_TIMEOUT_MS) || 600000;
 // the browser now sees tokens as they arrive rather than one blob at the end,
 // so a local model notices a cancelled request on its next write.
 const relayTransport = (target) => (target.protocol === "https:" ? https : http);
+// Checks where a NAME resolves, which relayTargetAllowed cannot (security.js).
+const relayLookup = metadataGuardedLookup(dns.lookup);
 
 app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
   const controller = new AbortController();
@@ -1094,6 +1100,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
         method: requestMethod,
         headers: upstreamHeaders,
         signal: controller.signal,
+        lookup: relayLookup,
       }, resolve);
       upstreamRequest.on("error", reject);
       upstreamRequest.end(body);
@@ -1147,7 +1154,7 @@ app.post("/api/ai/relay", largeJsonParser, async (req, res) => {
       return;
     }
     if (!controller.signal.aborted && !res.headersSent) {
-      sendError(res, 502, error);
+      sendError(res, error?.code === RELAY_BLOCKED_CODE ? 400 : 502, error);
     } else if (!res.writableEnded && !res.destroyed) {
       // Headers are already out, so there is no status left to set — end the
       // response rather than leaking the socket. (A client that went away has

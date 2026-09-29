@@ -176,6 +176,27 @@ describe("AI relay", () => {
     assert.ok(Date.now() - startedAt < 10000, "the deadline must fire promptly");
   });
 
+  test("a named endpoint resolves through the metadata guard and is relayed", async () => {
+    // The relay checks where a NAME resolves (security.js metadataGuardedLookup);
+    // an ordinary name — here localhost — must pass straight through it.
+    const upstream = await startUpstream((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const port = await startServer();
+    const response = await relay(port, upstream.replace("127.0.0.1", "localhost"));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+  });
+
+  test("the metadata service behind an IPv6 wrapper is refused", async () => {
+    const port = await startServer();
+    const response = await relay(port, "http://[::ffff:169.254.169.254]/latest/meta-data/");
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /cloud metadata endpoint/);
+  });
+
   test("a transport failure says what actually failed, not just \"fetch failed\"", async () => {
     // Nothing is listening here: the player mistyped a port, or their model
     // server is not running. The reason has to survive into the bug report.

@@ -2,6 +2,7 @@
  *  for path containment, the CSRF/origin guard, HTTP range parsing and the hub
  *  host allowlist. Kept separate so they can be unit-tested (security.test.js)
  *  without spinning up the server. */
+import net from "net";
 import path from "path";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -114,19 +115,83 @@ const METADATA_HOSTNAMES = new Set([
   "instance-data",
 ]);
 
-// Strip the brackets Node's URL keeps around an IPv6 hostname.
-const bareHostname = (hostname) => String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
+// Strip the brackets Node's URL keeps around an IPv6 hostname, a zone id
+// (fe80::1%eth0) and the trailing dot of a fully-qualified name.
+const bareHostname = (hostname) => String(hostname || "")
+  .replace(/^\[|\]$/g, "")
+  .replace(/%.*$/, "")
+  .replace(/\.$/, "")
+  .toLowerCase();
+
+// The eight 16-bit groups of a valid IPv6 address, expanding "::" and a dotted
+// IPv4 tail (::ffff:169.254.169.254).
+const ipv6Groups = (address) => {
+  let text = address;
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(1).map(Number);
+    text = `${text.slice(0, dotted.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const parts = (part) => (part ? part.split(":").map((group) => Number.parseInt(group, 16)) : []);
+  const [head, tail] = text.split("::");
+  if (tail === undefined) return parts(head);
+  const front = parts(head);
+  const back = parts(tail);
+  return [...front, ...new Array(8 - front.length - back.length).fill(0), ...back];
+};
+
+// The IPv4 address an IPv6 one stands for, when it is one of the forms that
+// reach an IPv4 host: mapped (::ffff:a.b.c.d), the old compatible form
+// (::a.b.c.d) and NAT64 (64:ff9b::a.b.c.d). Node's URL writes
+// http://[::ffff:169.254.169.254]/ as [::ffff:a9fe:a9fe], which is how the
+// metadata service slipped past a check that compared text.
+const embeddedIPv4 = (groups) => {
+  const zeroPrefix = groups.slice(0, 5).every((group) => group === 0);
+  const mapped = zeroPrefix && groups[5] === 0xffff;
+  const compatible = zeroPrefix && groups[5] === 0 && groups[6] !== 0;
+  const nat64 = groups[0] === 0x64 && groups[1] === 0xff9b && groups.slice(2, 6).every((group) => group === 0);
+  if (!mapped && !compatible && !nat64) return null;
+  return [groups[6] >> 8, groups[6] & 0xff, groups[7] >> 8, groups[7] & 0xff].join(".");
+};
+
+const EC2_METADATA_IPV6 = ipv6Groups("fd00:ec2::254").join(":");
 
 export const isMetadataAddress = (hostname) => {
   const host = bareHostname(hostname);
   if (METADATA_HOSTNAMES.has(host)) return true;
+  const family = net.isIP(host);
   // IPv4 link-local (169.254.0.0/16) — metadata lives at .169.254, but the whole
   // range is link-local and has no business being an AI endpoint.
-  if (/^169\.254\./.test(host)) return true;
+  if (family === 4) return /^169\.254\./.test(host);
+  if (family !== 6) return false;
+  const groups = ipv6Groups(host);
+  const v4 = embeddedIPv4(groups);
+  if (v4) return isMetadataAddress(v4);
   // IPv6 link-local (fe80::/10) and the metadata alias fd00:ec2::254.
-  if (/^fe[89ab][0-9a-f]:/.test(host)) return true;
-  if (host === "fd00:ec2::254") return true;
-  return false;
+  if ((groups[0] & 0xffc0) === 0xfe80) return true;
+  return groups.join(":") === EC2_METADATA_IPV6;
+};
+
+// A dns.lookup for the relay's upstream socket that refuses a NAME resolving to
+// a metadata address (a DNS record pointing at 169.254.169.254, or a name that
+// rebinds to it after the URL check). relayTargetAllowed only sees the text of
+// the URL; this sees where the connection actually goes. Node does not call a
+// lookup for an IP literal, which relayTargetAllowed has already judged.
+export const RELAY_BLOCKED_CODE = "ERELAYMETADATA";
+
+export const metadataGuardedLookup = (baseLookup) => (hostname, options, callback) => {
+  const done = typeof options === "function" ? options : callback;
+  const lookupOptions = typeof options === "function" ? {} : options;
+  baseLookup(hostname, lookupOptions, (error, address, family) => {
+    if (error) return done(error);
+    const resolved = Array.isArray(address) ? address : [{ address, family }];
+    if (resolved.some((entry) => isMetadataAddress(entry?.address))) {
+      const blocked = new Error("That address is a cloud metadata endpoint, not an AI endpoint.");
+      blocked.code = RELAY_BLOCKED_CODE;
+      return done(blocked);
+    }
+    return done(null, address, family);
+  });
 };
 
 // Decide whether the AI relay may fetch `candidate`. Returns { allowed, reason }.

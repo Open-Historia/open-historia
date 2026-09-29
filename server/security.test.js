@@ -9,7 +9,9 @@ import {
   isAllowedHubUrl,
   isLoopbackAddress,
   isMetadataAddress,
+  metadataGuardedLookup,
   parseByteRange,
+  RELAY_BLOCKED_CODE,
   relayTargetAllowed,
   resolveChildPath,
   sanitizeRelayHeaders,
@@ -133,6 +135,54 @@ test("isMetadataAddress catches cloud metadata and link-local addresses", () => 
   for (const ok of ["localhost", "127.0.0.1", "192.168.1.9", "10.0.0.2", "api.openai.com", "169.253.1.1"]) {
     assert.equal(isMetadataAddress(ok), false, ok);
   }
+});
+
+test("isMetadataAddress sees the metadata service through IPv6 wrappers", () => {
+  // Node's URL rewrites [::ffff:169.254.169.254] as [::ffff:a9fe:a9fe], which a
+  // text comparison against "169.254." never matched.
+  assert.equal(new URL("http://[::ffff:169.254.169.254]/").hostname, "[::ffff:a9fe:a9fe]");
+  for (const bad of [
+    "[::ffff:a9fe:a9fe]", "::ffff:169.254.169.254", "0:0:0:0:0:ffff:a9fe:a9fe",
+    "[::a9fe:a9fe]", "64:ff9b::a9fe:a9fe", "[fe80::1%25eth0]", "fe80::1%eth0",
+    "FD00:EC2:0:0:0:0:0:254", "metadata.google.internal.",
+  ]) {
+    assert.equal(isMetadataAddress(bad), true, bad);
+  }
+  for (const ok of ["::1", "[::1]", "::ffff:127.0.0.1", "::ffff:c0a8:0109", "2001:db8::a9fe:a9fe", "fd00:ec2::253"]) {
+    assert.equal(isMetadataAddress(ok), false, ok);
+  }
+  assert.equal(relayTargetAllowed(new URL("http://[::ffff:169.254.169.254]/latest/meta-data/")).allowed, false);
+});
+
+test("metadataGuardedLookup refuses a name that resolves to the metadata service", async () => {
+  const fakeLookup = (answers) => (hostname, options, callback) => {
+    const found = answers[hostname];
+    if (!found) return callback(Object.assign(new Error("not found"), { code: "ENOTFOUND" }));
+    if (options?.all) return callback(null, found);
+    return callback(null, found[0].address, found[0].family);
+  };
+  const lookup = metadataGuardedLookup(fakeLookup({
+    "model.lan": [{ address: "192.168.1.50", family: 4 }],
+    "sneaky.example": [{ address: "93.184.216.34", family: 4 }, { address: "::ffff:169.254.169.254", family: 6 }],
+    "meta.example": [{ address: "169.254.169.254", family: 4 }],
+  }));
+  const ask = (hostname, options) => new Promise((resolve) => {
+    const done = (error, address, family) => resolve({ error, address, family });
+    if (options === undefined) lookup(hostname, done);
+    else lookup(hostname, options, done);
+  });
+
+  // A model on the LAN resolves as it always did, in both calling styles Node uses.
+  assert.deepEqual(await ask("model.lan", {}), { error: null, address: "192.168.1.50", family: 4 });
+  assert.deepEqual(await ask("model.lan", { all: true }), { error: null, address: [{ address: "192.168.1.50", family: 4 }], family: undefined });
+  assert.equal((await ask("model.lan")).address, "192.168.1.50");
+
+  for (const [name, options] of [["meta.example", {}], ["sneaky.example", { all: true }]]) {
+    const { error } = await ask(name, options);
+    assert.equal(error?.code, RELAY_BLOCKED_CODE, name);
+    assert.match(error.message, /cloud metadata endpoint/);
+  }
+  assert.equal((await ask("missing.example", {})).error.code, "ENOTFOUND");
 });
 
 test("relayTargetAllowed: private AI endpoints pass, metadata and odd schemes don't", () => {
