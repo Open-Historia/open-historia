@@ -43,9 +43,9 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `SearchBar.jsx` | Unified place search (this map's cities, regions, ~70k world places). |
 | `LayersPanel.jsx` | Region / label layer visibility toggles. |
 | `ReferencePanel.jsx` | Tracing-image upload/opacity/placement (session-only). |
-| `BasemapPicker.jsx` | Overlay to choose a built-in ESRI basemap, a saved basemap, upload, or a community one. |
+| `BasemapPicker.jsx` | Overlay to choose a built-in ESRI basemap, a saved basemap, upload, or a community one. Deleting a saved basemap asks first and says when it fails; a map keeps its own copy in `doc.metadata.customBackground`. |
 | `FlagPicker.jsx` | Overlay to choose a country flag (My flags / built-in / community). |
-| `DocumentsMenu.jsx` | Top-left menu: new/open/save/export-JSON/export-for-game + author field. |
+| `DocumentsMenu.jsx` | Top-left menu: new/open/save/export-JSON/export-for-game + author field. Deleting a saved map asks first, says when the delete fails, and is disabled for the map that is open (the saves kept writing to the deleted id, and every one failed). |
 | `exportPreset.js` | `buildGameSeed` + tier detection + region normalization + verbatim-polity logic. |
 | `regionImport.js` | Loads `regions-seed.geojson` into the OL source; resolves owner NAMEs from `gid0`. |
 | `documentMigration.js` | Brings a legacy code-keyed document forward to name-keyed on open. |
@@ -327,7 +327,7 @@ Tabs:
 - **In the game** — *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`listBuiltInFlags()`).
 - **Community** — fetched via the hub proxy; a single flag installs as a data URL, a scenario **flag pack** (`fromScenario`) installs wholesale into My flags (dedup by content hash).
 
-Upload (`fileToFlagDataUrl`, `FLAG_ACCEPT`) saves to the library first, then applies. **Remove** re-selects the standard code-derived flag (`pick(null)`). Values stored in `doc.flags` are downscaled PNG data URLs.
+Upload (`fileToFlagDataUrl`, `FLAG_ACCEPT`) saves to the library first, then applies. **Remove** re-selects the standard code-derived flag (`pick(null)`). Deleting one of *My flags* asks first and says when it fails; maps keep their own copy in `doc.flags`. Values stored in `doc.flags` are downscaled PNG data URLs.
 
 ---
 

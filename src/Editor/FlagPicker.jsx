@@ -205,6 +205,19 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
 
   const refreshMine = () => { listFlags().then(setMine); };
 
+  // One click used to delete, and a failure was swallowed. A map keeps its own
+  // copy of each flag (doc.flags holds the image), so only the library entry goes.
+  const handleDelete = async (flag) => {
+    if (!window.confirm(`Delete the flag “${flag.name || flag.code || "Flag"}” from My flags? Maps already using it keep their own copy.`)) return;
+    setError("");
+    try {
+      await deleteFlag(flag.id);
+    } catch (e) {
+      setError(`Could not delete that flag: ${e?.message || e}`);
+    }
+    refreshMine();
+  };
+
   useEffect(() => {
     if (open) refreshMine();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -395,7 +408,7 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                           active={currentFlag === f.dataUrl}
                           onClick={() => pick(f.dataUrl)}
                           onPublish={() => openFlagPublishForm({ name: f.name, author: f.author || author, code: f.code || "" })}
-                          onDelete={async () => { await deleteFlag(f.id).catch(() => {}); refreshMine(); }}
+                          onDelete={() => { void handleDelete(f); }}
                         />
                       ))}
                   </div>

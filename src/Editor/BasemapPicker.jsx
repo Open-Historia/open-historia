@@ -217,8 +217,16 @@ const BasemapPicker = ({
     }
   };
 
-  const handleDelete = async (id) => {
-    await deleteBasemapApi(id).catch(() => {});
+  // One click used to delete, and a failure was swallowed. A map keeps its
+  // own copy of its basemap (doc.metadata.customBackground), so only the
+  // library entry goes.
+  const handleDelete = async (bm) => {
+    if (!window.confirm(`Delete the basemap “${bm.name || "Custom basemap"}” from Your basemaps? Maps already using it keep their own copy.`)) return;
+    try {
+      await deleteBasemapApi(bm.id);
+    } catch (e) {
+      window.alert(`Could not delete that basemap: ${e?.message || e}`);
+    }
     refresh();
   };
 
@@ -306,7 +314,7 @@ const BasemapPicker = ({
                         active={currentCustomId === bm.id}
                         badge={bm.kind === "vector" ? "vector" : undefined}
                         onClick={() => { onSelectCustom(bm); onClose(); }}
-                        onDelete={() => handleDelete(bm.id)}
+                        onDelete={() => handleDelete(bm)}
                         onPublish={() => handlePublish(bm)}
                       />
                     ))}

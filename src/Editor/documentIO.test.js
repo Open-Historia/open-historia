@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadDocument, saveDocument } from "./documentIO.js";
+import { deleteDocument, loadDocument, saveDocument } from "./documentIO.js";
 
 // Answers every request with one response, and records what was asked.
 const withFetch = async (respond, run) => {
@@ -31,6 +31,16 @@ test("a failure with no message still says which status came back", async () => 
   await withFetch(() => new Response("<html>oops</html>", { status: 502 }), async () => {
     await assert.rejects(saveDocument(null, { name: "x" }), { message: "Could not save the map (HTTP 502)" });
     await assert.rejects(loadDocument("a"), { message: "Could not load the map (HTTP 502)" });
+  });
+});
+
+test("a delete that fails throws instead of answering null", async () => {
+  await withFetch(() => json({ error: "EPERM: operation not permitted" }, 400), async (calls) => {
+    await assert.rejects(deleteDocument("world_1"), { message: "EPERM: operation not permitted" });
+    assert.deepEqual(calls, [{ url: "/api/mapeditor/documents/world_1", method: "DELETE" }]);
+  });
+  await withFetch(() => json({ id: "world_1", deleted: true }), async () => {
+    assert.deepEqual(await deleteDocument("world_1"), { id: "world_1", deleted: true });
   });
 });
 

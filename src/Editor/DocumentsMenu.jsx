@@ -43,6 +43,20 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
   };
   const close = () => setOpen(false);
 
+  // A saved map is deleted for good (the desktop store removes its file), so
+  // the trash icon asks first and says when the delete fails. The map that is
+  // open cannot be deleted from here: the Workshop kept saving to the deleted
+  // id, and every save after it failed.
+  const remove = async (doc) => {
+    if (!window.confirm(`Delete “${doc.name || "Untitled Map"}” for good? This cannot be undone.`)) return;
+    try {
+      await deleteDocument(doc.id);
+    } catch (e) {
+      window.alert(`Could not delete this map: ${e?.message || e}`);
+    }
+    refresh();
+  };
+
   return (
     <div style={{ position: "fixed", top: 12, left: 12, zIndex: 36 }}>
       <button
@@ -119,9 +133,17 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
                   </span>
                 </button>
                 <button
-                  title="Delete"
-                  onClick={async () => { await deleteDocument(doc.id); refresh(); }}
-                  style={{ background: "transparent", border: "none", color: "#f87171", cursor: "pointer" }}
+                  title={doc.id === currentId ? "This map is open. Open or start another map to delete it." : "Delete"}
+                  aria-label={doc.id === currentId ? "This map is open. Open or start another map to delete it." : "Delete"}
+                  disabled={doc.id === currentId}
+                  onClick={() => { void remove(doc); }}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "#f87171",
+                    cursor: doc.id === currentId ? "default" : "pointer",
+                    opacity: doc.id === currentId ? 0.3 : 1,
+                  }}
                 >
                   <Icon name="trash" size={13} />
                 </button>

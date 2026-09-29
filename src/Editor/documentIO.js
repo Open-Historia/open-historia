@@ -12,7 +12,7 @@ const BASE = "/api/mapeditor/documents";
 
 // What went wrong, in the store's own words: both stores answer { error } (the
 // desktop server's sendError, the website's errorResponse). The Workshop shows
-// it, so a failed save says why instead of only that it failed.
+// it, so a failed save or delete says why instead of only that it failed.
 const failure = async (r, fallback) => {
   let message = "";
   try {
@@ -49,13 +49,12 @@ export const saveDocument = async (id, doc) => {
   return r.json();
 };
 
+// Throws when the delete did not happen: it used to answer null either way,
+// and the Saved maps list could not tell the author.
 export const deleteDocument = async (id) => {
-  try {
-    const r = await fetch(`${BASE}/${id}`, { method: "DELETE" });
-    return r.ok ? r.json() : null;
-  } catch {
-    return null;
-  }
+  const r = await fetch(`${BASE}/${id}`, { method: "DELETE" });
+  if (!r.ok) throw await failure(r, "Could not delete the map");
+  return r.json();
 };
 
 export const downloadJson = (doc) => {
