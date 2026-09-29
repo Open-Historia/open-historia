@@ -108,41 +108,42 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 
 ## 4. Placeholder → variable helper map
 
-`defaultPrompts.json` → `helpers`. Task/root text uses the uppercase `${PLACEHOLDER}`; the helper maps it to a lowercase `${var}` computed in `buildPromptContext`. "Used by" lists the prompts whose **default text** actually contains the placeholder.
+`defaultPrompts.json` → `helpers`. Task/root text uses the uppercase `${PLACEHOLDER}`; the helper maps it to a lowercase `${var}` computed in `buildPromptContext`. "Used by" lists the prompts whose **default text** actually contains the placeholder: `advisor`, `leader` and `tasks.*` in `defaultPrompts.json`, except that for `gameMaster` it is `NATIVE_GAME_MASTER_PROMPT` (`gameplayPrompts.js`), which `runJsonTask` renders in place of `tasks.gameMaster`.
 
 | `${PLACEHOLDER}` | → template var | Inserts | Used by (default text) |
 |---|---|---|---|
-| `PLAYER_POLITY` | `playerPolity` | Player polity name (`game.country`) | nearly all |
+| `PLAYER_POLITY` | `playerPolity` | Player polity name (`game.country`) | advisor, leader, countryStatSheet, actions, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor, descriptionToAction, eventConsolidator, gameMaster, pregameHistory, spyIntercept, intelligenceAssessment, chatActions |
 | `PLAYER_POLITY_REGIONS` | `playerPolityRegions` | Comma list of regions the player owns, or the LANDLESS notice | advisor |
-| `PLAYER_POLITY_BATTALION_SUMMARIES` | `playerBattalionSummaries` | Player + world unit lines (no feasibility doctrine) | advisor |
+| `PLAYER_POLITY_BATTALION_SUMMARIES` | `playerBattalionSummaries` | Player + world unit lines (no feasibility doctrine) | *(none — the advisor reads `ALL_FORCES_POSTURE` instead)* |
+| `ALL_FORCES_POSTURE` | `forcePosture` | Every power's formations: position, whose territory each is in, distance to the nearest foreign border, standing orders (`buildForcePostureText`, `forcePosture.js`; built only when a prompt renders it) | advisor |
 | `PLAYER_POLITY_REPUTATION_CONTEXT` | `playerPolityReputationContext` | "International reputation: N/100 (band)." | *(none — injected via the [International Reputation] directive, not the placeholder)* |
-| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions | advisor, actions, jumpForward, autoJumpForward, interactiveCreation, gameMaster, descriptionToAction |
-| `PLAYER_EVERY_ACTION` / `PLAYER_EVERY_ACTION_NOT_PREVIOUS` | `allActions` | All actions incl. resolved | advisor, jumpForward, autoJumpForward |
-| `GRAND_MAP_DESCRIPTION` | `worldSummary` | Full world snapshot (see §5 `worldSummary`) | advisor, countryStatSheet |
+| `PLAYER_ACTIONS_THIS_ROUND` | `plannedActions` | Planned (unresolved) actions | advisor, jumpForward, autoJumpForward, interactiveCreation, descriptionToAction |
+| `PLAYER_EVERY_ACTION` / `PLAYER_EVERY_ACTION_NOT_PREVIOUS` | `allActions` | All actions incl. resolved | advisor, jumpForward, autoJumpForward (only the `_NOT_PREVIOUS` spelling) |
+| `GRAND_MAP_DESCRIPTION` | `worldSummary` | Full world snapshot (see §5 `worldSummary`) | advisor, countryStatSheet, spyIntercept, intelligenceAssessment |
 | `GRAND_MAP_DESCRIPTION_NO_CITY` | `worldSummaryNoCity` | **Identical string** to `worldSummary` (name is historical) | leader, actions, jumpForward, autoJumpForward, descriptionToAction, gameMaster, pregameHistory |
-| `CURRENT_UNITS` | `unitsSummary` | Deployed units **+ conditional military-feasibility doctrine** | jumpForward, autoJumpForward |
-| `CURRENT_MAP_STRUCTURES` | `markersSummary` | `world.markers` structures with coords | jumpForward, autoJumpForward |
+| `CURRENT_UNITS` | `unitsSummary` | Deployed units **+ conditional military-feasibility doctrine** | jumpForward, autoJumpForward, gameMaster, idleDiplomacy |
+| `CURRENT_MAP_STRUCTURES` | `markersSummary` | `world.markers` structures with coords | jumpForward, autoJumpForward, gameMaster |
 | `CITY_COORDINATES` | `citiesSummary` | City coordinate catalog (custom era set or stock significant slice) | jumpForward, autoJumpForward |
-| `NUMBER_OF_REGIONS` | `numberOfRegions` | Count of regions in the map catalog | jumpForward, autoJumpForward, gameMaster |
-| `WORLD_BEFORE_ROUND_ONE_TEXT` | `worldBeforeRoundOne` | Scenario "World Before Round One" briefing | advisor, leader, actions, jumpForward, autoJumpForward, interactive×3, descriptionToAction, gameMaster, pregameHistory |
-| `HISTORICAL_PRESET_SIMULATION_RULES` | `simulationRules` | Scenario simulation rules | advisor, leader, countryStatSheet, actions, jump×2, interactive×3, descriptionToAction, gameMaster, pregameHistory |
-| `ALL_EVENTS_WITH_CONSOLIDATION` | `recentEventsLong` | STORY SO FAR (consolidated) + RECENT EVENTS | leader, advisor, actions, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor |
+| `NUMBER_OF_REGIONS` | `numberOfRegions` | Count of regions in the map catalog | jumpForward, autoJumpForward |
+| `WORLD_BEFORE_ROUND_ONE_TEXT` | `worldBeforeRoundOne` | Scenario "World Before Round One" briefing | advisor, leader, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor, interactiveSummary, descriptionToAction, gameMaster, pregameHistory |
+| `HISTORICAL_PRESET_SIMULATION_RULES` | `simulationRules` | Scenario simulation rules | advisor, leader, countryStatSheet, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor, interactiveSummary, descriptionToAction, gameMaster, pregameHistory, spyIntercept, intelligenceAssessment, chatActions |
+| `ALL_EVENTS_WITH_CONSOLIDATION` | `recentEventsLong` | STORY SO FAR (consolidated) + RECENT EVENTS | advisor, leader, actions, jumpForward, autoJumpForward, interactiveCreation, interactiveExecutor, gameMaster |
 | `CONSOLIDATED_HISTORY` | `consolidatedHistory` | Just the consolidated "STORY SO FAR" | *(declared in editor sections; not in current default text)* |
-| `PREVIOUS_ROUND_EVENTS` | `recentEvents` | Recent unconsolidated events (short window) | countryStatSheet, interactiveCreation |
-| `NON_CONSOLIDATED_ROUNDS_WITH_DATES` | `worldInitiativeContext` | The native world director's live analysis for the jump segment: focused and deferred storylines, the exploration slate, the era's conflict posture, economic and diplomatic attention, the storyline record contract | `runJumpSegments` (`buildWorldInitiativeContextBackground`, worker) |
-| `canonicalStorylineContext` | `world.storylines` for the GM prompt: id, status, pressure, momentum, title, participants, state (≤24) | `buildGameMasterStorylineContext` |
-| `recentRoundsWithDates` | `from → to` date pairs from `simulationHistory` | advisor, leader, actions, jumpForward, autoJumpForward |
-| `CHATS_NON_CONSOLIDATED_ROUNDS` | `chatHistoryLong` | Detailed multi-chat transcript | advisor, leader, actions, jumpForward, autoJumpForward |
+| `PREVIOUS_ROUND_EVENTS` | `recentEvents` | Recent unconsolidated events (short window) | countryStatSheet, interactiveCreation, spyIntercept, intelligenceAssessment |
+| `NON_CONSOLIDATED_ROUNDS_WITH_DATES` | `recentRoundsWithDates` | `from → to` date pairs from `simulationHistory` | advisor, leader, actions, jumpForward, autoJumpForward |
+| `CHATS_NON_CONSOLIDATED_ROUNDS` | `chatHistoryLong` | Detailed multi-chat transcript | advisor, leader, actions, jumpForward, autoJumpForward, gameMaster |
 | `CHAT_PARTICIPANTS` | `chatParticipants` | Names of the current chat's participants | leader, chatActions |
 | `THIS_CHAT_HISTORY` | `chatHistory` | The current chat's message lines — for the leader, `CONVERSATION_IN_TURNS` instead: the thread rides as the turns (§3b) | leader, chatActions |
+| `THIS_CHATS_MOST_RECENT_SPEAKER` | `lastSpeaker` | The polity that spoke last in the current chat | *(none)* |
 | `RESPONDING_POLITY_NAME` | `respondingPolityName` | Which polity the leader model should voice | leader |
 | `ALL_ADVISOR_MESSAGES` | `advisorMessages` | `CONVERSATION_IN_TURNS`: the transcript rides as the turns, once (§3b) | advisor |
-| `ORIGIN_ROUND_DATE` | `date` | Current game date (`game.gameDate`, raw ISO/text) | leader, countryStatSheet, eventConsolidator, gameMaster, descriptionToAction |
+| `ORIGIN_ROUND_DATE` | `date` | Current game date (`game.gameDate`, raw ISO/text) | leader, countryStatSheet, jumpForward, autoJumpForward, descriptionToAction, eventConsolidator, gameMaster, spyIntercept, intelligenceAssessment |
 | `ORIGIN_ROUND_GRAMMATICAL_DATE` | `dateReadable` | Current date formatted "D MMMM YYYY" | advisor, actions, jumpForward |
 | `STARTING_ROUND_DATE` | `startDate` | Campaign start date (`game.startDate`) | advisor, jumpForward, autoJumpForward, pregameHistory |
-| `TARGET_ROUND_DATE` | `targetDate` | Jump target date (ISO) | jumpForward, autoJumpForward |
+| `TARGET_ROUND_DATE` | `targetDate` | Jump target date (ISO) | jumpForward |
 | `TARGET_ROUND_GRAMMATICAL_DATE` | `targetDateReadable` | Target date formatted readable | jumpForward |
-| `CURRENT_ROUND_NUMBER` | `round` | Current round number | jumpForward |
+| `CURRENT_ROUND_NUMBER` | `round` | Current round number | jumpForward, autoJumpForward |
+| `JUMP_LIVE_STATE` | `jumpLiveState` | The time skip's live records, one block (`buildJumpLiveState`, §6a), the native world director's analysis among them (`worldInitiativeContext`: focused and deferred storylines, the exploration slate, the era's conflict posture, economic and diplomatic attention, the storyline record contract; built per segment by `runJumpSegments`) | jumpForward, autoJumpForward |
 | `DIFFICULTY_DESCRIPTION_CHATS` | `difficultyGuidanceChats` | Difficulty guidance, "chats" flavor | leader |
 | `DIFFICULTY_DESCRIPTION_JUMP_FORWARD` | `difficultyGuidanceJumpForward` | Difficulty guidance, "jump" flavor | jumpForward, autoJumpForward |
 | `DESCRIPTION_ACTION_TEXT` | `actionInput` | Raw player freeform text to convert | descriptionToAction |
@@ -154,7 +155,7 @@ Because the advisor/leader path skips `buildTemplateVariables`, `playerPolityRep
 | `INTERACTIVE_PREMISE_DESCRIPTION` | `interactivePremise` | The interactive event's premise text | interactiveExecutor, interactiveSummary |
 | `INTERACTIVE_SIMULATION_HISTORY` | `interactiveHistory` | Choice→summary log so far | interactiveExecutor, interactiveSummary |
 
-Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (all tasks), and in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `interactiveExecutor` — `${interactiveChoice}`.
+Lowercase variables referenced **directly** by task text (no helper alias): `${language}` (every prompt except `pregameHistory`, the four native directors, `geographyResolver` and `demandCheck`); in `idleDiplomacy` — `${playerPolity}`, `${dateReadable}`, `${worldSummary}`, `${recentEvents}`, `${chatSummary}`; in `chatActions` — `${worldSummary}`, `${recentEvents}`; in `interactiveExecutor` — `${interactiveChoice}`; in `spyIntercept` — `${targetPolity}`, `${disinformation}`; in `intelligenceAssessment` — `${targetPolity}`; in `projects` — `${projectsSummary}`, `${simulationRules}`; in `gameMaster` (the native prompt) — `${gameMasterMode}`, `${canonicalWarContext}`, `${canonicalStorylineContext}` (`world.storylines` for the GM: id, status, pressure, momentum, title, participants, state, at most 24; `buildGameMasterStorylineContext`), `${gameMasterPoliticalActorContext}`, `${canonicalDiplomaticContext}`, `${gameMasterBaseGeographyCatalog}`; and the native directors' own inputs in `timelineCurator`, `unitDirector`, `structureDirector`, `territoryDirector` and `geographyResolver` (`${curatorCandidates}`, `${unitDirectorUnits}`, `${structureDirectorCandidates}`, `${territoryDirectorState}`, `${geographyResolverItems}` and their siblings).
 
 ---
 
@@ -168,6 +169,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `playerPolityRegions` | Player's owned-region names, "No player polity…", "No explicit… override list", or the LANDLESS block | `buildPlayerPolityRegionsText` `promptContext.js` (LANDLESS text 287) |
 | `playerBattalionSummaries` | `buildUnitsSummaryText(world)` (up to 60 units, coords/type/owner/strength/status) | `promptContext.js` / builder `195` |
 | `unitsSummary` | Same unit text; **`buildTemplateVariables` appends `buildMilitaryFeasibilityText`** (era-reach/type/distance doctrine) only when units exist or the actions text matches the military regex | `promptContext.js`; override `gameplay.js`; feasibility builder `319` |
+| `forcePosture` | Every power's formations with whose territory each is in, the distance to the nearest foreign border and its standing orders (`world.units` + `world.pendingUnitOrders`); positions only if the territory index fails. Built only when a prompt renders it (border proximity is the costliest thing in a prompt build) | `buildForcePostureText` `forcePosture.js`, called from `promptContext.js` |
 | `playerPolityReputationContext` | "International reputation: N/100 (poor/mixed/well-regarded)." from `world.internationalReputation[player]`, else last viewed stat sheet, else 50 | `buildPlayerPolityReputationText` `gameplay.js` (added `371`) |
 | `worldSummary` | Multi-section snapshot: player line + tags, round, date, language, difficulty, world-before-round-one, simulation rules, up-to-24 territorial overrides, up-to-16 polity overrides (incl. `note` lore), up-to-40 country tag lines, the interactive event in progress | `buildWorldSummary` `promptContext.js` |
 | `worldSummaryNoCity` | **Identical** to `worldSummary` | `promptContext.js` |
@@ -401,6 +403,7 @@ Its rules live in the template, with one exception injected at call time: `build
 - **Durable memory:** every reply also carries a hidden `DIPLOMATIC_MEMORY:<summary>` line — the thread's COMPLETE durable memory, modal force and attribution preserved (`buildDiplomaticTurnInstruction`, `runtime/diplomaticEnvelope.js`). `parseDiplomaticEnvelope` strips it and the chat stores it on the message as `memorySummary`; the newest one is fed back as a system-side context entry ahead of the dated, attributed transcript tail (`loadDiplomaticHistory`), and `diplomaticContinuity` (§5.1) shows it to the jump.
 ### 7.15 Root prompt: `advisor` — chief advisor chat
 - **Purpose:** In-character strategic advice, ≤3000 chars, may append a `chart`-fenced Chart.js block. **Assembly:** `buildAdvisorSystemPrompt` (`main.jsx`) + `sendMessage` with rolling `advisorHistory`; language directive only (no difficulty, no schema).
+- **What it sees of the armies:** `${ALL_FORCES_POSTURE}` → `forcePosture` (`buildForcePostureText`, `forcePosture.js`): every power's formations, whose territory each stands in, how far it is from whose border and what it is under orders to do. It replaced `PLAYER_POLITY_BATTALION_SUMMARIES`, whose unit list arrived under the player's heading and was read as the player's own army.
 
 ### 7.16 Not in the prompt pack: `generateCountryStats` — intel briefing
 - **Purpose:** Free-text bulleted intelligence briefing on a polity. Builds its **own inline system prompt** (dossier + world snapshot + recent events) and calls `callAI` **directly** (no tool, no `runJsonTask`, so only the language directive is appended). Entry: `generateCountryStats({code, name})` `gameplay.js`. Distinct from `countryStatSheet` (§7.12).
