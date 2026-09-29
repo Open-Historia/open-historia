@@ -23,6 +23,7 @@ import {
 import { FLAG_ACCEPT, fileToFlagDataUrl } from "./flagImage.js";
 import { listFlags, saveFlag, deleteFlag } from "../runtime/flagLibrary.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
+import { CommunitySourceBadge } from "./BasemapPicker.jsx";
 
 const overlay = {
   position: "fixed",
@@ -103,7 +104,9 @@ const closeBtn = {
 
 // One flag. 3:2 like a real flag; `contain` not `cover` so a flag is never cropped
 // (a cropped flag is often a different country's).
-const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDelete }) => (
+// fromCommunity: someone else's flag, installed from the hub. It links to its
+// post (communityUrl) instead of offering to publish it again.
+const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDelete, fromCommunity = false, communityUrl = null }) => (
   <div
     style={{
       ...cardSurface,
@@ -149,7 +152,8 @@ const FlagCard = ({ title, subtitle, imageUrl, active, onClick, onPublish, onDel
         ✕
       </button>
     )}
-    {onPublish && (
+    {fromCommunity && <CommunitySourceBadge url={communityUrl} />}
+    {onPublish && !fromCommunity && (
       <button
         type="button"
         title="Share this flag with the community"
@@ -224,6 +228,13 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
     : community;
 
   const pick = (dataUrlOrUrl) => { onPick(dataUrlOrUrl); onClose(); };
+
+  // My flags that came from the hub (saved with source.community): by image,
+  // so a flag on this map that is one of them is not offered for publishing
+  // again, and by post, so a community flag already saved is used from the
+  // library rather than downloaded a second time.
+  const communityUrlByImage = new Map(mine.filter((f) => f.source?.community && f.dataUrl).map((f) => [f.dataUrl, f.source?.url || null]));
+  const savedByPost = new Map(mine.filter((f) => f.source?.community && f.source?.url && f.dataUrl).map((f) => [f.source.url, f]));
 
   const handleUpload = async (file) => {
     if (!file) return;
@@ -374,6 +385,8 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                         active={currentFlag === f.dataUrl}
                         onClick={() => pick(f.dataUrl)}
                         onPublish={() => openFlagPublishForm({ name: `${f.code} flag`, author, code: f.code })}
+                        fromCommunity={communityUrlByImage.has(f.dataUrl)}
+                        communityUrl={communityUrlByImage.get(f.dataUrl) || null}
                       />
                     ))}
                   </div>
@@ -395,6 +408,8 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                           active={currentFlag === f.dataUrl}
                           onClick={() => pick(f.dataUrl)}
                           onPublish={() => openFlagPublishForm({ name: f.name, author: f.author || author, code: f.code || "" })}
+                          fromCommunity={Boolean(f.source?.community)}
+                          communityUrl={f.source?.url || null}
                           onDelete={async () => { await deleteFlag(f.id).catch(() => {}); refreshMine(); }}
                         />
                       ))}
@@ -477,9 +492,13 @@ const FlagPicker = ({ open, onClose, ownerCode, currentFlag, mapFlags = {}, auth
                         <button
                           type="button"
                           disabled={busyId === post.id}
-                          onClick={() => (post.fromScenario ? handleInstallPack(post) : handleInstall(post))}
+                          onClick={() => (post.fromScenario
+                            ? handleInstallPack(post)
+                            : savedByPost.has(post.url) ? pick(savedByPost.get(post.url).dataUrl) : handleInstall(post))}
                           style={{ ...tabBtn(false), marginTop: "0.35rem", width: "100%" }}
-                          title={post.fromScenario ? "Save this scenario's custom flags into My flags" : undefined}
+                          title={post.fromScenario
+                            ? "Save this scenario's custom flags into My flags"
+                            : savedByPost.has(post.url) ? "Already in My flags, so it is used from there" : undefined}
                         >
                           {busyId === post.id
                             ? (post.fromScenario ? "Adding…" : "Applying…")

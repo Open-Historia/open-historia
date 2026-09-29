@@ -102,7 +102,20 @@ const closeBtn = {
   width: "2rem",
 };
 
-const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish }) => (
+// A little pill on a card saying it came from the community, linking to its
+// post when the record kept one. Shared with FlagPicker's cards.
+export const CommunitySourceBadge = ({ url }) => {
+  const style = { position: "absolute", left: 6, bottom: 6, background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: "999px", color: "#fff", fontSize: "0.6rem", fontWeight: 700, padding: "0.12rem 0.45rem", textDecoration: "none" };
+  return url ? (
+    <a href={url} target="_blank" rel="noopener noreferrer" title="Installed from the community hub. Open its post" onClick={(e) => e.stopPropagation()} style={style}>
+      Community ↗
+    </a>
+  ) : (
+    <span title="Installed from the community hub" style={style}>Community</span>
+  );
+};
+
+const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onDelete, onPublish, communityUrl = null, fromCommunity = false }) => (
   <div
     style={{ ...cardSurface, outline: active ? "2px solid rgba(255,255,255,0.22)" : "none", outlineOffset: "-2px" }}
     onClick={onClick}
@@ -132,7 +145,8 @@ const BasemapCard = ({ title, imageUrl, imageFilter, active, badge, onClick, onD
           ✓ In use
         </span>
       )}
-      {onPublish && (
+      {fromCommunity && <CommunitySourceBadge url={communityUrl} />}
+      {onPublish && !fromCommunity && (
         <button
           type="button"
           title="Share this basemap to the community"
@@ -209,6 +223,15 @@ const BasemapPicker = ({
   }, [open, tab, communityLoaded]);
 
   if (!open) return null;
+
+  // What Your basemaps already holds, so a post installed before says so
+  // instead of offering to download its whole payload again (the store would
+  // only then find it by hash and hand back the copy it has).
+  const installedHashes = new Set(mine.flatMap((bm) => [bm.contentHash, bm.source?.hash]).filter(Boolean).map((hash) => String(hash).toLowerCase()));
+  const installedUrls = new Set(mine.map((bm) => bm.source?.url).filter(Boolean));
+  const isInstalled = (post) => Boolean(
+    (post.contentHash && installedHashes.has(String(post.contentHash).toLowerCase())) || (post.url && installedUrls.has(post.url)),
+  );
 
   const handleUpload = async (file) => {
     if (!file) return;
@@ -324,7 +347,11 @@ const BasemapPicker = ({
                         badge={bm.kind === "vector" ? "vector" : undefined}
                         onClick={() => { onSelectCustom(bm); onClose(); }}
                         onDelete={() => handleDelete(bm.id)}
+                        // Someone else's work, installed from the hub: it links
+                        // to its post rather than offering to publish it again.
                         onPublish={() => handlePublish(bm)}
+                        fromCommunity={Boolean(bm.source?.community)}
+                        communityUrl={bm.source?.url || null}
                       />
                     ))}
                   </div>
@@ -354,7 +381,8 @@ const BasemapPicker = ({
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))", gap: "0.8rem" }}>
                   {community.map((post) => {
-                    const canInstall = basemapPostInstallable(post);
+                    const installed = isInstalled(post);
+                    const canInstall = basemapPostInstallable(post) && !installed;
                     return (
                     <div key={post.id} style={{ ...cardSurface, flex: "unset", cursor: "default" }}>
                       <div style={{ position: "relative", aspectRatio: "3 / 2", background: "#111113" }}>
@@ -383,15 +411,15 @@ const BasemapPicker = ({
                           type="button"
                           disabled={!canInstall || busyId === post.id}
                           onClick={() => handleInstall(post)}
-                          title={canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
+                          title={installed ? "Already in Your basemaps" : canInstall ? "Install into Your basemaps" : "This post has no basemap file attached"}
                           style={{
                             ...tabBtn(false),
                             background: canInstall ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.04)",
                             cursor: canInstall && busyId !== post.id ? "pointer" : "default",
-                            opacity: canInstall ? 1 : 0.5,
+                            opacity: canInstall || installed ? 1 : 0.5,
                           }}
                         >
-                          {busyId === post.id ? "Installing…" : "⬇ Install"}
+                          {busyId === post.id ? "Installing…" : installed ? "✓ Installed" : "⬇ Install"}
                         </button>
                       </div>
                     </div>

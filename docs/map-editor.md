@@ -325,7 +325,7 @@ A full-screen overlay (community-hub purple, not editor blue) mounted at `MapEdi
 
 Tabs:
 - **In the game** — *Already on this map* (flags already placed → reuse), *My flags* (saved to the library, reusable across maps), and *Built-in flags* (`listBuiltInFlags()`).
-- **Community** — fetched via the hub proxy; a single flag installs as a data URL, a scenario **flag pack** (`fromScenario`) installs wholesale into My flags (dedup by content hash).
+- **Community** — fetched via the hub proxy; a single flag installs as a data URL, a scenario **flag pack** (`fromScenario`) installs wholesale into My flags (dedup by content hash). A flag installed from the hub is saved with `source.community` and its post's url: its card (in My flags, and on this map) shows a **Community** link to the post instead of the ⤴ publish button, and a single community flag already in My flags is applied from there without downloading it again.
 
 Upload (`fileToFlagDataUrl`, `FLAG_ACCEPT`) saves to the library first, then applies. **Remove** re-selects the standard code-derived flag (`pick(null)`). Values stored in `doc.flags` are downscaled PNG data URLs.
 
@@ -348,7 +348,7 @@ Uploaded via the **Basemap: …** button (bottom bar) → `BasemapPicker` overla
 | `.pmtiles` | `raster` | **no** |
 | `.png`/`.jpg`/`.svg` | `image` (data URL, stretched across the world) | yes |
 
-GeoTIFF/PMTiles are not saved with the map, not added to Your basemaps and not shown by the game; `uploadBasemap` answers `{ sessionOnly: true }` for them and the picker says so, and it answers `{ libraryError }` when an image or vector basemap is on the map but the library would not take it, which the picker also shows (it used to go only to the console). The Upload button's tooltip and the empty Your basemaps shelf say which formats are kept. Heavy parsers (`shpjs`, `jszip`) are dynamically imported so they only load on demand. Persistable backgrounds (`vector`/`image`) are saved into `doc.metadata.customBackground` and rebuilt on open via `rebuildPersistedBackground(saved, {persisted})` — the `persisted` flag stops a restored background from re-dirtying the doc on load. In the game, a custom background **replaces Earth** and forces `world.customRegions` on (so the stock political overlay is hidden).
+A basemap installed from the Community tab (`installCommunityBasemap`, saved with `source.community`) shows a **Community** link to its post on its Your basemaps card instead of the ⤴ publish button, and the Community tab shows **✓ Installed** instead of Install for a post whose content hash or post url is already in the library. GeoTIFF/PMTiles are not saved with the map, not added to Your basemaps and not shown by the game; `uploadBasemap` answers `{ sessionOnly: true }` for them and the picker says so, and it answers `{ libraryError }` when an image or vector basemap is on the map but the library would not take it, which the picker also shows (it used to go only to the console). The Upload button's tooltip and the empty Your basemaps shelf say which formats are kept. Heavy parsers (`shpjs`, `jszip`) are dynamically imported so they only load on demand. Persistable backgrounds (`vector`/`image`) are saved into `doc.metadata.customBackground` and rebuilt on open via `rebuildPersistedBackground(saved, {persisted})` — the `persisted` flag stops a restored background from re-dirtying the doc on load. In the game, a custom background **replaces Earth** and forces `world.customRegions` on (so the stock political overlay is hidden).
 
 ---
 
