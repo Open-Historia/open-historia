@@ -1001,12 +1001,15 @@ const impactsSchema = {
 // This compaction is jump-only: the authoritative/internal schemas (including
 // Game Master) retain their full descriptions. Validation is unchanged because
 // descriptions are annotations, not constraints.
+// Only a string annotation goes: a field that is itself called "description"
+// (groupOps has one) is a schema object inside `properties` and must survive,
+// or additionalProperties false turns every op that fills it into a failed turn.
 const stripNestedSchemaDescriptions = (schema) => {
   if (Array.isArray(schema)) return schema.map(stripNestedSchemaDescriptions);
   if (!schema || typeof schema !== "object") return schema;
   return Object.fromEntries(
     Object.entries(schema)
-      .filter(([key]) => key !== "description")
+      .filter(([key, value]) => !(key === "description" && typeof value === "string"))
       .map(([key, value]) => [key, stripNestedSchemaDescriptions(value)]),
   );
 };

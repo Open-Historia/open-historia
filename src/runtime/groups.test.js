@@ -167,6 +167,14 @@ test("the jump and the Game Master can write groupOps, and the jump schema stays
   const bad = validateGameplayPayload("jumpForward", { ...jump, events: [{ ...jump.events[0], impacts: { groupOps: [{ op: "annex", name: "X" }] } }] });
   assert.equal(bad.valid, false, "the op is an enum");
 
+  // The prompt asks for a description on create; the jump schema's compaction
+  // once stripped the field itself, so every described create failed the turn.
+  const described = validateGameplayPayload("jumpForward", { ...jump, events: [{ ...jump.events[0], impacts: { groupOps: [
+    { op: "create", name: "Cartel del Norte", description: "A drug cartel that runs the northern highway towns.", regionIds: ["Nuevo León"] },
+    { op: "update", name: "Cartel del Norte", description: "Now also taxes the border crossings." },
+  ] } }] });
+  assert.equal(described.valid, true, described.error);
+
   const jumpSchema = GAMEPLAY_TOOLS.jumpForward?.parameters ?? GAMEPLAY_TOOLS.jumpForward;
   assert.ok(JSON.stringify(jumpSchema).includes("groupOps"));
   assert.ok(JSON.stringify(GAME_MASTER_SCHEMA).includes("groupOps") || JSON.stringify(GAME_MASTER_SCHEMA).includes("eventsJson"),
