@@ -77,6 +77,5 @@ export const checksHeldError = (failures) => {
     // simulationStatus.js HELD_TURN.checks; spelled out to keep this file
     // import-free (checksHold.test.js pins the two together).
     error.heldKind = "checks";
-    error.failedChecks = list.map(({ key }) => key);
     return error;
 };

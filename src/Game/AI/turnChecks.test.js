@@ -34,7 +34,6 @@ test("a check that fell back holds the turn and says why", async () => {
     assert.equal(checksHoldTurn(checks), true);
     const error = checksHeldError(checks.failures());
     assert.equal(error.heldKind, "checks");
-    assert.deepEqual(error.failedChecks, ["units"]);
     assert.match(error.message, /nothing has been saved yet/);
     assert.match(error.message, /unit moves \(503 The model is overloaded\)/);
 });
