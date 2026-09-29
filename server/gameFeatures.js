@@ -212,6 +212,17 @@ export const normalizeFeatureOverrides = (raw) => {
   return overrides;
 };
 
+// A game's overrides with one feature's override replaced (or removed, for
+// null/undefined) and every other feature's kept. The library stores take
+// `features` as the complete override set, so a caller that changes one
+// feature sends this rather than that feature alone.
+export const withFeatureOverride = (raw, key, entry) => {
+  const next = { ...normalizeFeatureOverrides(raw) };
+  if (entry === undefined || entry === null) delete next[key];
+  else next[key] = entry;
+  return normalizeFeatureOverrides(next);
+};
+
 // What a game actually plays with: the scenario's configuration under the
 // game's overrides.
 export const resolveFeatures = (scenarioFeatures, gameFeatures) => {

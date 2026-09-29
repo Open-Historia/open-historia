@@ -9,6 +9,7 @@ import {
   normalizeFeatureSettings,
   playerFocusOf,
   resolveFeatures,
+  withFeatureOverride,
   worldDirectionOf,
 } from "./gameFeatures.js";
 
@@ -147,4 +148,18 @@ test("Player focus: the scenario sets the default level and a game chooses its o
   assert.equal(playerFocusOf(resolveFeatures({ playerFocus: { enabled: false, level: "focused" } }, null)), "focused");
   assert.deepEqual(normalizeFeatureOverrides({ playerFocus: { enabled: false, level: "focused" } }), { playerFocus: { level: "focused" } });
   assert.equal(featureDefaults().playerFocus.enabled, true);
+});
+
+test("Changing one feature's override keeps the game's other overrides", () => {
+  const game = { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } };
+  assert.deepEqual(
+    withFeatureOverride(game, "playerFocus", { level: "spotlight" }),
+    { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 }, playerFocus: { level: "spotlight" } },
+  );
+  // Back to the scenario default: only Player focus goes.
+  const focused = { ...game, playerFocus: { level: "focused" } };
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", null), game);
+  assert.deepEqual(withFeatureOverride(focused, "playerFocus", { level: undefined }), game);
+  assert.deepEqual(withFeatureOverride(null, "playerFocus", { level: "balanced" }), { playerFocus: { level: "balanced" } });
+  assert.deepEqual(game, { espionage: { enabled: false }, idleDiplomacy: { averageMinutes: 30 } }, "the input is not changed");
 });

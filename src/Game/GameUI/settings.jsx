@@ -40,7 +40,7 @@ import { formatResetTime } from "../AI/fallbackRunner.js";
 import { REVIEW_SECTIONS, announceRequestBudgetChange, describeJumpCost, requestDay, requestSettings } from "../AI/requestBudget.js";
 import { PLAYER_FOCUS_LEVELS, normalizePlayerFocus } from "../AI/playerFocus.js";
 import { getActivePlayerFocus, useActiveFeatures } from "../../runtime/gameFeatures.js";
-import { playerFocusOf } from "../../../server/gameFeatures.js";
+import { playerFocusOf, withFeatureOverride } from "../../../server/gameFeatures.js";
 import {
     isRatingEnabled,
     isTelemetryEnabled,
@@ -1819,8 +1819,12 @@ const PlayerFocusSetting = () => {
         setSaving(true);
         setError("");
         try {
-            // undefined clears the override, so the game follows its scenario again.
-            await saveGame(gameId, { features: { playerFocus: { level: value ?? undefined } } });
+            // null clears the override, so the game follows its scenario again.
+            // The stores take `features` as the game's complete override set,
+            // so the others (Espionage off, its own idle diplomacy) are sent
+            // along rather than wiped.
+            const features = withFeatureOverride(library.activeGame?.features, "playerFocus", value ? { level: value } : null);
+            await saveGame(gameId, { features });
         } catch (problem) {
             setError(problem?.message || "That could not be saved.");
         } finally {
