@@ -964,6 +964,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // (handleRetryTurn) without making that callback depend on either.
     const messagesRef               = useRef(messages);
     const runTurnRef                = useRef(null);
+    const turnInFlightRef           = useRef(false);
     const handleMessagesScroll = React.useCallback(() => {
         const el = messagesContainerRef.current;
         if (!el) return;
@@ -1110,9 +1111,24 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     // original question stays where it is, so the transcript reads as one
     // exchange. sendMessage pops its own history entry when a call throws (see
     // main.jsx), so the model never sees the question twice either.
-    const runTurn = async (text, { replaceTrailingError = false } = {}) => {
-        if (!text || isLoading) return;
+    //
+    // One turn at a time, checked through a ref: `isLoading` is this render's
+    // value and was set only after the awaits below, so a quick double-click on
+    // Retry sent the question twice, spending two requests, doubling the
+    // reply and queueing its actions twice.
+    const runTurn = async (text, options) => {
+        if (!text || turnInFlightRef.current) return;
+        turnInFlightRef.current = true;
+        setIsLoading(true);
+        try {
+            await askAdvisor(text, options);
+        } finally {
+            turnInFlightRef.current = false;
+            setIsLoading(false);
+        }
+    };
 
+    const askAdvisor = async (text, { replaceTrailingError = false } = {}) => {
         // `round` rides along with the date for applyAdvisorProjects — see its
         // comment for why a project update without one reads as stale.
         const { gameDate, round: gameRound } = await readJson(JSON_URLS.game, {
@@ -1146,8 +1162,6 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 at: new Date().toISOString(),
                 ...(catchUp.text ? { catchUp: catchUp.text, catchUpLabel: catchUp.label } : {}),
             }]));
-        setIsLoading(true);
-
         // Streaming: the ThinkingDots show until the first token, then a live
         // advisor bubble fills as tokens arrive. It carries a `streaming` flag so
         // it can be found and finalised; intermediate text is NOT persisted.
@@ -1260,14 +1274,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
                 saveMessages(updated);
                 return updated;
             });
-        } finally {
-            setIsLoading(false);
         }
     };
 
     const handleSend = () => {
         const text = input.trim();
-        if (!text || isLoading) return;
+        if (!text || turnInFlightRef.current) return;
         setInput("");
         return runTurn(text);
     };
