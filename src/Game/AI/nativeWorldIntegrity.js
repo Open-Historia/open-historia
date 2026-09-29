@@ -493,22 +493,40 @@ export const createWorldActorResolver = (world, gameCountry = "") => {
     return uniqueStrings([target, ...(record?.aliases || [])]);
   };
 
+  // One compiled whole-word pattern per alias, built the first time a text is
+  // searched. A jump screens every event against every polity, and compiling
+  // each alias again per event was most of its time on a large map.
+  const aliasPatterns = new Map();
+  const aliasPattern = (alias) => {
+    const token = normalizeString(alias).toLowerCase();
+    if (!token || token.length < 3) return null;
+    if (!aliasPatterns.has(token)) {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      aliasPatterns.set(token, new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i"));
+    }
+    return aliasPatterns.get(token);
+  };
+  const aliasesMentioned = (aliases, haystack) =>
+    aliases.some((alias) => Boolean(aliasPattern(alias)?.test(haystack)));
+
   const mentioned = (value) => {
     const haystack = ` ${normalizeString(value).toLowerCase()} `;
     const matches = [];
     for (const record of records) {
-      const aliases = uniqueStrings([record.canonical, ...normalizeArray(record.aliases)])
-        .sort((a, b) => b.length - a.length);
-      if (aliases.some((alias) => {
-        const token = normalizeString(alias).toLowerCase();
-        if (!token || token.length < 3) return false;
-        const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(haystack);
-      })) {
+      if (aliasesMentioned([record.canonical, ...normalizeArray(record.aliases)], haystack)) {
         matches.push(record.canonical);
       }
     }
     return uniqueStrings(matches);
+  };
+
+  // Whether the text names this actor: the exact name given, plus every alias
+  // of the polity whose canonical name it is (not of one it merely resolves to).
+  const mentions = (actor, value) => {
+    const target = normalizeString(actor);
+    if (!target) return true;
+    const record = byCanonical.get(target.toLowerCase());
+    return aliasesMentioned([target, ...normalizeArray(record?.aliases)], ` ${normalizeString(value).toLowerCase()} `);
   };
 
   return {
@@ -518,6 +536,7 @@ export const createWorldActorResolver = (world, gameCountry = "") => {
     equivalent,
     aliasesFor,
     mentionedPolities: mentioned,
+    mentions,
   };
 };
 
@@ -556,23 +575,13 @@ const actorMentionedInText = (actor, text, world, gameCountry = "") => {
   });
 };
 
-const mentionedPolities = (text, world, gameCountry = "") => {
-  const matches = [];
-  for (const record of polityAliasRecords(world, gameCountry)) {
-    if (actorMentionedInText(record.canonical, text, world, gameCountry)) {
-      matches.push(record.canonical);
-    }
-  }
-  return uniqueStrings(matches);
-};
-
-const actorIsActiveBelligerent = (actor, world) => {
+const actorIsActiveBelligerent = (actor, world, records = polityAliasRecords(world)) => {
   const rawBelligerents = activeBelligerentSet(world);
   const target = normalizeString(actor).toLowerCase();
   if (!target) return false;
   if (rawBelligerents.has(target)) return true;
 
-  const record = polityAliasRecords(world)
+  const record = records
     .find((entry) => entry.canonical.toLowerCase() === target);
 
   return Boolean(record?.aliases.some((alias) =>
@@ -1317,17 +1326,11 @@ export const deriveWorldExplorationAudit = (
   const entries = new Map();
   const claimedEventIndexes = new Set();
   const claimedStorylineIds = new Set();
+  const resolver = createWorldActorResolver(world, gameCountry);
 
   const claimEventForActor = (actor) => {
     for (let index = 0; index < events.length; index += 1) {
-      if (
-        actorMentionedInText(
-          actor,
-          eventExplorationText(events[index]),
-          world,
-          gameCountry,
-        )
-      ) {
+      if (resolver.mentions(actor, eventExplorationText(events[index]))) {
         claimedEventIndexes.add(index);
         return `event${index + 1}`;
       }
@@ -1337,14 +1340,7 @@ export const deriveWorldExplorationAudit = (
 
   const claimStorylineForActor = (actor) => {
     for (const update of storylineUpdates) {
-      if (
-        actorMentionedInText(
-          actor,
-          storylineExplorationText(update),
-          world,
-          gameCountry,
-        )
-      ) {
+      if (resolver.mentions(actor, storylineExplorationText(update))) {
         const id = normalizeString(update?.id);
         if (id) claimedStorylineIds.add(id.toLowerCase());
         return id ? `storyline:${id}` : "";
@@ -1368,7 +1364,7 @@ export const deriveWorldExplorationAudit = (
       !verdict &&
       actor &&
       outreach.length > 0 &&
-      actorMentionedInText(actor, outreachText, world, gameCountry)
+      resolver.mentions(actor, outreachText)
     ) {
       verdict = "outreach";
     }
@@ -1377,7 +1373,7 @@ export const deriveWorldExplorationAudit = (
       !verdict &&
       actor &&
       ledgerValues.some(hasNativeLedgerRecords) &&
-      actorMentionedInText(actor, ledgerText, world, gameCountry)
+      resolver.mentions(actor, ledgerText)
     ) {
       verdict = "ledger";
     }
@@ -1428,7 +1424,7 @@ export const deriveWorldExplorationAudit = (
       } else {
         for (let index = 0; index < events.length; index += 1) {
           const text = eventExplorationText(events[index]);
-          const actorCount = mentionedPolities(text, world, gameCountry).length;
+          const actorCount = resolver.mentionedPolities(text).length;
           const createdChats = normalizeArray(events[index]?.impacts?.createdChats).length;
           if (actorCount >= 2 || createdChats > 0) {
             claimedEventIndexes.add(index);
@@ -1784,6 +1780,7 @@ const falseNonBelligerentWartimeReason = (
   event,
   world,
   gameCountry = "",
+  resolver = null,
 ) => {
   const text =
     `${normalizeString(event?.title)} ${normalizeString(event?.description)}`;
@@ -1791,14 +1788,15 @@ const falseNonBelligerentWartimeReason = (
   if (!WAR_DEPENDENT_HOMEFRONT_RE.test(text)) return "";
   if (PREPAREDNESS_RE.test(text) || FOREIGN_SPILLOVER_RE.test(text)) return "";
 
-  const actors = mentionedPolities(text, world, gameCountry);
+  const actors = (resolver || createWorldActorResolver(world, gameCountry)).mentionedPolities(text);
 
   if (!actors.length && event?.playerRelated && normalizeString(gameCountry)) {
     actors.push(normalizeString(gameCountry));
   }
 
   if (!actors.length) return "";
-  if (actors.some((actor) => actorIsActiveBelligerent(actor, world))) return "";
+  const records = polityAliasRecords(world);
+  if (actors.some((actor) => actorIsActiveBelligerent(actor, world, records))) return "";
 
   return `war-dependent domestic/economic condition asserted for non-belligerent actor(s): ${actors.join(", ")}`;
 };
@@ -2098,6 +2096,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
   gameCountry = "",
   actions = [],
   chats = [],
+  resolver: sharedResolver = null,
 } = {}) => {
   if (!candidate || typeof candidate !== "object") {
     return { applied: 0, unresolved: [], bindings: [] };
@@ -2110,7 +2109,7 @@ export const bindWorldEventAuthorityRefs = (candidate, {
     includeStorylineUpdates: false,
   });
 
-  const resolver = createWorldActorResolver(world, gameCountry);
+  const resolver = sharedResolver || createWorldActorResolver(world, gameCountry);
   const playerCanonical = resolver.canonical(normalizeString(gameCountry));
   const actionRecords = currentActionRecords(actions);
   const commitmentRecords = playerCommitmentRecords(chats, resolver, playerCanonical);
@@ -2851,6 +2850,7 @@ const eventAgencyAuthorityReason = (event, {
   actions = [],
   chats = [],
   requireAgency = false,
+  resolver: sharedResolver = null,
 } = {}) => {
   const player = normalizeString(gameCountry);
   if (!player || !event || typeof event !== "object") return "";
@@ -2882,7 +2882,7 @@ const eventAgencyAuthorityReason = (event, {
       : "";
   }
 
-  const resolver = createWorldActorResolver(world, player);
+  const resolver = sharedResolver || createWorldActorResolver(world, player);
   const playerCanonical = resolver.canonical(player);
   const sovereignActors = normalizeArray(agency.sovereignActors);
 
@@ -3288,12 +3288,12 @@ const lowTrajectoryInstitutionalEvent = (event) => {
 
 export const createWorldEventScopeClassifier = (
   analysis = null,
-  { world = {}, gameCountry = "" } = {},
+  { world = {}, gameCountry = "", resolver: sharedResolver = null } = {},
 ) => {
   // Build identity provenance ONCE for the bounded visible batch. Never recreate
   // the 4k+ region alias index once per event; that is the exact class of hotpath
   // R3.2 removed from the World Director.
-  const resolver = createWorldActorResolver(world, gameCountry);
+  const resolver = sharedResolver || createWorldActorResolver(world, gameCountry);
   const playerActors = uniqueStrings([
     gameCountry,
     ...normalizeArray(analysis?.explorationSlate)
@@ -3308,7 +3308,7 @@ export const createWorldEventScopeClassifier = (
     if (event?.playerRelated === true) return "player-sphere";
 
     const text = eventExplorationText(event);
-    const actors = mentionedPolities(text, world, gameCountry)
+    const actors = resolver.mentionedPolities(text)
       .map((actor) => resolver.canonical(actor))
       .filter(Boolean);
 
@@ -3336,6 +3336,7 @@ const applyLowTrajectoryFeedGuard = ({
   analysis = null,
   world = {},
   game = {},
+  resolver = null,
 } = {}) => {
   const source = normalizeArray(events);
   const currentLow = source
@@ -3357,6 +3358,7 @@ const applyLowTrajectoryFeedGuard = ({
   const classifyScope = createWorldEventScopeClassifier(analysis, {
     world,
     gameCountry: normalizeString(game?.country),
+    resolver,
   });
   const scopeCounts = source.reduce((acc, event) => {
     const scope = classifyScope(event);
@@ -3435,6 +3437,8 @@ export const screenGeneratedWorldEvents = ({
   let strippedPolityUpdates = 0;
   let mergedDuplicatePolityUpdates = 0;
   let strippedNoOpRegionControlOps = 0;
+  // One identity index for the whole batch: every check below reads it.
+  const resolver = createWorldActorResolver(world, normalizeString(game?.country));
 
   for (const original of normalizeArray(events)) {
     const processSanitized = sanitizeProcessOnlyPolityUpdates(original);
@@ -3458,6 +3462,7 @@ export const screenGeneratedWorldEvents = ({
       gameCountry: normalizeString(game?.country),
       actions,
       chats,
+      resolver,
     });
     const event = eventWrapper.events[0];
 
@@ -3467,6 +3472,7 @@ export const screenGeneratedWorldEvents = ({
       actions,
       chats,
       requireAgency: false,
+      resolver,
     });
     if (agencyReason) {
       dropped.push({
@@ -3482,6 +3488,7 @@ export const screenGeneratedWorldEvents = ({
       event,
       world,
       normalizeString(game?.country),
+      resolver,
     );
 
     if (wartimeReason) {
@@ -3516,6 +3523,7 @@ export const screenGeneratedWorldEvents = ({
     analysis,
     world,
     game,
+    resolver,
   });
   if (feedGuard.dropped.length) dropped.push(...feedGuard.dropped);
   hidden.push(...feedGuard.hidden);
