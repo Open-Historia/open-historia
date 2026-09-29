@@ -11,8 +11,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { cleanJsxText, extractFromSource, extractTree } from "../../scripts/i18n/extractStrings.mjs";
+import { cleanJsxText, extractFromSource, extractTree, interfaceFiles } from "../../scripts/i18n/extractStrings.mjs";
 
 const extract = (code) => {
   const result = extractFromSource(code, "src/Game/GameUI/probe.jsx", {});
@@ -139,4 +140,15 @@ test("tab lists and status messages are read", () => {
   );
   assert.deepEqual(exact.sort(), ["Statistics", "World map"]);
   assert.deepEqual(patterns, ["Saved {{file}}."]);
+});
+
+test("the Android saved notice's words reach the catalog", () => {
+  // Plain DOM, not JSX: its text was set by textContent, which the extractor
+  // cannot see, so every pack left it in English.
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const rel = "src/runtime/native/savedNotice.js";
+  const listed = interfaceFiles(root).map((file) => path.relative(root, file).split(path.sep).join("/"));
+  assert.ok(listed.includes(rel), "the notice's module is an interface file");
+  const { exact } = extractFromSource(fs.readFileSync(path.join(root, rel), "utf8"), rel, { jsx: false, catchAll: false });
+  for (const text of ["Saved to your Downloads folder", "Share", "Close"]) assert.ok(exact.has(text), text);
 });
