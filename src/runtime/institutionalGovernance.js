@@ -1160,15 +1160,13 @@ export const commitInstitutionalPlayerMessage = async ({
   };
 };
 
-// One native publication for an institutional leader reply and its optional
-// formal ballot. The model may propose only its OWN ballot metadata; this seam
-// derives voter identity/government from native state, validates eligibility,
-// and records the legal ballot before the generation is published. Invalid or
-// stale ballot metadata is ignored without losing the visible diplomatic reply.
+// One native publication for an institutional leader's line in the Council
+// (the idle pulse routes a member's outreach here). Speech is legally inert:
+// formal business reaches the ledger only through the institution_* chat
+// actions (applyInstitutionalChatGovernanceBatch).
 export const applyInstitutionalDiplomaticReply = ({
   world: worldInput = {}, chats: chatsInput = [], events: eventsInput = [], institutionId = "", playerCountry = "",
-  speakingAs = "", code = "", reply = "", memorySummary = "", reaction = "",
-  institutionVote = null, institutionProposal = null, institutionAmendment = null, date = "", externalConsequenceApplier = null,
+  speakingAs = "", code = "", reply = "", memorySummary = "", reaction = "", date = "",
 } = {}) => {
   const materialized = materializeInstitutionalChannel({
     world: worldInput, chats: chatsInput, institutionId, playerCountry, date,
@@ -1178,118 +1176,32 @@ export const applyInstitutionalDiplomaticReply = ({
     [entry?.name, entry?.code, entry?.polityKey].some((value) => lower(value) === lower(speaker)));
   if (!participant) throw new Error(`${speaker || "<blank>"} is not a current participant in this institutional channel.`);
 
-  let world = materialized.world;
-  let events = normalizeEvents(eventsInput);
-  // Visible speech is committed first in conversational order. Any native
-  // governance system rows created from hidden metadata follow it in the same
-  // atomic generation. Speech itself remains legally inert.
+  const world = materialized.world;
+  const events = normalizeEvents(eventsInput);
   let chats = appendInstitutionLeaderReply({
     chats: materialized.chats, channelId: materialized.channel.id, speakingAs: speaker,
     code: clean(code || participant?.code), reply, memorySummary, reaction, date,
   });
 
-  let createdAmendment = null;
-  let amendmentError = "";
-  if (institutionAmendment && typeof institutionAmendment === "object") {
-    try {
-      const amendmentResult = applyInstitutionGovernanceCommand({
-        world, chats, events, institutionId, playerCountry, date,
-        command: {
-          type: "amendment",
-          proposalId: clean(institutionAmendment.proposalId),
-          proposer: speaker,
-          amendment: { text: clean(institutionAmendment.text).slice(0, 4000) },
-        },
-      });
-      world = amendmentResult.world;
-      chats = amendmentResult.chats;
-      events = amendmentResult.events;
-      createdAmendment = amendmentResult.amendment || null;
-    } catch (error) {
-      amendmentError = clean(error?.message || error);
-    }
-  }
-
-  let createdProposal = null;
-  let proposalError = "";
-  if (institutionProposal && typeof institutionProposal === "object") {
-    try {
-      const proposalResult = applyInstitutionGovernanceCommand({
-        world, chats, events, institutionId, playerCountry, date,
-        command: {
-          type: "lodge-proposal",
-          proposer: speaker,
-          // Provider metadata may table only a plain resolution. It cannot
-          // smuggle implementation/consequence objects into native canon.
-          proposal: {
-            type: "resolution",
-            title: clean(institutionProposal.title).slice(0, 240),
-            summary: clean(institutionProposal.summary).slice(0, 2400),
-          },
-        },
-      });
-      world = proposalResult.world;
-      chats = proposalResult.chats;
-      events = proposalResult.events;
-      createdProposal = proposalResult.proposal || null;
-    } catch (error) {
-      proposalError = clean(error?.message || error);
-    }
-  }
-
-  let ballot = null;
-  let voteError = "";
-  let votedProposal = null;
-  let outcome = null;
-  let implementation = null;
-  if (institutionVote && typeof institutionVote === "object") {
-    try {
-      const voteResult = applyInstitutionGovernanceCommand({
-        world, chats, events, institutionId, playerCountry, date, externalConsequenceApplier,
-        command: {
-          type: "vote",
-          proposalId: institutionVote.proposalId,
-          polity: speaker,
-          choice: institutionVote.choice,
-          reason: institutionVote.reason,
-          authority: "npc",
-          finalizeWhenComplete: true,
-          implementWhenPassed: true,
-        },
-      });
-      world = voteResult.world;
-      chats = voteResult.chats;
-      events = voteResult.events;
-      ballot = voteResult.ballot || null;
-      votedProposal = voteResult.proposal || null;
-      outcome = voteResult.outcome || null;
-      implementation = voteResult.implementation || null;
-    } catch (error) {
-      voteError = clean(error?.message || error);
-    }
-  }
-
   chats = reconcileChatsForPlayer(chats, world, playerCountry);
   const institution = resolveInstitutionRecord(world, institutionId);
   return {
-    world, chats, events, ballot, voteError, votedProposal, outcome, implementation,
-    createdProposal, proposalError, createdAmendment, amendmentError, institution,
+    world, chats, events, institution,
     channel: chats.find((chat) => lower(chat?.institutionId) === lower(canonicalInstitutionIdentity(institution || materialized.institution).id)) || materialized.channel,
   };
 };
 
 export const commitInstitutionalDiplomaticReply = async ({
   institutionId = "", playerCountry = "", speakingAs = "", code = "", reply = "",
-  memorySummary = "", reaction = "", institutionVote = null, institutionProposal = null, institutionAmendment = null, date = "", expectedGameId = "",
-  externalConsequenceApplier = null,
+  memorySummary = "", reaction = "", date = "", expectedGameId = "",
 } = {}) => {
   let result = null;
   const committed = await mutateCanonicalTurnState(({ world, chats, events, game }) => {
     result = applyInstitutionalDiplomaticReply({
       world, chats, events, institutionId,
       playerCountry: playerCountry || game?.country || "",
-      speakingAs, code, reply, memorySummary, reaction, institutionVote, institutionProposal, institutionAmendment,
-      date: date || game?.gameDate || "", externalConsequenceApplier,
+      speakingAs, code, reply, memorySummary, reaction,
+      date: date || game?.gameDate || "",
     });
     return { world: result.world, chats: result.chats, events: result.events };
   }, { playerCountry, expectedGameId });
