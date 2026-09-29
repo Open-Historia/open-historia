@@ -3328,8 +3328,11 @@ const applyLowTrajectoryFeedGuard = ({
 // The native verdicts that mean the world made the player's own sovereign
 // choice: the player's country is the one acting (or a named party to a joint
 // commitment) and neither a queued order nor a player-authored message backs
-// it. The screen drops these. Other player verdicts (the player is only
-// mentioned, or the event could not be classified) are logged, never enforced.
+// it. For now the screen only logs them, marked wouldWithhold, and keeps the
+// event: the title-based reading still takes the player's country as the actor
+// in "Poland Comes Under Attack as Russia Declares War" or "Poland Hit as
+// Russia Imposes Sanctions", and dropping those would erase the world acting on
+// the player. Enforce once the logged verdicts show the rule is precise.
 const PLAYER_SOVEREIGN_CHOICE_VERDICTS = new Set([
   "player-fresh-sovereign-choice-without-authority",
   "joint-player-sovereign-choice-without-authority",
@@ -3412,7 +3415,12 @@ export const screenGeneratedWorldEvents = ({
 
     const playerVerdict = binding.unresolved.find((row) => row.source === "native-unresolved-player");
     if (playerVerdict) {
-      playerVerdicts.push({ id: normalizeString(event?.id), title: normalizeString(event?.title), reason: playerVerdict.reason });
+      playerVerdicts.push({
+        id: normalizeString(event?.id),
+        title: normalizeString(event?.title),
+        reason: playerVerdict.reason,
+        wouldWithhold: Boolean(playerSovereignChoiceReason(event, playerVerdict, actions)),
+      });
     }
 
     const agencyReason = eventAgencyAuthorityReason(event, {
@@ -3446,17 +3454,6 @@ export const screenGeneratedWorldEvents = ({
         title: normalizeString(event?.title),
         route: "NON_BELLIGERENT_WARTIME_CAUSALITY",
         reason: wartimeReason,
-      });
-      continue;
-    }
-
-    const sovereignReason = playerVerdict ? playerSovereignChoiceReason(event, playerVerdict, actions) : "";
-    if (sovereignReason) {
-      dropped.push({
-        id: normalizeString(event?.id),
-        title: normalizeString(event?.title),
-        route: "PLAYER_AGENCY_AUTHORITY",
-        reason: sovereignReason,
       });
       continue;
     }
@@ -3502,6 +3499,7 @@ export const screenGeneratedWorldEvents = ({
     strippedPolityUpdates,
     mergedDuplicatePolityUpdates,
     strippedNoOpRegionControlOps,
+    playerVerdicts,
     analysisVersion:
       normalizeString(analysis?.version) ||
       WORLD_INTEGRITY_VERSION,

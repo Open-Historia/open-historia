@@ -131,12 +131,30 @@ const screenLatvia = (events, extra = {}) => quietly(() => screenGeneratedWorldE
   ...extra,
 }));
 
-test("the world cannot declare war for the player's country", () => {
+// The rule is logged, not enforced, until its verdicts prove precise: every
+// event stays, and the ones it would withhold are marked.
+const wouldWithhold = (screened) => screened.playerVerdicts
+  .filter((verdict) => verdict.wouldWithhold)
+  .map((verdict) => verdict.reason);
+
+test("the world declaring war for the player's country is marked to be withheld", () => {
   const screened = screenLatvia([latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.")]);
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped[0].route, "PLAYER_AGENCY_AUTHORITY");
-  assert.match(screened.dropped[0].reason, /no queued order or player-authored message/);
-  assert.deepEqual(screened.hidden, [], "it never happened, so the Board must never read it");
+  assert.deepEqual(wouldWithhold(screened), ["player-fresh-sovereign-choice-without-authority"]);
+  assert.equal(screened.events.length, 1, "logged only, so the event stays");
+  assert.deepEqual(screened.dropped, []);
+});
+
+test("the world acting on the player's country is never marked, even when the title opens with it", () => {
+  const screened = screenLatvia([
+    latviaEvent("Russia Declares War on Latvia", "Russia declares war on Latvia.", { combatants: ["Russian Federation", "Republic of Latvia"] }),
+    latviaEvent("Latvia Comes Under Attack as Russia Declares War", "Russia declares war on Latvia and its forces cross the border.", { combatants: ["Russian Federation", "Republic of Latvia"] }),
+    latviaEvent("Latvia Hit as Russia Imposes Sanctions", "Russia imposes sanctions on Latvian food exports."),
+  ]);
+  assert.equal(screened.events.length, 3);
+  assert.deepEqual(screened.dropped, []);
+  // The title-based reading still takes the last two for Latvia's own choice.
+  // This is why the rule is not enforced yet.
+  assert.equal(wouldWithhold(screened).length, 2);
 });
 
 test("the player's own order authorizes the same choice", () => {
@@ -144,9 +162,10 @@ test("the player's own order authorizes the same choice", () => {
   const screened = screenLatvia([latviaEvent("Latvia Declares War on Russia", "Latvia declares war on Russia.")], { actions });
   assert.equal(screened.events.length, 1);
   assert.equal(screened.events[0].agency.authority, "player-order");
+  assert.deepEqual(screened.playerVerdicts, []);
 });
 
-test("an event citing a queued order is kept even when it overreaches the order", () => {
+test("an event citing a queued order is not marked even when it overreaches the order", () => {
   const actions = [{ id: "act-border", status: "planned", text: "Strengthen the eastern border" }];
   const screened = screenLatvia([latviaEvent(
     "Latvia Mobilizes Reservists",
@@ -154,6 +173,8 @@ test("an event citing a queued order is kept even when it overreaches the order"
     { impacts: { actionIds: ["act-border"] } },
   )], { actions });
   assert.equal(screened.events.length, 1);
+  assert.deepEqual(screened.events[0].impacts.actionIds, ["act-border"]);
+  assert.deepEqual(wouldWithhold(screened), []);
 });
 
 test("the player's own message in a chat authorizes the treaty it agreed", () => {
@@ -170,20 +191,22 @@ test("the player's own message in a chat authorizes the treaty it agreed", () =>
     "Latvia Signs Border Demarcation Treaty With Estonia",
     "Latvia signs the border demarcation treaty with Estonia in Riga.",
   );
-  assert.equal(screenLatvia([treaty]).events.length, 0, "without the chat nothing authorizes it");
+  assert.equal(wouldWithhold(screenLatvia([treaty])).length, 1, "without the chat nothing authorizes it");
   const screened = screenLatvia([treaty], { chats });
   assert.equal(screened.events.length, 1);
   assert.equal(screened.events[0].agency.authority, "player-commitment");
   assert.equal(screened.events[0].agency.authorityRef, "msg-latvia");
+  assert.deepEqual(screened.playerVerdicts, []);
 });
 
-test("another power's sovereign act that only names the player's country stays", () => {
+test("another power's sovereign act that only names the player's country stays unmarked", () => {
   const screened = screenLatvia([
     latviaEvent("NATO Deploys Battalion to Latvia", "NATO deploys a multinational battalion to Latvia."),
     latviaEvent("Russia Deploys Troops Near the Latvia Border", "Russia deploys troops near the border."),
   ]);
   assert.equal(screened.events.length, 2);
   assert.deepEqual(screened.dropped, []);
+  assert.deepEqual(wouldWithhold(screened), []);
 });
 
 // --- The parties of a treaty are who signed it ---
@@ -201,14 +224,13 @@ const pactRecord = (eventId, parties) => ({
 test("a treaty's agreement record makes the player a signatory even when another state heads the title", () => {
   const pact = latviaEvent("Estonia Signs Defence Pact With Latvia", "Estonia and Latvia sign a mutual defence pact in Tallinn.");
   const withoutRecord = screenLatvia([pact]);
-  assert.equal(withoutRecord.events.length, 1, "read from the title alone, Estonia signed it");
+  assert.deepEqual(wouldWithhold(withoutRecord), [], "read from the title alone, Estonia signed it");
 
   const screened = screenLatvia([pact], {
     agreementUpdates: [pactRecord(pact.id, ["Republic of Estonia", "Republic of Latvia"])],
   });
-  assert.equal(screened.events.length, 0);
-  assert.equal(screened.dropped[0].route, "PLAYER_AGENCY_AUTHORITY");
-  assert.match(screened.dropped[0].reason, /^joint-player-sovereign-choice-without-authority/);
+  assert.deepEqual(wouldWithhold(screened), ["joint-player-sovereign-choice-without-authority"]);
+  assert.equal(screened.events.length, 1);
 });
 
 test("a treaty between two other states names both as sovereign actors and no one else", () => {
