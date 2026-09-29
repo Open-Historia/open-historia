@@ -5076,7 +5076,10 @@ const applyPolityAndTerritoryImpacts = ({
   // same event must have settled its land first. A dissolved polity keeps its
   // record (aliases still fold old history onto it) but leaves the present:
   // its stats, tags, reputation, intelligence and colour go, and its standing
-  // agreements end on the event's date.
+  // agreements end on the event's date. So do its wars: it leaves every side it
+  // fought on, and a war with nobody left on one side ends that day (the sides
+  // are kept as they were, so the record still says who fought). Its units
+  // leave the map with it, and their standing orders with them.
   for (const { code } of dissolutions) {
     const holdsTerritory = [
       ...Object.values(world.regionOwnershipOverrides || {}),
@@ -5105,6 +5108,20 @@ const applyPolityAndTerritoryImpacts = ({
         lastUpdatedDate: endedDate || canonicalizeDateString(agreement.lastUpdatedDate),
       };
     });
+    world.wars = normalizeArray(world.wars).map((war) => {
+      if (!war || typeof war !== "object" || war.status === "ended") return war;
+      const sideA = normalizeArray(war.sideA).filter((party) => !samePolity(party, code));
+      const sideB = normalizeArray(war.sideB).filter((party) => !samePolity(party, code));
+      if (sideA.length === normalizeArray(war.sideA).length && sideB.length === normalizeArray(war.sideB).length) return war;
+      const lastUpdatedDate = endedDate || war.lastUpdatedDate;
+      if (!sideA.length || !sideB.length) {
+        return { ...war, status: "ended", endedDate: endedDate || war.lastUpdatedDate, lastUpdatedDate };
+      }
+      return { ...war, sideA, sideB, lastUpdatedDate };
+    });
+    world.units = normalizeArray(world.units).filter((unit) => !samePolity(unit?.ownerCode, code));
+    const unitIds = new Set(world.units.map((unit) => unit?.id));
+    world.pendingUnitOrders = normalizeArray(world.pendingUnitOrders).filter((order) => unitIds.has(order?.unitId));
     delete colors[code];
     console.info(`[polity lifecycle] dissolved "${code}".`);
   }
