@@ -156,8 +156,8 @@ Produces `dist-site/`: landing page at `/`, game under `/play/`.
 | `gameDir` = `dist-web/` | `assemble-site.mjs:11` | Web game (base `/play/`) copied to `dist-site/play/` |
 | `outDir` = `dist-site/` | `assemble-site.mjs:12` | The deployable output |
 | `ROOT_PAGES` | `assemble-site.mjs:22` | Pages that must answer at the **root** (`guides`, `get-started`, `how-to-play`, `ai-setup`, `self-hosting`, `pax-historia-alternative`, `sitemap`, `guides.css`, `robots.txt`, `sitemap.xml`). Their only copy lives in `public/` (so a local install serves them offline too); assembler lifts them out of `/play/` up to `/`. **A listed page that's missing fails the build** (a dropped page would otherwise 404 only to a crawler) |
-| `ROOT_ASSETS` | `assemble-site.mjs:34` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, PWA icons, `screenshot.png`). Copied to `/` if present; **silently skipped** if renamed (a missing image is a cosmetic 404, not build-fatal) |
-| Guard | `assemble-site.mjs:41` | Fatal if `dist-web/index.html` is missing (build the game first) |
+| `ROOT_ASSETS` | `assemble-site.mjs` | Images referenced by absolute `/…` paths from both root guides and the game (`logo.png`, five `loading_screen*`, the default cover `scenario-placeholder.webp`, PWA icons, `screenshot.png`). Copied to `/` if present; a missing one prints a `[warn]` naming it but does not fail the build (a missing image is a cosmetic 404). `server/siteAssembly.test.js` checks every listed name exists in `public/` |
+| Guard | `assemble-site.mjs` | Fatal if `dist-web/index.html` is missing (build the game first) |
 
 The `--base /play/` split is why absolute `/logo.png` in the game needs a duplicate at the site root: under `/play/` an absolute URL resolves against the origin, not the base.
 
@@ -327,7 +327,7 @@ Key asymmetries a newcomer should internalize:
 - **Never let a pmtiles/large geojson into a Pages build** — the `oh-drop-map-binaries` plugin, both CI size guards, and the local deploy engine's `findOversized` all defend the 25 MiB Pages limit, which rejects *after* a green build (`vite.config.ts:43`, `deploy-site.yml:58`, `deploy-site.mjs:95`).
 - **Neither Android application id may ever change** (`io.github.arkniem.paxhistoria`; the beta's `io.github.arkniem.paxhistoria.beta`): a new id is a new app, and its players' saves stay behind in the old one. The APK asset name was changed once (`pax-historia.apk` → `open-historia.apk`, 2026-09-04); the old asset has since been deleted from the release. See §3 before doing it again.
 - **Stage the map data before `cap sync`** — `android-apk.yml` runs `npm run map` and `npm run www` between `npm run build:android` and Gradle; `cap sync` copies whatever is in `mobile/www/`.
-- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 (`assemble-site.mjs:46`, `:59`).
+- **`ROOT_PAGES` is fail-hard, `ROOT_ASSETS` is fail-soft** — a dropped root *page* fails `build:site`; a dropped root *image* is only a cosmetic 404 and a build warning (`assembleSite` in `assemble-site.mjs`).
 - **`deploy-site.yml` is superseded but still on `main`** — the admin-panel button is the live path; the yml stays because the pushing token lacks the `workflow` scope to delete it.
 - **`--branch=main` / `--branch=<BRANCH>` is what makes a Pages upload production** — omit it and the live domain keeps the old build while the deploy still reports success.
 
