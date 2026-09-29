@@ -25,6 +25,10 @@ const turn = () => journalTurn({
     ],
     relationUpdates: [{ id: "rel-1", a: "A", b: "B", eventIndexes: [3] }],
     agreementUpdates: [],
+    puppetUpdates: [
+        { id: "puppet-1", op: "install", overlord: "Russia", puppet: "Crimea", eventIds: ["event-ai-r0002-20140503-002"] },
+        { id: "puppet-2", op: "release", overlord: "Russia", puppet: "Crimea", eventIds: ["event-ai-r0002-20140518-004"] },
+    ],
     storylineUpdates: [{ id: "story-1", eventIds: ["event-ai-r0002-20140425-001", "event-ai-r0002-20140518-004"] }],
     stopDate: "2014-05-21",
     summary: "A month of war.",
@@ -38,7 +42,9 @@ test("the journal keeps the model's events in reveal order and leaves the engine
     assert.deepEqual(journal.events.map((entry) => entry.title), ["Ultimatum delivered", "Columns cross the border", "Kharkiv falls", "Ceasefire talks open"]);
     assert.equal(journal.stopDate, "2014-05-21");
     assert.equal(journal.mode, "jump");
+    assert.deepEqual(journal.puppetUpdates.map((update) => update.id), ["puppet-1", "puppet-2"], "the puppet changes are journaled with the other ledgers");
     assert.deepEqual(journalTurn().events, []);
+    assert.deepEqual(journalTurn().puppetUpdates, []);
 });
 
 test("stopping after the second event keeps two, drops two, and closes on the second's date", () => {
@@ -54,6 +60,7 @@ test("ledger records bound only to discarded events go with them; baselines and 
     const { result } = truncateTurn(turn(), 2, { originDate: "2014-04-21" });
     assert.deepEqual(result.warUpdates.map((update) => update.op), ["start", "note"], "the ceasefire was bound to a discarded event");
     assert.deepEqual(result.relationUpdates, [], "bound by index to the fourth event");
+    assert.deepEqual(result.puppetUpdates.map((update) => update.op), ["install"], "a kept event's puppet stays; a discarded one's goes");
     assert.equal(result.storylineUpdates.length, 1, "bound to a kept event as well as a discarded one");
 });
 

@@ -3,7 +3,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyPuppetUpdates, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import { applyDiplomaticUpdates, applyPuppetUpdates, bindPuppetUpdatesToEvents, decodePuppetUpdates, puppetUpdatesFromCanonical, revealPuppetsToSpies } from "./nativeDiplomaticDirector.js";
+import { mergeSegmentPayloads } from "./jumpSegments.js";
 
 // A subordination rides the same compact-line transport as wars, relations and
 // agreements: the model never writes the ledger, it emits lines that must
@@ -535,4 +536,33 @@ test("an occupied country is still a country: lawful sovereignty counts as land"
 test("with no region list to consult, land is not checked", () => {
   const { appliedIds } = applyOnMap(annexedWorld, "install~United Kingdom~Ireland~protectorate~50~open~1~Unknown map", []);
   assert.equal(appliedIds.length, 1);
+});
+
+// THE BUG. A skip narrated a government installed in Warsaw and wrote a valid
+// install line, and no puppet ever appeared: the segment merge every skip goes
+// through carried wars, relations, agreements and storylines, not puppets. This
+// is a skip's path from the model's line to the ledger, one step per stage the
+// game runs (gameplay.js validateSegmentLedgers binds, the merge joins, the
+// apply writes).
+test("a skip's install line reaches world.puppets through the segment merge", () => {
+  const segmentEvents = events();
+  const segment = {
+    events: segmentEvents,
+    puppetUpdates: bindPuppetUpdatesToEvents(decodePuppetUpdates("install~USSR~Poland~satellite~40~open~1~Provisional government seated"), segmentEvents),
+  };
+  const merged = mergeSegmentPayloads([segment], { targetDate: "1945-06-30" });
+  const { world, appliedPuppetIds } = applyDiplomaticUpdates({
+    world: baseWorld,
+    relationUpdates: merged.relationUpdates,
+    agreementUpdates: merged.agreementUpdates,
+    puppetUpdates: merged.puppetUpdates,
+    events: merged.events,
+    stopDate: merged.stopDate,
+    round: 1,
+  });
+  assert.equal(appliedPuppetIds.length, 1);
+  assert.equal(world.puppets.length, 1);
+  assert.equal(world.puppets[0].overlord, "USSR");
+  assert.equal(world.puppets[0].puppet, "Poland");
+  assert.deepEqual(world.puppets[0].sourceEventIds, ["e1"]);
 });
