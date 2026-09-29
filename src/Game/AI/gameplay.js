@@ -16160,7 +16160,7 @@ export const maybeGeneratePregameHistory = async () => {
 // one polity sends a short note to the player's inbox. Hard-suspended while any
 // simulation is in flight (busy lock above), never stacked, and silent on any
 // failure — there is no canned fallback small talk.
-// The chat half's chance per 60 s roll comes from the scenario's (or the game's)
+// The pulse's chance per 60 s roll comes from the scenario's (or the game's)
 // "one attempt every N minutes" setting — the Features tab of either editor —
 // read from the active features: 1/8 by default, the value 1/20 was raised to
 // when a player waited ~20 idle minutes just to CONSULT the model and most
