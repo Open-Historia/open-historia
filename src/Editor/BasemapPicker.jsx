@@ -14,6 +14,7 @@ import { BACKGROUND_ACCEPT } from "./customBackground.js";
 import { listBasemaps, deleteBasemap as deleteBasemapApi, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { basemapPostInstallable, fetchCommunityBasemaps, installCommunityBasemap, publishBasemap } from "../runtime/communityBasemaps.js";
 import { acceptFor } from "../runtime/fileAccept.js";
+import { useIsMobile } from "../runtime/useIsMobile.js";
 
 const overlay = {
   position: "fixed",
@@ -167,6 +168,7 @@ const BasemapPicker = ({
   onSelectCustom,
   onUpload,
 }) => {
+  const isMobile = useIsMobile();
   const [tab, setTab] = useState("mine"); // mine | community
   const [mine, setMine] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -261,13 +263,15 @@ const BasemapPicker = ({
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={headerBar}>
-          <div style={{ fontSize: "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
+        {/* Wraps rather than clipping Upload and ✕ off a phone's edge, the way
+            FlagPicker's header does; there Upload drops its label to an icon. */}
+        <div style={{ ...headerBar, flexWrap: "wrap", gap: isMobile ? "0.4rem" : "0.6rem" }}>
+          <div style={{ fontSize: isMobile ? "0.95rem" : "1.05rem", fontWeight: 800, marginRight: "0.4rem" }}>Basemaps</div>
           <button type="button" style={tabBtn(tab === "mine")} onClick={() => setTab("mine")}>My Basemaps</button>
           <button type="button" style={tabBtn(tab === "community")} onClick={() => setTab("community")}>Community</button>
-          <div style={{ flex: 1 }} />
-          <label style={uploadBtn} title="A map image (PNG, JPG, SVG) or a vector map (GeoJSON, KML, KMZ, Shapefile) is saved to your basemaps. GeoTIFF and PMTiles files are shown for the current session only.">
-            {busy ? "Uploading…" : "⬆ Upload basemap"}
+          {!isMobile && <div style={{ flex: 1 }} />}
+          <label style={uploadBtn} aria-label={isMobile ? "Upload basemap" : undefined} title="A map image (PNG, JPG, SVG) or a vector map (GeoJSON, KML, KMZ, Shapefile) is saved to your basemaps. GeoTIFF and PMTiles files are shown for the current session only.">
+            {busy ? (isMobile ? "…" : "Uploading…") : isMobile ? "⬆" : "⬆ Upload basemap"}
             <input
               type="file"
               accept={acceptFor(BACKGROUND_ACCEPT)}
@@ -279,7 +283,7 @@ const BasemapPicker = ({
               }}
             />
           </label>
-          <button type="button" style={closeBtn} onClick={onClose} title="Close">✕</button>
+          <button type="button" className="oh-tap" aria-label="Close basemap picker" style={{ ...closeBtn, marginLeft: isMobile ? "auto" : undefined }} onClick={onClose} title="Close">✕</button>
         </div>
 
         <div style={bodyBox}>

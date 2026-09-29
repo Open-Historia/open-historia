@@ -838,6 +838,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
 
       <DocumentsMenu
         docName={d.name}
+        onNameChange={d.setName}
         currentId={docId}
         author={d.author}
         onAuthorChange={d.setAuthor}
@@ -1302,6 +1303,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
         scenarioDirty={scenarioMode ? scenarioDirty : false}
         openPanel={openPanel}
         onOpenPanel={togglePanel}
+        isMobile={isMobile}
         search={
           <SearchBar
             api={api}

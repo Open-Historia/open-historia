@@ -27,7 +27,7 @@ const menuItem = {
   borderRadius: 6,
 };
 
-const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSave, onExport, onExportGame, onOpen }) => {
+const DocumentsMenu = ({ docName, onNameChange, currentId, author, onAuthorChange, onNew, onSave, onExport, onExportGame, onOpen }) => {
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState([]);
   // On a phone the three top bars (this one, the centred toolbar, the top-right
@@ -71,6 +71,20 @@ const DocumentsMenu = ({ docName, currentId, author, onAuthorChange, onNew, onSa
 
       {open && (
         <div style={{ ...panelSurface, marginTop: 6, width: 260, padding: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+          {/* On a phone the bottom bar has no room for the name box, so it is here. */}
+          {isMobile && onNameChange && (
+            <div style={{ padding: "4px 8px 0" }}>
+              <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>
+                Map name
+              </div>
+              <input
+                value={docName || ""}
+                onChange={(e) => onNameChange(e.target.value)}
+                placeholder="Map name"
+                style={{ width: "100%", boxSizing: "border-box", padding: "6px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.28)", color: "#fff", fontSize: 12.5, outline: "none" }}
+              />
+            </div>
+          )}
           <div style={{ padding: "4px 8px 6px" }}>
             <div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.45)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: 4 }}>
               Made by

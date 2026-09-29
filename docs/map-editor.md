@@ -34,7 +34,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `OlMap.jsx` | The OpenLayers surface. Owns the region source/layers, all editing interactions, click-selection, undo/redo, and the imperative region API exposed via `onReady`. |
 | `useMapDocument.js` | Document state hook: metadata, types, features (cities), colorOverrides, flags, tags + all setters + ephemeral UI state. Region geometry is **not** here. |
 | `Toolbar.jsx` | Top tool strip (single-choice tool + undo/redo/fit). |
-| `BottomBar.jsx` | Status bar: counts (open managers), Layers/Reference buttons, basemap picker, map name, save-status dot, search box. |
+| `BottomBar.jsx` | Status bar: counts (open managers), Layers/Reference buttons, basemap picker, map name, save-status dot, search box. On a phone (`isMobile`) the chips fold into one **Panels** menu that opens upward (Back closes it), the basemap button and the status keep only their icon and dot, and the map name moves into the Documents menu (`DocumentsMenu.jsx`). |
 | `SelectionInspector.jsx` | Right panel for the current region selection: name/type/country/disputed-by/colour/flag/tags + merge/copy/zoom/delete. |
 | `TypeManager.jsx` | Region "type" editor (render + gameplay settings). |
 | `RegionsPanel.jsx` | Searchable region list → select + zoom. |
@@ -43,7 +43,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `SearchBar.jsx` | Unified place search (this map's cities, regions, ~70k world places). |
 | `LayersPanel.jsx` | Region / label layer visibility toggles. |
 | `ReferencePanel.jsx` | Tracing-image upload/opacity/placement (session-only). |
-| `BasemapPicker.jsx` | Overlay to choose a built-in ESRI basemap, a saved basemap, upload, or a community one. |
+| `BasemapPicker.jsx` | Overlay to choose a built-in ESRI basemap, a saved basemap, upload, or a community one. Its header wraps on a phone, where Upload is an icon, like `FlagPicker`'s. |
 | `FlagPicker.jsx` | Overlay to choose a country flag (My flags / built-in / community). |
 | `DocumentsMenu.jsx` | Top-left menu: new/open/save/export-JSON/export-for-game + author field. |
 | `exportPreset.js` | `buildGameSeed` + tier detection + region normalization + verbatim-polity logic. |
