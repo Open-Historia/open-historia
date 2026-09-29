@@ -381,3 +381,32 @@ test("a second start after the refresh does nothing more", () => {
   assert.equal(readFileSync(path.join(root, "scenarios", "default", "world.json"), "utf-8"), world);
   assert.ok(!existsSync(path.join(root, "scenarios", "modern-day-edited-2")), "no second copy");
 });
+
+// Seen on a player's install (2026-09-29): the built-in carried the new map's
+// stamp but the old stock world as its regions.geojson — written by an older
+// build run against the same data directory. The stamp matched, so nothing ever
+// replaced the file: a new campaign's owners named regions the map did not
+// have, the map drew no colours, and nothing could be placed on it.
+test("a built-in stamped with the seed's map but holding the stock world gets the seed's map back", () => {
+  const root = freshRoot();
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  const dir = path.join(root, "scenarios", "default");
+  writeStockSized(path.join(dir, "regions.geojson"));
+  writeFileSync(path.join(dir, "regions.coarse.geojson"), "{}");
+  writeFileSync(path.join(dir, "regions.coarse.geojson.stamp"), "old");
+
+  const result = runStore(root, `store.ensureScenarioStore(); ${report("{ catalog: store.getScenarioCatalog().scenarios.map((s) => s.id) }")}`);
+  assert.equal(statSync(path.join(dir, "regions.geojson")).size, seedRegionsBytes, "the seed's map is back");
+  assert.equal(existsSync(path.join(dir, "regions.coarse.geojson.stamp")), false, "the coarse copy of the old map is gone");
+  assert.deepEqual(result.catalog, ["default"], "no fork: nothing was started on the stale file");
+  assert.equal(readJson(path.join(dir, "world.json")).builtInMap, STAMP);
+});
+
+test("a map of the player's own in a stamped built-in is left alone", () => {
+  const root = freshRoot();
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  const own = path.join(root, "scenarios", "default", "regions.geojson");
+  writeFileSync(own, JSON.stringify({ type: "FeatureCollection", features: [] }));
+  runStore(root, `store.ensureScenarioStore(); ${report("true")}`);
+  assert.equal(readFileSync(own, "utf-8"), JSON.stringify({ type: "FeatureCollection", features: [] }));
+});

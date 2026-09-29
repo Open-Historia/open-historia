@@ -7,6 +7,7 @@ import { LibraryTopBar, TOP_BAR_OFFSET, openLibraryTab, useMainMenuOpen } from "
 import { ApiSetupPrompt } from "./apiSetupPrompt.jsx";
 import { GameLoadingScreen, useGameLoading } from "./gameLoadingScreen.jsx";
 import { useLibraryState } from "../../runtime/library.js";
+import { presenceFor, useDiscordPresence } from "../../runtime/discordPresence.js";
 import { DISCORD_URL, GITHUB_URL, REDDIT_URL } from "../../runtime/communityLinks.js";
 import { useCountryDisplayName } from "../../runtime/polityNames.js";
 import { DateWidget } from "./time";
@@ -248,6 +249,14 @@ const Main = ({
   // remounted per game, so it starts over with every game opened).
   const gameLoading = useGameLoading();
   const showGameLoading = gameLoading.active && Boolean(activeGame?.id);
+  // Discord's "Playing Open Historia", with who, where and when under it
+  // (runtime/discordPresence.js; the desktop app and the local server only).
+  useDiscordPresence(presenceFor({
+    activeGame,
+    playerName: activeCountryName || activeGame?.country || "",
+    scenarioName: runtimeScenario?.name || "",
+    inMenu: mainMenuOpen || hasNoGames,
+  }));
   const providerReady = aiSetup.ready;
   const [apiPromptAnsweredFor, setApiPromptAnsweredFor] = useState(() => {
     try { return sessionStorage.getItem("oh:api-setup-answered") || ""; } catch { return ""; }

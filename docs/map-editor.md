@@ -22,6 +22,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `scenarioName` | Label shown in the Apply button tooltip. |
 | `onApplyToScenario(seed)` | Callback that writes the built game seed into the scenario. Its presence sets `scenarioMode = true` (`:45`), which forces `seedKind="deferred"` so the default world is **not** auto-seeded underneath the scenario's own map. |
 | `initialMap` | The scenario's current map (regions/owners/cities/palette/flags/tags/background/basemap), hydrated once it arrives (`:339`). |
+| `review` | `{ suggestion, decisions, onSaved(decisions) }`: a suggestion's map changes to review in this map (§25). The **Suggested changes** panel opens once the map has loaded, the bottom bar gains a **Suggested changes: N** chip, and `onSaved` is called after each save with the decisions. |
 
 ---
 
@@ -57,6 +58,7 @@ The editor writes a game seed in one of two tiers: **tier 1 (re-ownership)** kee
 | `fields.jsx` | Form-field primitives (`Row`, `TextField`, `NumberField`, `ColorField`, `Toggle`, `SelectField`, `TagField`) + hex/rgb helpers. |
 | `fmg/FmgPanel.jsx`, `fmg/fmgDriver.js`, `fmg/fmgImport.js` | Fantasy Map Generator drawer, headless Azgaar runner, result→editor-seed converter. |
 | `flagImage.js`, `citiesImport.js` | Flag downscaling; seed-city import + search. |
+| `SuggestionReviewPanel.jsx`, `suggestionReview.js` | Reviewing a suggestion's map changes (§25): the review's state (`useSuggestionReview`), the markup layer (`useSuggestionMarkup`), the panel; and the pure half — each change's status against the open map, its dependencies, applying it (with an undo), and what to mark on the map. |
 
 ---
 
@@ -103,7 +105,7 @@ TypeManager / Features … ──┼──► MapEditor ──► OlMap  ──�
 
 **Colours are keyed by country NAME, not GADM code** — this is true of `colorOverrides`, `flags`, `tags`, and region `owner` alike. See §10.
 
-The hook exposes a derived `colors` = `{ ...fetchedPalette, ...colorOverrides }` (`:194`) so an edited colour paints immediately exactly as it will in-game; `basePalette` is the fetched palette alone (`/assets/colors.json`, `:110`) so the UI can offer a **Reset** when an override exists. `mergeColors(extra)` layers a scenario's own polity colours on top.
+The hook exposes a derived `colors` = `{ ...fetchedPalette, ...colorOverrides }` (`:194`) so an edited colour paints immediately exactly as it will in-game; `basePalette` is the fetched palette alone (`/assets/colors.json`, `:110`) so the UI can offer a **Reset** when an override exists. `mergeColors(extra)` layers a scenario's own polity colours on top. The stock palette's fetch merges **under** what is already there (`setColors((current) => ({ ...fetched, ...current }))`). Hydration can merge the scenario's colours before that fetch lands, and a fetch that replaced them used to wipe them: the next save then wrote generated colours over every country the author had coloured.
 
 Setters (all set `saveStatus="dirty"`):
 
@@ -134,6 +136,7 @@ Created once in a `[]`-dep effect and driven through refs so it survives React r
 | Cities / points | `VectorLayer` (declutter) | 30 | `pointSource`; zoom+prominence gated so ~70k cities never all render. |
 | Reference image | `ImageLayer` | 40 | Tracing aid (session only). |
 | Reference frame | `VectorLayer` | 41 | Dashed outline + corner handles while the Reference panel is open. |
+| Suggestion review markup | `VectorLayer` (`name: "suggestion-review"`) | 57 | Only while a suggestion is reviewed (§25). |
 
 **Two performance-critical choices** (documented at `:232` and `:250`): `wrapX:false` on the source/layers (stops OL redrawing the world sideways *and* fixes ±180° editing), and `VectorImageLayer` for regions (rasterise-once/re-blit instead of re-rasterising thousands of paths per frame). Serialisation uses `writeFeaturesObject` (not `JSON.parse(writeFeatures(...))`) to avoid building an ~83MB string on every 2s autosave (`:785`).
 
@@ -164,6 +167,7 @@ This is the surface every panel drives. Each mutating call pushes an undo/redo c
 | `locateFeature(coord)` | Fly to a lon/lat. |
 | `serializeRegions()` | Region geometry → GeoJSON FC (EPSG:4326, 5 decimals). Used on save/export. |
 | `loadRegions(fc)` | Replace the source from a FeatureCollection (ids pulled from `properties.id`). |
+| `applyRegionPatch({ upsert, remove, withAttributes })` | Puts in regions (GeoJSON features in EPSG:4326) and takes others out, as **one** undo step. An existing region gets the new geometry, and its attributes too with `withAttributes`. A new one is added marked `edited`. Used when a suggested border change is accepted (§25). |
 | `reseedWorld()` | Load the stock world seed fresh. |
 | `reseedWorldWithOwners(overrides)` | Load stock world, then stamp `{regionId: ownerName}` overrides — how a tier-1 scenario opens. |
 | `undo()` / `redo()` | Drive the command stack. |
@@ -436,7 +440,7 @@ Save robustness:
 
 ## 19. How edits reach the game — Save / Save & Exit / Apply & Play (`libraryBar.jsx` `applyMapToScenario`)
 
-In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`) then uploads each seed piece as a scenario asset:
+In embedded mode, **▶ Apply & Play** calls `onApplyToScenario(seed)` (`MapEditor.jsx:198`), which runs `applyMapToScenario(scenario, seed)` (`libraryBar.jsx:1754`). It writes `world`/`game` via `saveScenario` (merging over the current world; sets `ownerCodes` for the start-country picker, `customRegions:true`; keeps the scenario's player country while the map still has it, by its exact name, since the seed's own `game.country` is only the map's first owner: `playerCountryAfterSave.js`, which fixed saves resetting every scenario's start country) then uploads each seed piece as a scenario asset:
 
 | Seed field | Scenario asset | Empty behaviour |
 |---|---|---|
@@ -519,3 +523,23 @@ Ported from kernely's Continuum branch. The editor's document gained an explicit
 **Border cleanup on save.** All three actions first run the Topology panel's conservative repair over **every region at 500 m** (`repairTopologyEverywhere` in `OlMap.jsx`; the pure parts — chunk grid, progress wording — in `topologySweep.js`): enclosed cracks are filled into the neighbour they touch most, thin overlaps are trimmed from the smaller region, as one Undo step, and only then is the map written. It is not an all-pairs check: overlap discovery asks the map's spatial index for extent neighbours only (the stock 4,848-region world is 14,011 pairs, ~3 s), and the gap search reads the holes of ONE union of every region, built as the union of chunk unions — the same polygon set as a single call (the stock world yields the identical 324 cracks either way), with bounded memory and a repaint between chunks. A per-chunk search was rejected because a crack longer than a chunk (a double-traced border between two large countries) could go unseen. Two measured facts shape the rest: trimming a sliver can expose a hairline between the winner and a third region, so a pass that repaired something is followed by another until one finds nothing (at most three; the stock world is 98 cracks and 57 slivers, then nothing), and the save writes coordinates at five decimals (about a metre), which leaves centimetre slivers along every repaired border on reload — so defects narrower than **2 m** are ignored (`BORDER_CLEANUP.minWidth`; the panel itself keeps its 0 m floor), or every save would move hundreds of regions by centimetres. Repairs are applied in one go (a repaint between them redraws the whole world each time), every crack of one target in a single union. A follow-up pass looks only around the previous pass's repairs (`hotspotsOf` in `topologySweep.js`: the padded footprints of the slivers trimmed and the cracks filled — a repair can only expose something inside its own footprint, and the first pass has seen everything else), so passes two and three cost a fraction of the first. **Time is bounded.** The search stops at `BORDER_CLEANUP.maxMillis` (60 s), or when the player presses **Save now** on the screen (offered after ten seconds); what it has found by then is applied (until `maxApplyMillis`, 90 s) and the note says the check stopped and why. An error inside a phase (polygon-clipping's precision refusals, which a detailed map can hit on a follow-up pass) ends the search the same way and keeps the repairs already made, instead of throwing the cleanup away. **Each pair check and each trim is local.** `geometry.js` clips both inputs to the box their extents share before polygon-clipping sees them (Sutherland–Hodgman against the box; exact — the same pieces and areas, pinned by `geometry.test.js` on the built-in map's own pairs — and the cost of the neighbourhood rather than of the region), and the crack-target touch score reads a region's boundary from an R-tree instead of walking every segment for every point. Measured in Node: the built-in map's pass 11 s → 4.5 s; the map with its borders drawn eight times finer 103 s → 25 s; a map with a single 41,000-vertex sea zone, which every coastal region is a neighbour of, 914 s → 14 s a pass — the case that held a player's save for forty minutes. The `BorderCleanupOverlay.jsx` screen ("Cleaning up the borders", progress bar, what is being checked, which pass, the seconds so far, Save now) is painted before the work starts so the page never looks frozen, and stays up until the scenario is written; a failure in the pass never blocks the save, and a plain Save leaves a one-line note beside the buttons saying what was fixed — or that the check stopped after so many seconds and what it left for the next save.
 
 **Export.** `buildGameSeed` emits one `polityOverrides` record per registry entry and per owner (code = stable key, display name, cumulative aliases, colour, status, `verbatim` for a code-shaped key) plus `ownerSchema`, the map's disputes as `world.regionClaimants`, the groups and their areas, the map features and the puppet states, and cities export their authored `tier` (1 town, 2 city, 3 major) with `capital` as an independent flag (`CityPopup.jsx`).
+
+## 25. Reviewing suggested changes (`SuggestionReviewPanel.jsx`)
+
+When a player suggests changes to a community scenario, the author reviews the map's changes here ([game-ui.md §4.8](game-ui.md#48-suggested-changes) covers the rest of the flow). `libraryBar.jsx` `openMapReview` opens the Workshop on the scenario with a `review` prop. Reviewing works like tracked changes in a word processor: every change is listed beside the map and marked on it, and the author accepts or rejects them one at a time, a group at a time, or all at once.
+
+- **The list.** Sections (`REVIEW_SECTIONS`, `src/runtime/suggestionSections.js`): Countries, Who owns which region, Borders, Region names and types, Claims, Groups, Cities, Units, Map features, Puppet states and Map settings. Ownership changes are grouped by from → to ("12 regions: Alpha → Beta"). A border change covers a cluster of neighbouring regions, with one line per region: "New region", "Region removed" or "Region redrawn". Decided changes can be hidden. Clicking a change zooms to it.
+- **Status against the open map** (`mapChangeStatus`, `suggestionReview.js`):
+  - *open*: the map still has the post's value;
+  - *conflict*: the author changed it since posting ("You changed this too"; accepting replaces it);
+  - *applied*: already so;
+  - *missing*: what it changes is not on this map any more ("Not on your map").
+- **Accepting applies the change at once** (`applyMapChange`, which returns its undo):
+  - regions through the map's own API: `setRegionAttrs` for owners, names, types, claims and groups, and `applyRegionPatch` for borders, one undo step;
+  - the document's records (countries, groups, cities, units, features, puppet states, the basemap and background) through `useMapDocument`'s setters.
+
+  What a change needs is accepted first (`changeDependencies`: a country or group the suggestion adds). A change written against a country's old name follows a rename the author accepted in the same review. **Undo** takes an acceptance back.
+- **The markup layer** (`useSuggestionMarkup`, zIndex 57). Each change's regions are outlined in amber while it waits, green once accepted and grey once rejected. The suggested new borders are drawn dashed in blue over the old ones, and cities, units and features get a dot. The focused change is drawn in white.
+- **Nothing reaches the scenario until the map is saved**, as with any other edit here. After each save, `review.onSaved(review.decisionsForSave())` records the map decisions in the scenario's `hubReviews`. The suggestion is `done` once every change, on the map and off it, is decided. Closing without saving keeps nothing.
+
+The diff that produced the changes (`src/runtime/scenarioChanges.js`, `diffScenarioBundles`) compares shapes with a tolerance, so the Workshop's own save-time border cleanup, which runs over the whole map on every save, does not read as a suggestion. Coordinates are hashed at 5 decimals. A shape counts as changed when its area moved by more than 0.15%, or by more than a strip a quarter of the cleanup's width (500 m in the map's projection, 0.005° here) along its whole border, or when its outline moved by more than that width. The outline leaves out what the cleanup makes and removes with next to no area: spikes (a vertex the ring runs out to and back from within about 6°), sliver tips (out and back within the cleanup's width), specks (parts under about 0.1 km²) and stray parts that are only a sliver. Before this, a save that changed nothing read as 15 border changes on one hub post. It also reads both versions as the stores do: legacy owner codes migrated (`migrateBundleOwners`), a city's size derived as the game derives it (`cityTierOf`), and records the Workshop writes on its own left out.

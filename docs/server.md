@@ -92,6 +92,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | --- | --- | --- | --- |
 | POST | `/api/ai/relay` | Server-to-server relay to a player-configured OpenAI-compatible endpoint (defeats the endpoint's missing CORS). Speaks `http`/`https` directly — **not** `fetch`, whose undici default gave up on any generation that took over 300s to answer — and pipes the upstream body straight back, so a streamed answer reaches the browser as it arrives. Aborts upstream if the client disconnects; `OH_RELAY_TIMEOUT_MS` (default 600000) is the only deadline, and it replies `504` rather than hanging | `server/server.js:844` |
 | POST | `/api/server/shutdown` | Stop the process (acks first, then `process.exit(0)`); the beta UI no longer has a button for it | `server/server.js:559` |
+| POST | `/api/presence` | What the page shows, for Discord's "Playing Open Historia" (`{ scene: "game", player, scenario, date }` or `{ scene: "menu" }`); taken from this computer only, answered 204 either way. See [Discord Rich Presence](#discord-rich-presence) | `server/server.js`, `server/discordPresence.js` |
 | GET | `/api/hub/file?url=` | Proxy-download a community bundle from GitHub only; manual redirect-following with per-hop allowlist re-check; on-disk cache keyed by URL SHA-256 | `server/server.js:575` |
 | POST | `/api/hub/import-log` | Best-effort import telemetry; one ping per scenario per install (atomic `wx` marker), forwarded to the counter Worker | `server/server.js:657` |
 | GET | `/api/hub/import-counts` | Read import counts back from the counter Worker (60 s in-memory cache) | `server/server.js:691` |
@@ -133,7 +134,8 @@ server/data/
   scenarios/
     <scenarioId>/
       scenario.json              # meta (name, hero*, accentColor, coverImageContentType,
-                                 #        countryNameOverrides, hubOrigin, playCount, timestamps)
+                                 #        countryNameOverrides, hubOrigin, hubPublished, hubReviews,
+                                 #        playCount, timestamps)
       world.json  game.json  prompts.json   # CORE_JSON_ASSET_FILES
       colors.json flags.json tags.json       # OPTIONAL_JSON_ASSET_FILES
       cover-image.bin            # uploaded cover (content type in scenario.json)
@@ -263,10 +265,27 @@ Bundles are the shareable unit strangers swap on the community hub. Schema strin
 - **Export** — `exportScenarioBundle(id)` (`server/libraryStore.js`) returns `{ schema, scenario{meta}, data{7 core assets}, assets{...}, mode: "full", exportedAt }`. Every export is full: cover, colors, flags, tags, geometry, background and any custom PMTiles archive travel whenever the scenario has them. The former light mode (which dropped custom PMTiles) is gone; `?mode=` on the route is accepted and ignored, and older `mode: "light"` bundles still import.
   - **What is base64 and what is not.** Binaries (the cover, a custom PMTiles archive) are base64. JSON assets — the region and city geometry, a vector background — are the JSON itself (`encodeJsonFile`), because base64 made every shared map a third bigger for nothing: in a real hub bundle the region geometry was 17.1 MB of the 18.1 MB file, against 12.8 MB of actual geometry. Anything that does not parse as JSON still falls back to base64, byte-exact. The importer reads both shapes, so the bundles already on the hub import unchanged (`server/scenarioBundleWeight.test.js`).
   - **Inside a .zip the heavy assets are real entries.** `src/runtime/bundleFiles.js` lifts every embedded asset over 64 KB out of `scenario.json` into `assets/<file>` — text DEFLATEd, binaries STOREd — leaving `{ mode: "file", file, format }` behind, and puts them back on import before the bundle reaches the importer, which never learns it happened. The same lift is used by the scenario export, the hub publish and a game export carrying its map. That hub map: 18.1 MB as one JSON document, 13.8 MB with the geometry as JSON, **4.2 MB** as a zip.
-- **Import** — `importScenarioBundle` (`server/libraryStore.js:2529`) creates a **new** scenario, writes its core data via `updateScenario`, lays down each embedded asset via `applyScenarioBundleAsset`, then stamps `hubOrigin` last (so the import's own meta writes don't clear it) and selects it.
-- **Update-in-place** — `updateScenarioFromBundle` (`server/libraryStore.js:2635`) is the hub card's "Update" button: it keeps the local `id` (games reference scenarios by id) and `createdAt`, replaces meta/world/assets from the new bundle, and visits **every** uploadable key so an asset the new version dropped doesn't linger. `hubOrigin` is re-stamped last so the card reverts to "New Game" after refresh.
+- **Import** — `importScenarioBundle` (`server/libraryStore.js:3546`) creates a **new** scenario, writes its core data via `updateScenario`, lays down each embedded asset via `applyScenarioBundleAsset`, then stamps `hubOrigin` last (so the import's own writes never count as the player's edits) and selects it.
+- **Update-in-place** — `updateScenarioFromBundle` (`server/libraryStore.js:3657`) is the hub card's "Update" button: it keeps the local `id` (games reference scenarios by id) and `createdAt`, replaces meta/world/assets from the new bundle, and visits **every** uploadable key so an asset the new version dropped doesn't linger. `hubOrigin` is re-stamped last so the card reverts to "New Game" after refresh.
 
-`hubOrigin` (`{ postId, bundleUrl, syncedAt }`, normalized at `server/libraryStore.js:575-585`) is provenance for hub imports. **Any meta write that doesn't explicitly carry `hubOrigin` clears it** (`writeScenarioMeta`, `server/libraryStore.js:639-641`) — a local edit forks the copy and stops offering overwrites. GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal (and the reason `/api/hub/file`'s disk cache can never go stale). See [Scenario hub](runtime-services.md).
+### Hub provenance: where a scenario came from and where it went
+
+A scenario keeps three records about the community hub in `scenario.json`. They are normalised by `server/hubProvenance.js`, which is pure and shared with the web store (`src/runtime/web/models.js`), so the two stores never disagree. Tests: `server/hubProvenance.test.js`.
+
+| Record | Shape | Written by |
+|---|---|---|
+| `hubOrigin` | `{ postId, bundleUrl, syncedAt, title?, author?, editedAt? }` — the post this copy was downloaded from | the import and **Update** (stamped last); `null` from **Unlink** |
+| `hubPublished` | `{ key, publishedAt, postIds[], author?, title?, suggestions[], blocked?[], checkedAt?, commentCounts? }` — the player's own posts of this scenario and the suggestions left on them | **Publish** (the key), **Link my post**, the suggestion checks, **Reject all from @…** / **Unblock** |
+| `hubReviews` | `{ [suggestionId]: { status: reviewing|done|dismissed, accepted[], rejected[], updatedAt } }` | the review dialog; the map editor on save |
+
+The rules:
+
+- **An edit keeps `hubOrigin` and stamps `editedAt`** (`hubOriginAfterWrite`, used by `writeScenarioMeta`). Before, the first local edit erased it. An edited copy is never offered an **Update**, which would overwrite the player's work. It still knows its original, which **Suggest changes** compares against. A write that carries `hubOrigin` sets it, and an explicit `hubOrigin: null` unlinks the scenario for good.
+- **Bookkeeping is not an edit.** `updateScenario` (`server/libraryStore.js:2240`) writes a body that carries only `hubOrigin` / `hubPublished` / `hubReviews` with `touch: false`. That write moves neither `updatedAt` nor `editedAt`. In a body that also edits the scenario, the provenance is written after the edit.
+- **An edited copy's games carry their map.** `fetchableHubOrigin` returns null for an edited copy, so a game exported from it embeds the map rather than pointing at a post whose file is no longer what the game was played on.
+- **Suggestions are references**, never the files: `{ id, postId, commentId, author, createdAt, zipUrl, note }`, with `zipUrl` a GitHub attachment. There are at most 50, and a blocked contributor's (a case-insensitive login in `blocked`, at most 100) are dropped on every write. `withContributorBlocked` also resets `commentCounts`, so the next check re-reads every comment. `openHubSuggestions(published, reviews)` lists the suggestions not yet reviewed or dismissed.
+
+GitHub mints a new immutable attachment URL per re-upload, so `bundleUrl` inequality is itself the update signal, and the reason `/api/hub/file`'s disk cache can never go stale. The suggestion flow is in [game-ui.md §4.8](game-ui.md#48-suggested-changes).
 
 ---
 
@@ -305,5 +324,17 @@ Every store imports this one constant, so a single env var relocates **all** wri
 | `OH_DATA_DIR` | `server/data` | Writable data root for every store (`server/dataDir.js`) |
 | `OH_ALLOW_CROSS_ORIGIN` | unset | `=1` disables the cross-origin-write guard (`server/server.js:111`) |
 | `OH_IMPORT_COUNTER_URL` | `https://oh-import-counter.…workers.dev` | Import-telemetry counter Worker; empty string disables pings (`server/server.js:653`) |
+| `OH_DISCORD_PRESENCE` | on | `=0` turns Discord Rich Presence off (`server/discordPresence.js`) |
+| `OH_DISCORD_APP_ID` | the committed id | Another Discord application for the presence (testing) |
+
+## Discord Rich Presence
+
+Discord shows "Playing Open Historia" on a player's profile and beside their name in every server's member list when a program on the same computer tells the Discord app what is being played. This server is that program: it runs on the player's computer, in the desktop app (`electron/main.cjs` imports it) and in the downloadable local server. The website runs in a browser and the Android app on a phone, and neither can reach a Discord app.
+
+- The page reports what is on screen: `src/runtime/discordPresence.js` `presenceFor` / `useDiscordPresence`, called from the HUD (`src/Game/GameUI/main.jsx`), posts `/api/presence` 1.5 s after the last change, and not at all in a web build (`VITE_OH_WEB`).
+- `server/discordPresence.js` speaks Discord's local protocol itself (no dependency): the socket `discord-ipc-0..9` (a named pipe on Windows; a Unix socket under `XDG_RUNTIME_DIR`/`TMPDIR`, including the Flatpak and Snap locations), frames of opcode + length + JSON, a handshake with the application id, then `SET_ACTIVITY`. It reconnects every 30 s while Discord is closed, sends at most one update per 4 s (Discord takes five in twenty seconds) and nothing that is already showing, and stops for good if Discord does not know the application id.
+- What shows: "Playing Open Historia" (the Discord application's name), then "Playing as France", "Modern Day · 1 January 2016", the time since the game was opened, the logo (an image URL, so there is no art to upload) and a "Play Open Historia" button to openhistoria.com. "In the main menu" outside a game.
+- The application: `DISCORD_APPLICATION_ID` in `server/discordPresence.js`, an application named "Open Historia" in Discord's developer portal (discord.com/developers/applications). The id (`1529270119916896326`) is public. With no id, the whole feature is inert.
+- Off: a player turns it off in Discord (User Settings, Activity Privacy, "Share your detected activities with others"); a server owner with `OH_DISCORD_PRESENCE=0`.
 
 Related sibling pages: [World state](world-state.md) · [Map editor](map-editor.md) · [Scenario hub](runtime-services.md).

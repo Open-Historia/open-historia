@@ -482,6 +482,28 @@ test("falling short of the destination still reads as moving", () => {
   assert.equal(result.units[0].status, "moving");
 });
 
+// Seen in a player's Game (2026-09-29): an armoured division sent 149 km
+// marched 90 km in a one-day skip and stopped 59 km short. Its order was pruned
+// as satisfied, being inside the arrival radius, and the division stood there
+// reading "moving" for good. Here, Glasgow to Stranraer: 118 km, 28 short. A unit still on its
+// way keeps its order until it gets there.
+test("a unit that stops inside the arrival radius but short of its destination keeps marching", () => {
+  const glasgow = { lng: -4.25, lat: 55.86 };
+  const stranraer = { lng: -5.03, lat: 54.9 };
+  let world = { units: [unit({ type: "armor", ...glasgow, status: "moving" })], pendingUnitOrders: [{ id: "o1", unitId: "unit-1", kind: "move", toLng: stranraer.lng, toLat: stranraer.lat }] };
+  world = advanceStandingOrders(world, { fromDate: "2016-02-14", toDate: "2016-02-15", round: 16 });
+  const short = haversineKm(world.units[0].lat, world.units[0].lng, stranraer.lat, stranraer.lng);
+  assert.ok(short > 0 && short < 60, `expected to stop inside the radius but short, got ${short} km`);
+  assert.equal(world.units[0].status, "moving");
+  assert.equal(world.pendingUnitOrders.length, 1, "the order to Stranraer was dropped short of it");
+
+  world = advanceStandingOrders(world, { fromDate: "2016-02-15", toDate: "2016-02-16", round: 17 });
+  assert.equal(world.units[0].lng, stranraer.lng);
+  assert.equal(world.units[0].lat, stranraer.lat);
+  assert.equal(world.units[0].status, "idle");
+  assert.equal(world.pendingUnitOrders.length, 0);
+});
+
 // ---- stale "moving" on old saves -------------------------------------------
 
 test("a unit left claiming to move with nothing moving it is repaired to idle", () => {

@@ -1299,6 +1299,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // delete every patrol the instant it was created. It ends by expiry
     // (untilRound, in advanceStandingOrders) or when its unit goes away.
     if (order.kind === "patrol") return true;
+    // A unit still on its way keeps its order until it arrives: a step that stops
+    // inside the radius but short of the destination is not an arrival. Dropping
+    // it there left a division 59 km short of its destination reading "moving" with
+    // nothing to move it. The radius is for a unit already standing near.
+    if (unit.status === "moving") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };
@@ -1446,6 +1451,7 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
   const createdAt = normalizeOptionalString(entry.createdAt) || timestamp;
   const status = normalizeOptionalString(entry.status).toLowerCase();
   const foundedAt = normalizeOptionalString(entry.foundedAt || entry.date);
+  const approximate = normalizeApproximateMark(entry.approximate);
 
   return {
     id: normalizeOptionalString(entry.id) || generateId(`marker-${index}`),
@@ -1462,7 +1468,21 @@ export const normalizeMarkerEntry = (entry, index = 0) => {
     updatedAt: normalizeOptionalString(entry.updatedAt) || createdAt,
     updatedDate: normalizeOptionalString(entry.updatedDate || entry.lastUpdatedDate) || foundedAt,
     sourceEventIds: normalizeMarkerSourceEventIds(entry.sourceEventIds),
+    ...(approximate ? { approximate } : {}),
   };
+};
+
+// A structure given an approximate placement because the place its event named is
+// not on the map (AI/placement.js): what was asked for, and where it went. The
+// player settles it with Accept or Move (structurePlacement.js).
+const normalizeApproximateMark = (value) => {
+  if (!value || typeof value !== "object") return null;
+  const asked = normalizeOptionalString(value.asked);
+  const country = normalizeOptionalString(value.country);
+  // `unnamed`: the thing was given no place at all, so nothing was asked for.
+  const unnamed = value.unnamed === true;
+  if (!(asked || unnamed) || !country) return null;
+  return { asked, country, near: normalizeOptionalString(value.near), ...(unnamed ? { unnamed } : {}) };
 };
 
 export const normalizeMarkers = (markers) =>

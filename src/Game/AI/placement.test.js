@@ -31,6 +31,7 @@ import {
     offsetPoint,
     pointInGeometry,
     readPlacement,
+    describeApproximatePlacement,
     resolvePlacement,
     resolveRegionPlacement,
 } from "./placement.js";
@@ -342,4 +343,137 @@ test("the Workshop-free pipeline: a new formation nothing places is raised in it
     assert.ok(body.includes("owner: entry.owner"), "the unit's owner reaches the phrase reader");
     assert.ok(body.includes("entry.spawn && entry.owner") && body.includes("resolvePlacement(entry.owner, gazetteer"), "a spawn with nowhere to go is raised at home");
     assert.ok(body.includes("rather than left off the map"), "and the receipt says where it went");
+});
+
+// --- approximate placement: a place the map does not know ---
+//
+// Seen in a live game (2026-09-27): a base ordered at Djibo, Burkina Faso was
+// dropped because the Scenario's map has no Djibo. Now it goes near the capital
+// of the country the phrase names, or into the owner's own land, and says so.
+
+// Westmark's capital is Midburg; Eastland marks none.
+const CAPITALS = { westmark: { name: "Midburg", point: [32, 51] } };
+// Exact names only: the test map's loose matching would read "Nowhereville,
+// Westmark" as Westmark itself, which the real map does not.
+const mapped = {
+    ...gazetteer,
+    find: (name, options = {}) => gazetteer.find(name, { ...options, exact: true }),
+    capitalOf: (country) => CAPITALS[fold(country)] ?? null,
+    // The places an event's text names, in the order it names them, held by that
+    // country: the real gazetteer reads its regions and cities the same way.
+    placesNamedIn: (text, country) => [...REGIONS.map((region) => ({ name: region.name, region, owner: region.owner })),
+        ...CITIES.map((city) => ({ name: city.name, point: city.point, owner: gazetteer.regionAt(city.point)?.owner }))]
+        .map((place) => ({ ...place, at: fold(text).indexOf(fold(place.name)) }))
+        .filter((place) => place.at >= 0 && fold(place.owner) === fold(country))
+        .sort((a, b) => a.at - b.at),
+};
+const approx = (phrase, { owner = "", seedText = "Probe Base", context = "" } = {}) =>
+    resolvePlacement(phrase, mapped, { seedText, owner, approximate: true, context });
+const inRegion = (spot, id) => pointInGeometry([spot.lng, spot.lat], REGIONS.find((region) => region.id === id).geometry);
+const inCountry = (spot, owner) => REGIONS.some((region) => region.owner === owner && pointInGeometry([spot.lng, spot.lat], region.geometry));
+
+test("a place the map knows is placed exactly, never approximately", () => {
+    const spot = approx("Midburg");
+    assert.equal(spot.approximate, undefined);
+    assert.deepEqual([spot.lng, spot.lat], [32, 51]);
+});
+
+test("an unknown town in a named country goes near that country's capital", () => {
+    for (const phrase of ["Nowhereville, Westmark", "Nowhereville in Westmark", "Westmark's Nowhereville district"]) {
+        const spot = approx(phrase, { owner: "Eastland" });
+        assert.equal(spot.error, undefined, phrase);
+        assert.equal(inCountry(spot, "Westmark"), true, `${phrase}: ${spot.lng},${spot.lat} is not in Westmark`);
+        assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50, `${phrase}: too far from Midburg`);
+        assert.deepEqual(spot.approximate, { asked: phrase, country: "Westmark", near: "Midburg" }, phrase);
+    }
+});
+
+// Seen in a player's Game (2026-09-29): an unknown town beside a province
+// the map knows went near Cardiff, the first capital its country marks. The province the phrase names is where the thing goes.
+test("a known province in the phrase is where the thing goes when the town is unknown", () => {
+    const spot = approx("Nowhereville, Eastland North", { owner: "Westmark" });
+    assert.equal(inRegion(spot, "el-n"), true, `${spot.lng},${spot.lat} is not in Eastland North`);
+    assert.equal(spot.approximate.country, "Eastland");
+    assert.equal(spot.approximate.near, "Eastland North");
+});
+
+test("a known city in the phrase is where the thing goes, near it and in its country", () => {
+    const spot = approx("Nowhereville, Midburg", { owner: "Eastland" });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50);
+    assert.equal(spot.approximate.near, "Midburg");
+});
+
+// The same Game: the event named a province, and the phrase only the town and
+// its country. What the event itself names, in that country,
+// comes before the capital.
+test("a place the event names in that country comes before its capital", () => {
+    const spot = approx("Nowhereville, Westmark", { context: "The division completes its redeployment across Westmark South and arrives at Nowhereville." });
+    assert.equal(inRegion(spot, "wm-s"), true, `${spot.lng},${spot.lat} is not in Westmark South`);
+    assert.equal(spot.approximate.near, "Westmark South");
+});
+
+test("a place the event names in another country is not used", () => {
+    const spot = approx("Nowhereville, Westmark", { context: "Troops leave Eastland North for Nowhereville." });
+    assert.equal(spot.approximate.near, "Midburg");
+    assert.equal(inCountry(spot, "Westmark"), true);
+});
+
+test("a phrase that names no country goes into the owner's own land", () => {
+    const spot = approx("Nowhereville", { owner: "Westmark" });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.equal(spot.approximate.country, "Westmark");
+    assert.ok(distanceKm([spot.lng, spot.lat], [32, 51]) <= 50);
+});
+
+test("the same thing lands in the same spot every time", () => {
+    const first = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    const again = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    assert.deepEqual([first.lng, first.lat], [again.lng, again.lat]);
+});
+
+test("with no country named and an owner that holds no land, nothing is placed", () => {
+    const spot = approx("Nowhereville", { owner: "Atlantis" });
+    assert.match(spot.error ?? "", /is called "Nowhereville"/);
+    assert.equal(spot.approximate, undefined);
+});
+
+test("without the approximate option an unknown place is still an error", () => {
+    assert.match(resolvePlacement("Nowhereville", mapped, { owner: "Eastland" }).error ?? "", /is called/);
+});
+
+test("two things placed approximately in one country land in different spots", () => {
+    // Spacing (featureSpacing.js) keeps them clear once placed; the name already
+    // spreads them, so several bases do not start from one point.
+    const first = approx("Nowhereville, Westmark", { seedText: "Djibo Forward Operating Base" });
+    const second = approx("Elsewhere, Westmark", { seedText: "Dori Supply Depot" });
+    assert.notDeepEqual([first.lng, first.lat], [second.lng, second.lat]);
+});
+
+// Seen in a replayed turn (2026-09-29): the structure director built a forward
+// operating base with no `at`, and its event named nowhere the map knows. It
+// goes into its owner's land like an unknown town, marked as given no place.
+test("a thing given no place at all goes into its owner's land, marked unnamed", () => {
+    const spot = approx("", { owner: "Westmark", context: "Engineers break ground on a base at Nowhereville." });
+    assert.equal(inCountry(spot, "Westmark"), true);
+    assert.deepEqual(spot.approximate, { asked: "", country: "Westmark", near: "Midburg", unnamed: true });
+    assert.equal(
+        describeApproximatePlacement({ title: "A Base Is Begun", name: "Nowhereville Base", phrase: "", placed: spot }),
+        'Event "A Base Is Begun": Nowhereville Base was given no place. It was placed near Midburg, in Westmark instead. Give every new unit and structure `at`.',
+    );
+    assert.equal(approx("", { owner: "Atlantis" }).approximate, undefined, "no owner's land, nowhere to go");
+});
+
+test("the model is told what it named, and where the thing went instead", () => {
+    const placed = approx("Nowhereville, Westmark", { owner: "Eastland" });
+    assert.equal(
+        describeApproximatePlacement({ title: "A Base at Nowhereville", name: "Nowhereville Base", phrase: "Nowhereville, Westmark", reason: "not on this map", placed }),
+        'Event "A Base at Nowhereville": Nowhereville Base could not be placed at "Nowhereville, Westmark" — not on this map. '
+        + "It was placed near Midburg, in Westmark instead. Name a city or province this map knows to place it exactly.",
+    );
+    const province = approx("Nowhereville, Eastland North", { owner: "Westmark" });
+    assert.match(describeApproximatePlacement({ name: "Depot", phrase: "Nowhereville, Eastland North", placed: province }), /placed near Eastland North, in Eastland instead/);
+    const inside = approx("Nowhereville, Eastland", { owner: "Westmark" });
+    assert.match(describeApproximatePlacement({ name: "Depot", phrase: "Nowhereville, Eastland", placed: inside }), /placed in Eastland instead/);
+    assert.equal(describeApproximatePlacement({ placed: place("Midburg") }), "", "an exact placement is not reported");
 });

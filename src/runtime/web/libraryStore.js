@@ -23,6 +23,7 @@ import {
   readScenarioMeta, readGameMeta, readStoredImageContentType, resolveOrderedIds, normalizeId, normalizePlayCount,
   scenarioLooksLikeRuntimeSnapshot, buildFreshGameSeedFromScenario, buildFreshWorldSeedFromScenario,
   normalizeRuntimeWorld, COUNTRY_NAME_REGISTRY, normalizeHubOrigin,
+  fetchableHubOrigin, hubOriginAfterWrite, normalizeHubPublished, normalizeHubReviews,
   GAME_BUNDLE_SCHEMA, ACCEPTED_GAME_BUNDLE_SCHEMAS, GAME_BUNDLE_DATA_KEYS,
   OPTIONAL_GAME_BUNDLE_KEYS, BUILT_IN_SCENARIO_IDS,
 } from "./models.js";
@@ -115,7 +116,8 @@ const getGameManifest = async () => {
 const saveGameManifest = (m) => kvPut(GAME_MANIFEST_KEY, { activeGameId: m.activeGameId ?? "", order: [...new Set(m.order ?? [])] });
 
 // --- Meta writers (mirror writeScenarioMeta/writeGameMeta) ----------------
-const writeScenarioMeta = (record, updates = {}) => {
+// `touch: false` is bookkeeping, not an edit (server twin has the same rule).
+const writeScenarioMeta = (record, updates = {}, { touch = true } = {}) => {
   const current = readScenarioMeta(record.id, record.meta ?? {});
   const next = {
     ...current,
@@ -126,14 +128,19 @@ const writeScenarioMeta = (record, updates = {}) => {
     countryNameOverrides: updates.countryNameOverrides && typeof updates.countryNameOverrides === "object"
       ? updates.countryNameOverrides : current.countryNameOverrides,
       features: updates.features !== undefined ? normalizeFeatureSettings(updates.features) : current.features,
-    // Hub provenance survives ONLY when a write explicitly carries it — any
-    // other meta write is a local modification, which turns the copy into a
-    // fork that must stop offering hub updates (server twin has the same rule).
-    hubOrigin: Object.prototype.hasOwnProperty.call(updates, "hubOrigin")
-      ? normalizeHubOrigin(updates.hubOrigin)
-      : null,
+    // A write that carries hubOrigin sets or clears it (import/Update stamp it
+    // last; Unlink clears it); any other meta write is a local modification,
+    // which keeps the link but marks it edited, so the copy stops offering hub
+    // updates yet can still suggest its changes back (server/hubProvenance.js).
+    hubOrigin: hubOriginAfterWrite(current.hubOrigin, updates, { touch }),
+    hubPublished: Object.prototype.hasOwnProperty.call(updates, "hubPublished")
+      ? normalizeHubPublished(updates.hubPublished)
+      : current.hubPublished,
+    hubReviews: Object.prototype.hasOwnProperty.call(updates, "hubReviews")
+      ? normalizeHubReviews(updates.hubReviews)
+      : current.hubReviews,
     id: record.id,
-    updatedAt: nowIso(),
+    updatedAt: touch ? nowIso() : current.updatedAt,
   };
   record.meta = next;
   return next;
@@ -889,11 +896,26 @@ const createScenario = async (body = {}) => {
   return getScenarioDetails(id);
 };
 
+// The hub bookkeeping a scenario write may carry (server/hubProvenance.js), and
+// what counts as an edit next to it; the server twin draws the same line.
+const HUB_PROVENANCE_KEYS = ["hubOrigin", "hubPublished", "hubReviews"];
+const SCENARIO_EDIT_KEYS = [...META_KEYS, "game", "gamePatch", "prompts", "promptsPatch", "storage", "world", "worldPatch"];
+const pickHubProvenance = (body) => Object.fromEntries(
+  HUB_PROVENANCE_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(body ?? {}, key)).map((key) => [key, body[key]]),
+);
+
 const updateScenario = async (id, body = {}) => {
   const record = await getScenario(id);
   if (!record) throw new Error(`Scenario not found: ${id}`);
-  writeScenarioMeta(record, pickMetaUpdates(body));
-  applyJsonMutations(record, body, /*canonicalizeCountry*/ true, "scenario");
+  // A write that only records hub bookkeeping is not an edit: no updatedAt, and
+  // a downloaded copy is not marked as changed.
+  const provenance = pickHubProvenance(body);
+  const edits = SCENARIO_EDIT_KEYS.some((key) => body[key] !== undefined);
+  if (edits || !Object.keys(provenance).length) {
+    writeScenarioMeta(record, pickMetaUpdates(body));
+    applyJsonMutations(record, body, /*canonicalizeCountry*/ true, "scenario");
+  }
+  if (Object.keys(provenance).length) writeScenarioMeta(record, provenance, { touch: false });
   await putScenario(record);
   if (body.setActive) await setSelectedScenario(id);
   return getScenarioDetails(id);
@@ -1031,7 +1053,7 @@ const updateGame = async (id, body = {}) => {
 
 // Play stamps for the main menu's "Last Played"/"Most Played" rows — patches
 // record.meta directly (NOT writeGameMeta/writeScenarioMeta, which stamp
-// updatedAt and drop hubOrigin; server twin has the same rule).
+// updatedAt and mark a hub copy edited; server twin has the same rule).
 const recordGamePlayed = async (gameId) => {
   try {
     const record = await getGame(gameId);
@@ -1616,14 +1638,15 @@ const exportGameBundle = async (id) => {
     schema: GAME_BUNDLE_SCHEMA,
     scenarioRef: {
       builtIn: BUILT_IN_SCENARIO_IDS.has(meta.scenarioId),
-      hubOrigin: scenario?.hubOrigin ?? null,
+      // Server twin: only an unedited copy can be fetched from the hub again.
+      hubOrigin: fetchableHubOrigin(scenario?.hubOrigin),
       // Server twin: nothing to embed when this store lacks the map either.
       missing: Boolean(scenario?.missing),
       scenarioId: meta.scenarioId,
       // Server twin. This store holds the scenario as an object rather than files,
       // so measure what a bundle of it would serialise to.
       scenarioBytes:
-        scenario?.missing || BUILT_IN_SCENARIO_IDS.has(meta.scenarioId) || scenario?.hubOrigin
+        scenario?.missing || BUILT_IN_SCENARIO_IDS.has(meta.scenarioId) || fetchableHubOrigin(scenario?.hubOrigin)
           ? 0
           : await scenarioBundleBytes(meta.scenarioId),
       // Server twin: a map's name must not decay to an id when a game carrying no

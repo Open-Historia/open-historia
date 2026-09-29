@@ -557,14 +557,143 @@ const resolveReading = (reading, gazetteer, seed, prefer = "") => {
     return null;
 };
 
+// ---------------------------------------------------------------------------
+// Approximate placement: a place the map does not know
+// ---------------------------------------------------------------------------
+//
+// Seen in a live game (2026-09-27): a base ordered at "Djibo, Burkina Faso" was
+// dropped because the Scenario's map has no Djibo, and a unit sent there was
+// raised in its owner's homeland, which for a foreign unit is another continent.
+// Now it gets an approximate placement: near the capital of the country the
+// phrase says the place is in, inside that country when the map marks no capital,
+// or in its owner's own land when no country can be told — and the model is told.
+//
+// gazetteer.capitalOf(country) -> { name, point } | null
+
+export const APPROXIMATE_KM = 50;
+
+// A country that can hold something: a polity the map knows, with land.
+const landedPolity = (thing) => (thing?.kind === "polity" && asArray(thing.regions).length ? thing : null);
+
+// One seed per phrase and thing, so a replayed turn lands on the same spot.
+const seedOf = (phrase, seedText) => hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
+
+// The country a phrase says its place is in, as the map knows it: named outright
+// ("Djibo, Burkina Faso", "Djibo in Burkina Faso", "Burkina Faso's Soum"), or
+// the holder of a province or city in the phrase the map does know ("Djibo,
+// Soum"). Countries mentioned elsewhere in an event are never used.
+const countryInPhrase = (phrase, gazetteer) => {
+    const named = namedInPhrase(phrase);
+    for (const token of named) {
+        const country = landedPolity(gazetteer.find(token, { exact: true }));
+        if (country) return country;
+    }
+    for (const token of named) {
+        const thing = gazetteer.find(token, { exact: true });
+        const holder = asText(thing?.region?.owner ?? (thing?.point ? gazetteer.regionAt(thing.point)?.owner : ""));
+        const country = holder ? landedPolity(gazetteer.find(holder, { exact: true })) : null;
+        if (country) return country;
+    }
+    return null;
+};
+
+// Every name a phrase gives, the last part first: "Djibo, Burkina Faso" gives
+// Burkina Faso, then Djibo; "in" and a possessive give the name they carry.
+const namedInPhrase = (phrase) => {
+    const parts = asText(phrase).split(",").map((part) => stripArticle(part.trim())).filter(Boolean);
+    const named = [];
+    for (const part of [...parts].reverse()) {
+        named.push(part);
+        const inside = part.match(/\bin\s+(.+)$/i);
+        if (inside) named.push(stripArticle(inside[1]));
+        const possessive = part.match(/^(.+?)['’]s\b/);
+        if (possessive) named.push(stripArticle(possessive[1]));
+    }
+    return named;
+};
+
+const insideAny = (point, regions) => asArray(regions).some((region) => pointInGeometry(point, region.geometry));
+
+// A province or city the phrase names beside the unknown town: "Stranraer,
+// Scotland".
+const anchorInPhrase = (phrase, gazetteer) => {
+    for (const token of namedInPhrase(phrase)) {
+        const thing = gazetteer.find(token, { exact: true });
+        if (thing?.kind === "region" || thing?.kind === "city") return thing;
+    }
+    return null;
+};
+
+// A spot by an anchor on the country's own land: inside a province, or within
+// APPROXIMATE_KM of a point, the bearing and distance taken from the thing's
+// name so a replayed turn puts it back in the same spot. null when the anchor
+// is not the country's.
+const nearAnchor = (anchor, regions, seed) => {
+    if (anchor?.region?.geometry) {
+        const point = interiorPoint(anchor.region.geometry, { seed });
+        return point && insideAny(point, regions) ? { point, near: asText(anchor.name) } : null;
+    }
+    if (!anchor?.point) return null;
+    const first = seed % 360;
+    const reach = 10 + (seed % (APPROXIMATE_KM - 10));
+    for (const km of [reach, reach / 2, reach / 4]) {
+        for (let step = 0; step < 8; step += 1) {
+            const point = offsetPoint(anchor.point, (first + step * 45) % 360, km);
+            if (insideAny(point, regions)) return { point, near: asText(anchor.name) };
+        }
+    }
+    return insideAny(anchor.point, regions) ? { point: anchor.point, near: asText(anchor.name) } : null;
+};
+
+// Where a thing goes in a country when its town is not on the map, the most
+// particular first: a province or city the phrase names; one the event's own
+// words name in that country (`context`); the country's capital; its interior.
+const approximatePoint = (country, gazetteer, seed, { phrase = "", context = "" } = {}) => {
+    const regions = asArray(country.regions);
+    const anchors = [
+        anchorInPhrase(phrase, gazetteer),
+        ...(asText(context) ? asArray(gazetteer.placesNamedIn?.(context, country.name)) : []),
+        gazetteer.capitalOf?.(country.name) ?? null,
+    ];
+    for (const anchor of anchors) {
+        const spot = anchor ? nearAnchor(anchor, regions, seed) : null;
+        if (spot) return spot;
+    }
+    const region = heartland(regions);
+    const point = region && interiorPoint(region.geometry, { seed });
+    return point ? { point, near: "" } : null;
+};
+
 // { lng, lat, regionId, regionName, how, label } — or { error } saying what could
 // not be found, in words the model can act on next turn.
 // `owner` is the polity doing the placing: what "the border with Colombia" is
 // measured from, and which Montana an unqualified "Montana" means.
-export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
+// `approximate`: when nothing in the phrase is on the map, give the thing an
+// approximate placement and return `approximate: { asked, country, near }`
+// alongside the point (`near` is "" when the country marks no capital).
+export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "", approximate = false, context = "" } = {}) => {
+    const exact = resolveExactly(phrase, gazetteer, { seedText, owner });
+    if (!exact.error || !approximate) return exact;
+    try {
+        const country = countryInPhrase(phrase, gazetteer)
+            ?? (asText(owner) ? landedPolity(gazetteer.find(asText(owner), { exact: true })) : null);
+        if (!country) return exact;
+        const spot = approximatePoint(country, gazetteer, seedOf(phrase, seedText), { phrase, context });
+        if (!spot) return exact;
+        return {
+            ...done(spot.point, "approximate", gazetteer, country.name),
+            // `unnamed`: no place was given at all, so nothing was not found.
+            approximate: { asked: asText(phrase), country: country.name, near: spot.near, ...(asText(phrase) ? {} : { unnamed: true }) },
+        };
+    } catch {
+        return exact; // one odd polygon must not cost the turn its other placements
+    }
+};
+
+const resolveExactly = (phrase, gazetteer, { seedText = "", owner = "" } = {}) => {
     const readings = readPlacement(phrase, { owner });
     if (!readings.length) return { error: `"${asText(phrase)}" is not a place` };
-    const seed = hashText(`${asText(phrase).toLowerCase()}|${asText(seedText).toLowerCase()}`);
+    const seed = seedOf(phrase, seedText);
     for (const reading of readings) {
         let resolved = null;
         try {
@@ -582,6 +711,20 @@ export const resolvePlacement = (phrase, gazetteer, { seedText = "", owner = "" 
     const names = [...new Set(readings.flatMap((reading) => [reading.name, reading.first, reading.second]).map(asText).filter(Boolean))];
     const name = names[0] || asText(phrase);
     return { error: `no city, region, unit or structure on this map is called "${name}"`, name, names };
+};
+
+// What the model is told of an approximate placement, in the next turn's notes:
+// the place it named that the map lacks, and where the thing went instead, so it
+// names a place the map knows next time. `placed` is resolvePlacement's answer.
+export const describeApproximatePlacement = ({ title = "", name = "", phrase = "", reason = "", placed } = {}) => {
+    const mark = placed?.approximate;
+    if (!mark) return "";
+    const where = mark.near ? `near ${mark.near}, in ${mark.country}` : `in ${mark.country}`;
+    if (mark.unnamed) {
+        return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} was given no place. It was placed ${where} instead. Give every new unit and structure \`at\`.`;
+    }
+    return `${asText(title) ? `Event "${asText(title)}": ` : ""}${asText(name) || "a unit"} could not be placed at "${asText(phrase)}"`
+        + `${asText(reason) ? ` — ${asText(reason)}` : ""}. It was placed ${where} instead. Name a city or province this map knows to place it exactly.`;
 };
 
 // A destination given as a region id instead of a phrase. The schema offers
