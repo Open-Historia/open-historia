@@ -22,7 +22,7 @@ import { MAP_CARD_OPENED, SAFE_BOTTOM, SAFE_RIGHT } from "../../runtime/mobileUi
 import { dismissRegionPopup } from "../Selection/Regions.jsx";
 import { dismissUnitPopup } from "../Selection/Units.jsx";
 import { dismissFeaturePopup } from "../Selection/Features.jsx";
-import { openCountryPanel } from "../Selection/CountryPanel.jsx";
+import { OPEN_COUNTRY_STATS_EVENT, openCountryPanel } from "../Selection/CountryPanel.jsx";
 import { logDebugEvent, logSettingChange } from "../../runtime/debugLog.js";
 import {
   describeProviderSetupNeed,
@@ -226,6 +226,10 @@ const Main = ({
   // button) opens it wanting to prime the conversation, rather than opening it
   // blank. Consumed (cleared) once AdvisorPanel has placed it in its input.
   const [pendingAdvisorPrompt, setPendingAdvisorPrompt] = useState("");
+  // The polity a map card's Stats button asked the Country drawer to show.
+  // Consumed (cleared) once the drawer's Stats pane has taken it, so the flag
+  // button still opens the drawer on the player's own country.
+  const [pendingCountryTarget, setPendingCountryTarget] = useState("");
   const [isForcesOpen, setIsForcesOpen] = useState(false);
   const [activeBottomPanel, setActiveBottomPanel] = useState(null);
   const [shouldLoadAdvisor, setShouldLoadAdvisor] = useState(false);
@@ -493,6 +497,18 @@ const Main = ({
     return () => window.removeEventListener(MAP_CARD_OPENED, onCardOpened);
   }, [isMobile, activeBottomPanel]);
 
+  useEffect(() => {
+    const openCountryStats = (event) => {
+      const country = String(event?.detail?.country || "").trim();
+      if (!country) return;
+      setIsAdvisorOpen(false);
+      setPendingCountryTarget(country);
+      setIsCountryOpen(true);
+    };
+    window.addEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+    return () => window.removeEventListener(OPEN_COUNTRY_STATS_EVENT, openCountryStats);
+  }, []);
+
   // An interactive event opens from the card of the event a time skip offered,
   // and from the time panel's note while one is offered or in progress (time.jsx
   // dispatches this).
@@ -569,6 +585,8 @@ const Main = ({
           <LazyCountryPanel
             open={isCountryOpen}
             onClose={() => setIsCountryOpen(false)}
+            requestedTarget={pendingCountryTarget}
+            onConsumeTarget={() => setPendingCountryTarget("")}
             width={advisorCssWidth}
             onResize={handleAdvisorResize}
             onResizeEnd={handleAdvisorResizeEnd}

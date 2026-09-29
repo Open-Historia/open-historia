@@ -22,6 +22,12 @@ export const openCountryPanel = (country) => {
     _openPanel?.(country);
 };
 
+// The card's Stats button: main.jsx opens the Country drawer on this polity
+// (detail.country). The drawer only followed map clicks while it was open, and
+// on a phone it covers the map, so it could show nothing but the player's own
+// country.
+export const OPEN_COUNTRY_STATS_EVENT = "oh:open-country-stats";
+
 const FILTER_MODES = [
     { id: "all", label: "All" },
     { id: "major", label: "Major" },
@@ -269,6 +275,13 @@ const CountryInfoPanel = () => {
         }
     };
 
+    const openStats = () => {
+        const target = polityKey || country.polityKey || country.name || country.code;
+        if (!target) return;
+        window.dispatchEvent(new CustomEvent(OPEN_COUNTRY_STATS_EVENT, { detail: { country: target } }));
+        setCountry(null);
+    };
+
     const openDiplomacy = () => {
         requestDiplomaticChat({
             name: displayName || country.name,
@@ -499,11 +512,15 @@ const CountryInfoPanel = () => {
         </div>
 
         {/* Footer */}
-        <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
-        <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={footerButtonStyle}>
+        {/* Three buttons wrap onto two lines on a narrow phone rather than squeezing their words. */}
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", display: "flex", flexWrap: "wrap", gap: "0.6rem", padding: "0.8rem 1.1rem" }}>
+        <button type="button" className="oh-tap-row" onClick={runAdvisorReport} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
         Advisor Report
         </button>
-        <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)" }}>
+        <button type="button" className="oh-tap-row" onClick={openStats} style={{ ...footerButtonStyle, flex: "1 1 auto", whiteSpace: "nowrap" }}>
+        Stats
+        </button>
+        <button type="button" className="oh-tap-row" onClick={openDiplomacy} style={{ ...footerButtonStyle, background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.28)", flex: "1 1 auto", whiteSpace: "nowrap" }}>
         Open Diplomacy
         </button>
         </div>

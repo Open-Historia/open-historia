@@ -1462,10 +1462,16 @@ const HistoricalTrackingModal = ({
     );
 };
 
-const StatsPaneBody = ({ active }) => {
+// `requestedTarget`: a polity to show instead of the player's own (a map card's
+// Stats button); `onConsumeTarget` is called once it has been taken.
+const StatsPaneBody = ({ active, requestedTarget = "", onConsumeTarget }) => {
     const { activeGameId, runtimeScenario, token: libraryToken } = useLibraryState();
     const [player, setPlayer] = useState({ code: "", date: "", startDate: "", round: 0, gameKey: "game" });
     const [targetCountry, setTargetCountry] = useState("");
+    // A requested polity that arrived before the game was read: the first
+    // applyGame targets it instead of the player's country.
+    const requestedTargetRef = useRef("");
+    const playerLoadedRef = useRef(false);
     const [polity, setPolity] = useState(null); // world.polityOverrides[target]
     const [worldSnapshot, setWorldSnapshot] = useState(null);
     const worldSnapshotRef = useRef(null);
@@ -1644,6 +1650,9 @@ const StatsPaneBody = ({ active }) => {
         const applyGame = (game) => {
             if (cancelled || !game) return;
             const code = String(game?.country || "").trim();
+            const requested = requestedTargetRef.current;
+            requestedTargetRef.current = "";
+            playerLoadedRef.current = true;
             const nextPlayer = {
                 code,
                 date: String(game?.gameDate || game?.startDate || ""),
@@ -1653,11 +1662,11 @@ const StatsPaneBody = ({ active }) => {
             };
             setPlayer((current) => {
                 if (current.gameKey !== nextPlayer.gameKey) {
-                    setTargetCountry(code);
+                    setTargetCountry(requested || code);
                     setState({ status: "idle", sheet: null, error: "" });
                     setWorldSnapshot(null);
                 } else {
-                    setTargetCountry((target) => target || code);
+                    setTargetCountry((target) => target || requested || code);
                 }
                 return current.code === nextPlayer.code &&
                     current.date === nextPlayer.date &&
@@ -1690,6 +1699,15 @@ const StatsPaneBody = ({ active }) => {
             document.removeEventListener("visibilitychange", onVisibility);
         };
     }, [active, activeGameId]);
+
+    useEffect(() => {
+        const requested = cleanText(requestedTarget);
+        if (!requested) return;
+        const country = polityIndexRef.current?.canonicalKey(requested) || requested;
+        if (playerLoadedRef.current) setTargetCountry(country);
+        else requestedTargetRef.current = country;
+        onConsumeTarget?.();
+    }, [requestedTarget, onConsumeTarget]);
 
     // While the pane is showing, clicking any country on the map inspects it.
     // Listen through the committed browser event rather than the old module-global
@@ -2518,7 +2536,7 @@ const StatsPaneBody = ({ active }) => {
             )}
 
             <p style={{ color: "rgba(255,255,255,0.35)", fontSize: "0.7rem", marginTop: "1rem" }}>
-            Click any country on the map to inspect it.
+            Click any country on the map to inspect it, or open its card and choose Stats.
             </p>
             </>
         )}
@@ -2559,11 +2577,11 @@ const reportStatsRender = (id, phase, actualDuration) => {
     reportPerfOperation(`React ${id} ${phase}`, Number(actualDuration) || 0, { warnAt: 30 });
 };
 
-const StatsPane = memo(function StatsPane({ active }) {
+const StatsPane = memo(function StatsPane({ active, requestedTarget, onConsumeTarget }) {
     if (!active) return null;
     return (
         <React.Profiler id="StatsPane" onRender={reportStatsRender}>
-            <StatsPaneBody active />
+            <StatsPaneBody active requestedTarget={requestedTarget} onConsumeTarget={onConsumeTarget} />
         </React.Profiler>
     );
 });
