@@ -33,3 +33,36 @@ export const regionsHeldBy = (catalog, overrides = {}, source = "") => {
     }
     return [...held.values()];
 };
+
+// The impacts that annex `regions` ([{ id, name, from }], `from` being who
+// holds each now) into `owner`, for applyEventImpactsToWorld — the seam a time
+// skip's annexation and the Region Inspector go through, so the tools leave
+// the world as they do: the title moves, the old claims are settled (the
+// map's baked claimants with them), and the new owner is the sovereign.
+// A region `from` holds without being its lawful sovereign (an occupation)
+// would keep `from` in control after a transfer alone, so it is taken as
+// well, and `from` is not left behind as a claimant.
+export const annexationImpacts = (world, regions, owner, note = "Annexed by hand in the Cheats panel") => {
+    const to = clean(owner);
+    const sovereignty = world?.regionSovereigntyOverrides && typeof world.regionSovereigntyOverrides === "object"
+        ? world.regionSovereigntyOverrides
+        : {};
+    const regionTransfers = [];
+    const regionControlOps = [];
+    if (!to) return { regionTransfers, regionControlOps };
+    for (const region of Array.isArray(regions) ? regions : []) {
+        const regionId = clean(region?.id);
+        const regionName = clean(region?.name);
+        const from = clean(region?.from);
+        if (!regionId || from === to) continue;
+        regionTransfers.push({ regionId, regionName, fromCode: from, toCode: to, note });
+        const sovereign = clean(sovereignty[regionId]);
+        if (from && sovereign && sovereign !== from) {
+            regionControlOps.push(
+                { op: "control", regionId, regionName, fromCode: from, toCode: to, note },
+                { op: "clear_contest", regionId, regionName, fromCode: to, claimantCode: from, clearAll: false, note },
+            );
+        }
+    }
+    return { regionTransfers, regionControlOps };
+};

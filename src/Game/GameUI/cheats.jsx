@@ -57,7 +57,7 @@ import { syncManualEventTimelineHistory } from "../../runtime/manualEventTimelin
 import { applyEventRowChange } from "../../runtime/eventEditorRows.js";
 import { isSimulationBusy } from "../AI/simulationStatus.js";
 import { createSerialQueue } from "../../runtime/serialQueue.js";
-import { regionsHeldBy } from "../../runtime/gmAnnex.js";
+import { annexationImpacts, regionOwnerNow, regionsHeldBy } from "../../runtime/gmAnnex.js";
 import { applyPoliticalEditorStateToWorld, politicalActorToEditorState, politicalDebugSnapshotFromWorld, politicalEditorStateFromWorld } from "./countryEditorPolitical.js";
 import {
     REMINDERS_LIMIT,
@@ -4122,6 +4122,25 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
 
     if (tool === "annex-country" || tool === "annex-regions") {
         const wholeCountry = tool === "annex-country";
+        // Through the event-impact seam, as the Region Inspector's edits and a
+        // time skip's annexations go: the title moves, old claims are settled
+        // and the sovereign is the new owner (runtime/gmAnnex.js).
+        const annexByHand = (world, impacts) => applyEventImpactsToWorld({
+            world,
+            round: game?.round || 0,
+            events: [{
+                id: `admin-annex-${Date.now().toString(36)}`,
+                date: game?.gameDate || game?.startDate || "",
+                title: "Cheats annexation",
+                description: "Structured administrative annexation from the Cheats panel.",
+                importance: "minor",
+                kind: "world",
+                notable: false,
+                playerRelated: false,
+                impacts,
+                source: "manual-admin",
+            }],
+        }).world;
         return (
             <>
             {header(meta.title, meta.subtitle)}
@@ -4176,23 +4195,23 @@ const ToolView = ({ tool, header, busy, status, game, polities, refresh, runBusy
                                     setStatus(`Failed: no regions of ${nameOf(source)} were found on the map, so nothing was annexed.`);
                                     return;
                                 }
-                                for (const region of held) overrides[region.id] = owner;
-                                await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
+                                await writeWorldState(annexByHand(world, annexationImpacts(world, held.map((region) => ({ ...region, from: source })), owner)));
                                 await noteGmChange("territory", `Annexed the whole of ${nameOf(source)} into ${nameOf(owner)} by hand (${count} regions).`);
                                 setStatus(`${nameOf(source)} annexed into ${nameOf(owner)} (${count} regions). The map updates within a few seconds.`);
                             } else {
                                 if (!props.GID_1) return;
-                                const previous = overrides[String(props.GID_1)];
-                                overrides[String(props.GID_1)] = owner;
-                                await writeWorldState({ ...world, regionOwnershipOverrides: overrides });
-                                if (previous !== owner) {
+                                const regionId = String(props.GID_1);
+                                const label = String(props.NAME_1 || props.GID_1);
+                                const from = regionOwnerNow({ id: regionId, country: props.owner, countryCode: props.GID_0 || props.gid0 }, overrides);
+                                if (from !== owner) {
+                                    await writeWorldState(annexByHand(world, annexationImpacts(world, [{ id: regionId, name: label, from }], owner)));
                                     await noteGmChange("territory", "", {
                                         group: `regions→${owner}`,
                                         template: `Moved {items} to ${nameOf(owner)} by hand.`,
-                                        item: String(props.NAME_1 || props.GID_1),
+                                        item: label,
                                     });
                                 }
-                                setStatus(`${props.NAME_1 || props.GID_1} → ${nameOf(owner)}. Keep clicking, or press Done.`);
+                                setStatus(`${label} → ${nameOf(owner)}. Keep clicking, or press Done.`);
                             }
                         } catch (error) {
                             setStatus(`Failed: ${error.message}`);
