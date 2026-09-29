@@ -153,3 +153,50 @@ test("a hub Update still clears an asset the new bundle leaves out", async () =>
   assert.equal(updated.assetStatus.backgroundData, false);
   assert.equal(updated.assetStatus.regionsGeojson, true);
 });
+
+const newGame = async (name, body = {}) =>
+  ok(await games("POST", "", { name, scenarioId: "default", setActive: true, ...body })).game.id;
+
+test("a game export carries the campaign's own colours, flags, tags and institution logos", async () => {
+  await reset();
+  const id = await newGame("Colours");
+  ok(await runtime("PUT", "colors", { Testland: [10, 20, 30] }));
+  ok(await runtime("PUT", "flags", { Testland: "flag.png" }));
+  ok(await runtime("PUT", "tags", { Testland: ["tag"] }));
+  ok(await runtime("PUT", "institutionLogos", { un: "data:image/png;base64,AAAA" }));
+
+  const bundle = ok(await games("GET", `${id}/export`));
+  assert.deepEqual(bundle.data.colors, { Testland: [10, 20, 30] });
+  assert.deepEqual(bundle.data.flags, { Testland: "flag.png" });
+  assert.deepEqual(bundle.data.tags, { Testland: ["tag"] });
+  assert.deepEqual(bundle.data.institutionLogos, { un: "data:image/png;base64,AAAA" });
+
+  const imported = ok(await games("POST", "import", bundle)).game.id;
+  ok(await games("PUT", "active", { gameId: imported }));
+  assert.deepEqual(ok(await runtime("GET", "colors")), { Testland: [10, 20, 30] });
+  assert.deepEqual(ok(await runtime("GET", "flags")), { Testland: "flag.png" });
+  assert.deepEqual(ok(await runtime("GET", "tags")), { Testland: ["tag"] });
+});
+
+test("a game export leaves out an optional asset the game has none of", async () => {
+  await reset();
+  const id = await newGame("Plain");
+  const bundle = ok(await games("GET", `${id}/export`));
+  assert.deepEqual(bundle.data.colors, { Testland: [1, 2, 3] }, "the colours copied from the scenario at creation");
+  assert.equal("flags" in bundle.data, false);
+  assert.equal("tags" in bundle.data, false);
+  assert.equal("institutionLogos" in bundle.data, false);
+  assert.equal(bundle.data.game.country, "Testland");
+});
+
+test("an orphaned game exports its own stats sheet", async () => {
+  await reset();
+  const imported = ok(await games("POST", "import", {
+    schema: "open-historia-game-bundle/1",
+    game: { name: "Orphan" },
+    scenarioRef: { scenarioId: "gone-map", scenarioName: "Gone Map" },
+    data: { game: { country: "Testland" }, world: { ownerSchema: 4 }, stats: { rows: ["gdp"] } },
+  })).game.id;
+  const bundle = ok(await games("GET", `${imported}/export`));
+  assert.deepEqual(bundle.data.stats, { rows: ["gdp"] });
+});

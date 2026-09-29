@@ -1598,7 +1598,17 @@ const exportGameBundle = async (id) => {
   const scenario = await getGameScenarioSummary(meta.scenarioId);
   const data = {};
 
-  for (const key of GAME_BUNDLE_DATA_KEYS) data[key] = jsonAsset(record, key);
+  // The optional assets (colors, flags, tags, stats, institutionLogos) live
+  // top-level on a web record and the rest in record.json; runtimeValueFromRecord
+  // knows which. Reading them all from record.json exported every campaign's
+  // colours, flags and tags as {}. A game with no value of its own leaves the
+  // key out, so the importer falls back to the scenario's rather than storing an
+  // empty object over it.
+  for (const key of GAME_BUNDLE_DATA_KEYS) {
+    const value = runtimeValueFromRecord(record, key);
+    if (value === undefined && OPTIONAL_GAME_BUNDLE_KEYS.has(key)) continue;
+    data[key] = value === undefined ? cloneJson(JSON_ASSET_DEFAULTS[key] ?? {}) : coerceRuntimeValue(key, value);
+  }
 
   // Same ownership rule as the desktop store: while the linked scenario exists,
   // its Stats definition is canonical. The game copy is only an orphan/import
