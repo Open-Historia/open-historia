@@ -62,6 +62,7 @@ import {
   createPoliticalCartographyScheduler,
   diffPoliticalOwnership,
 } from "./vnext/politicalCartographyLifecycle.js";
+import { createOwnershipPresentationState } from "./vnext/ownershipPresentationHolds.js";
 import { deriveLegacyAuthoritativeCountryCodes } from "./vnext/legacyScenarioGeometryAuthority.js";
 import { hasExactRegionTileIdentity } from "./vnext/regionTileAuthority.js";
 import {
@@ -449,17 +450,16 @@ const WorldMap = ({ isGlobe = false }) => {
   const [polityLabelCollections, setPolityLabelCollections] = useState(EMPTY_POLITY_LABEL_COLLECTIONS);
   const [derivedSourceEpoch, setDerivedSourceEpoch] = useState(0);
   const boundaryFeatureMapRef = useRef(new Map());
-  const ownershipTransitionQueueRef = useRef([]);
-  // Transition geometry can arrive before the heavier boundary/PTR result.
-  // Keep both halves keyed by cartography revision so the sweep can start
-  // immediately and the derived cartography can publish only after it finishes.
-  const ownershipTransitionByRevisionRef = useRef(new Map());
   // Canonical ownership may advance immediately, but presentation stays on the
-  // last accepted visual revision until its sovereignty sweep completes.
-  // Counts (rather than a Set) keep overlapping rapid mutations of the same
-  // region ordered instead of releasing a later hold when an earlier sweep ends.
-  const ownershipPresentationHoldCountsRef = useRef(new Map());
+  // last accepted visual revision until its sovereignty sweep completes: the
+  // per-region holds and the queued sweeps, keyed by cartography revision so
+  // the sweep can start as soon as its geometry arrives and the derived
+  // cartography publishes only after it finishes
+  // (vnext/ownershipPresentationHolds.js). One object for the map's life.
   const [ownershipPresentationHoldEpoch, setOwnershipPresentationHoldEpoch] = useState(0);
+  const [ownershipPresentation] = useState(() => createOwnershipPresentationState({
+    onHoldsChanged: () => setOwnershipPresentationHoldEpoch((epoch) => epoch + 1),
+  }));
   const appliedCustomFillStateRef = useRef(new Map());
   // The desired region -> fill map is a pure function of the two inputs cached
   // beside it, and a hold/release epoch changes neither. Keyed on identity so an
@@ -479,35 +479,9 @@ const WorldMap = ({ isGlobe = false }) => {
   });
   const [ownershipTransitionQueueEpoch, setOwnershipTransitionQueueEpoch] = useState(0);
   const [ownershipTransitionSlices, setOwnershipTransitionSlices] = useState(EMPTY_FEATURE_COLLECTION);
-  const holdOwnershipPresentation = useCallback((regionIds = []) => {
-    let changed = false;
-    const counts = ownershipPresentationHoldCountsRef.current;
-    for (const rawId of regionIds) {
-      const id = String(rawId ?? "");
-      if (!id) continue;
-      counts.set(id, (counts.get(id) ?? 0) + 1);
-      changed = true;
-    }
-    if (changed) setOwnershipPresentationHoldEpoch((epoch) => epoch + 1);
-  }, []);
-  const releaseOwnershipPresentation = useCallback((regionIds = []) => {
-    let changed = false;
-    const counts = ownershipPresentationHoldCountsRef.current;
-    for (const rawId of regionIds) {
-      const id = String(rawId ?? "");
-      if (!id || !counts.has(id)) continue;
-      const next = (counts.get(id) ?? 1) - 1;
-      if (next > 0) counts.set(id, next);
-      else counts.delete(id);
-      changed = true;
-    }
-    if (changed) setOwnershipPresentationHoldEpoch((epoch) => epoch + 1);
-  }, []);
-  const releaseAllOwnershipPresentation = useCallback(() => {
-    if (!ownershipPresentationHoldCountsRef.current.size) return;
-    ownershipPresentationHoldCountsRef.current.clear();
-    setOwnershipPresentationHoldEpoch((epoch) => epoch + 1);
-  }, []);
+  const holdOwnershipPresentation = ownershipPresentation.hold;
+  const releaseOwnershipPresentation = ownershipPresentation.release;
+  const releaseAllOwnershipPresentation = ownershipPresentation.releaseAll;
   const [labelZoom, setLabelZoom] = useState(3.5);
   // R5.4.6: owners whose curved polity label MapLibre has actually confirmed
   // as rendered after the map settles. A curve-capable point fallback is never
@@ -863,11 +837,12 @@ const WorldMap = ({ isGlobe = false }) => {
   // owner is dirty, hide only borders/labels touching that owner; unrelated
   // cartography remains stable.
   const ownershipPresentationTarget = useMemo(() => (
-    ownershipPresentationHoldCountsRef.current.size > 0 && acknowledgedBoundaryOwnership != null
+    ownershipPresentation.holds.size > 0 && acknowledgedBoundaryOwnership != null
       ? acknowledgedBoundaryOwnership
       : regionOwnershipOverrides
   ), [
     acknowledgedBoundaryOwnership,
+    ownershipPresentation,
     ownershipPresentationHoldEpoch,
     regionOwnershipOverrides,
   ]);
@@ -1311,8 +1286,8 @@ const WorldMap = ({ isGlobe = false }) => {
     }
     setInitialCartographySettled(true);
     setAcknowledgedBoundaryOwnership(queued.ownershipOverrides ?? {});
-    releaseOwnershipPresentation(queued.changedRegionIds ?? []);
-  }, [releaseOwnershipPresentation, updateBoundarySourceFromPatch]);
+    ownershipPresentation.releaseEntry(queued);
+  }, [ownershipPresentation, updateBoundarySourceFromPatch]);
 
   const clearDerivedCartography = useCallback(({ resetMetadata = false } = {}) => {
     boundaryFeatureMapRef.current.clear();
@@ -1421,9 +1396,7 @@ const WorldMap = ({ isGlobe = false }) => {
     cartographyGeometryEpochRef.current = geometryEpoch;
     if (geometryChanged) {
       setRegionRenderRepair(EMPTY_REGION_RENDER_REPAIR);
-      ownershipTransitionQueueRef.current = [];
-      ownershipTransitionByRevisionRef.current.clear();
-      releaseAllOwnershipPresentation();
+      ownershipPresentation.reset();
       const sweep = ownershipSweepRef.current;
       sweep.token += 1;
       sweep.worker?.terminate?.();
@@ -1670,20 +1643,13 @@ const WorldMap = ({ isGlobe = false }) => {
           : EMPTY_FEATURE_COLLECTION;
         if (!transitionData.features.length) return;
 
-        if (!ownershipTransitionByRevisionRef.current.has(revision)) {
-          const queued = {
-            transitionData,
-            cartographyResult: null,
-            cartographyAccepted: false,
-            animationDone: false,
-            ownershipOverrides: request?.payload?.ownershipOverrides ?? {},
-            changedRegionIds: result.changedRegionIds ?? request?.payload?.changedRegionIds ?? [],
-            revision,
-          };
-          ownershipTransitionByRevisionRef.current.set(revision, queued);
-          ownershipTransitionQueueRef.current.push(queued);
-          setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
-        }
+        const { added } = ownershipPresentation.addTransition({
+          revision,
+          transitionData,
+          ownershipOverrides: request?.payload?.ownershipOverrides ?? {},
+          changedRegionIds: result.changedRegionIds ?? request?.payload?.changedRegionIds ?? [],
+        });
+        if (added) setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
         return;
       }
 
@@ -1693,33 +1659,15 @@ const WorldMap = ({ isGlobe = false }) => {
 
       const completion = scheduler.complete(result?.requestId);
       if (!completion.accepted) {
-        const discardedTransition = ownershipTransitionByRevisionRef.current.get(Number(result?.requestId));
-        if (discardedTransition) {
-          discardedTransition.cartographyDiscarded = true;
-          if (discardedTransition.animationDone) {
-            ownershipTransitionByRevisionRef.current.delete(Number(result?.requestId));
-          }
-        }
-        if (
-          completion.superseded
-          && completion.supersededBy?.payload?.type === "update-ownership"
-        ) {
-          // The scheduler coalesces unpublished political revisions. Keep one
-          // hold for the surviving desired revision PLUS any early sweep that
-          // is still visually consuming its own hold. Otherwise A->B->C can
-          // reveal C underneath the still-running A->B animation.
-          const counts = ownershipPresentationHoldCountsRef.current;
-          const visuallyPendingIds = new Set(
-            discardedTransition && !discardedTransition.animationDone
-              ? (discardedTransition.changedRegionIds ?? []).map(String)
-              : [],
-          );
-          for (const rawId of completion.supersededBy.payload.changedRegionIds ?? []) {
-            const id = String(rawId ?? "");
-            if (!id || !counts.has(id)) continue;
-            counts.set(id, visuallyPendingIds.has(id) ? Math.max(2, counts.get(id) ?? 0) : 1);
-          }
-        }
+        // The scheduler coalesces unpublished political revisions: the
+        // surviving ownership revision keeps one hold per region, plus one
+        // for a sweep still playing (ownershipPresentationHolds.js).
+        ownershipPresentation.discardCartography(result?.requestId, {
+          supersededByChangedRegionIds: completion.superseded
+            && completion.supersededBy?.payload?.type === "update-ownership"
+            ? completion.supersededBy.payload.changedRegionIds ?? []
+            : null,
+        });
         return;
       }
       const request = completion.request;
@@ -1730,15 +1678,7 @@ const WorldMap = ({ isGlobe = false }) => {
           setInitialRegionRepairSettled(true);
         }
         if (request?.payload?.type === "update-ownership") {
-          const pendingTransition = ownershipTransitionByRevisionRef.current.get(Number(request?.revision));
-          if (pendingTransition) {
-            pendingTransition.cartographyFailed = true;
-            if (pendingTransition.animationDone) {
-              ownershipTransitionByRevisionRef.current.delete(Number(request?.revision));
-            }
-          } else {
-            releaseOwnershipPresentation(request?.payload?.changedRegionIds ?? []);
-          }
+          ownershipPresentation.failCartography(request?.revision, request?.payload?.changedRegionIds ?? []);
         }
         console.warn("Political cartography derivation failed:", result.error);
         logDebugEvent("warn", `[map] Political cartography revision ${request?.revision ?? "?"} failed.`, {
@@ -1763,42 +1703,26 @@ const WorldMap = ({ isGlobe = false }) => {
         // boundary/PTR result, so the sweep can already be running while this
         // result is derived. Attach the accepted cartography to that same
         // revision instead of starting a second/delayed animation.
-        const revision = Number(request?.revision ?? result?.requestId ?? 0);
-        let queued = ownershipTransitionByRevisionRef.current.get(revision);
-        if (!queued) {
-          // Fail-soft for browsers/workers that somehow missed the early
-          // transition-ready message: preserve the animation, just without the
-          // latency advantage.
-          queued = {
-            transitionData: result.ownershipTransitionData,
-            cartographyResult: null,
-            cartographyAccepted: false,
-            animationDone: false,
-            ownershipOverrides: request?.payload?.ownershipOverrides ?? {},
-            changedRegionIds: request?.payload?.changedRegionIds ?? [],
-            revision,
-          };
-          ownershipTransitionByRevisionRef.current.set(revision, queued);
-          ownershipTransitionQueueRef.current.push(queued);
-          setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
-        }
-
-        queued.cartographyResult = {
-          boundaryPatch: result.boundaryPatch,
-          disputedData: result.disputedData,
-          labels: result.labels,
-        };
-        queued.cartographyAccepted = true;
-        queued.ownershipOverrides = request?.payload?.ownershipOverrides ?? queued.ownershipOverrides ?? {};
-        queued.changedRegionIds = request?.payload?.changedRegionIds ?? queued.changedRegionIds ?? [];
+        // A revision whose early transition-ready message never came gets
+        // its sweep queued here: the animation is kept, just without the
+        // latency advantage.
+        const { entry, added, publishNow } = ownershipPresentation.acceptCartography({
+          revision: Number(request?.revision ?? result?.requestId ?? 0),
+          transitionData: result.ownershipTransitionData,
+          cartographyResult: {
+            boundaryPatch: result.boundaryPatch,
+            disputedData: result.disputedData,
+            labels: result.labels,
+          },
+          ownershipOverrides: request?.payload?.ownershipOverrides,
+          changedRegionIds: request?.payload?.changedRegionIds,
+        });
+        if (added) setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
 
         // If the ~680 ms sweep already finished while cartography was still
         // deriving, publish the new borders/PTR now. Otherwise finish() will
         // commit them exactly when the sweep reaches 100%.
-        if (queued.animationDone) {
-          publishOwnershipPresentation(queued);
-          ownershipTransitionByRevisionRef.current.delete(revision);
-        }
+        if (publishNow) publishOwnershipPresentation(entry);
       } else {
         if (result.boundaryPatch) updateBoundarySourceFromPatch(result.boundaryPatch);
         if (result.disputedData?.features) setDisputedRegionData(result.disputedData);
@@ -2285,7 +2209,7 @@ const WorldMap = ({ isGlobe = false }) => {
         };
       }
       const applied = appliedCustomFillStateRef.current;
-      const held = ownershipPresentationHoldCountsRef.current;
+      const held = ownershipPresentation.holds;
       const operations = [];
       for (const [regionId, fillColor] of next) {
         if (held.has(regionId) || applied.get(regionId) === fillColor) continue;
@@ -2363,6 +2287,7 @@ const WorldMap = ({ isGlobe = false }) => {
     customFlag,
     map,
     ownerColorCss,
+    ownershipPresentation.holds,
     ownershipPresentationHoldEpoch,
     regionOwnershipOverrides,
     repairedRegionIdSet,
@@ -2379,7 +2304,7 @@ const WorldMap = ({ isGlobe = false }) => {
   useEffect(() => {
     const sweep = ownershipSweepRef.current;
     if (sweep.active) return;
-    const queued = ownershipTransitionQueueRef.current.shift();
+    const queued = ownershipPresentation.nextTransition();
     if (!queued) return;
 
     const transitionData = queued.transitionData ?? EMPTY_FEATURE_COLLECTION;
@@ -2390,13 +2315,7 @@ const WorldMap = ({ isGlobe = false }) => {
     // derivation is already ready. It will publish when its accepted result
     // actually arrives.
     if (!transitionData?.features?.length || !customActive || !mapInstance?.setFeatureState) {
-      queued.animationDone = true;
-      if (queued.cartographyAccepted && queued.cartographyResult) {
-        publishOwnershipPresentation(queued);
-        ownershipTransitionByRevisionRef.current.delete(Number(queued.revision));
-      } else {
-        releaseOwnershipPresentation(queued.changedRegionIds ?? []);
-      }
+      if (ownershipPresentation.finishTransition(queued) === "publish") publishOwnershipPresentation(queued);
       setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
       return;
     }
@@ -2404,13 +2323,7 @@ const WorldMap = ({ isGlobe = false }) => {
     const reducedMotion = typeof window !== "undefined"
       && window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
     if (reducedMotion) {
-      queued.animationDone = true;
-      if (queued.cartographyAccepted && queued.cartographyResult) {
-        publishOwnershipPresentation(queued);
-        ownershipTransitionByRevisionRef.current.delete(Number(queued.revision));
-      } else {
-        releaseOwnershipPresentation(queued.changedRegionIds ?? []);
-      }
+      if (ownershipPresentation.finishTransition(queued) === "publish") publishOwnershipPresentation(queued);
       setOwnershipTransitionQueueEpoch((epoch) => epoch + 1);
       return;
     }
@@ -2505,16 +2418,7 @@ const WorldMap = ({ isGlobe = false }) => {
       // If not, reveal the target base fill now and let the accepted derived
       // cartography catch up as soon as its worker result arrives.
       applyTargetBaseFill();
-      queued.animationDone = true;
-      if (queued.cartographyAccepted && queued.cartographyResult) {
-        publishOwnershipPresentation(queued);
-        ownershipTransitionByRevisionRef.current.delete(Number(queued.revision));
-      } else {
-        releaseOwnershipPresentation(queued.changedRegionIds ?? []);
-        if (queued.cartographyDiscarded || queued.cartographyFailed) {
-          ownershipTransitionByRevisionRef.current.delete(Number(queued.revision));
-        }
-      }
+      if (ownershipPresentation.finishTransition(queued) === "publish") publishOwnershipPresentation(queued);
       setBaseHidden(false);
       try {
         if (mapInstance.getLayer?.("ownership-transition-sweep-fill")) {
@@ -2785,6 +2689,7 @@ const WorldMap = ({ isGlobe = false }) => {
     customActive,
     map,
     ownerColorCss,
+    ownershipPresentation,
     ownershipTransitionQueueEpoch,
     publishOwnershipPresentation,
     repairedRegionIdSet,
@@ -2804,9 +2709,8 @@ const WorldMap = ({ isGlobe = false }) => {
     } catch {}
     sweep.floodLayer = null;
     sweep.active = false;
-    ownershipTransitionQueueRef.current = [];
-    ownershipTransitionByRevisionRef.current.clear();
-  }, [map]);
+    ownershipPresentation.reset({ releaseHolds: false });
+  }, [map, ownershipPresentation]);
 
 
   // Detailed PMTiles previously evaluated a region-id match table containing
@@ -2851,7 +2755,7 @@ const WorldMap = ({ isGlobe = false }) => {
       }
 
       const applied = appliedTileFillStateRef.current;
-      const held = ownershipPresentationHoldCountsRef.current;
+      const held = ownershipPresentation.holds;
       const operations = [];
 
       for (const [regionId, fillColor] of next) {
@@ -2920,7 +2824,7 @@ const WorldMap = ({ isGlobe = false }) => {
       if (retryFrame) cancelAnimationFrame(retryFrame);
       if (workFrame) cancelAnimationFrame(workFrame);
     };
-  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentationHoldEpoch, shouldMountStockRegions, tileFillSourceEpoch]);
+  }, [authoredRegionIds, map, ownerByRegionId, editedStockIds, ownerColorCss, ownershipPresentation.holds, ownershipPresentationHoldEpoch, shouldMountStockRegions, tileFillSourceEpoch]);
 
   const stockRegionsFillPaint = useMemo(
     () => customActive

@@ -177,6 +177,14 @@ The crossfade band is z5.5–6.5 because the seed geometry was extracted at tile
 
 `_fillColor` is carried by the dissolved polity surfaces (`enrichedPolitySurfaceData`). The authored regions source is the URL itself — nothing on the UI thread parses or clones the regions file — and live ownership reaches it through `setFeatureState` (`fillColor`), so an ownership change is a tiny state diff rather than a GeoJSON replacement.
 
+### 4.4 Ownership hand-over
+
+When a region changes hands, `world.json` has the new owner at once, but the map keeps the region on its old colour until the sovereignty sweep (a flood from the frontier, or the directional strip sweep as fallback) has played and the worker's new borders and labels are ready, then hands over in one go. The bookkeeping is `vnext/ownershipPresentationHolds.js` (`createOwnershipPresentationState`), which `Nations.jsx` drives:
+
+- **Holds** — region id → count. A held region is skipped by both fill-sync effects. Counts keep rapid changes of one region ordered; when the scheduler coalesces revisions (A → B → C), each region of the surviving revision keeps one hold, plus one while an earlier sweep is still playing over it.
+- **Transitions** — one entry per ownership revision with sweep geometry, queued for the sweep effect and indexed by revision, since the worker's cartography can arrive before or after its sweep ends. `finishTransition` says whether to publish now or that the holds have gone and the cartography publishes on arrival.
+- Every hold an entry took is released exactly once, on publish or at the sweep's end (failed, discarded, or not ready yet); `releaseAll` (a stalled worker, a stock map) marks every pending entry released so a sweep ending later cannot take a newer change's hold.
+
 ---
 
 ## 5. Owner colouring — the single resolver

@@ -42,7 +42,8 @@ test("Pipeline v2 discards obsolete worker revisions rather than publishing them
   assert.match(nations, /scheduler\.complete\(result\?\.requestId\)/);
   assert.match(
     nations,
-    /if \(!completion\.accepted\) \{[\s\S]*?cartographyDiscarded = true[\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
+    // What a discard does is ownershipPresentationHolds.test.js's to check.
+    /if \(!completion\.accepted\) \{[\s\S]*?ownershipPresentation\.discardCartography\([\s\S]*?completion\.superseded[\s\S]*?return;\s*\}/,
   );
   assert.match(nations, /const request = completion\.request/);
 });
@@ -279,7 +280,10 @@ test("legal ownership animation keeps canonical ownership separate from bounded 
   assert.match(nations, /ownership-transition-sweep-source/);
   assert.match(nations, /ownership-transition-sweep-fill/);
   assert.match(nations, /ownershipTransitionHidden/);
-  assert.match(nations, /ownershipTransitionQueueRef\.current\.push/);
+  // The hold and queue bookkeeping lives in ownershipPresentationHolds.js.
+  assert.match(nations, /ownershipPresentation\.addTransition\(/);
+  assert.match(nations, /ownershipPresentation\.nextTransition\(\)/);
+  assert.match(nations, /ownershipPresentation\.finishTransition\(queued\) === "publish"/);
   assert.match(
     nations,
     /new Worker\(new URL\("\.\/vnext\/ownershipTransitionWorker\.js"/,
