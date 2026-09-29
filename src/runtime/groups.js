@@ -58,6 +58,16 @@ export const findGroupKey = (groups, name) => {
     ?? "";
 };
 
+// May the group keyed `key` take `newName`? Only when no OTHER group answers to
+// it: the group's own former name is its to take back (an event reverting the
+// Northern Resistance to the Righteous Armies), and findGroupKey matches former
+// names, so a plain "is it taken?" test refused exactly that.
+export const canRenameGroup = (groups, key, newName) => {
+  if (!newName || newName === key) return false;
+  const holder = findGroupKey(groups, newName);
+  return !holder || holder === key;
+};
+
 const normalizeGroup = (key, value) => {
   const name = normalizeGroupName(key || value?.name);
   if (!name) return null;
@@ -175,7 +185,7 @@ export const applyGroupOps = ({ groups = {}, groupAreas = {} } = {}, ops = []) =
       changes.push({ op: "update", name: key });
     }
 
-    if (op.newName && !findGroupKey(nextGroups, op.newName)) {
+    if (canRenameGroup(nextGroups, key, op.newName)) {
       const record = nextGroups[key];
       delete nextGroups[key];
       const formerNames = [...new Set([...(record.formerNames ?? []), key])].filter((former) => fold(former) !== fold(op.newName)).slice(-12);

@@ -96,6 +96,22 @@ test("create, take, update, rename, release and dissolve do what they say", () =
   assert.deepEqual(Object.keys(state.groups), ["The Grey Tide"], "erased, and only that group");
 });
 
+test("a group can take back a former name, but never another group's", () => {
+  let state = applyGroupOps({}, [
+    { op: "create", name: "Righteous Armies", regionIds: ["r1"] },
+    { op: "create", name: "Cartel", regionIds: ["r2"] },
+  ]);
+  state = applyGroupOps(state, [{ op: "update", name: "Righteous Armies", newName: "Northern Resistance" }]);
+  state = applyGroupOps(state, [{ op: "update", name: "Northern Resistance", newName: "Righteous Armies" }]);
+  assert.deepEqual(Object.keys(state.groups).sort(), ["Cartel", "Righteous Armies"]);
+  assert.deepEqual(state.groups["Righteous Armies"].formerNames, ["Northern Resistance"], "the name taken back is no longer a former one");
+  assert.equal(state.groupAreas.r1, "Righteous Armies");
+
+  state = applyGroupOps(state, [{ op: "update", name: "Righteous Armies", newName: "Cartel" }]);
+  assert.deepEqual(Object.keys(state.groups).sort(), ["Cartel", "Righteous Armies"], "two groups are never merged by a rename");
+  assert.equal(state.groupAreas.r2, "Cartel");
+});
+
 test("the model is taken at its word where the intent is plain, and nowhere else", () => {
   const state = applyGroupOps({}, [
     { op: "take", name: "Militia", regionIds: ["r1"] },

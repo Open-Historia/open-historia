@@ -1,7 +1,7 @@
 /*! Open Historia — portions (troop deployments + era troop types) © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import { JSON_URLS, getPrimedScenarioRegionCatalog, primeJson, publishJsonWriteBatch, readJson, reportPerfOperation, writeJson } from "./assets.js";
 import { withMapClaims } from "./mapClaims.js";
-import { applyGroupOps, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
+import { applyGroupOps, canRenameGroup, findGroupKey, normalizeGroupAreas, normalizeGroupOp, normalizeGroups } from "./groups.js";
 import { enqueueContentStrings, enqueueEventStrings } from "./translator.js";
 import { normalizeTagList } from "./countryTags.js";
 import { MAX_PUPPETS as MAX_WORLD_PUPPETS, PUPPET_KINDS, PUPPET_SECRECY_LEVELS, PUPPET_STATUSES } from "./puppets.js";
@@ -5234,7 +5234,7 @@ export const applyEventImpactsToWorld = ({
           continue;
         }
         let name = key;
-        if (op.newName && !findGroupKey(nextWorld.groups, op.newName)) {
+        if (canRenameGroup(nextWorld.groups, key, op.newName)) {
           try {
             const result = renamePolityInWorld(nextWorld, key, op.newName);
             Object.assign(nextWorld, result.world);
