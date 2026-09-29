@@ -1,7 +1,9 @@
 /*! Open Historia — country info panel rules © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 // What the map's country panel (Game/Selection/CountryPanel.jsx) shows, kept
-// out of React so node can test it: which polity a click means and which
-// regions it holds.
+// out of React so node can test it: which polity a click means, which regions
+// it holds and which events are about it.
+import COUNTRY_NAMES from "./generated/countryNames.js";
+import { gameDateDayNumber } from "./gameDates.js";
 import { buildOwnerAliasMap, createOwnerResolver, regionBaseOwner } from "./ownerNames.js";
 import { resolvePolityIdentity } from "./polityIdentity.js";
 
@@ -71,3 +73,97 @@ export const classifyPolityRegions = ({ catalog = [], world = {}, polityKey = ""
     occupiedSovereign: [...new Set(occupiedSovereign)],
   };
 };
+
+// Every polity name the world or the stock map knows: the save's keys, names
+// and aliases and every real country. The event matcher below uses them to
+// tell a polity's name from the same letters inside a longer one.
+export const knownPolityNames = (world) => {
+  const names = new Set(Object.values(COUNTRY_NAMES).map(clean).filter(Boolean));
+  for (const [key, polity] of Object.entries(world?.polityOverrides ?? {})) {
+    for (const name of [key, polity?.name, ...(Array.isArray(polity?.aliases) ? polity.aliases : [])]) {
+      const text = clean(name);
+      if (text) names.add(text);
+    }
+  }
+  return [...names];
+};
+
+const WORD_CHAR = /[\p{L}\p{M}\p{N}]/u;
+const isWordChar = (char) => Boolean(char) && WORD_CHAR.test(char);
+
+// Where `needle` stands in `haystack` as a whole name, [start, end) pairs: the
+// characters either side, whole code points, are not letters, marks or digits.
+// Unicode-aware on purpose - a \b regex counts "ô" in "Côte" as a boundary.
+const wholeNameSpans = (haystack, needle) => {
+  const spans = [];
+  if (!needle) return spans;
+  let from = 0;
+  for (;;) {
+    const start = haystack.indexOf(needle, from);
+    if (start < 0) return spans;
+    const end = start + needle.length;
+    const before = Array.from(haystack.slice(Math.max(0, start - 2), start)).pop();
+    const after = String.fromCodePoint(haystack.codePointAt(end) ?? 32);
+    if (!isWordChar(before) && !isWordChar(after)) spans.push([start, end]);
+    from = start + 1;
+  }
+};
+
+const impactNames = (impacts) => {
+  const names = [];
+  for (const change of impacts?.polityChanges ?? []) names.push(change?.code);
+  for (const transfer of impacts?.regionTransfers ?? []) names.push(transfer?.toCode, transfer?.fromCode);
+  for (const op of impacts?.regionControlOps ?? []) names.push(op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode);
+  for (const claim of impacts?.regionClaims ?? []) names.push(claim?.claimantCode);
+  for (const op of impacts?.politicalActorOps ?? []) names.push(op?.polityKey);
+  for (const op of impacts?.unitOps ?? []) names.push(op?.unit?.ownerCode);
+  for (const op of impacts?.markerOps ?? []) names.push(op?.marker?.ownerCode);
+  for (const chat of impacts?.createdChats ?? []) {
+    for (const country of chat?.countries ?? []) {
+      if (typeof country === "string") names.push(country);
+      else names.push(country?.code, country?.name);
+    }
+  }
+  return names;
+};
+
+// A test for "is this event about the polity?". Impacts are read first and
+// match its key or current name exactly. Failing those, the title and
+// description are searched for either as a whole name, case aside, and a hit
+// inside a longer known name does not count: "Sudan" in "South Sudan", "Niger"
+// in "Nigeria", "Guinea" in "Papua New Guinea". The polity's own aliases never
+// hide it.
+export const createEventMatcher = ({ key = "", name = "", aliases = [], knownNames = [] } = {}) => {
+  const own = [...new Set([clean(key), clean(name)].filter(Boolean))];
+  const ownLower = [...new Set(own.map((entry) => entry.toLowerCase()))];
+  const exclude = new Set([...ownLower, ...aliases.map((alias) => clean(alias).toLowerCase())]);
+  const covering = [...new Set(knownNames.map((entry) => clean(entry).toLowerCase()))]
+    .filter((entry) => entry && !exclude.has(entry) && ownLower.some((mine) => entry.length > mine.length && entry.includes(mine)));
+
+  return (event) => {
+    if (!own.length) return false;
+    if (impactNames(event?.impacts).some((value) => own.includes(clean(value)))) return true;
+    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
+    for (const mine of ownLower) {
+      const spans = wholeNameSpans(haystack, mine);
+      if (!spans.length) continue;
+      const covers = covering.flatMap((longer) => (longer.includes(mine) ? wholeNameSpans(haystack, longer) : []));
+      if (spans.some(([start, end]) => !covers.some(([from, to]) => from <= start && end <= to))) return true;
+    }
+    return false;
+  };
+};
+
+// Newest first: by game date, later-logged first within a day, undated last.
+export const sortEventsNewestFirst = (events) =>
+  (Array.isArray(events) ? events : [])
+    .map((event, index) => ({ event, index, day: gameDateDayNumber(event?.date) }))
+    .sort((left, right) => {
+      if (left.day !== right.day) {
+        if (left.day === null) return 1;
+        if (right.day === null) return -1;
+        return right.day - left.day;
+      }
+      return right.index - left.index;
+    })
+    .map(({ event }) => event);

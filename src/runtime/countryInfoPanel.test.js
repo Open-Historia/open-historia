@@ -3,7 +3,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyPolityRegions, resolvePanelPolity } from "./countryInfoPanel.js";
+import {
+  classifyPolityRegions,
+  createEventMatcher,
+  knownPolityNames,
+  resolvePanelPolity,
+  sortEventsNewestFirst,
+} from "./countryInfoPanel.js";
 import { regionBaseOwner } from "./ownerNames.js";
 
 // ---- regions ---------------------------------------------------------------
@@ -91,4 +97,92 @@ test("the panel resolves a click to the polity's stable key and current name", (
   assert.equal(resolved.currentName, "Third Reich");
   assert.deepEqual(resolved.polity.aliases, ["Reich"]);
   assert.equal(resolvePanelPolity({ name: "France", code: "France" }, {}).stableKey, "France");
+});
+
+// ---- related events --------------------------------------------------------
+
+const matcherFor = (key, name = key, world = {}, aliases = []) =>
+  createEventMatcher({ key, name, aliases, knownNames: knownPolityNames(world) });
+
+const prose = (title, description = "") => ({ title, description, impacts: {} });
+
+test("text matching: Niger is not Nigeria", () => {
+  const niger = matcherFor("Niger");
+  assert.equal(niger(prose("Nigeria holds elections")), false);
+  assert.equal(niger(prose("Coup in Niger")), true);
+  assert.equal(niger(prose("Niger's junta expels envoys")), true);
+  assert.equal(matcherFor("Nigeria")(prose("Coup in Niger")), false);
+});
+
+test("text matching: Sudan is not South Sudan, but both named counts", () => {
+  const sudan = matcherFor("Sudan");
+  assert.equal(sudan(prose("South Sudan declares independence")), false);
+  assert.equal(sudan(prose("Border talks", "South Sudan and Sudan agree on Abyei.")), true);
+  assert.equal(matcherFor("South Sudan")(prose("South Sudan declares independence")), true);
+});
+
+test("text matching: Guinea is not Papua New Guinea, Equatorial Guinea or Guinea-Bissau", () => {
+  const guinea = matcherFor("Guinea");
+  assert.equal(guinea(prose("Papua New Guinea hosts a summit")), false);
+  assert.equal(guinea(prose("Oil found off Equatorial Guinea")), false);
+  assert.equal(guinea(prose("Guinea-Bissau votes")), false);
+  assert.equal(guinea(prose("Bauxite strike in Guinea")), true);
+});
+
+test("text matching ignores case and handles accented names", () => {
+  const ivory = matcherFor("Côte d'Ivoire");
+  assert.equal(ivory(prose("CÔTE D'IVOIRE signs the accord")), true);
+  assert.equal(ivory(prose("Côte d'Ivoirean exporters")), false);
+  assert.equal(matcherFor("Chad")(prose("Chadian troops advance")), false);
+});
+
+test("a longer name belonging to the polity itself does not hide it", () => {
+  const world = { polityOverrides: { Sudan: { name: "Sudan", aliases: ["Republic of the Sudan"] } } };
+  const sudan = matcherFor("Sudan", "Sudan", world, ["Republic of the Sudan"]);
+  assert.equal(sudan(prose("The Republic of the Sudan protests")), true);
+});
+
+test("a renamed polity matches its key and its new name", () => {
+  const world = { polityOverrides: { Germany: { name: "Third Reich" }, "East Germany": { name: "East Germany" } } };
+  const matcher = matcherFor("Germany", "Third Reich", world);
+  assert.equal(matcher(prose("The Third Reich remilitarises the Rhineland")), true);
+  assert.equal(matcher(prose("Germany signs the pact")), true);
+  assert.equal(matcher(prose("East Germany signs the pact")), false);
+});
+
+test("every impact kind that names a polity matches it exactly", () => {
+  const matcher = matcherFor("France");
+  const byImpact = (impacts) => matcher({ title: "Untitled", description: "", impacts });
+  assert.equal(byImpact({ polityChanges: [{ code: "France" }] }), true);
+  assert.equal(byImpact({ regionTransfers: [{ regionId: "x", toCode: "France", fromCode: "Spain" }] }), true);
+  assert.equal(byImpact({ regionTransfers: [{ regionId: "x", toCode: "Spain", fromCode: "France" }] }), true);
+  assert.equal(byImpact({ regionControlOps: [{ op: "control", fromCode: "Spain", toCode: "France" }] }), true);
+  assert.equal(byImpact({ regionControlOps: [{ op: "contest", fromCode: "Spain", actorCode: "France" }] }), true);
+  assert.equal(byImpact({ regionControlOps: [{ op: "clear_contest", claimantCode: "France" }] }), true);
+  assert.equal(byImpact({ regionClaims: [{ regionId: "x", claimantCode: "France" }] }), true);
+  assert.equal(byImpact({ politicalActorOps: [{ op: "appoint", polityKey: "France" }] }), true);
+  assert.equal(byImpact({ unitOps: [{ op: "spawn", unit: { ownerCode: "France" } }] }), true);
+  assert.equal(byImpact({ markerOps: [{ op: "build", marker: { ownerCode: "France" } }] }), true);
+  assert.equal(byImpact({ createdChats: [{ countries: ["France"] }] }), true);
+  assert.equal(byImpact({ createdChats: [{ countries: [{ code: "", name: "France" }] }] }), true);
+  // Exact: another polity's impacts, or a folded spelling, are not France's.
+  assert.equal(byImpact({ polityChanges: [{ code: "Spain" }] }), false);
+  assert.equal(byImpact({ polityChanges: [{ code: "france" }] }), false);
+  assert.equal(byImpact({}), false);
+});
+
+test("related events come newest first, undated last", () => {
+  const events = [
+    { id: "a", date: "1939-09-01" },
+    { id: "b", date: "1940-05-10" },
+    { id: "c", date: "" },
+    { id: "d", date: "1940-05-10" },
+    { id: "e", date: "1914-07-28" },
+  ];
+  assert.deepEqual(sortEventsNewestFirst(events).map((event) => event.id), ["d", "b", "a", "e", "c"]);
+});
+
+test("BC dates sort by the calendar, not the text", () => {
+  const events = [{ id: "300bc", date: "-0300-01-01" }, { id: "218bc", date: "-0218-03-01" }];
+  assert.deepEqual(sortEventsNewestFirst(events).map((event) => event.id), ["218bc", "300bc"]);
 });

@@ -7,7 +7,13 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import { JSON_URLS, getNationFlags, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
-import { classifyPolityRegions, resolvePanelPolity } from "../../runtime/countryInfoPanel.js";
+import {
+    classifyPolityRegions,
+    createEventMatcher,
+    knownPolityNames,
+    resolvePanelPolity,
+    sortEventsNewestFirst,
+} from "../../runtime/countryInfoPanel.js";
 import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
@@ -81,19 +87,24 @@ const footerButtonStyle = {
     padding: "0.7rem 0.9rem",
 };
 
-// Does this event involve the country? Impacts are checked by code, prose by name.
-const eventInvolvesCountry = (event, code, name) => {
-    const impacts = event?.impacts ?? {};
-    if ((impacts.polityChanges ?? []).some((change) => change?.code === code)) return true;
-    if ((impacts.regionTransfers ?? []).some((transfer) => transfer?.toCode === code || transfer?.fromCode === code)) return true;
-    if ((impacts.regionControlOps ?? []).some((op) =>
-        [op?.fromCode, op?.toCode, op?.actorCode, op?.claimantCode].some((value) => value === code || value === name))) return true;
-    if ((impacts.createdChats ?? []).some((chat) => (chat?.countries ?? []).some((country) => (typeof country === "string"
-        ? country === code || country === name
-        : country?.code === code || country?.name === name)))) return true;
-    const haystack = `${event?.title ?? ""} ${event?.description ?? ""}`.toLowerCase();
-    return Boolean(name) && haystack.includes(String(name).toLowerCase());
-};
+// Related Events shows this many more at a time; the region lists start with
+// this many pills and open in place.
+const EVENT_STEP = 30;
+const SOVEREIGN_PILLS = 80;
+const OTHER_PILLS = 40;
+
+const RegionPills = ({ names, limit, expanded, onExpand }) => (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
+    {(expanded ? names : names.slice(0, limit)).map((regionName) => (
+        <span key={regionName} style={pillStyle}>{regionName}</span>
+    ))}
+    {!expanded && names.length > limit && (
+        <button type="button" className="oh-tap" onClick={onExpand} style={{ ...pillStyle, background: "none", cursor: "pointer", fontFamily: "inherit", opacity: 0.6 }}>
+        {`+${names.length - limit} more`}
+        </button>
+    )}
+    </div>
+);
 
 const CountryInfoPanel = () => {
     const isMobile = useIsMobile();
@@ -103,6 +114,8 @@ const CountryInfoPanel = () => {
     const [loaded, setLoaded] = useState(null);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
+    const [eventLimit, setEventLimit] = useState(EVENT_STEP);
+    const [expandedLists, setExpandedLists] = useState({});
     const [report, setReport] = useState(null); // null | "loading" | text | {error}
     const [flagFailed, setFlagFailed] = useState(false);
     const [flagCatalog, setFlagCatalog] = useState({});
@@ -119,6 +132,8 @@ const CountryInfoPanel = () => {
         setLoaded(null);
         setSearch("");
         setFilterIndex(0);
+        setEventLimit(EVENT_STEP);
+        setExpandedLists({});
         setReport(null);
         setFlagFailed(false);
         setFlagPickerOpen(false);
@@ -200,7 +215,7 @@ const CountryInfoPanel = () => {
     const polityKey = identity?.stableKey || "";
     const displayName = identity?.currentName || country?.name || "";
     const playerCountry = ready ? loaded.game?.country || "" : "";
-    const aliases = Array.isArray(identity?.polity?.aliases) ? identity.polity.aliases : [];
+    const aliases = useMemo(() => (Array.isArray(identity?.polity?.aliases) ? identity.polity.aliases : []), [identity]);
     // The author's starting tags unless the AI has since rewritten them.
     const tags = useMemo(
         () => (identity ? resolveCountryTags(loaded.baseTags, worldState, identity.stableKey) : []),
@@ -218,10 +233,17 @@ const CountryInfoPanel = () => {
     const regions = regionLists.sovereign;
     const controlledForeignRegions = regionLists.controlledForeign;
     const occupiedSovereignRegions = regionLists.occupiedSovereign;
-    const events = useMemo(
-        () => (identity ? loaded.allEvents.filter((event) => eventInvolvesCountry(event, identity.stableKey, identity.currentName)) : []),
-        [identity, loaded],
-    );
+    // The log is stored oldest first; the panel leads with what just happened.
+    const events = useMemo(() => {
+        if (!identity) return [];
+        const involves = createEventMatcher({
+            key: identity.stableKey,
+            name: identity.currentName,
+            aliases,
+            knownNames: knownPolityNames(worldState),
+        });
+        return sortEventsNewestFirst(loaded.allEvents.filter(involves));
+    }, [identity, aliases, loaded, worldState]);
 
     useEffect(() => {
         if (!country) return;
@@ -344,7 +366,9 @@ const CountryInfoPanel = () => {
         <div style={{ display: "flex", flex: 1, flexDirection: "column", gap: "0.4rem", minHeight: 0, overflowY: "auto", padding: "0 1.1rem 1rem", scrollbarWidth: "thin" }}>
         <div style={{ alignItems: "baseline", display: "flex", justifyContent: "space-between" }}>
         <div style={{ fontSize: "1rem", fontWeight: 800 }}>Related Events</div>
-        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem" }}>{filteredEvents.length} shown</div>
+        <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.75rem" }}>
+        {filteredEvents.length > eventLimit ? `${eventLimit} of ${filteredEvents.length} shown` : `${filteredEvents.length} shown`}
+        </div>
         </div>
         <div style={{ display: "flex", gap: "0.45rem" }}>
         <input
@@ -374,7 +398,7 @@ const CountryInfoPanel = () => {
             </div>
         ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem", padding: "0.2rem 0 0.4rem" }}>
-            {filteredEvents.slice(0, 30).map((event) => (
+            {filteredEvents.slice(0, eventLimit).map((event) => (
                 <div key={event.id} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: "0.55rem 0.7rem" }}>
                 <div style={{ alignItems: "baseline", display: "flex", gap: "0.5rem", justifyContent: "space-between" }}>
                 <span style={{ fontSize: "0.82rem", fontWeight: 700 }}>{event.title}</span>
@@ -387,6 +411,16 @@ const CountryInfoPanel = () => {
                 )}
                 </div>
             ))}
+            {filteredEvents.length > eventLimit && (
+                <button
+                type="button"
+                className="oh-tap-row"
+                onClick={() => setEventLimit((limit) => limit + EVENT_STEP)}
+                style={{ ...footerButtonStyle, borderRadius: 8, fontSize: "0.78rem", padding: "0.45rem 0.7rem" }}
+                >
+                Show more events
+                </button>
+            )}
             </div>
         )}
 
@@ -467,12 +501,12 @@ const CountryInfoPanel = () => {
         {regions.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.78rem" }}>None</div>
         ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-            {regions.slice(0, 80).map((regionName) => (
-                <span key={regionName} style={pillStyle}>{regionName}</span>
-            ))}
-            {regions.length > 80 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{regions.length - 80} more</span>}
-            </div>
+            <RegionPills
+            names={regions}
+            limit={SOVEREIGN_PILLS}
+            expanded={Boolean(expandedLists.sovereign)}
+            onExpand={() => setExpandedLists((current) => ({ ...current, sovereign: true }))}
+            />
         )}
         </div>
         </div>
@@ -484,12 +518,12 @@ const CountryInfoPanel = () => {
             {controlledForeignRegions.length === 0 ? (
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
             ) : (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                {controlledForeignRegions.slice(0, 40).map((regionName) => (
-                    <span key={regionName} style={pillStyle}>{regionName}</span>
-                ))}
-                {controlledForeignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{controlledForeignRegions.length - 40} more</span>}
-                </div>
+                <RegionPills
+                names={controlledForeignRegions}
+                limit={OTHER_PILLS}
+                expanded={Boolean(expandedLists.controlled)}
+                onExpand={() => setExpandedLists((current) => ({ ...current, controlled: true }))}
+                />
             )}
             </div>
             <div>
@@ -497,12 +531,12 @@ const CountryInfoPanel = () => {
             {occupiedSovereignRegions.length === 0 ? (
                 <div style={{ color: "rgba(255,255,255,0.45)", fontSize: "0.76rem" }}>None</div>
             ) : (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}>
-                {occupiedSovereignRegions.slice(0, 40).map((regionName) => (
-                    <span key={regionName} style={pillStyle}>{regionName}</span>
-                ))}
-                {occupiedSovereignRegions.length > 40 && <span style={{ ...pillStyle, opacity: 0.6 }}>+{occupiedSovereignRegions.length - 40} more</span>}
-                </div>
+                <RegionPills
+                names={occupiedSovereignRegions}
+                limit={OTHER_PILLS}
+                expanded={Boolean(expandedLists.occupied)}
+                onExpand={() => setExpandedLists((current) => ({ ...current, occupied: true }))}
+                />
             )}
             </div>
             </div>
