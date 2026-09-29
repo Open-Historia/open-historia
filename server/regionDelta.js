@@ -21,6 +21,8 @@ const key = (feature) => {
   return id === undefined || id === null || id === "" ? null : String(id);
 };
 
+// The editor builds its differences keyed by this same rule
+// (src/Editor/regionChanges.js), so the two sides agree which region is which.
 export const regionDeltaKey = key;
 
 // A payload the client meant as a delta, as opposed to a full FeatureCollection
