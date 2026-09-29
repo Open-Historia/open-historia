@@ -13574,7 +13574,11 @@ const AGENT_REPORT_EVERY_ROUNDS = 3;
 
 const unitDirectorVariables = (input, game) => ({
   unitDirectorCandidates: JSON.stringify(input.candidates, null, 2),
-  unitDirectorUnits: JSON.stringify(input.units, null, 2),
+  // The list is capped with the events' own units first (nativeUnitDirector.js);
+  // a cut is said, so an unlisted power's army is not read as absent.
+  unitDirectorUnits: JSON.stringify(input.units, null, 2) + (input.omittedUnits > 0
+    ? `\n[${input.omittedUnits === 1 ? "1 more unit is" : `${input.omittedUnits} more units are`} not listed, the units these events name coming first; leave the unlisted ones as they are.]`
+    : ""),
   unitDirectorGameDate: normalizeString(game?.gameDate),
   unitDirectorRound: String(game?.round || 1),
 });

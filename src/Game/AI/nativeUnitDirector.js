@@ -8,7 +8,8 @@
 // engine). This build resolves fighting through narrated strength changes and
 // postures, so there is no attack op here.
 
-import { normalizeUnitEntry, normalizeUnits } from "../../runtime/gameState.js";
+import { normalizePendingUnitOrders, normalizeUnitEntry, normalizeUnits } from "../../runtime/gameState.js";
+import { mentionCount, nameVariants } from "./regionFocus.js";
 
 const normalizeString = (value) => String(value ?? "").trim();
 const normalizeArray = (value) => (Array.isArray(value) ? value : []);
@@ -65,16 +66,31 @@ const NON_COMBAT_STRENGTH_PATTERN =
 const eventText = (event) =>
   `${normalizeString(event?.title)} ${normalizeString(event?.description)}`.trim();
 
-const summarizeUnit = (unit) => ({
+// What the director is shown of a unit. Posture, composition and cover are
+// there because a move op sets a posture, and choosing one blind to the
+// current one contradicted it; the standing order because the engine is
+// already carrying the unit somewhere (world.pendingUnitOrders), and a new
+// order should follow it or knowingly replace it.
+const summarizeUnit = (unit, standingOrder = null) => ({
   id: normalizeString(unit?.id),
   name: normalizeString(unit?.name),
   type: normalizeString(unit?.type),
   ownerCode: normalizeString(unit?.ownerCode),
   strength: Number(unit?.strength) || 0,
   status: normalizeString(unit?.status),
+  posture: normalizeString(unit?.posture),
+  ...(normalizeString(unit?.composition) ? { composition: normalizeString(unit.composition) } : {}),
+  ...(unit?.covert === true ? { covert: true } : {}),
   lng: Number(unit?.lng),
   lat: Number(unit?.lat),
   regionId: normalizeString(unit?.regionId),
+  ...(standingOrder ? {
+    standingOrder: {
+      kind: standingOrder.kind,
+      target: standingOrder.targetLabel || `lat ${standingOrder.toLat.toFixed(2)}, lng ${standingOrder.toLng.toFixed(2)}`,
+      ...(standingOrder.untilRound > 0 ? { untilRound: standingOrder.untilRound } : {}),
+    },
+  } : {}),
 });
 
 const opKey = (op) => {
@@ -295,21 +311,51 @@ const selectUnitDirectorCandidates = (events) => normalizeArray(events)
   .map((event, index) => ({ event, index }))
   .filter(({ event }) => hasMilitaryContent(event) && eventNeedsNativeUnitDirector(event));
 
-const unitDirectorAnalyzerInput = (candidates, units) => ({
-  candidates: candidates.map(({ event, index }) => ({
-    eventIndex: index,
-    date: normalizeString(event?.date),
-    title: normalizeString(event?.title),
-    description: normalizeString(event?.description),
-    existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
-  })),
-  units: units.map(summarizeUnit),
-});
+// How many units the director is shown. A big scenario map can field
+// hundreds, and every one rode the shared turn review uncapped.
+export const UNIT_DIRECTOR_UNIT_LIMIT = 60;
+
+// The units the candidate events are about come first: an owner the events
+// name exactly, a formation they name, or a unit their own unitOps touch. The
+// rest follow in saved order, up to the limit; `omittedUnits` counts the cut.
+// The sanitizer still checks every op against the whole order of battle.
+const unitDirectorAnalyzerInput = (candidates, units, pendingUnitOrders = []) => {
+  const text = candidates.map(({ event }) => eventText(event)).join(" ");
+  const touched = new Set(candidates.flatMap(({ event }) => normalizeArray(event?.impacts?.unitOps)
+    .map((op) => normalizeString(op?.unitId))
+    .filter(Boolean)));
+  const ownerNamed = new Map();
+  const isNamed = (unit) => {
+    const owner = normalizeString(unit?.ownerCode);
+    if (owner && !ownerNamed.has(owner)) ownerNamed.set(owner, mentionCount(text, nameVariants(owner)) > 0);
+    return touched.has(normalizeString(unit?.id))
+      || (owner && ownerNamed.get(owner))
+      || (normalizeString(unit?.name) && mentionCount(text, nameVariants(unit.name)) > 0);
+  };
+  const ordered = units
+    .map((unit, index) => ({ unit, index, tier: isNamed(unit) ? 0 : 1 }))
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((entry) => entry.unit);
+  const orderByUnit = new Map(normalizePendingUnitOrders(pendingUnitOrders).map((order) => [order.unitId, order]));
+  return {
+    candidates: candidates.map(({ event, index }) => ({
+      eventIndex: index,
+      date: normalizeString(event?.date),
+      title: normalizeString(event?.title),
+      description: normalizeString(event?.description),
+      existingUnitOps: cloneValue(normalizeArray(event?.impacts?.unitOps)),
+    })),
+    units: ordered.slice(0, UNIT_DIRECTOR_UNIT_LIMIT).map((unit) => summarizeUnit(unit, orderByUnit.get(unit.id) ?? null)),
+    omittedUnits: Math.max(0, ordered.length - UNIT_DIRECTOR_UNIT_LIMIT),
+  };
+};
 
 // null when no event needs the director.
 export const buildUnitDirectorInput = ({ events = [], world = {} } = {}) => {
   const candidates = selectUnitDirectorCandidates(events);
-  return candidates.length ? unitDirectorAnalyzerInput(candidates, normalizeUnits(world?.units)) : null;
+  return candidates.length
+    ? unitDirectorAnalyzerInput(candidates, normalizeUnits(world?.units), world?.pendingUnitOrders)
+    : null;
 };
 
 export const directGeneratedUnitOps = async ({
@@ -337,7 +383,7 @@ export const directGeneratedUnitOps = async ({
   let analysis = null;
 
   try {
-    analysis = await analyzeBatch(unitDirectorAnalyzerInput(candidates, units));
+    analysis = await analyzeBatch(unitDirectorAnalyzerInput(candidates, units, world?.pendingUnitOrders));
   } catch (error) {
     console.warn("[unit director] analysis failed; preserving simulator unitOps unchanged.", error);
     return sourceEvents;
