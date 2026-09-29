@@ -1,0 +1,146 @@
+/*! Open Historia — map-asset download tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
+// Run: node --test server/mapAssetsFetch.test.js
+//
+// scripts/fetch-map-assets.mjs downloads the world map from the map-data
+// release; electron/main.cjs decides from the same manifest whether the setup
+// window is needed, and the server reads the files from OH_ASSETS_DIR and
+// OH_DATA_DIR. All three have to agree on where a file lives: a packaged beta
+// downloaded into its own folder while its server read the stable app's, so the
+// map never rendered however often it downloaded.
+//
+// electron/main.cjs requires electron and cannot be imported by `node --test`,
+// so its map-data helpers are sliced out of it and evaluated with their
+// dependencies in scope (as desktopPortProbe.test.js does).
+
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import url from "node:url";
+import { resolveAssetTarget, syncMapAssets } from "../scripts/fetch-map-assets.mjs";
+
+const MANIFEST = JSON.parse(fs.readFileSync(new URL("../scripts/map-assets.json", import.meta.url), "utf8"));
+
+const source = fs.readFileSync(new URL("../electron/main.cjs", import.meta.url), "utf8");
+const start = source.indexOf("const assetTarget = (assetPath) => {");
+const end = source.indexOf("// Runs the existing fetcher as a child process");
+assert.ok(start !== -1 && end > start, "could not find the map-data helpers in electron/main.cjs");
+const desktop = ({ assetsDir, dataDir, userRoot, manifestPath }) => new Function(
+  "path", "fs", "ASSETS_DIR", "DATA_DIR", "USER_ROOT", "MANIFEST",
+  `${source.slice(start, end)}\nreturn { assetTarget, missingAssets, relocateLegacyStockMap };`,
+)(path, fs, assetsDir, dataDir, userRoot, manifestPath);
+
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+const tempDir = (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "oh-map-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+};
+
+// A packaged beta: its own userData, the stable app's assets folder.
+const betaLayout = (dir) => {
+  const userRoot = path.join(dir, "Open Historia Beta");
+  return {
+    userRoot,
+    dataDir: path.join(userRoot, "server", "data"),
+    assetsDir: path.join(dir, "open-historia", "public", "assets"),
+  };
+};
+
+// A small manifest of real bytes, served by a fake release.
+const fakeRelease = (files) => {
+  const assets = Object.entries(files).map(([assetPath, text]) => ({
+    path: assetPath,
+    asset: path.posix.basename(assetPath),
+    bytes: Buffer.byteLength(text),
+    sha256: sha(text),
+  }));
+  const byName = new Map(assets.map((asset, index) => [asset.asset, Object.values(files)[index]]));
+  const requests = [];
+  const fetchImpl = async (url) => {
+    const name = decodeURIComponent(url.split("/").pop());
+    requests.push(name);
+    return byName.has(name) ? new Response(byName.get(name)) : new Response("missing", { status: 404 });
+  };
+  return { manifest: { owner: "o", repo: "r", release: "map-data", assets }, fetchImpl, requests };
+};
+
+test("manifest paths land in the folders the server reads", () => {
+  const opts = { root: "/app", assetsDir: "/shared/public/assets", dataDir: "/app/own/data" };
+  assert.equal(resolveAssetTarget("public/assets/regions.pmtiles", opts), path.resolve("/shared/public/assets/regions.pmtiles"));
+  assert.equal(resolveAssetTarget("server/data/stock/regions.geojson", opts), path.resolve("/app/own/data/stock/regions.geojson"));
+  assert.equal(resolveAssetTarget("other/file.bin", opts), path.resolve("/app/other/file.bin"));
+  // Unset folders fall back to the project root, as a source checkout expects.
+  assert.equal(resolveAssetTarget("public/assets/regions.pmtiles", { root: "/app" }), path.resolve("/app/public/assets/regions.pmtiles"));
+});
+
+test("a manifest path that climbs out of its folder is refused", () => {
+  const opts = { root: "/app", assetsDir: "/shared/assets", dataDir: "/app/data" };
+  assert.equal(resolveAssetTarget("public/assets/../../escape.bin", opts), null);
+  assert.equal(resolveAssetTarget("../escape.bin", opts), null);
+});
+
+test("the desktop setup check and the fetcher agree on every shipped map file", (t) => {
+  const layout = betaLayout(tempDir(t));
+  const { assetTarget } = desktop({ ...layout, manifestPath: "" });
+  for (const asset of MANIFEST.assets) {
+    assert.equal(
+      assetTarget(asset.path),
+      resolveAssetTarget(asset.path, { root: layout.userRoot, assetsDir: layout.assetsDir, dataDir: layout.dataDir }),
+      asset.path,
+    );
+  }
+  // The pmtiles the server serves live in the shared folder, not the beta's own.
+  assert.equal(assetTarget("public/assets/regions.pmtiles"), path.join(layout.assetsDir, "regions.pmtiles"));
+});
+
+test("a beta's download lands in the shared folder, and its next launch needs no setup", async (t) => {
+  const dir = tempDir(t);
+  const layout = betaLayout(dir);
+  const release = fakeRelease({
+    "public/assets/regions.pmtiles": "regions archive",
+    "server/data/stock/regions.geojson": "{\"type\":\"FeatureCollection\"}",
+  });
+  const manifestPath = path.join(dir, "map-assets.json");
+  fs.writeFileSync(manifestPath, JSON.stringify(release.manifest));
+  const { missingAssets } = desktop({ ...layout, manifestPath });
+  assert.equal(missingAssets().length, 2);
+
+  const result = await syncMapAssets({
+    manifest: release.manifest,
+    root: layout.userRoot,
+    assetsDir: layout.assetsDir,
+    dataDir: layout.dataDir,
+    ensure: true,
+    fetchImpl: release.fetchImpl,
+    log: () => {},
+    warn: () => {},
+  });
+  assert.equal(result.downloaded, 2);
+  assert.equal(fs.readFileSync(path.join(layout.assetsDir, "regions.pmtiles"), "utf8"), "regions archive");
+  assert.ok(fs.existsSync(path.join(layout.dataDir, "stock", "regions.geojson")));
+  assert.equal(fs.existsSync(path.join(layout.userRoot, "public")), false, "nothing written to the beta's own public/");
+  assert.deepEqual(missingAssets(), []);
+});
+
+test("run as a script, it honours OH_ASSETS_DIR and OH_DATA_DIR and still exits 0 when every download fails", async (t) => {
+  const { spawnSync } = await import("node:child_process");
+  const dir = tempDir(t);
+  const layout = betaLayout(dir);
+  fs.mkdirSync(layout.userRoot, { recursive: true });
+  // No network in tests: fetch is replaced before the script runs.
+  const offline = "data:text/javascript,globalThis.fetch=async()=>{throw new Error('offline test')}";
+  const script = new URL("../scripts/fetch-map-assets.mjs", import.meta.url);
+  const run = spawnSync(process.execPath, ["--import", offline, url.fileURLToPath(script), "--ensure"], {
+    cwd: layout.userRoot,
+    env: { ...process.env, OH_ASSETS_DIR: layout.assetsDir, OH_DATA_DIR: layout.dataDir },
+    encoding: "utf8",
+  });
+  assert.equal(run.status, 0);
+  assert.match(run.stderr, /could not download regions-z8\.pmtiles|could not download regions\.pmtiles/);
+  assert.match(run.stderr, /offline test/);
+  assert.equal(fs.existsSync(path.join(layout.userRoot, "public")), false);
+});

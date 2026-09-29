@@ -118,7 +118,9 @@ Makes the local tree match the manifest. Called by the launcher and updater **in
 | Verify | `node scripts/fetch-map-assets.mjs` | Re-fetch anything whose SHA-256 differs (picks up a re-uploaded map, repairs truncation) |
 | Ensure | `node scripts/fetch-map-assets.mjs --ensure` | Faster: trusts size, only fetches missing / wrong-size files |
 
-Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path, `fetch-map-assets.mjs:92`) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+Downloads to `<dst>.download`, verifies the SHA-256 **before** renaming into place, and is **best-effort**: it never exits non-zero (`process.exit(0)` on every path) so a network failure can never block a launch or update. Requires Node 18+ for global `fetch`.
+
+Manifest paths are relative to the current directory, except that the fetcher follows the server's folders when they are set (`resolveAssetTarget`): `public/assets/…` lands in `OH_ASSETS_DIR` and `server/data/…` in `OH_DATA_DIR`. The desktop app sets both before it spawns the fetcher, and its setup check (`assetTarget` in `electron/main.cjs`) applies the same rule, so the check, the download and the server look at one folder. That matters for the packaged beta, whose `OH_ASSETS_DIR` is the stable app's `%APPDATA%/open-historia/public/assets` while its own data lives under `Open Historia Beta`; `server/mapAssetsFetch.test.js` keeps the two rules in step.
 
 ### `scripts/trim-pmtiles.mjs` — the zoom levels nothing draws
 
