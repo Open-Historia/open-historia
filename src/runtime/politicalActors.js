@@ -939,37 +939,6 @@ export const ensurePoliticalProfile = (world, polityKey) => {
     return normalized.byPolity[key];
 };
 
-// Legacy migration/helper only. New event impacts MUST mutate political reality
-// through politicalActorOps (see politicalActorOps.js), never by guessing an office
-// from Stats metadata. Kept for explicit old-save/data migrations that already
-// encoded a single ambiguous `leader` field. Normal event application does not call
-// this seam.
-export function applyPoliticalActorMetadataPatch(world, polityKey, patch) {
-    if (!world || !patch || typeof patch !== "object" || Array.isArray(patch)) return null;
-    const actor = getPoliticalProfile(world, polityKey);
-    if (!actor || typeof actor !== "object") return null;
-
-    const leader = clean(patch.leader);
-    const government = clean(patch.government);
-
-    if (leader) {
-        actor.leader = leader;
-        actor.government = normalizePoliticalGovernment({
-            ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-            headOfState: leader,
-        }, actor.parties || []);
-    }
-
-    if (government) {
-        actor.government = normalizePoliticalGovernment({
-            ...(actor.government && typeof actor.government === "object" ? actor.government : {}),
-            form: government,
-        }, actor.parties || []);
-    }
-
-    return actor;
-}
-
 // One-way compatibility projection for legacy Stats consumers. Political Actors
 // remain the write authority; this helper merely exposes the canonical government
 // form and head of state in the old sheet vocabulary when such a sheet already

@@ -253,10 +253,6 @@ export const createInitialStartupState = () => ({
   total: GATING_TASKS.length,
 });
 
-// Held at module scope so a background warm that outlives runStartupPreload stays
-// reachable — and its rejection stays handled — after the caller has moved on.
-let backgroundWarms = [];
-
 export const runStartupPreload = async ({
   onProgress,
   timeBudgetMs = STARTUP_TIME_BUDGET_MS,
@@ -350,12 +346,11 @@ export const runStartupPreload = async ({
   };
 
   // Launched alongside the gating set, then deliberately not awaited.
-  backgroundWarms = STARTUP_TASKS.filter((task) => task.background).map((task) =>
+  for (const task of STARTUP_TASKS.filter((entry) => entry.background)) {
     runTask(task).catch((error) => {
       console.warn(`Background preload task "${task.id}" failed:`, error);
-      return null;
-    }),
-  );
+    });
+  }
 
   await Promise.all(
     GATING_TASKS.map((task) =>
@@ -407,8 +402,3 @@ export const runStartupPreload = async ({
     timedOut,
   };
 };
-
-// The archives still warming after the startup screen dismissed. Awaiting this is
-// optional — the map renders from range reads meanwhile — but a caller that
-// genuinely needs a whole archive resident (a bulk export, say) can.
-export const whenBackgroundWarmsSettle = () => Promise.allSettled(backgroundWarms);

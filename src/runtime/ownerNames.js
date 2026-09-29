@@ -20,13 +20,6 @@ export const toCountryName = (token) => {
   return COUNTRY_NAMES[raw] || COUNTRY_NAMES[raw.toUpperCase()] || raw;
 };
 
-// True when the token is a bare GADM code that has a full name to become. Only useful
-// for reporting; call sites should just canonicalise unconditionally.
-export const isCountryCode = (token) => {
-  const raw = String(token ?? "").trim();
-  return Boolean(raw) && Boolean(COUNTRY_NAMES[raw] || COUNTRY_NAMES[raw.toUpperCase()]);
-};
-
 // ---------------------------------------------------------------------------
 // Display names vs identity
 //

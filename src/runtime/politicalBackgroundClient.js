@@ -82,5 +82,3 @@ export const advancePoliticalBackgroundBatchInWorker = async (payload, { signal 
     worker.postMessage({ id, payload });
   });
 };
-
-export const resetPoliticalBackgroundWorkerForTests = () => stopWorker();

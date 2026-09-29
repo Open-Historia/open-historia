@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  applyPoliticalActorMetadataPatch,
   ensurePoliticalProfile,
   getPoliticalProfile,
   normalizePoliticalActors,
@@ -89,22 +88,6 @@ test("a polity of its own never borrows another polity's actor through the stock
   delete legacy.polityOverrides["Republic of Poland"];
   assert.equal(getPoliticalProfile(legacy, "Poland")?.polityKey, "Republic of Poland");
 });
-
-test("legacy political metadata migration helper remains available without making Stats the normal write authority", () => {
-  const world = makeWorld();
-
-  const updated = applyPoliticalActorMetadataPatch(world, "Poland", {
-    government: "Presidential republic",
-    leader: "Test Leader",
-  });
-
-  assert.ok(updated);
-  assert.equal(updated.government.form, "Presidential republic");
-  assert.equal(updated.government.headOfState, "Test Leader");
-  assert.equal(updated.leader, "Test Leader");
-  assert.equal(getPoliticalProfile(world, "Republic of Poland")?.leader, "Test Leader");
-});
-
 
 test("political actor normalization owns a fresh mutable copy", () => {
   const source = makeWorld().politicalActors;
