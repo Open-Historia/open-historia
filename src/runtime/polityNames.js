@@ -9,12 +9,18 @@ import { JSON_URLS, loadCountryNames, readJson } from "./assets.js";
 let nameByCode = new Map();
 let refreshedAt = 0;
 let inflight = null;
+// Bumped by a switch to another save: a refresh begun before it read that
+// save's world, and its names are not this one's.
+let generation = 0;
+const resetListeners = new Set();
 
 const refresh = async () => {
+  const startedIn = generation;
   const [countries, world] = await Promise.all([
     loadCountryNames().catch(() => []),
     readJson(JSON_URLS.world, { defaultValue: {}, force: true }).catch(() => ({})),
   ]);
+  if (startedIn !== generation) return;
   const next = new Map();
   for (const country of countries ?? []) {
     if (country?.code) next.set(String(country.code), country.name || country.code);
@@ -30,12 +36,39 @@ const refresh = async () => {
 
 export const ensurePolityNames = async () => {
   if (Date.now() - refreshedAt > 15000) {
-    inflight = inflight ?? refresh().finally(() => {
-      inflight = null;
-    });
+    if (!inflight) {
+      const run = refresh().finally(() => {
+        if (inflight === run) inflight = null;
+      });
+      inflight = run;
+    }
     await inflight;
   }
 };
+
+// Another save is open: its polities may carry other names for the same codes
+// ("German Reich" in one, "Federal Republic of Germany" in the next). The cache
+// is emptied, a refresh still in flight is disowned, and every mounted name
+// looks itself up again.
+export const resetPolityNames = () => {
+  generation += 1;
+  nameByCode = new Map();
+  refreshedAt = 0;
+  inflight = null;
+  for (const listener of [...resetListeners]) listener();
+};
+
+// Returns the unsubscribe.
+export const onPolityNamesReset = (listener) => {
+  resetListeners.add(listener);
+  return () => {
+    resetListeners.delete(listener);
+  };
+};
+
+if (typeof window !== "undefined") {
+  window.addEventListener("oh:active-game-changed", resetPolityNames);
+}
 
 // Sync lookup — falls back to the code until ensurePolityNames has run.
 export const polityDisplayName = (code) => {
@@ -50,12 +83,18 @@ export const useCountryDisplayName = (code) => {
 
   useEffect(() => {
     let cancelled = false;
-    setName(polityDisplayName(code));
-    ensurePolityNames().then(() => {
-      if (!cancelled) setName(polityDisplayName(code));
-    });
+    const lookUp = () => {
+      setName(polityDisplayName(code));
+      ensurePolityNames().then(() => {
+        if (!cancelled) setName(polityDisplayName(code));
+      });
+    };
+    lookUp();
+    // The same code can name another polity in the save switched to.
+    const unsubscribe = onPolityNamesReset(lookUp);
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [code]);
 

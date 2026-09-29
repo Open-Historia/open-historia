@@ -154,7 +154,8 @@ Where the override resolver renames by scenario, `polityNames.js` resolves a **c
 |---|---|
 | `ensurePolityNames()` | Refreshes `nameByCode` if older than 15 s; merges `loadCountryNames()` with `world.polityOverrides` (era polity wins **only when it carries a name**) |
 | `polityDisplayName(code)` | Sync lookup, falls back to the code until a refresh has run |
-| `useCountryDisplayName(code)` | Hook: renders the code, then swaps to the resolved name after `ensurePolityNames()` |
+| `useCountryDisplayName(code)` | Hook: renders the code, then swaps to the resolved name after `ensurePolityNames()`; looks the name up again after a save switch (`onPolityNamesReset`) |
+| `resetPolityNames()` | Run on `oh:active-game-changed`: empties the cache, disowns a refresh still in flight (its answer is the previous save's and is dropped when it lands) and tells every `onPolityNamesReset` listener, because the same code can name another polity in the save switched to |
 
 ---
 
