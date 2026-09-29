@@ -75,7 +75,7 @@ All go through `requestJson()` (thin `fetch` + `parseApiResponse`, which throws 
 | `downloadScenarioJsonAsset(id, key)` | GET | `/api/scenarios/:id/assets/:key` | Returns `null` on 404/throw (missing = "use default") |
 | `uploadScenarioAsset(id, key, file)` | PUT | `/api/scenarios/:id/assets/:key` | Raw body via `toUploadBuffer`; force refresh |
 | `clearScenarioAsset(id, key)` | DELETE | `/api/scenarios/:id/assets/:key` | Force refresh |
-| `exportScenarioBundle(id, mode="light")` | GET | `/api/scenarios/:id/export?mode=` | Returns bundle JSON |
+| `exportScenarioBundle(scenarioId)` | GET | `/api/scenarios/:id/export` | Returns bundle JSON; always the whole scenario, custom PMTiles included (there is no light export) |
 | `importScenarioBundle(bundle)` | POST | `/api/scenarios/import` | New local scenario; force refresh |
 | `updateScenarioFromBundle(id, bundle)` | PUT | `/api/scenarios/:id/import` | Hub **Update** button — replaces content, **keeps the local id** so games keep working |
 | `loadGameDetails(id)` | GET | `/api/games/:id` | Returns details |

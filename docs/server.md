@@ -56,7 +56,7 @@ All routes are JSON in / JSON out unless noted. Errors are `{ error: message }` 
 | PUT | `/api/scenarios/active` | Set the selected scenario (alias of `selected`) | `server/server.js:282` |
 | PUT | `/api/scenarios/selected` | Set the selected scenario | `server/server.js:290` |
 | PUT | `/api/scenarios/:scenarioId` | Update meta / `world` / `game` / `prompts` / `storage.*` (full-replace or `*Patch` merge) | `server/server.js:298` |
-| GET | `/api/scenarios/:scenarioId/export` | Export a shareable bundle; `?mode=full` embeds PMTiles, default `light` | `server/server.js:306` |
+| GET | `/api/scenarios/:scenarioId/export` | Export a shareable bundle; always full, custom PMTiles included. `?mode=` is accepted and ignored, and older light bundles still import | `server/server.js:641` |
 | POST | `/api/scenarios/import` | Import a bundle as a **new** scenario (auto-selects it) → 201 | `server/server.js:315` |
 | PUT | `/api/scenarios/:scenarioId/import` | Replace an existing scenario's content from a fresh bundle (hub "Update" button) | `server/server.js:325` |
 | GET | `/api/scenarios/:scenarioId/assets/:assetKey` | Stream a binary/JSON upload asset (range-capable) | `server/server.js:333` |
