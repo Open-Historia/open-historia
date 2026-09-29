@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { advancePoliticalBackgroundSimulation } from "./politicalBackground.js";
+import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "./politicalBackground.js";
 import { advancePoliticalBackgroundKernel } from "./politicalBackgroundKernel.js";
 import { normalizePoliticalActors } from "./politicalActors.js";
 
@@ -161,4 +161,35 @@ test("one failed disposition op is reported without discarding pressures, respon
   assert.ok(result.world.politicalActors.byPolity.A.politicalPressures.issues.cost_of_living);
   assert.ok(result.world.politicalActors.byPolity.A.behavioralDisposition);
   assert.equal(result.world.politicalSimulation.lastProcessedDate, "2014-04-22");
+});
+
+test("the debug log hears about every background skip that is not simply nothing to do", () => {
+  assert.equal(describePoliticalBackgroundResult({ skipped: true, reason: "no-time-advanced" }), null);
+  assert.equal(describePoliticalBackgroundResult({ skipped: true, reason: "no-political-actors" }), null);
+
+  const unavailable = describePoliticalBackgroundResult({ skipped: true, reason: "worker-unavailable", plan: { droppedResponseTicks: 3 } });
+  assert.equal(unavailable.verbose, false);
+  assert.match(unavailable.message, /worker-unavailable/);
+  assert.equal(unavailable.detail.droppedResponseTicks, 3);
+
+  const workerError = describePoliticalBackgroundResult({ skipped: true, reason: "background-worker-error", error: new Error("kernel threw") });
+  assert.deepEqual(workerError.detail.errors, ["kernel threw"]);
+
+  const commit = describePoliticalBackgroundResult({ skipped: true, reason: "response-commit-failed", errors: ["Unknown party: x"] });
+  assert.deepEqual(commit.detail.errors, ["Unknown party: x"]);
+});
+
+test("a committed background run logs verbosely, and outside verbose mode when a disposition op was dropped", () => {
+  assert.equal(describePoliticalBackgroundResult({ skipped: false, plan: {} }), null);
+
+  const moved = describePoliticalBackgroundResult({ skipped: false, pressureChangedPolities: 2, responseChangedEntities: 1, plan: { responseTicks: 1 } });
+  assert.equal(moved.verbose, true);
+  assert.match(moved.message, /2 pressure polity/);
+
+  const dropped = describePoliticalBackgroundResult({ skipped: false, dispositionErrors: ["No Political Actor exists for X."], plan: {} });
+  assert.equal(dropped.verbose, false);
+  assert.deepEqual(dropped.detail.dispositionErrors, ["No Political Actor exists for X."]);
+
+  const capped = describePoliticalBackgroundResult({ skipped: false, plan: { droppedResponseTicks: 12 } });
+  assert.equal(capped.detail.droppedResponseTicks, 12);
 });

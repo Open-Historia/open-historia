@@ -1,12 +1,14 @@
 /*! Open Historia — non-blocking political background worker client (Continuum) */
 
 let politicalWorker = null;
-let politicalWorkerBroken = false;
+// Only a Worker that cannot be constructed at all stays off for the session. A
+// worker that crashes is dropped, and the next turn's request builds a fresh one,
+// so at most one re-creation happens per turn.
+let politicalWorkerUnsupported = false;
 let politicalRequestId = 0;
 const politicalPending = new Map();
 
-const stopWorker = ({ broken = false, reason = null } = {}) => {
-  if (broken) politicalWorkerBroken = true;
+const stopWorker = ({ reason = null } = {}) => {
   politicalWorker?.terminate?.();
   politicalWorker = null;
   for (const pending of politicalPending.values()) {
@@ -16,7 +18,7 @@ const stopWorker = ({ broken = false, reason = null } = {}) => {
 };
 
 const getPoliticalWorker = () => {
-  if (politicalWorkerBroken || typeof Worker === "undefined") return null;
+  if (politicalWorkerUnsupported || typeof Worker === "undefined") return null;
   if (politicalWorker) return politicalWorker;
 
   try {
@@ -35,8 +37,8 @@ const getPoliticalWorker = () => {
     };
 
     worker.onerror = (event) => {
+      if (politicalWorker !== worker) return;
       stopWorker({
-        broken: true,
         reason: new Error(event?.message || "Political background worker failed."),
       });
     };
@@ -44,7 +46,7 @@ const getPoliticalWorker = () => {
     politicalWorker = worker;
     return worker;
   } catch {
-    politicalWorkerBroken = true;
+    politicalWorkerUnsupported = true;
     return null;
   }
 };

@@ -224,7 +224,7 @@ import {
   writeWorldState,
   writeCanonicalTurnState,
 } from "../../runtime/gameState.js";
-import { advancePoliticalBackgroundSimulation } from "../../runtime/politicalBackground.js";
+import { advancePoliticalBackgroundSimulation, describePoliticalBackgroundResult } from "../../runtime/politicalBackground.js";
 import { dedupeGeneratedEvents, eventCanonicalKey } from "../../runtime/eventDedup.js";
 import {
   ACTION_OUTCOME_ASSOCIATION_SCHEMA,
@@ -7860,21 +7860,14 @@ const applySimulationResult = async ({
       signal: projects?.signal,
     });
     nextWorld = political.world;
-    if (!political.skipped && (political.pressureChangedPolities || political.responseChangedEntities || political.dispositionChangedPolities)) {
-      logDebugEvent(
-        "turn",
-        `Political background: ${political.pressureChangedPolities} pressure polity(s), ${political.responseChangedEntities} political response change(s), ${political.dispositionChangedPolities || 0} disposition change(s).`,
-        {
-          responseTicks: political.plan?.responseTicks || 0,
-          structuralSignalPolities: political.structuralSignalPolities || 0,
-          droppedResponseTicks: political.plan?.droppedResponseTicks || 0,
-        },
-        { verbose: true },
-      );
+    const politicalLog = describePoliticalBackgroundResult(political);
+    if (politicalLog) {
+      logDebugEvent("turn", politicalLog.message, politicalLog.detail, { verbose: politicalLog.verbose, problem: !politicalLog.verbose });
     }
   } catch (error) {
     if (projects?.signal?.aborted) throw error;
     console.warn("[politics background] native political update failed; the completed turn is preserved.", error);
+    logDebugEvent("turn", "Political background failed; the political state and clock are unchanged.", error, { problem: true });
   }
 
   // Permanent compact Stats history: snapshots only the numeric sheets that

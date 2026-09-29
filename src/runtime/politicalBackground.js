@@ -20,6 +20,43 @@ const pressureOperations = (patchesByPolity) => Object.entries(patchesByPolity |
 
 const isAbortError = (error) => error?.name === "AbortError";
 
+// Skips that are simply "nothing to do" rather than something broke.
+const QUIET_SKIP_REASONS = new Set(["no-time-advanced", "no-political-actors"]);
+
+// What the turn writes to the debug log about one background run, or null for
+// nothing. A skip for a real reason (no worker, a worker error, a failed
+// commit) and a committed run that dropped a disposition op are logged outside
+// verbose mode, so a save whose parties never change carries the reason.
+export const describePoliticalBackgroundResult = (political) => {
+  if (!political || typeof political !== "object") return null;
+  const droppedResponseTicks = Number(political.plan?.droppedResponseTicks) || 0;
+  if (political.skipped) {
+    if (QUIET_SKIP_REASONS.has(political.reason)) return null;
+    const errors = [
+      ...(Array.isArray(political.errors) ? political.errors : []),
+      ...(political.error ? [political.error?.message || String(political.error)] : []),
+    ];
+    return {
+      message: `Political background skipped (${political.reason || "unknown reason"}); the political state and clock are unchanged.`,
+      detail: { reason: political.reason || "", ...(errors.length ? { errors } : {}), droppedResponseTicks },
+      verbose: false,
+    };
+  }
+  const dispositionErrors = Array.isArray(political.dispositionErrors) ? political.dispositionErrors : [];
+  const changed = political.pressureChangedPolities || political.responseChangedEntities || political.dispositionChangedPolities;
+  if (!changed && !dispositionErrors.length && !droppedResponseTicks) return null;
+  return {
+    message: `Political background: ${political.pressureChangedPolities || 0} pressure polity(s), ${political.responseChangedEntities || 0} political response change(s), ${political.dispositionChangedPolities || 0} disposition change(s).`,
+    detail: {
+      responseTicks: political.plan?.responseTicks || 0,
+      structuralSignalPolities: political.structuralSignalPolities || 0,
+      droppedResponseTicks,
+      ...(dispositionErrors.length ? { dispositionErrors } : {}),
+    },
+    verbose: !dispositionErrors.length,
+  };
+};
+
 export const advancePoliticalBackgroundSimulation = async ({
   world,
   fromDate = "",
