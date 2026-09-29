@@ -227,3 +227,15 @@ test("the player's Council message comes back with the Council, not an accession
   assert.equal(result.channel.id, "institution-channel-council");
   assert.ok(result.channel.messages.some((message) => message.text === "We table the matter."));
 });
+
+test("a Council comment the player makes twice, word for word, is in the transcript twice", () => {
+  const first = materializeInstitutionalChannel({ world: makeWorld(), chats: [], institutionId: "council", playerCountry: "A" });
+  const once = applyInstitutionalPlayerMessage({
+    world: first.world, chats: first.chats, institutionId: "council", playerCountry: "A", text: "Agreed.", date: "2000-01-02",
+  });
+  const twice = applyInstitutionalPlayerMessage({
+    world: once.world, chats: once.chats, institutionId: "council", playerCountry: "A", text: "Agreed.", date: "2000-01-02",
+  });
+  assert.equal(twice.channel.messages.filter((message) => message.text === "Agreed.").length, 2);
+  assert.equal(twice.channel.events.filter((event) => event.kind === "message" && event.text === "Agreed.").length, 2);
+});

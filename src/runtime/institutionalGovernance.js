@@ -1121,9 +1121,13 @@ export const applyInstitutionalPlayerMessage = ({
   }
   const chats = materialized.chats.map((chat) => {
     if (clean(chat.id) !== clean(materialized.channel.id)) return chat;
+    // Its own id, so a comment made twice word for word is kept twice
+    // (chatThreads.js withUnloggedMessages folds an id-less line into an
+    // earlier one with the same speaker and words).
     return normalizeChatEntry({
       ...chat,
       messages: [...list(chat.messages), {
+        id: `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         role: "user", speaker: clean(playerCountry), text: messageText, time: clean(date),
       }],
     }) || chat;
