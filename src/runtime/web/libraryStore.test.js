@@ -16,8 +16,10 @@ import test from "node:test";
 
 const db = new Map();
 const getAllLog = [];
+const getLog = [];
 globalThis.__ohWebStoreTestDb = db;
 globalThis.__ohWebStoreTestGetAll = getAllLog;
+globalThis.__ohWebStoreTestGet = getLog;
 
 const IDB_STUB = `
 export const STORES = {
@@ -27,7 +29,7 @@ export const STORES = {
 const db = globalThis.__ohWebStoreTestDb;
 const table = (name) => { if (!db.has(name)) db.set(name, new Map()); return db.get(name); };
 const copy = (value) => (value === undefined ? undefined : structuredClone(value));
-export const idbGet = async (store, key) => copy(table(store).get(key));
+export const idbGet = async (store, key) => { globalThis.__ohWebStoreTestGet.push(store); return copy(table(store).get(key)); };
 export const idbGetAll = async (store) => { globalThis.__ohWebStoreTestGetAll.push(store); return [...table(store).values()].map(copy); };
 export const idbGetAllKeys = async (store) => [...table(store).keys()];
 export const idbPut = async (store, value) => { table(store).set(store === "kv" ? value.key : value.id, copy(value)); };
@@ -368,6 +370,31 @@ test("a runtime read or write never rebuilds the library catalogs", async () => 
   const echoed = ok(await runtime("PUT", "world", { ownerSchema: 4, polityOverrides: { Testland: { name: "Testland" } } }));
   assert.equal(echoed.customRegions, true, "the echo is still the served, normalised world");
   assert.deepEqual(getAllLog, []);
+});
+
+test("a tile request asks the catalog rows, and loads only the archive it serves", async () => {
+  await reset();
+  const scenarioId = ok(await scenarios("POST", "", { name: "Own Tiles" })).scenario.id;
+  const tiles = new Uint8Array([1, 2, 3, 4]);
+  await upload(scenarioId, "regions", tiles);
+  await newGame("Tiled", { scenarioId });
+  // Restore points make the game record the heavy one; a tile request must not load it.
+  ok(await runtime("PUT", "snapshots", [SNAPSHOT]));
+
+  getLog.length = 0;
+  assert.equal(await store.hasScenarioPmtilesOverride("regions"), true);
+  assert.equal(await store.hasScenarioPmtilesOverride("cities"), false);
+  assert.equal(await store.getScenarioPmtilesOverride("cities", null), null);
+  assert.deepEqual(getLog.filter((name) => name === "games" || name === "scenarios"), [], "no record for a yes or no");
+
+  const response = await store.getScenarioPmtilesOverride("regions", null);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), tiles);
+  assert.deepEqual(getLog.filter((name) => name === "games" || name === "scenarios"), ["scenarios"], "only the scenario whose bytes are served");
+
+  // A game on a map with no archive of its own serves none.
+  await newGame("Plain");
+  assert.equal(await store.hasScenarioPmtilesOverride("regions"), false);
+  assert.equal(await store.getScenarioPmtilesOverride("regions", null), null);
 });
 
 test("a runtime write that asks for no reply gets none", async () => {

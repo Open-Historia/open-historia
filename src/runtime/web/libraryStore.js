@@ -1482,9 +1482,25 @@ const updateScenarioFromBundle = async (scenarioId, bundle) => {
 };
 
 // --- pmtiles override (runtime binary) ------------------------------------
+// The lean catalog row of the scenario the running game renders on: the manifest
+// names the game, its gameMeta row its scenario. These checks run on every tile
+// request, and loading the records to answer them deserialised the whole game,
+// restore points included, and the whole scenario, tile archives included.
+// null when a row is missing (or predates assetStatus); the caller then loads
+// the records, as before.
+const activeRuntimeScenarioRow = async (key) => {
+  const { activeGameId } = await getGameManifest();
+  const gameRow = activeGameId ? await idbGet(STORES.gameMeta, activeGameId) : null;
+  if (!gameRow) return null;
+  const scenarioRow = await idbGet(STORES.scenarioMeta, readGameMeta(gameRow.id, gameRow.meta ?? {}).scenarioId);
+  return typeof scenarioRow?.assetStatus?.[key] === "boolean" ? scenarioRow : null;
+};
+
 export const getScenarioPmtilesOverride = async (key, rangeHeader) => {
   if (!PMTILES_ASSET_KEYS.includes(key)) return null;
-  const scenario = await getActiveRuntimeScenarioRecord();
+  const row = await activeRuntimeScenarioRow(key);
+  if (row && !row.assetStatus[key]) return null;
+  const scenario = row ? await getScenario(row.id) : await getActiveRuntimeScenarioRecord();
   const bytes = scenario?.pmtiles?.[key];
   if (bytes === undefined) return null;
   return binaryResponse(bytes, "application/octet-stream", rangeHeader);
@@ -1496,6 +1512,8 @@ export const getScenarioPmtilesOverride = async (key, rangeHeader) => {
 // to the manifest.
 export const hasScenarioPmtilesOverride = async (key) => {
   if (!PMTILES_ASSET_KEYS.includes(key)) return false;
+  const row = await activeRuntimeScenarioRow(key);
+  if (row) return row.assetStatus[key];
   const scenario = await getActiveRuntimeScenarioRecord();
   return scenario?.pmtiles?.[key] !== undefined;
 };
