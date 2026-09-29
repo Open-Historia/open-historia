@@ -9,7 +9,7 @@
 // the document only on save/export. Ephemeral UI state (active tool, selection,
 // save status, live region count) also lives here for the panels to read.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { OWNER_SCHEMA } from "./documentMigration.js";
 import { normalizeTagList } from "../runtime/countryTags.js";
 import { renamePolityInDocument } from "../../server/polityRename.js";
@@ -122,7 +122,17 @@ export const useMapDocument = (initial) => {
   const [activeTool, setActiveTool] = useState("select");
   const [selection, setSelection] = useState([]); // selected region ids
   const [regionCount, setRegionCount] = useState(0);
-  const [saveStatus, setSaveStatus] = useState("saved"); // saved | dirty | saving | error
+  const [saveStatus, setSaveStatusState] = useState("saved"); // saved | dirty | saving | error
+  // Counts edits: every change marks the document "dirty" through here. A save
+  // notes the count before it writes and calls the document saved only if the
+  // count has not moved, so an edit made while a save is in flight stays unsaved
+  // rather than being covered by a "saved" it was never part of.
+  const editsRef = useRef(0);
+  const setSaveStatus = useCallback((status) => {
+    if (status === "dirty") editsRef.current += 1;
+    setSaveStatusState(status);
+  }, []);
+  const editCount = useCallback(() => editsRef.current, []);
 
   // Owner -> [r,g,b] palette (shared with the game map for export compatibility).
   useEffect(() => {
@@ -161,7 +171,7 @@ export const useMapDocument = (initial) => {
       return { ...d, colorOverrides: next };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   // Set (or clear, with null) one country's flag. The value is an already
   // downscaled PNG data URL — see flagImage.js; we never store the raw upload.
@@ -174,7 +184,7 @@ export const useMapDocument = (initial) => {
       return { ...d, flags: next };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   // Set (or clear) one country's tags. Note the .length check rather than the
   // truthiness test setColorOverride/setFlag use: [] is truthy, so the same
@@ -189,7 +199,7 @@ export const useMapDocument = (initial) => {
       return { ...d, tags: next };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
 
   const setPolities = useCallback((updater) => {
@@ -200,7 +210,7 @@ export const useMapDocument = (initial) => {
         : (updater || {}),
     }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   const upsertPolity = useCallback((key, patch = {}) => {
     const stableKey = String(key || "").trim();
@@ -221,7 +231,7 @@ export const useMapDocument = (initial) => {
       return { ...d, polities: next };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   // Renaming a polity re-keys it: the record moves to the new name and every
   // colour, flag, tag and city marker keyed by the old one follows, and the old
@@ -240,7 +250,7 @@ export const useMapDocument = (initial) => {
       }
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   const removePolity = useCallback((key) => {
     const stableKey = String(key || "").trim();
@@ -257,7 +267,7 @@ export const useMapDocument = (initial) => {
       return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKey) };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   const removePolities = useCallback((keys) => {
     const stableKeys = [...new Set((keys || []).map((key) => String(key || "").trim()).filter(Boolean))];
@@ -276,7 +286,7 @@ export const useMapDocument = (initial) => {
       return { ...d, polities, colorOverrides, flags, tags, puppets: withoutPolities(d.puppets, stableKeys) };
     });
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   // Scenario Workshop bulk polity import. A 1911 roster can contain dozens of
   // landless polity identities before any of the newly imported regions have
@@ -394,7 +404,7 @@ export const useMapDocument = (initial) => {
     });
     setSaveStatus("dirty");
     return summary;
-  }, [doc.polities]);
+  }, [doc.polities, setSaveStatus]);
 
   // City markers from the Province Map Importer (its "Import explicit city Point
   // markers" option): the rows collectImportedCityPoints builds become point
@@ -410,35 +420,35 @@ export const useMapDocument = (initial) => {
     setDoc((d) => ({ ...d, features: mergeCityMarkers(d.features, rows, options).features }));
     setSaveStatus("dirty");
     return { count, created, updated, replaced, skipped };
-  }, [doc.features]);
+  }, [doc.features, setSaveStatus]);
 
   const patchMetadata = useCallback((patch) => {
     setDoc((d) => ({ ...d, metadata: { ...d.metadata, ...patch } }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
   const setBasemap = useCallback((basemap) => patchMetadata({ basemap }), [patchMetadata]);
   const setName = useCallback((name) => patchMetadata({ name }), [patchMetadata]);
   const setAuthor = useCallback((author) => patchMetadata({ author }), [patchMetadata]);
   const setTypes = useCallback((updater) => {
     setDoc((d) => ({ ...d, types: typeof updater === "function" ? updater(d.types) : updater }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
   const setFeatures = useCallback((updater) => {
     setDoc((d) => ({ ...d, features: typeof updater === "function" ? updater(d.features) : updater }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
   const setGroups = useCallback((updater) => {
     setDoc((d) => ({ ...d, groups: typeof updater === "function" ? updater(d.groups || {}) : (updater || {}) }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
   const setPuppets = useCallback((updater) => {
     setDoc((d) => ({ ...d, puppets: typeof updater === "function" ? updater(d.puppets || []) : (updater || []) }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
   const setUnits = useCallback((updater) => {
     setDoc((d) => ({ ...d, units: typeof updater === "function" ? updater(d.units || []) : (updater || []) }));
     setSaveStatus("dirty");
-  }, []);
+  }, [setSaveStatus]);
 
   return {
     doc,
@@ -491,6 +501,7 @@ export const useMapDocument = (initial) => {
     setRegionCount,
     saveStatus,
     setSaveStatus,
+    editCount,
     counts: {
       regions: regionCount,
       features: doc.features.length,

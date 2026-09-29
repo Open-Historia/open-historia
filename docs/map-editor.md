@@ -395,7 +395,9 @@ Save robustness:
 - **Debounced autosave** every 2s while `dirty`, keyed on `d.doc` (a fresh object per change) rather than a hand-listed field set — the old field list went stale and silently lost colour/flag/tag edits (`:289`).
 - **`beforeunload`** guard while `dirty`/`saving` (`:304`).
 - **`visibilitychange`/`pagehide` flush** via refs (avoids stale-closure loss on mobile suspend) (`:320`).
-- **Close** tries to save first and only prompts if the save fails (`:508`).
+- **Saves take turns** (`createSaveRunner`, `src/Editor/documentSaving.js`). A save asked for while one is running waits for it and then writes whatever is still unsaved, however many were asked for meanwhile, so two never write at once: the autosave and the hide flush used to run side by side, and with no document id yet each created a document. The id a create returns is in `docIdRef` before the save queued behind it runs.
+- **An edit made during a save stays unsaved.** Every change goes through `setSaveStatus("dirty")`, which counts it (`d.editCount()`); a save notes the count before it writes and calls the document saved only if the count has not moved. It used to set "saved" regardless, which hid the edit and cancelled the autosave the edit had armed.
+- **Close** saves first (`settleUnsavedWork`) and asks only if that save does not land. It goes by what `saveNow()` resolves to: reading React state after the await still said "saving", so a save that worked asked "could not be saved" anyway.
 
 ---
 

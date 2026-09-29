@@ -50,6 +50,7 @@ import { useMapDocument, createDocument, newId } from "./useMapDocument.js";
 import { loadBackgroundFile, rebuildPersistedBackground, vectorLayerToGeoJSON } from "./customBackground.js";
 import { addBackgroundToLibrary, getBasemapPayload } from "../runtime/basemapLibrary.js";
 import { saveDocument, loadDocument, downloadJson } from "./documentIO.js";
+import { createSaveRunner, settleUnsavedWork } from "./documentSaving.js";
 import { migrateDocumentOwners, OWNER_SCHEMA } from "./documentMigration.js";
 import { useIsMobile } from "../runtime/useIsMobile.js";
 import { useBackToClose } from "../runtime/backToClose.js";
@@ -433,29 +434,59 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // the map, or a document whose geometry it does not have — says so, and the
   // save is made again with the whole map. The record of what was last written is
   // committed only once the save has landed, so a failure is retried in full.
-  const saveNow = async () => {
-    if (!api) return;
+  //
+  // Saves take turns (documentSaving.js createSaveRunner): one asked for while
+  // another is running waits for it and then writes whatever is still unsaved,
+  // so two never write at once — with no document id yet, both used to create a
+  // document. The id a create returns goes into docIdRef at once, where the
+  // save queued behind it reads it; the docId state only redraws the menu.
+  const docIdRef = useRef(null);
+  const adoptDocId = (id) => {
+    docIdRef.current = id;
+    setDocId(id);
+  };
+  // d.editCount() when the document last matched what is stored.
+  const savedEditsRef = useRef(0);
+  // Resolves true when the document is saved with no edit left over. An edit
+  // made while the write was in flight is not in it: the status stays "dirty"
+  // (it used to be overwritten with "saved", which also cancelled the autosave
+  // the edit had armed) and the next save writes it.
+  const attemptSave = async () => {
+    if (!api) return false;
+    const id = docIdRef.current;
+    const edits = d.editCount();
+    // Queued behind a save that has already written everything.
+    if (id && edits === savedEditsRef.current) return true;
     try {
       d.setSaveStatus("saving");
       const changes = api.serializeRegionChanges?.() ?? null;
-      const creating = !docId;
+      const creating = !id;
       const payload = !changes || creating || changes.full
         ? buildPayload(changes?.full ?? null)
         : { ...buildDocumentFields(), regionsDelta: { changed: changes.changed, count: changes.count, removed: changes.removed } };
-      let saved = await saveDocument(docId, payload);
+      let saved = await saveDocument(id, payload);
       if (saved?.needsFullRegions) {
         console.warn("[editor] the store could not apply the map difference; writing the whole map:", saved.needsFullRegions);
         api.forgetSavedRegions?.();
-        saved = await saveDocument(saved.id ?? docId, buildPayload());
+        saved = await saveDocument(saved.id ?? id, buildPayload());
       }
-      if (!docId) setDocId(saved.id);
+      if (!id) adoptDocId(saved.id);
       changes?.commit?.();
+      if (d.editCount() !== edits) return false;
+      savedEditsRef.current = edits;
       d.setSaveStatus("saved");
+      return true;
     } catch (e) {
       console.warn("[editor] save failed:", e);
       d.setSaveStatus("error");
+      return false;
     }
   };
+  const attemptSaveRef = useRef(attemptSave);
+  attemptSaveRef.current = attemptSave;
+  const runSaveRef = useRef(null);
+  if (!runSaveRef.current) runSaveRef.current = createSaveRunner(() => attemptSaveRef.current());
+  const saveNow = () => runSaveRef.current();
 
   // The unload/visibility listeners below are registered once, so a closure would
   // freeze whatever the document was at that moment and flush THAT on the way out
@@ -477,17 +508,16 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       if (!ok) return false;
     }
     // Closing with edits still in the debounce window would drop them
-    // silently — the button looks like "go back", not "discard". Try
-    // to save first, and only ask if that fails or is still pending,
-    // so the common case closes with no prompt and no loss.
-    if (d.saveStatus === "dirty") {
-      await saveNow();
-      if (dRef.current.saveStatus === "saved") { onClose(); return true; }
-    }
-    if (d.saveStatus === "saved") { onClose(); return true; }
-    const ok = window.confirm(
-      "This map has changes that could not be saved. Close it and lose them?",
-    );
+    // silently — the button looks like "go back", not "discard". Save first
+    // and ask only if that save does not land. The answer is what saveNow
+    // returns: React state read after the await still said "saving" (the
+    // re-render had not happened yet), so a save that worked asked anyway.
+    const ok = await settleUnsavedWork({
+      status: dRef.current.saveStatus,
+      save: saveNow,
+      confirm: (question) => window.confirm(question),
+      question: "This map has changes that could not be saved. Close it and lose them?",
+    });
     if (ok) onClose();
     return ok;
   };
@@ -495,14 +525,22 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
   // A side panel open in it (types, regions, layers…) closes first.
   useBackToClose(Boolean(openPanel), () => setOpenPanel(null));
 
+  // A document just opened or started is what is stored (or has nothing to
+  // store yet): the saves write to its id, and edits made before it no longer
+  // count.
+  const markLoaded = (id) => {
+    adoptDocId(id);
+    savedEditsRef.current = d.editCount();
+    d.setSaveStatus("saved");
+  };
+
   const newDoc = (kind) => {
     d.setDoc(createDocument({ name: kind === "blank" ? "Untitled Map" : "World Map", kind }));
-    setDocId(null);
     if (kind === "blank") api?.loadRegions({ type: "FeatureCollection", features: [] });
     else api?.reseedWorld();
     setCustomBg(null);
     setCustomBgId(null);
-    d.setSaveStatus("saved");
+    markLoaded(null);
   };
 
   const openDoc = async (id) => {
@@ -536,8 +574,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
       api?.loadRegions(doc.regions);
       setCustomBg(rebuildPersistedBackground(doc.metadata?.customBackground));
       setCustomBgId(null);
-      setDocId(doc.id);
-      d.setSaveStatus("saved");
+      markLoaded(doc.id);
     } catch (e) {
       console.warn("[editor] open failed:", e);
     }
@@ -698,7 +735,7 @@ const MapEditor = ({ onClose, scenarioName, onApplyToScenario, initialMap, revie
     // OlMap effect renders it without re-emitting (no dirty/autosave on open).
     setCustomBg(initialMap.background ? rebuildPersistedBackground(initialMap.background) : null);
     setCustomBgId(null);
-    d.setSaveStatus("saved");
+    markLoaded(null);
     setScenarioDirty(false);
     setHydrated(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
