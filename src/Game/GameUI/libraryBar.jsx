@@ -138,8 +138,8 @@ const subscribeMainMenu = (listener) => {
 };
 export const useMainMenuOpen = () => useSyncExternalStore(subscribeMainMenu, isMainMenuOpen, isMainMenuOpen);
 // What a flow that activated a game still owes the player once the UI has
-// remounted around that game: open its editor, offer the country picker, or
-// say why the rest of the setup failed (runtime/afterActivation.js).
+// remounted around that game: offer the Apply & Play country picker, or open
+// its editor to say why the rest of the setup failed (runtime/afterActivation.js).
 const afterActivation = createActivationHandOff();
 const handOffAfterActivation = (work) => afterActivation.put(work);
 // With the full-width in-game bar gone, top-anchored UI (settings ⋮, date
@@ -1916,7 +1916,7 @@ const LibraryTopBar = ({ onOpenSettings }) => {
   };
 
   // Create the game from the scenario with the starting country and difficulty
-  // the player chose in the two-step picker, then open its editor.
+  // the player chose in the two-step picker, and go straight into it.
   const startGameForCountry = async (scenario, countryCode, difficulty) => {
     setCountryPicker(null);
     setCustomRegionData(null); setPickerOwnerOverrides(null); setPickerBackground(null);
@@ -1932,14 +1932,15 @@ const LibraryTopBar = ({ onOpenSettings }) => {
       // the game, the opening cover and the HUD named the scenario's default
       // country until it landed.
       const gamePatch = { ...(countryCode ? { country: countryCode } : null), ...(difficulty ? { difficulty } : null) };
-      const details = await createGame({
+      await createGame({
         name: `${scenario.name} Session`,
         scenarioId: scenario.id,
         ...(Object.keys(gamePatch).length ? { gamePatch } : null),
         setActive: true,
       });
-      // The UI remounts around the new game; the new instance opens its editor.
-      handOffAfterActivation({ gameId: details.game.id, editor: true });
+      // The UI remounts around the new game, menu closed, and play begins. Its
+      // editor is not opened: the call that did so ran in the instance being
+      // unmounted and never showed, and players start straight into the game.
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
@@ -2001,8 +2002,6 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           await writeJson(JSON_URLS.flags, { ...flags, [name]: faction.flag }, { pretty: true });
         } catch { /* flag is cosmetic */ }
       }
-
-      handOffAfterActivation({ gameId, editor: true });
     } catch (nextError) {
       if (gameId) {
         // Activated already: the remounted UI opens the game and says why.
@@ -2061,8 +2060,6 @@ const LibraryTopBar = ({ onOpenSettings }) => {
           await writeJson(JSON_URLS.flags, { ...flags, [key]: group.flag }, { pretty: true });
         } catch { /* flag is cosmetic */ }
       }
-
-      handOffAfterActivation({ gameId, editor: true });
     } catch (nextError) {
       if (gameId) {
         handOffAfterActivation({ gameId, editor: true, error: nextError.message });
@@ -2421,12 +2418,11 @@ const LibraryTopBar = ({ onOpenSettings }) => {
     setMenuOpen(false);
 
     try {
-      const details = await createGame({
+      await createGame({
         name: `${game.name} Copy`,
         seedGameId: game.id,
         setActive: true,
       });
-      handOffAfterActivation({ gameId: details.game.id, editor: true });
     } catch (nextError) {
       setMenuOpen(true);
       setEditorError(nextError.message);
