@@ -2813,6 +2813,9 @@ async function buildPromptVariables({
     }, {
         eventLimit: 16,
         longEventLimit: 24,
+        // A conversation never writes regionTransfers: region counts by power,
+        // and names only for the player and the speaker (buildWorldSummary).
+        conversation: true,
         respondingPolityName: speakingAs,
         // What this prompt is allowed to have READ. A leader speaks as one polity
         // and may only see chats that polity was in; the advisor passes no

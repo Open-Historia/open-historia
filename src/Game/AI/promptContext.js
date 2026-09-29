@@ -1641,7 +1641,17 @@ export const orderByFocus = (items, namesOf, focusCodes) => {
 // `regionListsViaTools`: the task has the lookup functions (lookupTools.js),
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
-export const buildWorldSummary = async (bundle, regionCatalog = null, { regionListsViaTools = false } = {}) => {
+//
+// `conversation`: the advisor or a leader, which talk and never write
+// regionTransfers. They get each power's region count, the region names (no
+// ids) of the player and of `speakingAs` only, and headers that say what the
+// list is rather than instructions for a jump. The jump's vocabulary of up to
+// 480 `name (id)` pairs was about ten kilobytes on every chat message.
+export const buildWorldSummary = async (bundle, regionCatalog = null, {
+  regionListsViaTools = false,
+  conversation = false,
+  speakingAs = "",
+} = {}) => {
   const world = normalizeWorldState(bundle.world);
   const regions = filterToRenderedRegions(regionCatalog ?? await loadRegions(), world);
   const regionLookup = new Map(regions.map((region) => [region.id, region]));
@@ -1723,11 +1733,20 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
       + (taggedCodes.length > TAG_SUMMARY_LIMIT ? `\n(+${taggedCodes.length - TAG_SUMMARY_LIMIT} more tagged countries not listed)` : "");
   const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
 
-  const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
-    focusCodes,
-    polityNames,
-    ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120 } : {}),
-  });
+  const regionOwnershipCatalog = conversation
+    ? buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
+        focusCodes: [playerName, toCountryName(normalizeString(speakingAs))].filter(Boolean),
+        polityNames,
+        regionIds: false,
+        rosterCap: 120,
+        focusIntro: "Regions held by the powers in this conversation:",
+        rosterIntro: "Every other power, with how many regions it holds:",
+      })
+    : buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
+        focusCodes,
+        polityNames,
+        ...(regionListsViaTools ? { focusTotalCap: 0, rosterCap: 120 } : {}),
+      });
 
   return [
     `Player polity: ${bundle.game.country || "Unknown polity"}${playerTags.length ? ` (${playerTags.join(", ")})` : ""}`,
@@ -1741,7 +1760,9 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     "Territorial changes from the base scenario:",
     territorySummary,
     "",
-    regionListsViaTools
+    conversation
+      ? "Map ownership by power:"
+      : regionListsViaTools
       ? "Map ownership by power (region counts only; region names and ids come from the lookup functions find_region, list_regions and map_around):"
       : "Map ownership (this IS the comma-separated region list referenced above — the "
         + "region vocabulary for regionTransfers):",
@@ -1750,9 +1771,12 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     "Dynamic polity overrides:",
     politySummary,
     "",
-    "What each country is (ideology, alignment, posture). Treat these as binding "
-      + "characterisation: act, speak and react in keeping with them, and only change "
-      + "them via polityChanges when events genuinely reshape a country.",
+    conversation
+      ? "What each country is (ideology, alignment, posture). Treat these as binding "
+        + "characterisation: act, speak and react in keeping with them."
+      : "What each country is (ideology, alignment, posture). Treat these as binding "
+        + "characterisation: act, speak and react in keeping with them, and only change "
+        + "them via polityChanges when events genuinely reshape a country.",
     tagSummary,
     "",
     world.activeInteractive
@@ -1793,6 +1817,10 @@ export const buildPromptContext = async (bundle, {
   // The task has the lookup functions: the prompt keeps the overview and the
   // functions carry the detail (region lists, older events, full chats).
   lookups = false,
+  // The advisor or a leader in conversation (buildPromptVariables, main.jsx):
+  // the world summary's map section is sized and worded for talk, not for a
+  // jump's regionTransfers (buildWorldSummary).
+  conversation = false,
   requiredKeys = null,
   respondingPolityName = "",
   targetDate = "",
@@ -1829,7 +1857,11 @@ export const buildPromptContext = async (bundle, {
 
   let worldSummary = "";
   if (wants("worldSummary", "worldSummaryNoCity")) {
-    worldSummary = await buildWorldSummary(bundle, regionCatalog, { regionListsViaTools: lookups });
+    worldSummary = await buildWorldSummary(bundle, regionCatalog, {
+      regionListsViaTools: lookups,
+      conversation,
+      speakingAs: respondingPolityName,
+    });
   }
 
   if (wants("citiesSummary")) {

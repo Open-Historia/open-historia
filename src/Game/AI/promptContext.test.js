@@ -164,3 +164,20 @@ test("a group founding or an occupation is a durable anchor for a long campaign"
   assert.match(anchors, /Kharkiv falls/);
   assert.doesNotMatch(anchors, /Parade/);
 });
+
+test("a conversation's world summary gives counts, and names only for the player and the speaker", async () => {
+  const { regions, world } = authoredWorld();
+  const bundle = { game, world, events: [], actions: [], chats: [] };
+  const chat = await buildWorldSummary(bundle, regions, { conversation: true, speakingAs: "Slavonia" });
+  assert.match(chat, /Map ownership by power:\nRegions held by the powers in this conversation:/);
+  assert.match(chat, /- Ruritania \[30 regions\]: Ruritania province 0, /);
+  assert.match(chat, /- Slavonia \[4 regions\]: Slavonia province 0, Slavonia province 1, Slavonia province 2, Slavonia province 3/);
+  assert.match(chat, /- Filler State 1 — 1 region/);
+  assert.equal(chat.includes("(Ruritania-0)"), false, "no region ids");
+  assert.equal(chat.includes("regionTransfer"), false, "no jump instructions");
+  assert.equal(chat.includes("polityChanges"), false);
+
+  const jump = await buildWorldSummary(bundle, regions);
+  assert.match(jump, /Ruritania province 0 \(Ruritania-0\)/, "the jump keeps its vocabulary");
+  assert.match(jump, /region vocabulary for regionTransfers/);
+});

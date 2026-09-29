@@ -95,6 +95,9 @@ export const ROSTER_INTRO =
 //     override owners, defined actors, chat partners) — the theatre in play.
 //   options.polityNames: { [code|label]: displayName } for nicer headers.
 //   options.ownerCap / focusTotalCap / rosterCap: prompt-budget bounds.
+//   options.regionIds: false lists region names without their ids.
+//   options.focusIntro / rosterIntro: the section headers, for a task that is
+//     not writing regionTransfers (FOCUS_INTRO and ROSTER_INTRO speak to one).
 export const buildRegionOwnershipText = (regionCatalog, overrides, options = {}) => {
   const catalog = Array.isArray(regionCatalog) ? regionCatalog : [];
   if (catalog.length === 0) {
@@ -108,6 +111,9 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   const focusTotalCap = Number.isFinite(options.focusTotalCap) ? options.focusTotalCap : 480;
   const rosterCap = Number.isFinite(options.rosterCap) ? options.rosterCap : 80;
   const polityNames = options.polityNames || {};
+  const withIds = options.regionIds !== false;
+  const focusIntro = options.focusIntro || FOCUS_INTRO;
+  const rosterIntro = options.rosterIntro || ROSTER_INTRO;
 
   const focus = (Array.isArray(options.focusCodes) ? options.focusCodes : [])
     .map(lower)
@@ -139,7 +145,7 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
   for (const [key, group] of focusEntries) {
     if (emitted >= focusTotalCap) break; // a focus power we cannot fit falls through to the roster
     const shown = group.regions.slice(0, ownerCap);
-    const list = shown.map((r) => (r.id ? `${r.name} (${r.id})` : r.name)).join(", ");
+    const list = shown.map((r) => (r.id && withIds ? `${r.name} (${r.id})` : r.name)).join(", ");
     const moreInGroup = group.regions.length - shown.length;
     const suffix = moreInGroup > 0 ? `, (+${moreInGroup} more)` : "";
     focusLines.push(`- ${headerLabel(key, group.label)} [${regionWord(group.regions.length)}]: ${list}${suffix}`);
@@ -162,11 +168,11 @@ export const buildRegionOwnershipText = (regionCatalog, overrides, options = {})
 
   const out = [];
   if (focusLines.length) {
-    out.push(FOCUS_INTRO, ...focusLines);
+    out.push(focusIntro, ...focusLines);
   }
   if (rosterLines.length) {
     if (out.length) out.push("");
-    out.push(ROSTER_INTRO, ...rosterLines);
+    out.push(rosterIntro, ...rosterLines);
     if (rosterOmitted > 0) {
       out.push(`(+${rosterOmitted} more power${rosterOmitted === 1 ? "" : "s"} not listed for brevity.)`);
     }
