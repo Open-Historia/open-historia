@@ -293,7 +293,7 @@ A turned agent feeds planted material and the board opens a foreign entry from i
 `verification` runs `"" → doubted → confirmed | refuted`, and ownership is split:
 
 - `spyProvenanceOps` ties a foreign entry to the agent that must have produced it (the brief is the only channel that puts a rival's programme on the board), stamping `linkedSpyIds`. Retroactive on purpose, so entries opened before this existed still get linked.
-- `spyIntelDoubtOps` stamps **`doubted`** when that agent is `suspected` or `turned` — the analysts' own warning, the same flag the Spy tab shows, not proof. Cast once per entry, so a later verdict is never overwritten. The wording never says an agent was turned: the player is not told, so the board is not either.
+- `spyIntelDoubtOps` stamps **`doubted`** when that agent is `suspected`, or `exposed` after having been turned (it has a `turnedAt`) — the analysts' own warning, the same flag the Spy tab shows, not proof. Cast once per entry, so a later verdict is never overwritten. A turned agent nobody suspects yet casts no doubt, and the wording never says an agent was turned: the player is not told, so the board is not either.
 - `doubtedAwaitingFreshSource` lists doubted entries the player now has a **clean** agent for — not the one that caused the doubt, and not a suspected replacement. That list is handed to the `projects` task, because whether a fresh source bears on an entry is a fact about world state, not something readable from board text.
 - **`confirmed` and `refuted` are the model's**, through an ordinary op. `projectSchema` offers only those two, so no model can cast doubt on the board itself — only settle one already cast.
 

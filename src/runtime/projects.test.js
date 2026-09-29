@@ -627,6 +627,22 @@ test("an agent that is merely live casts no doubt", () => {
   assert.deepEqual(spyIntelDoubtOps([spy()], [linkedForeign], { playerPolity: "France" }), []);
 });
 
+test("a turned agent nobody suspects yet casts no doubt, so the board does not give it away", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const turned = spy({ status: "turned", turnedAt: "1741-05-01" });
+  assert.deepEqual(spyIntelDoubtOps([turned], [linkedForeign], { playerPolity: "France" }), []);
+  // Once the analysts suspect it, the doubt follows.
+  assert.equal(spyIntelDoubtOps([{ ...turned, suspected: true }], [linkedForeign], { playerPolity: "France" })[0]?.verification, "doubted");
+});
+
+test("an agent exposed after having been turned casts doubt; one exposed while loyal does not", () => {
+  const linkedForeign = foreignEntry({ linkedSpyIds: ["spy-france-prussia-1"] });
+  const burned = spy({ status: "exposed", turnedAt: "1741-05-01", exposedAt: "1741-06-01" });
+  assert.equal(spyIntelDoubtOps([burned], [linkedForeign], { playerPolity: "France" })[0]?.verification, "doubted");
+  const loyal = spy({ status: "exposed", exposedAt: "1741-06-01" });
+  assert.deepEqual(spyIntelDoubtOps([loyal], [linkedForeign], { playerPolity: "France" }), []);
+});
+
 // What the agent in Prussia has most recently filed. gatherIntelligence replaces
 // the target's entry on every gather, so its planted flag describes the CURRENT channel.
 const filed = (planted) => ({ Prussia: { gatheredAt: "1741-07-02", round: 12, planted, exchanges: [] } });

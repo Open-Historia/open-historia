@@ -562,10 +562,12 @@ export const spyIntelDoubtOps = (spies, projects, { playerPolity = "", date = ""
   for (const spy of asArray(spies)) {
     const owner = asText(spy?.owner).toLowerCase();
     if (owner && player && owner !== player) continue;
-    const status = asText(spy?.status) || "active";
     // Suspected while still running, or exposed after having been turned: both
-    // mean what this agent sent may have been written by the other side.
-    if (spy?.suspected === true || status === "turned") compromised.add(asText(spy?.id));
+    // mean what this agent sent may have been written by the other side. A
+    // turned agent nobody suspects yet is NOT here: doubting its reports would
+    // tell the player what their own service has not worked out.
+    const exposedAfterTurning = asText(spy?.status) === "exposed" && Boolean(asText(spy?.turnedAt));
+    if (spy?.suspected === true || exposedAfterTurning) compromised.add(asText(spy?.id));
   }
   if (!compromised.size) return [];
 
