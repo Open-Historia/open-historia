@@ -177,7 +177,6 @@ import { renderTemplateCached, staticPrefixEndOf } from "./promptLayout.js";
 import { attachAttemptOutcome, finishAiRecord, normalizeParsedSummary } from "./telemetry.js";
 import {
   JSON_URLS,
-  getNationFlags,
   getPrimedScenarioRegionCatalog,
   loadCountryNames,
   loadRegionCatalog,
@@ -6608,6 +6607,14 @@ const normalizeGeneratedEvent = (entry, index = 0) => {
 
 const MAX_ROLLBACK_SNAPSHOTS = 12;
 
+// flags.json as a rename is about to rewrite it, or null when it could not be
+// read. Read with no default: getNationFlags answers {} on an error, and the
+// renamed copy of {} written back would erase every authored flag.
+const readFlagsForRename = () => readJson(JSON_URLS.flags, { force: true }).catch((error) => {
+  console.warn("[flags] could not read flags.json; the rename leaves the flags as they are:", error?.message || error);
+  return null;
+});
+
 // Persist the PRE-turn state so the cheats menu's "Roll back turn" can restore it.
 // A dedicated per-game runtime asset (storage/snapshots.json) — never bundled with
 // a scenario or dragged through the 5s poll — capped so a long game can't grow it
@@ -6619,7 +6626,10 @@ const MAX_ROLLBACK_SNAPSHOTS = 12;
 // into it (sealed, as stored): an undone turn takes its agents' reports and the
 // documents they stole with it. A snapshot captured before this carried none,
 // and restoring one keeps today's file, less the copies of undone documents.
-const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors, intercepts = null, turn = null }) => {
+// `flags` is flags.json as it stood before the turn, kept only when the turn
+// rewrote it (a rename moves a flag to the new name): flags can be large, and
+// no other part of a turn touches them.
+const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, events, actions, chat, colors, intercepts = null, flags = null, turn = null }) => {
   try {
     // Read shared and written without the defensive copies: the older restore
     // points only move along in a new array, never change (see
@@ -6640,6 +6650,7 @@ const captureRollbackSnapshot = async ({ round, fromDate, toDate, game, world, e
         chat: cloneValue(chat),
         colors: cloneValue(colors),
         ...(intercepts && typeof intercepts === "object" ? { intercepts: cloneValue(intercepts) } : {}),
+        ...(flags && typeof flags === "object" && !Array.isArray(flags) ? { flags: cloneValue(flags) } : {}),
       },
       ...(turn ? { turn: cloneValue(turn) } : {}),
     };
@@ -6715,6 +6726,16 @@ export const rollBackToSnapshot = async (index = 0) => {
     const reconciledIntercepts = withoutOrphanedDocuments(filedIntercepts, normalizeWorldState(s.world ?? {}).reports);
     if (snapshotIntercepts || reconciledIntercepts !== filedIntercepts) {
       await writeInterceptsState(reconciledIntercepts);
+    }
+    // The flags as they were, when the turn renamed a polity and moved its flag.
+    // Without them an undone rename left the country with no flag, and Intervene
+    // re-ran the rename against flags that had already moved.
+    if (s.flags && typeof s.flags === "object" && !Array.isArray(s.flags)) {
+      try {
+        await writeJson(JSON_URLS.flags, s.flags, { pretty: true });
+      } catch (error) {
+        console.warn("[rollback] the flags could not be restored:", error?.message || error);
+      }
     }
     // The advisor's notices of papers the restored world no longer puts in the
     // government's hands go with them; its conversation is otherwise the
@@ -7242,6 +7263,7 @@ const applySimulationResult = async ({
   // state does not carry: the game's own polity, the queued orders, the chats
   // (below), the flags, and the stock map's baked regions with no override.
   const renamedPolities = normalizeArray(impactMerge.renamedPolities);
+  let flagsBefore = null;
   let renamedFlags = null;
   if (renamedPolities.length) {
     const regions = filterToRenderedRegions(await loadRegionCatalog().catch(() => []), impactedWorld);
@@ -7250,8 +7272,10 @@ const applySimulationResult = async ({
       nextGame = renamePolityInGame(nextGame, from, to);
       nextActions = renamePolityInActions(nextActions, from, to);
     }
-    const flagsBefore = await getNationFlags({ force: true }).catch(() => ({}));
-    renamedFlags = renamedPolities.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore);
+    flagsBefore = await readFlagsForRename();
+    renamedFlags = flagsBefore
+      ? renamedPolities.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore)
+      : null;
   }
 
   // Live institution lifecycle effects ride the SAME events that narrate them.
@@ -8001,6 +8025,7 @@ const applySimulationResult = async ({
     chat: baseChats,
     colors: baseColors,
     intercepts: baseIntercepts,
+    flags: renamedFlags ? flagsBefore : null,
     turn: result.mode === "jump" || result.mode === "auto"
       ? journalTurn({
         events: freshEvents,
@@ -15680,8 +15705,10 @@ export const applyGameMasterPreview = async (preview) => {
       }
       if (game !== bundle.game) renamedGame = game;
       renamedChats = allChats;
-      flagsBefore = await getNationFlags({ force: true }).catch(() => ({}));
-      renamedFlags = renamedPolities.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore);
+      flagsBefore = await readFlagsForRename();
+      renamedFlags = flagsBefore
+        ? renamedPolities.reduce((flags, { from, to }) => renamePolityInFlags(flags, from, to), flagsBefore)
+        : null;
     }
 
     // Institution lifecycle operations in a GM-approved event use the same native
