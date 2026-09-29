@@ -340,7 +340,7 @@ import { unseenEvents, withoutUnseenMessages } from "../../runtime/unseenEvents.
 import { canRewindInteractiveTo, isSceneInProgress, openInteractive, recordInteractiveBeat, rewindInteractive } from "./interactiveRewind.js";
 import { chooseInteractiveOffer, offeredEvent } from "../../runtime/interactiveOffer.js";
 import { buildCrossChatKnowledge } from "./crossChatKnowledge.js";
-import { describeIntelligenceStanding, describeReputationStanding } from "./standingContext.js";
+import { describeIntelligenceStanding, describeLeaderStanding, describeReputationStanding } from "./standingContext.js";
 import { buildBoundedPoliticalDecisionContextSet } from "./politicalDecisionContext.js";
 import {
   getPoliticalProfile,
@@ -12286,6 +12286,10 @@ export const runChatActionBatch = async ({
               ? `A formal proposal has just been tabled for debate: ${normalizeString(institutionProposalId)}. Begin the Council's opening debate NOW in this same request. The proposal already exists in the formal agenda: do NOT lodge a duplicate and do NOT submit it for voting yet. Have 1-3 relevant AI member governments send concise, substantive opening positions using send_message; they may support, oppose, question, or propose an amendment when genuinely warranted. Do not wait for another player message before beginning the debate.`
               : "Nobody has spoken since your last turn; decide whether anyone would speak now.",
       politicalDecisionPrompt,
+      // The player's reputation and each AI participant's (standingContext.js):
+      // a one-to-one leader is told it too. No government's own figures here,
+      // since every participant reads this one request.
+      describeLeaderStanding(bundle.world, { player, speakers: aiParticipants }),
       documentKnowledge ? `[PRIVATE GOVERNMENT DOCUMENTS - COMPARTMENTALIZED]\n${documentKnowledge}` : "",
       institutionLifecyclePrompt,
       formalInstitutionPrompt,

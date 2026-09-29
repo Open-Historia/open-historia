@@ -111,6 +111,7 @@ import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
+import { describeLeaderStanding, describeOurFigures } from "./standingContext.js";
 
 // main.jsx - AI chat module
 // Supports Gemini, OpenAI, Anthropic, and OpenAI-compatible endpoints
@@ -3179,6 +3180,11 @@ async function buildAdvisorSystemPrompt() {
     });
     const directives = [
         advisorPoliticalDiplomacy.text,
+        // The government's own Stats sheet, its recent history, its reputation
+        // and its intelligence rating (standingContext.js): the figures the
+        // player sees in the Stats panel, from the world as the player has
+        // seen it, so "how is our economy doing?" is answered from them.
+        describeOurFigures(worldData, gameData?.country || ""),
         buildAdvisorActionsDirective(variables.plannedActionsWithIds),
         ADVISOR_MESSAGE_DRAFT_DIRECTIVE,
         ADVISOR_INSTITUTION_DRAFT_DIRECTIVE,
@@ -3321,6 +3327,11 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
     const agent = foreignAgentBrief(worldData, speakingAs, { playerPolity: playerCountry || gameData?.country || "", material: stolen });
     const espionage = agent ? "\n\n[Your Intelligence]\n" + agent : "";
 
+    // The player's reputation and this leader's own, and its own government's
+    // figures (standingContext.js): how far to take the player at its word,
+    // and what its own country can afford.
+    const standing = describeLeaderStanding(worldData, { player: playerCountry || gameData?.country || "", speakers: [speaker] });
+
     // One copy each of the briefing and the rules (see buildAdvisorSystemPrompt).
     const rendered = collapseRepeatedWorldContext(
         renderTemplate(promptPack.leader, { ...variables, ...helperValues }),
@@ -3398,7 +3409,7 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 
     // How softly or firmly a leader bargains at the chosen difficulty is in its
     // template (${DIFFICULTY_DESCRIPTION_CHATS}, the diplomacy directive), once.
-    return `${rendered}${politicalSection}${espionage}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
+    return `${rendered}${politicalSection}${espionage}${standing ? `\n\n${standing}` : ""}${playerGroupText ? `\n\n${playerGroupText}` : ""}${subordinations ? `\n\n${subordinations}` : ""}${papers ? `\n\n${papers}` : ""}${reminders ? `\n\n${reminders}` : ""}`;
 }
 
 let advisorHistory = [];
