@@ -46,6 +46,18 @@ test("an occupation is held, but its lawful sovereign keeps the title", () => {
   assert.match(dossier("German Empire", world), /holds 3 regions on the current map, and is the lawful sovereign of 2\./);
 });
 
+test("equal counts over different regions do not make it the lawful sovereign of what it holds", () => {
+  // France occupies g1 (still German by law) and has lost f1 to a German
+  // occupation (still French by law): 3 held, 3 by law, but not the same 3.
+  const world = {
+    regionOwnershipOverrides: { g1: "France", f1: "German Empire" },
+    regionSovereigntyOverrides: { g1: "German Empire", f1: "France" },
+  };
+  const text = dossier("France", world);
+  assert.match(text, /holds 3 regions on the current map, and is the lawful sovereign of 3\./);
+  assert.doesNotMatch(text, /is their lawful sovereign/);
+});
+
 test("a polity with no land says so", () => {
   assert.deepEqual(territoryLines(dossier("Kingdom of Aurelia")), ["Territory: holds no regions on the current map."]);
 });

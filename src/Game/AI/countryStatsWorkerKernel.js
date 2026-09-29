@@ -1355,6 +1355,7 @@ const describeDossierTerritory = (world, code, catalog) => {
 
   let controlled = 0;
   let lawful = 0;
+  let heldAsSovereign = 0;
   let lostToOthers = 0;
   const beyondStart = [];
   for (const region of catalog) {
@@ -1366,6 +1367,7 @@ const describeDossierTerritory = (world, code, catalog) => {
     if (isTarget(controller)) {
       controlled += 1;
       if (!isTarget(baseOwner)) beyondStart.push(region);
+      if (isTarget(sovereign)) heldAsSovereign += 1;
     } else if (isTarget(baseOwner)) {
       lostToOthers += 1;
     }
@@ -1374,7 +1376,9 @@ const describeDossierTerritory = (world, code, catalog) => {
 
   if (!controlled && !lawful) return [`Territory: holds no regions on the current map.`];
   const lines = [
-    lawful === controlled
+    // Equal counts are not enough: one region occupied and another lost to an
+    // occupier leave the two numbers equal over different regions.
+    lawful === controlled && heldAsSovereign === controlled
       ? `Territory: holds ${regionCount(controlled)} on the current map, and is their lawful sovereign.`
       : `Territory: holds ${regionCount(controlled)} on the current map, and is the lawful sovereign of ${lawful}.`,
   ];
