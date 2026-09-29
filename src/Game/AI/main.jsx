@@ -109,6 +109,7 @@ import { describeReportsForPrompt, normalizeReports } from "../../runtime/report
 import { describeDocumentsForAdvisor } from "../../runtime/reportDelivery.js";
 import { viewAsSeen } from "../../runtime/gameState.js";
 import { withCatchUp } from "./conversationCatchUp.js";
+import { ADVISOR_MEMORY_DIRECTIVE, advisorMemoryContextEntry, latestAdvisorMemory, splitAdvisorMemory } from "./advisorMemory.js";
 import { buildDiplomaticPoliticalContext } from "./diplomaticPoliticalContext.js";
 import { buildAdvisorPoliticalDiplomacyContext } from "./advisorPoliticalDiplomacyContext.js";
 
@@ -3224,6 +3225,9 @@ async function buildAdvisorSystemPrompt() {
         // true now, whatever the record says. Empty — and so absent — without any.
         renderReminders(worldData?.simulationReminders, { formatDate: formatDateReadable }),
         ADVISOR_FORMATTING_DIRECTIVE,
+        // Last, as the last thing it writes: the hidden ADVISOR_MEMORY line
+        // (advisorMemory.js).
+        ADVISOR_MEMORY_DIRECTIVE,
     ].filter(Boolean);
     return { systemPrompt: `${rendered}\n\n${directives.join("\n\n")}`, lookups: groupLookups };
 }
@@ -3416,6 +3420,10 @@ export async function buildDiplomaticSystemPrompt(countries, playerCountry, spea
 }
 
 let advisorHistory = [];
+// The newest ADVISOR_MEMORY a reply carried (advisorMemory.js): sent ahead of
+// the history, which past MAX_LIVE_CHAT_MESSAGES keeps only snippets of the
+// oldest talk.
+let advisorMemory = "";
 const MAX_LIVE_CHAT_MESSAGES = 24;
 const RETAINED_LIVE_CHAT_MESSAGES = 18;
 
@@ -3462,8 +3470,15 @@ export async function sendMessage(userMessage, options) {
         // maxTokens 8192 caps the reply; onChunk (passed by the advisor UI) streams
         // it token-by-token. Providers that can't stream still return the full reply
         // here, so the advisor works either way.
-        const reply = await callAI(systemPrompt, advisorHistory, { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
-        advisorHistory.push({ role: "model", parts: [{ text: reply }] });
+        const memoryContext = advisorMemoryContextEntry(advisorMemory);
+        const reply = await callAI(systemPrompt, [...(memoryContext ? [memoryContext] : []), ...advisorHistory], { maxTokens: 8192, ...opts, languageMode: "chat", logLabel: "advisor", taskKey: "advisor", ...(lookups ? { lookups } : {}) });
+        // The memory line comes off before the reply joins the history: the
+        // model is given it once, ahead of the turns. A reply that dropped it
+        // keeps the last one. The raw reply goes back to the panel, which
+        // strips it the same way and keeps it on the stored message.
+        const { reply: shown, memory } = splitAdvisorMemory(reply);
+        if (memory) advisorMemory = memory;
+        advisorHistory.push({ role: "model", parts: [{ text: shown }] });
         // The raw reply, before advisor.jsx strips its ```actions / ```projects /
         // ```deploy blocks out of it. A block that was malformed, or that the UI
         // never found, is only diagnosable against the text the model actually
@@ -3481,6 +3496,7 @@ export async function sendMessage(userMessage, options) {
 }
 
 export function loadHistory(savedMessages) {
+    advisorMemory = latestAdvisorMemory(savedMessages);
     advisorHistory = savedMessages
     .filter((msg) => msg.role === "user" || msg.role === "advisor")
     .map((msg) => ({
@@ -3500,6 +3516,7 @@ export function loadHistory(savedMessages) {
 
 export function startChat() {
     advisorHistory = [];
+    advisorMemory = "";
     logDebugEvent("advisor", "Advisor chat started — history cleared.");
 }
 

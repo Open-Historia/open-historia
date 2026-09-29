@@ -18,6 +18,7 @@ import { parseAdvisorReply } from "./advisorReply.js";
 import { ADVISOR_SLIDE } from "./advisorSlide.js";
 import Markdown, { MarkdownStyleInjector } from "./markdown.jsx";
 import { buildCatchUpNote } from "../AI/conversationCatchUp.js";
+import { splitAdvisorMemory, stripAdvisorMemory } from "../AI/advisorMemory.js";
 import { gmChangesSince } from "../../runtime/gmChanges.js";
 import { compareGameDates, formatGameDateReadable } from "../../runtime/gameDates.js";
 import { useRuntimeState } from "../../runtime/useRuntimeState.js";
@@ -1178,15 +1179,19 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             const next = prev.slice();
             const last = next[next.length - 1];
             if (last && last.role === "advisor" && last.streaming) {
-                next[next.length - 1] = { ...last, text: fullText };
+                next[next.length - 1] = { ...last, text: stripAdvisorMemory(fullText) };
             } else {
-                next.push({ role: "advisor", text: fullText, time: askedOn, streaming: true });
+                next.push({ role: "advisor", text: stripAdvisorMemory(fullText), time: askedOn, streaming: true });
             }
             return next;
         });
 
         try {
-            const reply = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
+            const raw = await sendMessage(text, { onChunk: (_delta, full) => showStreaming(full), catchUp: catchUp.text });
+            // The hidden ADVISOR_MEMORY line (AI/advisorMemory.js) is kept on the
+            // message, never in its text: loadHistory sends the newest one ahead
+            // of the history after a reload.
+            const { reply, memory } = splitAdvisorMemory(raw);
             // Apply any ```actions proposal in the reply to the real queue BEFORE
             // finalising the message, so the confirmation card that renders with it
             // reflects what actually happened — not a re-derivation done later at
@@ -1257,7 +1262,7 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             setMessages(prev => {
                 const next = prev.slice();
                 const last = next[next.length - 1];
-                const finalMessage = { role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
+                const finalMessage = { role: "advisor", text: reply, time: askedOn, at: new Date().toISOString(), ...(memory ? { memory } : {}), ...(chartProblem ? { chartProblem } : {}), ...(actionsProblems.length ? { actionsProblems } : {}), ...(draftProblems.length ? { draftProblems } : {}), ...(institutionDraftProblems.length ? { institutionDraftProblems } : {}), ...(deployProblems.length ? { deployProblems } : {}), ...(actionsSummary ? { actionsSummary } : {}), ...(projectsSummary ? { projectsSummary } : {}), ...(projectsProblem ? { projectsProblem } : {}), ...(projectsDetail ? { projectsDetail } : {}), ...(projectsExcerptText ? { projectsExcerpt: projectsExcerptText } : {}) };
                 // Finalise the streaming bubble, or append the full reply if the
                 // provider never streamed a chunk.
                 if (last && last.role === "advisor" && last.streaming) {
