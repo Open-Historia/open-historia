@@ -353,17 +353,16 @@ if (breakdown.agriculture + breakdown.industry + breakdown.services !== 100)
 
 Each part is already a `percentageSchema` (int 0–100) by Layer 1, but three in-range integers can still sum to 97 or 110. This exact-equality check (`!== 100`, not a tolerance band) guarantees the three-slice pie the stat sheet renders is coherent. A model that emits `40/40/30` fails and, on attempt 1, is told to fix it.
 
-### 5.4 The capture-reluctance guard (Layer 2, `gameplay.js:1011-1032`)
+### 5.4 The capture-reluctance guards (Layer 2, `validateGeneratedWorldChanges` in `gameplay.js`)
 
-Not in `validateGameplayPayload` — it lives in `validateGeneratedWorldChanges`, which jump/GM tasks pass as their `validatePayload` callback. The recurring field report it fixes: "two turns of invasions and not a single province transferred."
+Not in `validateGameplayPayload` — they live in `validateGeneratedWorldChanges`, which jump/GM tasks pass as their `validatePayload` callback. The recurring field report they fix: "two turns of invasions and not a single province transferred."
 
-Logic (strict attempt only):
+They run on the strict attempt only, only for event-shaped payloads, and only while the `captureGuard` option is on (the default). The Game Master preview passes `captureGuard: false`: an administrative correction may mention an annexation without moving a border. Two checks, over every event's `title`+`description`:
 
-1. Sum `regionTransfers` across all event `impacts` containers.
-2. If the total is **0**, scan every event's `title`+`description` against `CAPTURE_LANGUAGE` — a deliberately narrow, word-boundary-anchored regex of *capture verbs* (`captur*`, `seiz*`, `annex*`, `conquer*`, `occupy/ies/ied/ation`, `overran`, `liberat*`, `retak*`, `cede*`, `fell to`, `falls to`; `gameplay.js:994`).
-3. If any event narrates a capture but zero regions moved, return a corrective error telling the model to add `regionTransfers` to every capture event **or** strip the capture language.
+1. **Control changes.** If the whole payload has **zero** `regionControlOps` and an event matches `CONTROL_CHANGE_LANGUAGE` — a word-boundary-anchored regex of *capture verbs* (`captur*`, `seiz*`, `conquer*`, `occupy/ies/ied/ation`, `overran/overrun`, `liberat*`, `retak*`, `recaptur*`, `fell to`, `falls to`, `takes control`, `assumes control`) — without also matching the legal wording below, the error asks for control operations (`op=control` for a capture/occupation/liberation, `op=contest` while a region is disputed) or for the capture language to go.
+2. **Legal transfers.** If the whole payload has **zero** `regionTransfers` and an event matches `LEGAL_TRANSFER_LANGUAGE` (`annex*`, `cede/ceded/ceding`, `cession`, `sovereignty passes/transfers`, `treaty transfer`, `formal(ly) transfer(red)`, `incorporat*`, `unification`, `territorial award`, `sold`, `sale of territory`), the error asks for legal transfers (one per region, or `wholeCountry: true` for a total annexation or unification) or for the settlement wording to go.
 
-It is narrow by design: "preoccupied"/"occupational" never match, and defensive battles that move no borders (war verbs, not capture verbs) are a legitimate zero-transfer turn and never trip it. English-only heuristic; non-English games just skip the nudge. Because it is **strict-only**, it can never cost a finished turn on the final attempt.
+So wartime captures belong in `regionControlOps`, not `regionTransfers`; `annex*` and `cede*` moved from the capture list to the legal one. Both regexes are narrow by design: "preoccupied"/"occupational" never match, and defensive battles that move no borders (war verbs, not capture verbs) never trip them. English-only heuristic; non-English games just skip the nudge. Because the guards are **strict-only**, they can never cost a finished turn on the final attempt.
 
 ---
 

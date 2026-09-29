@@ -5902,11 +5902,13 @@ export const validateGeneratedWorldChanges = async (candidate, world, {
     const exactGroupError = validateExactApprovedGroupAreas(containers);
     if (exactGroupError) return exactGroupError;
   }
-  // Reluctance guard (strict attempt only): events that NARRATE a capture while
-  // the whole payload ships ZERO regionTransfers are the recurring field report
-  // — "two turns of invasions and not a single province transferred". One
-  // corrective retry asks the model to reconcile narration with the map (or to
-  // strip the capture language if genuinely nothing changed hands). English
+  // Reluctance guards (strict attempt only): events that NARRATE a change of
+  // hands while the map does not move are the recurring field report — "two
+  // turns of invasions and not a single province transferred". Two checks: a
+  // capture/occupation with ZERO regionControlOps, and a legal settlement
+  // (annexation, cession, treaty) with ZERO regionTransfers. One corrective
+  // retry asks the model to reconcile narration with the map (or to strip the
+  // wording if genuinely nothing changed hands). English
   // verb heuristic only — a non-English game just never gets this extra nudge —
   // and the final attempt always passes through salvage, so it can never cost a
   // finished turn. Only for event-shaped payloads: a $.impacts container has no
