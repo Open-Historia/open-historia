@@ -1298,6 +1298,11 @@ export const pruneSatisfiedUnitOrders = (units, orders) => {
     // delete every patrol the instant it was created. It ends by expiry
     // (untilRound, in advanceStandingOrders) or when its unit goes away.
     if (order.kind === "patrol") return true;
+    // A unit still on its way keeps its order until it arrives: a step that stops
+    // inside the radius but short of the destination is not an arrival. Dropping
+    // it there left a division 59 km short of its destination reading "moving" with
+    // nothing to move it. The radius is for a unit already standing near.
+    if (unit.status === "moving") return true;
     return haversineKm(unit.lat, unit.lng, order.toLat, order.toLng) > PENDING_ORDER_ARRIVAL_KM;
   });
 };

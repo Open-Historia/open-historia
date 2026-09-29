@@ -1,7 +1,7 @@
 /*! Open Historia — native unit director tests © 2026 Nicholas Krol, AGPL-3.0-or-later (see LICENSE). */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { eventNeedsNativeUnitDirector, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
+import { eventNeedsNativeUnitDirector, orderRaisesForces, sanitizeDirectorOrders } from "./nativeUnitDirector.js";
 
 // Seen in a live game (2026-09-21): the jump moved the Falklands garrison to
 // Mount Pleasant, the turn review's director moved it there again, placement
@@ -80,6 +80,41 @@ test("a formation that already exists fighting again is still not a new one", ()
 test("an event that raises a new formation is one the director is asked about", () => {
   assert.equal(eventNeedsNativeUnitDirector({ title: "Burkina Faso Activates New VDP Rapid-Reaction Battalion at Dori" }), true);
   assert.equal(eventNeedsNativeUnitDirector({ title: "Government Raises a Volunteer Militia in Soum Province" }), true);
+});
+
+// Seen in a player's Game (2026-09-29): an order to place a garrison became
+// "British Army Deploys New Strategic Garrison to <town>", and the director
+// marched the one armoured division there instead. A garrison placed at a named
+// spot is a new fixed formation, not a move of one that exists.
+const britishDivision = {
+  id: "unit-uk", name: "1st British Assault Division", type: "armor",
+  ownerCode: "British Empire", strength: 80, lng: -4.25, lat: 55.86,
+};
+const garrisoning = (title, description = "") => sanitizeDirectorOrders({
+  events: [{ title, description, kind: "player", impacts: {} }],
+  orders: [{ eventIndex: 0, unitOps: [{ op: "spawn", unit: { name: "Stranraer Garrison", type: "garrison", ownerCode: "British Empire", strength: 100, lng: -5.03, lat: 54.9 } }] }],
+  units: [britishDivision],
+  game: {},
+});
+
+test("a garrison placed, stationed or established at a named place is a new formation", () => {
+  assert.equal(orderRaisesForces("Place a garrison in Stranraer"), true);
+  assert.equal(orderRaisesForces("Station a garrison at Ayr"), true);
+  for (const [title, description] of [
+    ["British Army Deploys New Strategic Garrison to Stranraer", ""],
+    ["British Army Establishes a Garrison at Stranraer", "The British Army executes an operational deployment to establish a permanent military garrison in Stranraer."],
+    ["Britain Places a Garrison in Stranraer", ""],
+  ]) {
+    assert.equal(eventNeedsNativeUnitDirector({ title, description }), true, title);
+    const { acceptedByEvent, diagnostics } = garrisoning(title, description);
+    assert.equal(acceptedByEvent.get(0)?.length, 1, `${title}: ${JSON.stringify(diagnostics)}`);
+  }
+});
+
+test("an existing garrison holding or reinforced is not a new one", () => {
+  const { acceptedByEvent } = garrisoning("Stranraer Garrison Holds Firm", "The garrison repelled a probe at dawn.");
+  assert.equal(acceptedByEvent.get(0), undefined);
+  assert.equal(orderRaisesForces("Place sanctions on Russia"), false);
 });
 
 test("money or votes raised for an army are not a new formation", () => {

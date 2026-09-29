@@ -64,12 +64,19 @@ const DECISIVE_OUTCOME_PATTERN =
 // raised correctly was thrown away because only armies down to regiments, with
 // nothing between "new" and the noun, counted.
 const FORMATION_NOUN =
-  "(?:army|armies|corps|divisions?|brigades?|regiments?|battalions?|compan(?:y|ies)|militias?|forces?|legions?|detachments?|contingents?|battle ?groups?|formations?)";
+  "(?:army|armies|corps|divisions?|brigades?|regiments?|battalions?|compan(?:y|ies)|militias?|forces?|legions?|detachments?|contingents?|battle ?groups?|formations?|garrisons?)";
 const DESCRIBING_WORD = "(?:(?!(?:for|to|of|with|and|or|the|in|on|at|from|against|by)\\b)[\\w-]+ )";
+// A garrison is placed rather than raised: "place a garrison in Stranraer",
+// "establishes a permanent military garrison". Only a garrison takes these verbs
+// as a new formation; "stations its battalion at Dori" is still a move.
+const GARRISON_PLACED =
+  "\\b(?:places?|placed|placing|stations?|stationed|stationing|posts?|posted|posting|establish(?:es|ed|ing)?|sets? up|setting up)\\b"
+  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}garrisons?\\b";
 const RAISED_FORMATION_PATTERN = new RegExp(
   "\\bnew " + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b"
   + "|\\b(?:forms?|formed|forming|raises?|raised|raising|activates?|activated|stands? up|stood up|creates?|created|musters?|mustered)\\b"
-  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b",
+  + " (?:an? |its )?(?:new )?" + DESCRIBING_WORD + "{0,3}" + FORMATION_NOUN + "\\b"
+  + "|" + GARRISON_PLACED,
   "i",
 );
 
@@ -82,9 +89,11 @@ const isNewFormation = (text) => NEW_FORMATION_PATTERN.test(text) || RAISED_FORM
 // that event happens to be worded.
 const ORDER_RAISES_PATTERN = /\b(?:raise|raises|recruit|recruits|form|forms|mobili[sz]e|mobili[sz]es|muster|musters|stand up|create|creates|deploy|deploys|send|sends)\b/i;
 const FORMATION_NOUN_PATTERN = new RegExp("\\b" + FORMATION_NOUN + "\\b", "i");
+const GARRISON_PLACED_PATTERN = new RegExp(GARRISON_PLACED, "i");
 export const orderRaisesForces = (text) => {
   const value = String(text ?? "");
-  return ORDER_RAISES_PATTERN.test(value) && (FORMATION_NOUN_PATTERN.test(value) || MILITARY_FORMATION_PATTERN.test(value));
+  return GARRISON_PLACED_PATTERN.test(value)
+    || (ORDER_RAISES_PATTERN.test(value) && (FORMATION_NOUN_PATTERN.test(value) || MILITARY_FORMATION_PATTERN.test(value)));
 };
 const orderedForces = (event) => event?.ordered?.forces === true;
 

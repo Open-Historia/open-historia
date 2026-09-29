@@ -13813,6 +13813,9 @@ const UNIT_DIRECTOR_INSTRUCTION =
   // that makes a ship or a squadron a NEW formation sat only in the system
   // prompt. It is the last thing the model reads before answering.
   + "A ship, submarine or squadron COMMISSIONED, delivered, stood up or entering service is a new formation that does not exist yet: spawn it for the power that commissioned it, at its named port or base, even when that power already has units. "
+  // A player's order to place a garrison became a march of the one
+  // armoured division there (2026-09-29): a garrison is fixed where it is put.
+  + "A garrison placed, stationed or established at a named place is likewise new: spawn it there with type \"garrison\"; never march an existing field formation in its place. "
   + "No ops is valid only when the event has no material persistent-unit consequence. Prefer `at` with the event's named destination instead of guessing coordinates. Return JSON only.";
 const TERRITORY_DIRECTOR_INSTRUCTION =
   "Reconcile the supplied events with de-facto territorial control. Add only control/contest/clear operations that the event itself supports; never invent a legal sovereignty transfer. Return JSON only.";
