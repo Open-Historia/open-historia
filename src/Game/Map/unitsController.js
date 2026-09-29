@@ -80,6 +80,9 @@ export const getUnitOrder = (unitId) =>
 export const getPlayerCode = () => playerCode;
 // The scenario's allowed deployable troop types, or null when unrestricted.
 export const getAllowedUnitTypes = () => allowedUnitTypes;
+// Whether `type` may be deployed under `allowed` (null or empty: any type).
+export const isDeployableType = (type, allowed) =>
+  !Array.isArray(allowed) || allowed.length === 0 || allowed.includes(String(type ?? "").trim().toLowerCase());
 export const getInteractionMode = () => interactionMode;
 export const setInteractionMode = (next) => {
   interactionMode = next && next.kind ? next : { kind: "idle" };
@@ -430,8 +433,12 @@ export const revertUnitOrder = async (revert) => {
     }));
 };
 
+// Returns null, placing nothing, for a type the scenario does not allow
+// (world.allowedUnitTypes): the Forces panel only offers those, and this holds
+// the rule for every other caller too (the advisor's one-click deployments).
 export const deployUnit = async ({ type, strength, name, composition, lng, lat }) => {
   if (!playerCode) await bootstrap();
+  if (!isDeployableType(type, allowedUnitTypes)) return null;
   // Deploy as PENDING (rendered translucent): the player states an intent, and the
   // AI confirms, relocates or rejects it on the next time-jump.
   // Built outside the commit so the queued order can reference its id.

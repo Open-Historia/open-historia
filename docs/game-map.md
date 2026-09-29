@@ -313,7 +313,7 @@ A module-level store, separate from `useWorldState` but with the same 5s cadence
 
 | Function | Effect | Instant feedback | AI hand-off |
 |---|---|---|---|
-| `deployUnit` | Add a `pending` unit (translucent) | placed locally | queues a "Deploy request" order; revert = remove |
+| `deployUnit` | Add a `pending` unit (translucent); returns `null` and places nothing for a type outside `world.allowedUnitTypes` | placed locally | queues a "Deploy request" order; revert = remove |
 
 Player deploy is purely local **and** queues a machine-readable `action` (via `queueOrder`) so the AI confirms, repositions or rejects it on the next jump. The player never moves or fights a formation by hand: they state intent (`requestUnitOrders`, also an `action`), and the engine (`runtime/unitMotion.js`) and the AI carry it out.
 
