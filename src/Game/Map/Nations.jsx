@@ -602,6 +602,9 @@ const WorldMap = ({ isGlobe = false }) => {
   const enqueuedBoundaryClaimantsRef = useRef(null);
   const enqueuedBoundaryLabelNamesRef = useRef(null);
   const boundaryWorkerRestartCountRef = useRef(0);
+  // The worker gave up for good on this geometry (no retry left): every later
+  // readiness mark says so, or the next one would read as a recovery.
+  const bordersFailedRef = useRef(false);
   const regionOwnershipOverridesRef = useRef(regionOwnershipOverrides);
   regionOwnershipOverridesRef.current = regionOwnershipOverrides;
   const regionClaimantsRef = useRef(regionClaimants);
@@ -1535,6 +1538,7 @@ const WorldMap = ({ isGlobe = false }) => {
     enqueuedBoundaryLabelNamesRef.current = null;
 
     if (!customFlag) {
+      bordersFailedRef.current = false;
       releaseAllOwnershipPresentation();
       setInitialCartographySettled(true);
       setInitialRegionRepairSettled(true);
@@ -1568,6 +1572,7 @@ const WorldMap = ({ isGlobe = false }) => {
       // finishes. Canonical per-region rendering remains the only truth while
       // the replacement cartography is being derived.
       boundaryWorkerRestartCountRef.current = 0;
+      bordersFailedRef.current = false;
       clearDerivedCartography({ resetMetadata: true });
     }
 
@@ -1587,6 +1592,11 @@ const WorldMap = ({ isGlobe = false }) => {
       worker = new Worker(new URL("./vnext/polityBoundariesWorker.js", import.meta.url), { type: "module" });
     } catch (error) {
       console.warn("Political cartography worker is unavailable:", error);
+      logDebugEvent("warn", "[map] Political cartography worker is unavailable; borders and labels fall back to the simpler form.", {
+        error: String(error?.message ?? error),
+        regionsUrl: regionsGeojsonUrl,
+      });
+      bordersFailedRef.current = true;
       setInitialCartographySettled(true);
       setInitialRegionRepairSettled(true);
       setCustomRegionMeta(EMPTY_CUSTOM_REGION_META);
@@ -1651,16 +1661,23 @@ const WorldMap = ({ isGlobe = false }) => {
       worker.terminate();
       polityBoundaryWorkerRef.current = null;
       polityBoundarySchedulerRef.current = null;
+      const retrying = boundaryWorkerRestartCountRef.current < 1;
       if (initialFailure) {
         clearDerivedCartography({ resetMetadata: true });
-        markPolitiesReady(regionsGeojsonUrl, { failed: true });
+        // Not a failure yet: the replacement worker below may still succeed.
+        // With no retry left, the branch below marks the failure.
+        if (retrying) markPolitiesReady(regionsGeojsonUrl);
       }
-      if (boundaryWorkerRestartCountRef.current < 1) {
+      if (retrying) {
         boundaryWorkerRestartCountRef.current += 1;
         setBoundaryWorkerEpoch((epoch) => epoch + 1);
       } else {
         // Two failed worker generations must degrade to canonical fills/legacy
         // labels rather than holding the scenario-open screen until its ceiling.
+        bordersFailedRef.current = true;
+        logDebugEvent("warn", "[map] Political cartography failed twice; borders and labels fall back to the simpler form.", {
+          regionsUrl: regionsGeojsonUrl,
+        });
         setInitialCartographySettled(true);
         setInitialRegionRepairSettled(true);
         markPolitiesReady(regionsGeojsonUrl, { failed: true });
@@ -1977,6 +1994,10 @@ const WorldMap = ({ isGlobe = false }) => {
       if (worker !== polityBoundaryWorkerRef.current) return;
       releaseAllOwnershipPresentation();
       console.warn("Political cartography worker failed:", error);
+      logDebugEvent("warn", "[map] Political cartography worker failed.", {
+        error: String(error?.message ?? error),
+        regionsUrl: regionsGeojsonUrl,
+      });
       restartWorker({ initialFailure: !catalogReady });
     };
 
@@ -2059,7 +2080,7 @@ const WorldMap = ({ isGlobe = false }) => {
       && !ptrPolityTextStatus.mounted
       && !ptrPolityTextStatus.failed
     ) return;
-    markPolitiesReady(regionsGeojsonUrl);
+    markPolitiesReady(regionsGeojsonUrl, { failed: bordersFailedRef.current });
   }, [
     customFlag,
     customRegionMeta.ready,

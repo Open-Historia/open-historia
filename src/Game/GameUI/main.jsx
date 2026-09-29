@@ -32,6 +32,7 @@ import {
   syncAiDebugContext,
 } from "../AI/providerConfig.js";
 import { FallbackSwitchNotice } from "./fallbackSwitchNotice.jsx";
+import { BordersFallbackNotice } from "./bordersFallbackNotice.jsx";
 
 // Whether anything in the Fallback list has what its provider needs, and the
 // top entry's provider for the start-of-game prompt's wording. Re-read whenever
@@ -675,6 +676,7 @@ const Main = ({
         />
       </Presence>
       <FallbackSwitchNotice />
+      <BordersFallbackNotice />
     </>
   );
 };

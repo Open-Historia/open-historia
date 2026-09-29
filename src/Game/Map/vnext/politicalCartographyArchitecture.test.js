@@ -65,7 +65,7 @@ test("catalog metadata stays early while scenario readiness waits for safe geome
   assert.match(worker, /if \(type === "initialize"\) \{[\s\S]*scheduleRegionRenderRepair/);
   assert.match(nations, /ptrBlocksInitialReadiness/);
   assert.match(nations, /!ptrPolityTextStatus\.mounted[\s\S]*!ptrPolityTextStatus\.failed/);
-  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl\)/);
+  assert.match(nations, /markPolitiesReady\(regionsGeojsonUrl, \{ failed: bordersFailedRef\.current \}\)/);
   // The source and the worker fetch through the worker-fetchable URL (a blob:
   // copy on the website); the runtime URL stays the identity above.
   assert.match(nations, /useWorkerFetchableUrl\(regionsGeojsonUrl\)/);
