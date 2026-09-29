@@ -331,8 +331,10 @@ const ScenarioDetail = ({ post, busy, onImport, onBack, notice, error, touch }) 
       Likes and comments live on the scenario's GitHub post — tap 👍 or 💬 above (or the button below) to open it and react there.
     </div>
 
-    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem" }}>
-      {post.description || "No description."}
+    {/* The whole description, in the author's own lines (hubPosts.js);
+        the card shows the one-line cut. */}
+    <p style={{ color: "rgba(244,244,246,0.8)", fontSize: "0.9rem", lineHeight: 1.6, marginBottom: "1.3rem", overflowWrap: "anywhere", whiteSpace: "pre-line" }}>
+      {post.fullDescription || post.description || "No description."}
     </p>
 
     {/* Wraps on a phone, where the two side by side are wider than the screen. */}

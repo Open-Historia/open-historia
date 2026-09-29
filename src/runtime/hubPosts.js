@@ -76,7 +76,8 @@ export const parsePost = (issue, importsById) => {
   // the "Made by" or auto-filled "Basemap info" (hash/kind) sections — those are
   // metadata, not copy. Falls back to the whole body for old, non-form posts.
   const descSection = body.match(/###\s*Description[^\n]*\n+([\s\S]*?)(?=\n###\s|$)/i);
-  const description = (descSection ? descSection[1] : body)
+  const prose = (descSection ? descSection[1] : body)
+    .replace(/\r\n?/g, "\n")
     .replace(/###\s*Basemap info[\s\S]*$/i, "")     // auto-filled technical section (fallback path)
     .replace(/^Basemap-(?:Hash|Kind):.*$/gim, "")   // stray hash/kind lines
     .replace(/^Flags-Count:.*$/gim, "")             // flag-pack tag (see communityFlags.js)
@@ -85,11 +86,17 @@ export const parsePost = (issue, importsById) => {
     .replace(/<img[^>]*>/gi, "")
     .replace(/\[[^\]]*\]\([^)]*\)/g, "")             // markdown links (the dragged-in scenario file)
     .replace(BUNDLE_LINK_PATTERN, "")               // a bare bundle URL (older posts)
-    .replace(/^#+\s*.*$/gim, "")                      // any leftover headings
-    .replace(/\b(?:Scenario|Bundle) file:\s*/gi, "") // older "Scenario file:" label
-    .replace(/_No response_/gi, "")                  // GitHub's placeholder for empty fields
-    .replace(/\s+/g, " ")
+    .replace(/^#+[ \t]*.*$/gim, "")                   // any leftover headings
+    .replace(/\b(?:Scenario|Bundle) file:[ \t]*/gi, "") // older "Scenario file:" label
+    .replace(/_No response_/gi, "");                 // GitHub's placeholder for empty fields
+  // The author's own line breaks kept — setup notes and how to play read as
+  // they wrote them on the detail view. Cards and search get one line.
+  const fullDescription = prose
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
+  const description = fullDescription.replace(/\s+/g, " ");
   const coverImageMatch = body.match(COVER_IMAGE_PATTERN);
   const coverImageUrl = coverImageMatch ? (coverImageMatch[1] ?? coverImageMatch[2] ?? null) : null;
   // Import count comes ONLY from our own counter Worker, keyed by hub issue number.
@@ -117,6 +124,7 @@ export const parsePost = (issue, importsById) => {
     upvotes: issue.reactions?.["+1"] ?? 0,
     comments: issue.comments ?? 0,
     description: description.length > 200 ? `${description.slice(0, 197)}...` : description,
+    fullDescription,
     bundleUrl,
     installs,
     coverImageUrl,
