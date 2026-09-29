@@ -2057,10 +2057,11 @@ export const buildBoundedDiplomaticContext = (
     })
     .slice(0, MAX_CONTEXT_AGREEMENTS);
 
-  // Every standing subordination, the attention actors' first, as the TRUTH —
-  // loyalty, secrecy and who else has found out. Not only the attention
-  // actors': the world has few of them (MAX_PUPPETS), and a covert Puppet left
-  // out of the slice is a country the simulator narrates as independent. This context reaches the jump, the idle
+  // Every standing subordination up to MAX_CONTEXT_PUPPETS, the attention
+  // actors' first, as the TRUTH — loyalty, secrecy and who else has found out.
+  // Not only the attention actors': a covert Puppet left out of the slice is a
+  // country the simulator narrates as independent. This context reaches the
+  // jump, the idle
   // diplomacy pass and next-speaker, all of which reason about the whole world.
   // It does NOT reach a leader or a group turn, and must not: a leader speaks as
   // one country and is briefed on what that country knows instead
