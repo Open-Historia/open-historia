@@ -50,6 +50,13 @@ const storedBoolean = (key, fallback) => {
     }
 };
 
+// Stored on, lookups still run only while requests are not being saved
+// (gameplay.js lookupFunctionsEnabled), so the file says when they are not.
+const lookupFunctionsState = () => {
+    const on = getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions);
+    return on && requestSettings.saveRequests() ? "on (inactive: Save AI requests)" : onOff(on);
+};
+
 registerSettingsSnapshot("Display", () => [
     ["UI language", languageDisplayName(getStoredLanguage())],
     ["AI chat language", languageDisplayName(getStoredChatLanguage())],
@@ -109,7 +116,7 @@ registerSettingsSnapshot("AI", () => {
         ["Model reasoning", onOff(getReasoningEnabled())],
         ["Limit AI generation", onOff(getMapSetting(MAP_SETTING_KEYS.limitAiGeneration))],
         ["Generate long time skips in segments", onOff(getMapSetting(MAP_SETTING_KEYS.chunkLongJumps))],
-        ["AI lookup functions", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.lookupFunctions))],
+        ["AI lookup functions", lookupFunctionsState()],
         ["Show time skip events as they are written", onOff(getMapSettingDefaultOn(MAP_SETTING_KEYS.liveSkipEvents))],
         ["Batch background AI tasks", onOff(getMapSetting(MAP_SETTING_KEYS.batchBackgroundTasks))],
         ["Record AI telemetry", onOff(isTelemetryEnabled())],

@@ -315,7 +315,9 @@ const ChatLanguageSelector = () => {
 // On a touch screen the whole row is the switch: the pill alone is 28 px tall,
 // under a thumb's width, and the label beside it is what a thumb goes for. The
 // pill keeps its size and stops shrinking when a long label wraps beside it.
-const Toggle = ({ label, enabled, onToggle }) => {
+// `inactive`: the switch keeps its stored choice and can still be flipped, but
+// something else stops it working for now, which the line under the label says.
+const Toggle = ({ label, enabled, onToggle, inactive = "" }) => {
     const touch = useTouchPrimary();
     return (
     <div
@@ -329,7 +331,14 @@ const Toggle = ({ label, enabled, onToggle }) => {
         ...(touch ? { cursor: "pointer", gap: "0.75rem" } : null),
     }}
     >
-    <span style={{ fontSize: "0.9rem" }}>{label}</span>
+    {inactive
+        ? (
+            <span style={{ minWidth: 0 }}>
+            <span style={{ display: "block", fontSize: "0.9rem" }}>{label}</span>
+            <span style={{ color: "rgba(255,255,255,0.5)", display: "block", fontSize: "0.72rem", marginTop: "0.1rem" }}>{inactive}</span>
+            </span>
+        )
+        : <span style={{ fontSize: "0.9rem" }}>{label}</span>}
     <button
     onClick={touch ? undefined : onToggle}
     style={{
@@ -340,7 +349,7 @@ const Toggle = ({ label, enabled, onToggle }) => {
         cursor: "pointer",
         position: "relative",
         transition: "0.3s",
-        backgroundColor: enabled ? "#3b82f6" : "#55555b",
+        backgroundColor: enabled ? (inactive ? "rgba(59,130,246,0.35)" : "#3b82f6") : "#55555b",
         ...(touch ? { flexShrink: 0 } : null),
     }}
     >
@@ -1067,6 +1076,17 @@ const useRequestDay = () => {
         };
     }, []);
     return day;
+};
+
+// Whether requests are being saved, following the switch in AI requests.
+const useSavingRequests = () => {
+    const [saving, setSaving] = useState(() => requestSettings.saveRequests());
+    useEffect(() => {
+        const refresh = () => setSaving(requestSettings.saveRequests());
+        window.addEventListener("ai:request-budget", refresh);
+        return () => window.removeEventListener("ai:request-budget", refresh);
+    }, []);
+    return saving;
 };
 
 // Task keys the request count holds that are not per-task models
@@ -1998,6 +2018,9 @@ const SettingsWorkspace = ({
     const leaving = usePresenceLeaving();
     const cardRef = useRef(null);
     const [politicalWorldLabOpen, setPoliticalWorldLabOpen] = useState(false);
+    // Lookups run only while requests are not being saved (gameplay.js
+    // lookupFunctionsEnabled), so the switch shows as paused meanwhile.
+    const savingRequests = useSavingRequests();
     useWorkspaceMorph(cardRef, fromRect, closing);
 
     useEffect(() => {
@@ -2150,7 +2173,7 @@ const SettingsWorkspace = ({
                     <div style={settingsHelper}>
                     Off (default): the whole skip is generated in a single request. On: skips of more than a few months are generated in several shorter requests and merged into one round — slower and costlier in tokens, but far less likely to time out on a hosted provider.
                     </div>
-                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
+                    <Toggle label="AI lookup functions" enabled={mapSettings.lookupFunctions} inactive={savingRequests ? "Paused while Save AI requests is on" : ""} onToggle={() => updateMapSetting("lookupFunctions", MAP_SETTING_KEYS.lookupFunctions, !mapSettings.lookupFunctions)} />
                     <div style={settingsHelper}>
                     Only used while Save AI requests (above) is off, because every lookup is a whole extra request. On: before it answers, the model can call lookup functions — the exact power and region names, a region's neighbours, the war ledger, a chat — in up to three extra requests per task. Off: one request per task, with the region lists and ledgers written into the prompt instead. Needs a provider that supports function calling.
                     </div>
