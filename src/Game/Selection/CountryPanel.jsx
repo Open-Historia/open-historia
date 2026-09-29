@@ -5,14 +5,15 @@ import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { useBackToClose } from "../../runtime/backToClose.js";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
-import { getNationFlags, getNationTags, loadRegionCatalog } from "../../runtime/assets.js";
+import { JSON_URLS, getNationFlags, getNationTags, loadRegionCatalog, loadScenarioRegionCatalog } from "../../runtime/assets.js";
 import { resolveCountryTags } from "../../runtime/countryTags.js";
-import { readEventsState, readGameData, readWorldState } from "../../runtime/gameState.js";
+import { classifyPolityRegions, resolvePanelPolity } from "../../runtime/countryInfoPanel.js";
+import { readEventsState, readGameData, readWorldStateView } from "../../runtime/gameState.js";
 import { puppetSummaryFor } from "../../runtime/puppets.js";
 import { requestDiplomaticChat } from "../GameUI/chat.jsx";
 import GameFlagPicker from "../GameUI/GameFlagPicker.jsx";
+import { getWorldStateSnapshot, useWorldState } from "../Map/useWorldState.js";
 import { resolvePolityFlag } from "../../runtime/polityFlags.js";
-import { resolvePolityIdentity } from "../../runtime/polityIdentity.js";
 import { generateCountryStats } from "../AI/gameplayLazy.js";
 
 // Bridge: the region popup's info button opens this panel from outside React.
@@ -97,105 +98,63 @@ const eventInvolvesCountry = (event, code, name) => {
 const CountryInfoPanel = () => {
     const isMobile = useIsMobile();
     const [country, setCountry] = useState(null); // { code, name, flagUrl, flagEmoji }
-    const [events, setEvents] = useState([]);
-    const [aliases, setAliases] = useState([]);
-    const [tags, setTags] = useState([]);
-    const [regions, setRegions] = useState([]);
-    const [controlledForeignRegions, setControlledForeignRegions] = useState([]);
-    const [occupiedSovereignRegions, setOccupiedSovereignRegions] = useState([]);
+    // What the panel read for `country` when it opened; null while it reads,
+    // so nothing of the previous country is ever shown under this one's name.
+    const [loaded, setLoaded] = useState(null);
     const [search, setSearch] = useState("");
     const [filterIndex, setFilterIndex] = useState(0);
     const [report, setReport] = useState(null); // null | "loading" | text | {error}
     const [flagFailed, setFlagFailed] = useState(false);
-    const [worldState, setWorldState] = useState(null);
     const [flagCatalog, setFlagCatalog] = useState({});
-    const [polityKey, setPolityKey] = useState("");
-    const [displayName, setDisplayName] = useState("");
     const [flagPickerOpen, setFlagPickerOpen] = useState(false);
-    const [playerCountry, setPlayerCountry] = useState("");
+    const [worldWrites, setWorldWrites] = useState(0);
+    // The map's world store. During a turn's staged reveal it holds the world
+    // the map is showing, not the saved one the reveal is heading towards, so
+    // the panel never tells the player what the map has not shown yet.
+    const mapState = useWorldState();
 
     _openPanel = (next) => {
-        setCountry(next);
+        // A fresh object, so reopening the same country reads it again.
+        setCountry(next ? { ...next } : null);
+        setLoaded(null);
         setSearch("");
         setFilterIndex(0);
         setReport(null);
         setFlagFailed(false);
         setFlagPickerOpen(false);
-        setPolityKey("");
-        setDisplayName(next?.name || "");
     };
 
     useEffect(() => {
-        if (!country) return;
+        if (!country) return undefined;
         let cancelled = false;
 
         (async () => {
-            try {
-                const [allEvents, world, catalog, baseTags, flags, game] = await Promise.all([
-                    readEventsState({ force: true }).catch(() => []),
-                    readWorldState({ force: true }),
-                    loadRegionCatalog().catch(() => []),
-                    getNationTags().catch(() => ({})),
-                    getNationFlags({ force: true }).catch(() => ({})),
-                    readGameData().catch(() => ({})),
-                ]);
-                if (cancelled) return;
-                setPlayerCountry(game?.country || "");
-
-                const identity = resolvePolityIdentity(
-                    country.polityKey || country.name || country.code,
-                    world,
-                    { allowUnknown: false, requireActive: false, allowCoreMatch: true, allowStockBase: true },
-                );
-                const stableKey = identity.resolved || country.polityKey || country.name || country.code;
-                const polity = world.polityOverrides?.[stableKey];
-                const currentName = polity?.name || country.name || stableKey;
-
-                setWorldState(world);
-                setFlagCatalog(flags || {});
-                setPolityKey(stableKey);
-                setDisplayName(currentName);
-                setEvents((allEvents ?? []).filter((event) => eventInvolvesCountry(event, stableKey, currentName)));
-                setAliases(polity?.aliases ?? []);
-                // The author's starting tags unless the AI has since rewritten them.
-                setTags(resolveCountryTags(baseTags, world, stableKey));
-
-                const ownership = world.regionOwnershipOverrides ?? {};
-                const sovereignty = world.regionSovereigntyOverrides ?? {};
-                const sovereign = [];
-                const controlledForeign = [];
-                const occupiedSovereign = [];
-                const seen = new Set();
-
-                const classify = (regionId, regionName, baseOwner = "") => {
-                    const controller = ownership[regionId] ?? baseOwner;
-                    const legalOwner = sovereignty[regionId] ?? controller;
-                    if (legalOwner === stableKey) sovereign.push(regionName);
-                    if (controller === stableKey && legalOwner && legalOwner !== stableKey) controlledForeign.push(regionName);
-                    if (legalOwner === stableKey && controller && controller !== stableKey) occupiedSovereign.push(regionName);
-                    seen.add(regionId);
-                };
-
-                for (const region of catalog) classify(region.id, region.name, region.countryCode);
-
-                // overrides can reference custom/legacy regions missing from the catalog.
-                // don't make them disappear from the panel just because the lookup is incomplete.
-                const extraIds = new Set([...Object.keys(ownership), ...Object.keys(sovereignty)]);
-                for (const regionId of extraIds) {
-                    if (!seen.has(regionId)) classify(regionId, regionId, "");
-                }
-
-                setRegions([...new Set(sovereign)]);
-                setControlledForeignRegions([...new Set(controlledForeign)]);
-                setOccupiedSovereignRegions([...new Set(occupiedSovereign)]);
-            } catch {
-                if (!cancelled) {
-                    setEvents([]);
-                    setRegions([]);
-                    setControlledForeignRegions([]);
-                    setOccupiedSovereignRegions([]);
-                }
-            }
+            // The map's live world when it has one. Only before the map has
+            // loaded is the saved world read, as the shared read-only view.
+            const snapshot = getWorldStateSnapshot();
+            const [allEvents, savedWorld, drawnCatalog, baseTags, flags, game] = await Promise.all([
+                readEventsState().catch(() => []),
+                snapshot ? null : readWorldStateView().catch(() => null),
+                loadScenarioRegionCatalog().catch(() => []),
+                getNationTags().catch(() => ({})),
+                getNationFlags().catch(() => ({})),
+                readGameData().catch(() => ({})),
+            ]);
+            // The catalog Stats counts territory from: the rendered map's own
+            // regions, and the merged stock catalog only when it draws none.
+            const drawn = Array.isArray(drawnCatalog) && drawnCatalog.length > 0;
+            const catalog = drawn ? drawnCatalog : await loadRegionCatalog().catch(() => []);
+            if (cancelled) return;
+            setFlagCatalog(flags || {});
+            setLoaded({
+                country,
+                allEvents: allEvents ?? [],
+                savedWorld,
+                catalog: catalog ?? [],
+                drawn,
+                baseTags: baseTags || {},
+                game: game || {},
+            });
         })();
 
         return () => {
@@ -203,11 +162,74 @@ const CountryInfoPanel = () => {
         };
     }, [country]);
 
+    // While the panel is open it follows the game: a write the map store does
+    // not republish (tags, aliases) still re-reads the live world, and a new
+    // event log or round is picked up from the cache the write primed.
+    useEffect(() => {
+        if (!country || typeof window === "undefined") return undefined;
+        let cancelled = false;
+        const onWorldUpdated = () => setWorldWrites((count) => count + 1);
+        const onJsonUpdated = (event) => {
+            const url = event?.detail?.url;
+            const read = url === JSON_URLS.events
+                ? readEventsState().then((allEvents) => ({ allEvents: allEvents ?? [] }))
+                : url === JSON_URLS.game
+                    ? readGameData().then((game) => ({ game: game || {} }))
+                    : null;
+            read?.then((patch) => {
+                if (!cancelled) setLoaded((current) => (current?.country === country ? { ...current, ...patch } : current));
+            }).catch(() => {});
+        };
+        window.addEventListener("oh:world-updated", onWorldUpdated);
+        window.addEventListener("oh:runtime-json-updated", onJsonUpdated);
+        return () => {
+            cancelled = true;
+            window.removeEventListener("oh:world-updated", onWorldUpdated);
+            window.removeEventListener("oh:runtime-json-updated", onJsonUpdated);
+        };
+    }, [country]);
+
+    const ready = Boolean(country && loaded?.country === country);
+    const worldState = useMemo(
+        () => (ready ? getWorldStateSnapshot() || loaded.savedWorld || {} : null),
+        // The snapshot is re-read whenever the map store publishes or the world is written.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [ready, loaded, mapState.worldState, worldWrites],
+    );
+    const identity = useMemo(() => (worldState ? resolvePanelPolity(country, worldState) : null), [country, worldState]);
+    const polityKey = identity?.stableKey || "";
+    const displayName = identity?.currentName || country?.name || "";
+    const playerCountry = ready ? loaded.game?.country || "" : "";
+    const aliases = Array.isArray(identity?.polity?.aliases) ? identity.polity.aliases : [];
+    // The author's starting tags unless the AI has since rewritten them.
+    const tags = useMemo(
+        () => (identity ? resolveCountryTags(loaded.baseTags, worldState, identity.stableKey) : []),
+        [identity, loaded, worldState],
+    );
+    const regionLists = useMemo(
+        () => classifyPolityRegions({
+            catalog: identity ? loaded.catalog : [],
+            world: worldState ?? {},
+            polityKey,
+            includeUncatalogued: Boolean(loaded) && !loaded.drawn,
+        }),
+        [identity, loaded, worldState, polityKey],
+    );
+    const regions = regionLists.sovereign;
+    const controlledForeignRegions = regionLists.controlledForeign;
+    const occupiedSovereignRegions = regionLists.occupiedSovereign;
+    const events = useMemo(
+        () => (identity ? loaded.allEvents.filter((event) => eventInvolvesCountry(event, identity.stableKey, identity.currentName)) : []),
+        [identity, loaded],
+    );
+
     useEffect(() => {
         if (!country) return;
         let cancelled = false;
         const refresh = () => {
-            getNationFlags({ force: true })
+            // flags.json is invalidated and announced by the asset writer, so
+            // the memoized catalog is already the new one.
+            getNationFlags()
                 .then((flags) => {
                     if (!cancelled) {
                         setFlagCatalog(flags || {});
@@ -342,7 +364,11 @@ const CountryInfoPanel = () => {
         </button>
         </div>
 
-        {filteredEvents.length === 0 ? (
+        {!ready ? (
+            <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.8rem", padding: "0.3rem 0 0.4rem" }}>
+            Loading...
+            </div>
+        ) : filteredEvents.length === 0 ? (
             <div style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.8rem", padding: "0.3rem 0 0.4rem" }}>
             No events found for this country.
             </div>

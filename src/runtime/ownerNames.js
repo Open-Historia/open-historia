@@ -27,6 +27,13 @@ export const isCountryCode = (token) => {
   return Boolean(raw) && Boolean(COUNTRY_NAMES[raw] || COUNTRY_NAMES[raw.toUpperCase()]);
 };
 
+// Who holds a catalog region before any override: the owner the map bakes in
+// (`country`), else the country its GADM code names. A bare `countryCode` is
+// provenance, never an owner, so comparing one against a polity key misses
+// every region the world has not moved.
+export const regionBaseOwner = (region) =>
+  String(region?.country ?? "").trim() || toCountryName(region?.countryCode);
+
 // ---------------------------------------------------------------------------
 // Display names vs identity
 //
