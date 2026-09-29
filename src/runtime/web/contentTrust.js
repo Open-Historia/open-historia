@@ -8,7 +8,7 @@
 // Web build only (dynamically imported behind import.meta.env.VITE_OH_WEB from
 // assets.js), so none of this ships in the local download.
 
-import { fetchSignedJson } from "./trust.js";
+import { SIGNED_FETCH_TIMEOUT_MS, fetchSignedJson } from "./trust.js";
 import { hasScenarioPmtilesOverride } from "./libraryStore.js";
 
 // The signed node directory is served live by the registry Worker (it changes as
@@ -53,7 +53,8 @@ const loadManifest = () => {
 // directory's vetted ids so a node URL changing on restart needs no admin re-sign.
 const loadLiveUrls = () => {
   if (!liveNodesPromise) {
-    liveNodesPromise = fetch(LIVE_NODES_URL, { cache: "no-store" })
+    // Same deadline as the signed directory it is read beside: past it, no nodes.
+    liveNodesPromise = fetch(LIVE_NODES_URL, { cache: "no-store", signal: AbortSignal.timeout(SIGNED_FETCH_TIMEOUT_MS) })
       .then((r) => (r.ok ? r.json() : { nodes: [] }))
       .then((j) => j.nodes || [])
       .catch(() => []);

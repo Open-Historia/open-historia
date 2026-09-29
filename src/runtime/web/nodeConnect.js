@@ -79,7 +79,7 @@ export const connectBestNode = async () => {
   }
   // Moving to a different node? Let the old one drop us now rather than later.
   if (connected && connected.url && connected.url !== best.url) sendLeave();
-  try { await fetch(`${best.url}/oh/v1/ping`, { cache: "no-store" }); } catch { /* count is best-effort */ }
+  try { await fetch(`${best.url}/oh/v1/ping`, { cache: "no-store", signal: AbortSignal.timeout(4000) }); } catch { /* count is best-effort */ }
   setPreferredNode(best.url);
   startHeartbeat(best.url);
   installLeaveBeacon();

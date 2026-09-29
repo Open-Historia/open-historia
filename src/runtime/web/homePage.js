@@ -5,7 +5,7 @@
 // only, never in the local download.
 
 import { connectBestNode } from "./nodeConnect.js";
-import { isNativeApp } from "./nativeBoot.js";
+import { CONNECT_DEADLINE_MS, isNativeApp } from "./nativeBoot.js";
 
 const ENTERED_KEY = "oh:entered";
 const FONTS_HREF = "https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700;800&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap";
@@ -243,8 +243,14 @@ const demoAcknowledged = () => {
         overlay = el("div", { className: "oh-home", id: "oh-home-root" }, card);
         document.body.append(overlay); // up immediately — no flash of the game behind
 
-        // Connect to the best node in the background.
-        connectBestNode().then(renderConnection).catch(() => renderConnection({ origin: true }));
+        // Connect to the best node in the background. Games live in this browser and
+        // the map falls back to the origin, so a connection that has not settled by
+        // the deadline must not keep the player out: show the origin, enable Enter,
+        // and let a node that answers later replace it.
+        let settled = false;
+        const deadline = setTimeout(() => { if (!settled) renderConnection({ origin: true }); }, CONNECT_DEADLINE_MS);
+        const settle = (connection) => { settled = true; clearTimeout(deadline); renderConnection(connection); };
+        connectBestNode().then(settle).catch(() => settle({ origin: true }));
       };
 
       // Whether the home page should be shown this load (skipped once the player has

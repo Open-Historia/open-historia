@@ -238,7 +238,7 @@ Because every byte is hash-verified, an un-vetted node can at worst be useless; 
 
 ### Signature verification (`trust.js` + `trust/pinned-key.js`)
 
-`fetchSignedJson(url)` (`trust.js:41`) fetches `url` and `url.sig`, verifies the **detached Ed25519 signature over the exact served bytes** against the pinned root key(s), and enforces `keyid` + `expires`. Returns `{valid, data, reason}`; any of unsigned / bad-signature / expired / keyid-unknown ⇒ `valid:false` and the client simply **doesn't use nodes** and falls back to the origin — a broken trust chain degrades safely.
+`fetchSignedJson(url)` (`trust.js`) fetches `url` and `url.sig` (both bounded by `SIGNED_FETCH_TIMEOUT_MS`, 4 s, body included; `nodes-live.json` has the same deadline), verifies the **detached Ed25519 signature over the exact served bytes** against the pinned root key(s), and enforces `keyid` + `expires`. Returns `{valid, data, reason}`; any of unsigned / bad-signature / expired / keyid-unknown / timed out ⇒ `valid:false` and the client simply **doesn't use nodes** and falls back to the origin — a broken trust chain degrades safely.
 
 - `verifyDetached` uses `@noble/ed25519`.
 - `PINNED_ROOT_KEYS` (`trust/pinned-key.js`) — currently one key `oh-root-1` — is compiled into both the client and the node software; the private key is offline. Rotation = ship both keys for one release, then drop the old one.
@@ -265,7 +265,7 @@ A full-screen parchment/Roman overlay injected over the already-mounted game on 
 
 | Control | Behavior |
 |---|---|
-| Connection panel | "Finding the nearest node…" → connected node card (**anonymous node id only**, region, latency, `players/max` bar) or "Connected via the origin" fallback. Fed by `connectBestNode()` → `renderConnection`. |
+| Connection panel | "Finding the nearest node…" → connected node card (**anonymous node id only**, region, latency, `players/max` bar) or "Connected via the origin" fallback. Fed by `connectBestNode()` → `renderConnection`. If the connection has not settled by `CONNECT_DEADLINE_MS` (8 s, `nativeBoot.js`) it shows the origin and enables Enter; a node that answers later replaces it. |
 | **⚔ Enter Open Historia** | `enter()` — sets the `oh:entered` flag and removes the overlay. |
 | Footer links | GitHub, Discord, Host a node. |
 

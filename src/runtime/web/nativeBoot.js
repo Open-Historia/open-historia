@@ -27,10 +27,11 @@ const BOOT_ID = "oh-native-boot";
 export const MIN_VISIBLE_MS = 500;
 
 // The boot screen must never be the reason a player cannot reach their games. A
-// node probe already has its own 4s timeout, but the directory fetch in front of
-// it does not, and a captive portal can hang a request indefinitely. Past this the
-// screen comes down regardless; the connection keeps going and simply settles
-// behind the game, which is what the heartbeat does for the rest of the session.
+// node probe has its own 4s timeout and the directory fetch in front of it
+// another 4s (trust.js), so a stalled network settles on the origin by about
+// here. Past this the screen comes down regardless; the connection keeps going
+// and simply settles behind the game, which is what the heartbeat does for the
+// rest of the session.
 export const CONNECT_DEADLINE_MS = 8000;
 
 // Capacitor injects window.Capacitor before the bundle runs. Same signal router.js
