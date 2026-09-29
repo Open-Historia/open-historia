@@ -78,6 +78,10 @@ import {
   PREGAME_BOOTSTRAP_CONTRACT_VERSION,
   compilePregameBootstrapCandidate,
 } from "./pregameBootstrapCompiler.js";
+import {
+  derivePregameBootstrapCoverageRequirements,
+  validatePregameBootstrapCoverage,
+} from "./pregameBootstrapCoverage.js";
 import { validateGameMasterRequestedPuppetCompleteness, requestExplicitlyInstallsPuppet } from "./gameMasterRequestCompleteness.js";
 import { generatedInstitutionOutcomeIntegrityIssue } from "./institutionOutcomeIntegrity.js";
 import { POLITICAL_TRAIT_KEYS } from "../../runtime/politicalTraitRegistry.js";
@@ -720,6 +724,7 @@ ROUND-ZERO AUDIT
 - Persist the sparse bilateral relation climate central actors need for Day-One decisions.
 - Represent unresolved non-war processes that materially shape Day-One decisions; do not duplicate a live war as another storyline.
 - Preserve current state, not historical lifecycle steps. Historical cards are evidence, not bookkeeping padding.
+${normalizeString(variables?.pregameAuthoritativeCoverageActors) ? `- Scenario-authoritative armed actors that MUST appear in a war or unresolved non-war storyline: ${normalizeString(variables.pregameAuthoritativeCoverageActors)}. Native validation checks this coverage but does not decide which process/side they belong to.` : ""}
 
 CURRENT ROUND-ONE POLITIES (structured-output authority):
 ${vocabulary}
@@ -16668,13 +16673,28 @@ const validatePregamePolityVocabulary = (candidate, { world = {}, canonicalPolit
 // canonical state with identities chosen from an old snapshot.
 const validatePregameCanonicalBootstrap = (
   candidate,
-  { world = {}, startDate = "", strict = true, canonicalPolities = [] } = {},
+  {
+    world = {},
+    startDate = "",
+    strict = true,
+    canonicalPolities = [],
+    briefing = "",
+    coverageRequirements = null,
+  } = {},
 ) => {
   const eventError = validatePregameEvents(candidate, { startDate, strict });
   if (eventError) return eventError;
 
   const polityError = validatePregamePolityVocabulary(candidate, { world, canonicalPolities });
   if (polityError) return polityError;
+
+  const coverageError = validatePregameBootstrapCoverage(candidate, {
+    world,
+    briefing,
+    canonicalPolities,
+    requirements: coverageRequirements,
+  });
+  if (coverageError) return coverageError;
 
   const eventRefs = buildPregameEventIdsByRef(candidate?.events);
   if (eventRefs.error) return eventRefs.error;
@@ -16723,12 +16743,21 @@ export const maybeGeneratePregameHistory = async () => {
     // diplomacy ledgers: a campaign that opens mid-war starts with that war on
     // the books, and a standing alliance is a fact from day one.
     const canonicalPolities = await buildCurrentCanonicalPolityVocabulary(bundle.world);
+    const pregameCoverageRequirements = derivePregameBootstrapCoverageRequirements({
+      briefing,
+      world: bundle.world,
+      canonicalPolities,
+    });
     const variables = {
       ...(await buildTemplateVariables(bundle, { lookups: true })),
       pregameStartDate: startDate,
       pregameCanonicalPolityVocabulary: canonicalPolities.length
         ? canonicalPolities.map((name) => `- ${name}`).join("\n")
         : "No current polity vocabulary was available.",
+      pregameAuthoritativeCoverageActors: pregameCoverageRequirements
+        .map((entry) => normalizeString(entry?.polity))
+        .filter(Boolean)
+        .join("; "),
     };
     const { payload } = await runJsonTask("pregameHistory", {
       lookups: buildTaskLookups(bundle),
@@ -16746,6 +16775,8 @@ export const maybeGeneratePregameHistory = async () => {
           startDate,
           strict: !finalAttempt,
           canonicalPolities,
+          briefing,
+          coverageRequirements: pregameCoverageRequirements,
         }),
       variables,
     });
@@ -16779,6 +16810,19 @@ export const maybeGeneratePregameHistory = async () => {
 
       const eventRefs = buildPregameEventIdsByRef(sourceEvents, generatedEvents);
       if (eventRefs.error) throw new Error(eventRefs.error);
+
+      const freshCoverageRequirements = derivePregameBootstrapCoverageRequirements({
+        briefing,
+        world: currentWorld,
+        canonicalPolities,
+      });
+      const freshCoverageError = validatePregameBootstrapCoverage(payload, {
+        world: currentWorld,
+        briefing,
+        canonicalPolities,
+        requirements: freshCoverageRequirements,
+      });
+      if (freshCoverageError) throw new Error(freshCoverageError);
 
       // CP2.2 cutover: compile the exact accepted semantic candidate against the
       // FRESH canonical world inside the queued mutation. Persistent ids,
@@ -16843,7 +16887,8 @@ export const maybeGeneratePregameHistory = async () => {
         `[ai] pregame semantic bootstrap v${PREGAME_BOOTSTRAP_CONTRACT_VERSION}: ` +
         `${bootstrapEvents.length} event(s), ${factCounts.war || 0} war fact(s), ${factCounts.relation || 0} relation fact(s), ` +
         `${factCounts.agreement || 0} agreement fact(s), ${factCounts.puppet || 0} puppet fact(s), ` +
-        `${factCounts.storyline || 0} non-war storyline fact(s), ${derivedStorylineIds.length} derived war mirror(s).`,
+        `${factCounts.storyline || 0} non-war storyline fact(s), ${derivedStorylineIds.length} derived war mirror(s), ` +
+        `${freshCoverageRequirements.length} authoritative armed-actor coverage anchor(s).`,
       );
 
       const summary = normalizeString(payload?.summary);
