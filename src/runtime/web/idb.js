@@ -144,17 +144,3 @@ export const kvUpdate = (key, updater, fallback = null) =>
     await promisifyRequest(store.put({ key, value: next }));
     return next;
   });
-
-// Read-modify-write a keyed record (id-based store) atomically.
-export const idbUpdate = (store, key, updater) =>
-  runTx(store, "readwrite", async (tx) => {
-    const objectStore = tx.objectStore(store);
-    const current = await promisifyRequest(objectStore.get(key));
-    const next = updater(current);
-    if (next === undefined) {
-      await promisifyRequest(objectStore.delete(key));
-      return null;
-    }
-    await promisifyRequest(objectStore.put(next));
-    return next;
-  });

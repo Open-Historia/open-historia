@@ -5,7 +5,6 @@ import {
   addInstitutionProposalAmendment,
   applyInstitutionGovernanceCommand,
   castInstitutionProposalVote,
-  castInstitutionProposalVoteBatch,
   closeInstitutionProposalVoting,
   createInstitutionProposal,
   institutionEligibleVoters,
@@ -309,9 +308,7 @@ test("accepted text-only amendment blocks stale executable consequences until ex
   result = resolveInstitutionProposalAmendment({ world: result.world, institutionId: "council", proposalId: "p1", amendmentId: "a1", status: "accepted", requester: "A" });
   result = transitionInstitutionProposal({ world: result.world, institutionId: "council", proposalId: "p1", status: "formalized" });
   result = openInstitutionProposalVoting({ world: result.world, institutionId: "council", proposalId: "p1" });
-  result = castInstitutionProposalVoteBatch({ world: result.world, institutionId: "council", proposalId: "p1", playerCountry: "", ballots: [
-    { polity: "A", choice: "yes" }, { polity: "B", choice: "yes" }, { polity: "C", choice: "yes" },
-  ] });
+  for (const polity of ["A", "B", "C"]) result = vote(result.world, polity, "yes");
   result = closeInstitutionProposalVoting({ world: result.world, institutionId: "council", proposalId: "p1" });
   assert.equal(result.proposal.status, "passed");
   const implemented = implementInstitutionProposal({ world: result.world, institutionId: "council", proposalId: "p1" });
@@ -538,38 +535,15 @@ test("formal ballots are immutable once recorded", () => {
   assert.equal(result.proposal.voting.ballots.B.choice, "yes");
 });
 
-test("NPC ballot batch is atomic, cannot include player, and snapshots canonical governments", () => {
-  let result = open();
-  result.world.politicalActors.byPolity.B = { polityKey: "B", government: { form: "Parliamentary republic", headOfGovernment: "Prime B" } };
-  result.world.politicalActors.byPolity.C = { polityKey: "C", government: { form: "Republic", headOfState: "President C" } };
-  const batch = castInstitutionProposalVoteBatch({
-    world: result.world,
-    institutionId: "council",
-    proposalId: "p1",
-    playerCountry: "A",
-    date: "2000-01-05",
-    ballots: [
-      { polity: "B", choice: "yes", reason: "Government supports the program." },
-      { polity: "C", choice: "abstain", reason: "Coalition remains divided." },
-    ],
-  });
-  assert.equal(batch.proposal.voting.ballots.B.choice, "yes");
-  assert.match(batch.proposal.voting.ballots.B.government, /Prime B|Parliamentary republic/);
-  assert.equal(batch.proposal.voting.ballots.C.choice, "abstain");
-  assert.throws(() => castInstitutionProposalVoteBatch({
-    world: result.world,
-    institutionId: "council",
-    proposalId: "p1",
-    playerCountry: "A",
-    ballots: [{ polity: "A", choice: "yes" }],
-  }), /cannot cast the player's/i);
-});
-
-test("complete ballot batch finalizes, implements and emits one canonical institutional outcome event", () => {
+test("the ballot that completes the vote finalizes, implements and emits one canonical institutional outcome event", () => {
   let result = open(simpleRule, {
     consequences: [{ id: "admit-d", kind: "membership", op: "join", polity: "D", status: "member" }],
   });
   result = vote(result.world, "A", "yes");
+  result = castInstitutionProposalVote({
+    world: result.world, institutionId: "council", proposalId: "p1", polity: "B", choice: "yes",
+    date: "2000-01-05", government: "Gov", reason: "Supports the joint program.", playerCountry: "A",
+  });
   const resolved = applyInstitutionGovernanceCommand({
     world: result.world,
     chats: [],
@@ -578,12 +552,11 @@ test("complete ballot batch finalizes, implements and emits one canonical instit
     playerCountry: "A",
     date: "2000-01-06",
     command: {
-      type: "vote-batch",
+      type: "vote",
       proposalId: "p1",
-      ballots: [
-        { polity: "B", choice: "yes", reason: "Supports the joint program." },
-        { polity: "C", choice: "yes", reason: "Supports regional cooperation." },
-      ],
+      polity: "C",
+      choice: "yes",
+      reason: "Supports regional cooperation.",
       finalizeWhenComplete: true,
       implementWhenPassed: true,
     },
@@ -602,7 +575,7 @@ test("complete ballot batch finalizes, implements and emits one canonical instit
   assert.equal(resolved.events[0].agency.authority, "autonomous");
 });
 
-test("incomplete NPC batch does not close or emit an outcome event while player ballot is still missing", () => {
+test("an NPC ballot does not close or emit an outcome event while player ballot is still missing", () => {
   const result = applyInstitutionGovernanceCommand({
     world: open().world,
     chats: [],
@@ -611,12 +584,10 @@ test("incomplete NPC batch does not close or emit an outcome event while player 
     playerCountry: "A",
     date: "2000-01-05",
     command: {
-      type: "vote-batch",
+      type: "vote",
       proposalId: "p1",
-      ballots: [
-        { polity: "B", choice: "yes" },
-        { polity: "C", choice: "yes" },
-      ],
+      polity: "B",
+      choice: "yes",
       finalizeWhenComplete: true,
       implementWhenPassed: true,
     },

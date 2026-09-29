@@ -4225,8 +4225,6 @@ const registerPendingBatch = (entry) => {
   }
 };
 
-export const pendingBatchCount = () => pendingBatches.size;
-
 export const pollPendingBatches = async () => {
   if (pendingBatches.size === 0 || isSimulationBusy()) return;
   for (const [customId, entry] of [...pendingBatches]) {
@@ -12575,14 +12573,6 @@ export const checkDemandReply = async ({ chat, speaker, reply, answering = "", m
   return events;
 };
 
-export const consolidateRecentHistory = async ({ limit = 12 } = {}) => {
-  const bundle = await readGameStateBundle({ force: true });
-  const events = getUnconsolidatedEvents(bundle.events, bundle.world).slice(0, limit);
-  const chats = normalizeChats(bundle.chats).filter((chat) => chat.status === "closed").slice(0, limit);
-  const { summary } = await consolidateHistoryBatch(bundle, events, chats);
-  return summary;
-};
-
 // Cheats → History Document: fold the older unconsolidated history now —
 // everything but the retained tail, one batch — regardless of the round and
 // size thresholds, and write the pass and the revised document. Refused while
@@ -17053,7 +17043,3 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     setChatGenerationInFlight(false);
   }
 };
-
-// Clearer name for what this now does. The old export stays because main.jsx
-// imports it dynamically and the docs reference it by name.
-export const maybeRunIdlePulse = maybeSendIdleDiplomacy;

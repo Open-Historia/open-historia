@@ -21,8 +21,6 @@ const key = (feature) => {
   return id === undefined || id === null || id === "" ? null : String(id);
 };
 
-export const regionDeltaKey = key;
-
 // A payload the client meant as a delta, as opposed to a full FeatureCollection
 // or nothing at all.
 export const isRegionDelta = (value) =>

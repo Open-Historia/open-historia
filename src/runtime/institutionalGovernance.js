@@ -477,59 +477,6 @@ export const castInstitutionProposalVote = ({
   return { world, institution, proposal: institution.proposals[proposal.id], ballot: institution.proposals[proposal.id].voting.ballots[canonicalEligible] };
 };
 
-// Record a model-resolved NPC ballot batch in one normalization/mutation pass.
-// The caller may never supply the player ballot through this path. All rows are
-// validated first; one stale/illegal row rejects the WHOLE batch so a partial AI
-// result cannot become a half-legal institutional decision.
-export const castInstitutionProposalVoteBatch = ({
-  world: worldInput = {}, institutionId = "", proposalId = "", ballots = [],
-  date = "", playerCountry = "",
-} = {}) => {
-  const { world, institutions, institution } = normalizedWorldAndInstitution(worldInput, institutionId);
-  const proposal = clone(proposalMap(institution)[slug(proposalId)]);
-  if (!proposal || lower(proposal.status) !== "voting" || !proposal.voting) throw new Error("Proposal is not open for voting.");
-  const rows = list(ballots);
-  if (!rows.length) throw new Error("Institutional NPC ballot batch is empty.");
-
-  const eligible = list(proposal.voting.eligibleVoters);
-  const existing = new Set(Object.values(proposal.voting.ballots || {}).map((ballot) => lower(ballot?.polity)).filter(Boolean));
-  const seen = new Set();
-  const validated = [];
-  const rule = normalizeInstitutionVotingRule(proposal.voting.rule || {});
-
-  for (const row of rows) {
-    const requested = clean(row?.polity);
-    const canonicalEligible = eligible.find((entry) => lower(entry) === lower(requested));
-    if (!canonicalEligible) throw new Error(`${requested || "<blank>"} is not eligible to vote on ${proposal.id}.`);
-    if (playerCountry && lower(canonicalEligible) === lower(playerCountry)) {
-      throw new Error("NPC ballot batch cannot cast the player's institutional vote.");
-    }
-    const key = lower(canonicalEligible);
-    if (seen.has(key)) throw new Error(`NPC ballot batch contains duplicate voter ${canonicalEligible}.`);
-    if (existing.has(key)) throw new Error(`${canonicalEligible} has already cast a ballot on ${proposal.id}.`);
-    seen.add(key);
-    const choice = lower(row?.choice);
-    if (!["yes", "no", "abstain", "veto"].includes(choice)) throw new Error(`Unsupported vote ${row?.choice || "<blank>"}.`);
-    if (choice === "veto" && !isVetoHolder(institution, rule, canonicalEligible)) {
-      throw new Error(`${canonicalEligible} does not hold veto authority in ${institution.name}.`);
-    }
-    validated.push({
-      polity: canonicalEligible,
-      choice,
-      date: clean(date),
-      government: institutionGovernmentSnapshot(world, canonicalEligible),
-      reason: clean(row?.reason).slice(0, 1200),
-    });
-  }
-
-  proposal.voting.ballots = { ...(proposal.voting.ballots || {}) };
-  for (const ballot of validated) proposal.voting.ballots[ballot.polity] = ballot;
-  proposal.lastUpdatedDate = clean(date) || proposal.lastUpdatedDate || "";
-  institution.proposals = { ...proposalMap(institution), [proposal.id]: normalizeInstitutionProposal(proposal, proposal.id, world) };
-  commitInstitution(world, institutions, institution);
-  return { world, institution, proposal: institution.proposals[proposal.id], ballots: validated };
-};
-
 export const closeInstitutionProposalVoting = ({
   world: worldInput = {}, institutionId = "", proposalId = "", date = "",
 } = {}) => {
@@ -728,13 +675,6 @@ const systemTextForCommand = (institution, proposal, command, detail = {}) => {
   if (command === "amendment-status") return `${institution.name}: amendment ${detail.amendmentId || ""} ${detail.status}.`;
   if (command === "open-voting") return `${institution.name}: voting opened on ${title}.`;
   if (command === "vote") return `${detail.polity} cast a recorded ballot on ${title}.`;
-  if (command === "vote-batch") {
-    const count = Number(detail.ballotCount) || 0;
-    const outcome = detail.outcome;
-    return outcome
-      ? `${institution.name}: ${count} member ballot${count === 1 ? "" : "s"} recorded; ${title} ${outcome.status}${outcome.reason ? ` (${outcome.reason})` : ""}.`
-      : `${institution.name}: ${count} member ballot${count === 1 ? "" : "s"} recorded on ${title}.`;
-  }
   if (command === "close-voting") return `${institution.name}: ${title} ${proposal.status}${detail.outcome?.reason ? ` (${detail.outcome.reason})` : ""}.`;
   if (command === "implement") return `${institution.name}: implementation updated for ${title} — ${proposal.implementation?.status || "pending"}.`;
   return `${institution.name}: ${title} updated.`;
@@ -896,12 +836,6 @@ export const applyInstitutionGovernanceCommand = ({
     playerCountry,
     authority: command.authority || "npc",
   });
-  else if (type === "vote-batch") result = castInstitutionProposalVoteBatch({
-    ...common,
-    proposalId: command.proposalId,
-    ballots: command.ballots,
-    playerCountry,
-  });
   else if (type === "close-voting") result = closeInstitutionProposalVoting({ ...common, proposalId: command.proposalId });
   else if (type === "implement") result = implementInstitutionProposal({ ...common, proposalId: command.proposalId, playerCountry, externalConsequenceApplier });
   else throw new Error(`Unsupported institutional governance command ${command.type || "<blank>"}.`);
@@ -916,13 +850,13 @@ export const applyInstitutionGovernanceCommand = ({
     result = { ...result, ...implemented, outcome };
     implementation = implemented.implementation;
   }
-  if (["vote", "vote-batch"].includes(type) && command.finalizeWhenComplete === true && lower(result.proposal?.status) === "voting") {
+  if (type === "vote" && command.finalizeWhenComplete === true && lower(result.proposal?.status) === "voting") {
     const voting = result.proposal.voting || {};
     const recorded = new Set(Object.values(voting.ballots || {}).map((ballot) => lower(ballot?.polity)).filter(Boolean));
     const complete = list(voting.eligibleVoters).every((polity) => recorded.has(lower(polity)));
     if (complete) {
       const closed = closeInstitutionProposalVoting({ world: result.world, institutionId, proposalId: result.proposal.id, date });
-      result = { ...result, ...closed, ballots: result.ballots, ballot: result.ballot };
+      result = { ...result, ...closed, ballot: result.ballot };
       outcome = closed.outcome;
       closedThisCommand = true;
       if (outcome.status === "passed" && command.implementWhenPassed === true) {
@@ -939,7 +873,6 @@ export const applyInstitutionGovernanceCommand = ({
   const proposal = result.proposal;
   const text = systemTextForCommand(institution, proposal, type, {
     ...command,
-    ballotCount: result.ballots?.length,
     outcome,
   });
   const chats = reconcileChatsForPlayer(

@@ -615,69 +615,6 @@ const scaleComponentPopulationExact = (components, predicate, targetPopulation) 
   };
 };
 
-export const calibrateTerritorialComponentPopulations = (componentsInput, calibration) => {
-  const components = normalizeTerritorialComponents(componentsInput);
-  if (!components.length) {
-    return { components: [], error: "population calibration requires at least one valid territorial component." };
-  }
-  if (!calibration || typeof calibration !== "object" || Array.isArray(calibration)) {
-    return { components, error: "populationCalibration is required for this native Stats bootstrap/reconstruction." };
-  }
-
-  const total = parseStatNumber(calibration.totalPopulation);
-  const core = parseStatNumber(calibration.coreIntegratedPopulation);
-  const other = parseStatNumber(calibration.otherTerritoriesPopulation);
-  if (![total, core, other].every((value) => Number.isFinite(value) && value >= 0)) {
-    return { components, error: "populationCalibration must provide non-negative numeric totalPopulation, coreIntegratedPopulation, and otherTerritoriesPopulation." };
-  }
-
-  const targetTotal = Math.round(total);
-  const targetCore = Math.round(core);
-  const targetOther = Math.round(other);
-  if (!(targetTotal > 0)) {
-    return { components, error: "populationCalibration.totalPopulation must be greater than zero." };
-  }
-  if (targetCore + targetOther !== targetTotal) {
-    return {
-      components,
-      error: `populationCalibration group targets must sum exactly to totalPopulation (${targetCore} + ${targetOther} != ${targetTotal}).`,
-    };
-  }
-
-  const corePredicate = (component) => component.group !== "overseas/dependent";
-  const otherPredicate = (component) => component.group === "overseas/dependent";
-  const before = aggregateTerritorialEconomy(components);
-
-  let next = components;
-  const coreScaled = scaleComponentPopulationExact(next, corePredicate, targetCore);
-  if (coreScaled.error) return { components, error: coreScaled.error };
-  next = coreScaled.components;
-
-  const otherScaled = scaleComponentPopulationExact(next, otherPredicate, targetOther);
-  if (otherScaled.error) return { components, error: otherScaled.error };
-  next = otherScaled.components;
-
-  const after = aggregateTerritorialEconomy(next);
-  if (!after || after.population !== targetTotal || after.corePopulation !== targetCore || after.otherPopulation !== targetOther) {
-    return {
-      components,
-      error: `population calibration invariant failed after scaling (expected ${targetTotal}/${targetCore}/${targetOther}; got ${after?.population ?? "none"}/${after?.corePopulation ?? "none"}/${after?.otherPopulation ?? "none"}).`,
-    };
-  }
-
-  return {
-    components: next,
-    error: "",
-    diagnostics: {
-      beforeTotal: before?.population ?? null,
-      afterTotal: after.population,
-      coreTarget: targetCore,
-      otherTarget: targetOther,
-      totalTarget: targetTotal,
-    },
-  };
-};
-
 
 // The per-component split: how a macro bucket's population divides between its
 // components, and each component's own group and productivity.

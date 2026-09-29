@@ -12,7 +12,6 @@ import {
   advanceStandingOrders,
   applyEventImpactsToWorld,
   applyUnitOpBatch,
-  applyUnitOps,
   buildOwnerFootprint,
   clampUnitStrength,
   clearStaleUnitMotion,
@@ -278,12 +277,6 @@ test("removing a unit takes its standing order with it", () => {
   ], {});
   assert.equal(removed.units.length, 0);
   assert.equal(removed.orders.length, 0);
-});
-
-test("applyUnitOps keeps its old array contract for any caller that still expects it", () => {
-  const units = applyUnitOps([], [spawnOp({ id: "x" })], {});
-  assert.ok(Array.isArray(units));
-  assert.equal(units.length, 1);
 });
 
 // ---- advanceStandingOrders -------------------------------------------------

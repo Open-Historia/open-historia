@@ -309,10 +309,6 @@ const aliasScore = (alias, needle) => {
   return 0;
 };
 
-// The same rule ranks geocoder results, whose own order ignores what was typed.
-export const scorePlaceName = (name, query) =>
-  aliasScore(normalizePlaceText(name), normalizePlaceText(query));
-
 export const searchLocalPlaces = (entries, query, limit = 4) => {
   const needle = normalizePlaceText(query);
   if (!needle || !entries?.length || limit <= 0) return [];

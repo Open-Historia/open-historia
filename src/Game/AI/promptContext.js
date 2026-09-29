@@ -440,27 +440,6 @@ export const buildConsolidatedHistoryText = (
   });
 };
 
-export const buildCampaignHistoryText = (
-  events,
-  world,
-  {
-    consolidatedMaxChars = 0,
-    consolidatedSelection = "tail",
-    currentDate = "",
-    eventMaxChars = 0,
-    limit = 24,
-  } = {},
-) => [
-  "STORY SO FAR:",
-  buildConsolidatedHistoryText(world, {
-    maxChars: consolidatedMaxChars,
-    selection: consolidatedSelection,
-  }),
-  "",
-  "RECENT EVENTS:",
-  buildEventHistoryText(events, { currentDate, limit, maxChars: eventMaxChars, world }),
-].join("\n");
-
 
 const compactHistoricalAnchorText = (value, maxChars = 260) => {
   const text = normalizeString(value).replace(/\s+/g, " ");

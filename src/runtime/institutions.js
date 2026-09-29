@@ -996,27 +996,6 @@ export const institutionLifecycleCaseForPolity = (institution = {}, polityInput 
 };
 
 
-export const recordInstitutionAgendaCheck = ({
-  world: worldLike = {}, institutionId = "", date = "", round = 0, outcome = "none", sourceEventIds = [],
-} = {}) => {
-  const world = clone(worldLike || {});
-  const institutions = normalizeInstitutions(world.institutions, world);
-  const id = canonicalInstitutionIdentity({ id: institutionId }).id;
-  const institution = institutions.byId[id];
-  if (!institution) return { world: { ...world, institutions }, institution: null, error: `Unknown institution ${clean(institutionId) || "<blank>"}.` };
-  const previous = normalizeInstitutionGovernanceActivity(institution.governanceActivity);
-  const nextOutcome = ["proposal", "amendment", "advanced"].includes(lower(outcome)) ? lower(outcome) : "none";
-  institution.governanceActivity = normalizeInstitutionGovernanceActivity({
-    lastAgendaDate: clean(date) || previous.lastAgendaDate,
-    lastAgendaRound: Number.isFinite(Number(round)) ? Number(round) : previous.lastAgendaRound,
-    lastAgendaOutcome: nextOutcome,
-    consecutiveEmptyAgendaChecks: nextOutcome === "none" ? previous.consecutiveEmptyAgendaChecks + 1 : 0,
-    sourceEventIds: unique(sourceEventIds, 24),
-  });
-  institutions.byId[id] = normalizeInstitutionRecord(institution, id, world);
-  return { world: { ...world, institutions }, institution: institutions.byId[id], error: "" };
-};
-
 export const resolveInstitutionRecord = (world = {}, institutionInput = "") => {
   const institutions = world?.institutions && typeof world.institutions === "object" ? world.institutions : {};
   const byId = institutions.byId && typeof institutions.byId === "object" && !Array.isArray(institutions.byId)
@@ -1103,133 +1082,6 @@ export const bindInstitutionUpdatesToEvents = (updatesInput, eventsInput) => {
     ], 24);
     return { ...update, eventIds };
   });
-};
-
-const institutionEventText = (event = {}) => clean(`${event?.title || ""} ${event?.description || ""}`);
-const textToken = (value) => clean(value).toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-const containsSemanticToken = (text, value) => {
-  const token = textToken(value);
-  if (!token) return false;
-  return textToken(text).includes(token);
-};
-const CREATE_EVENT_RE = /\b(?:establish(?:es|ed|ing)?|create(?:s|d|ing)?|form(?:s|ed|ing)?|found(?:s|ed|ing)?|constitut(?:e|es|ed|ing)|charter(?:s|ed|ing)?|launch(?:es|ed|ing)?)\b/i;
-const JOIN_EVENT_RE = /\b(?:join(?:s|ed|ing)?|admit(?:s|ted|ting)?|accession|accede(?:s|d)?|becomes?\s+(?:a\s+)?member|enters?\s+(?:the\s+)?(?:alliance|union|organization|organisation|council|bloc|pact))\b/i;
-const LEAVE_EVENT_RE = /\b(?:withdraw(?:s|n|al)?|leave(?:s|ft|ing)?|exit(?:s|ed|ing)?|resign(?:s|ed|ing)?\s+(?:from\s+)?(?:membership|the\s+organization|the\s+organisation|the\s+alliance|the\s+union))\b/i;
-const SUSPEND_EVENT_RE = /\bsuspend(?:s|ed|ing|sion)?\b/i;
-const RESTORE_EVENT_RE = /\b(?:restore(?:s|d|ing)?|reinstate(?:s|d|ing)?|readmit(?:s|ted|ting)?)\b/i;
-const ROLE_EVENT_RE = /\b(?:elect(?:s|ed|ing)?|appoint(?:s|ed|ing)?|select(?:s|ed|ing)?|name(?:s|d|ing)?|chair(?:s|ed|ing)?|lead(?:s|ing)?|leadership)\b/i;
-const DISSOLVE_EVENT_RE = /\b(?:dissolv(?:e|es|ed|ing)|disband(?:s|ed|ing)?|abolish(?:es|ed|ing)?|wind(?:s|ing)?\s+up|terminate(?:s|d|ing)?)\b/i;
-
-const operationEventPattern = (op) => ({
-  create: CREATE_EVENT_RE,
-  join: JOIN_EVENT_RE,
-  leave: LEAVE_EVENT_RE,
-  suspend: SUSPEND_EVENT_RE,
-  restore: RESTORE_EVENT_RE,
-  role: ROLE_EVENT_RE,
-  dissolve: DISSOLVE_EVENT_RE,
-}[lower(op)] || null);
-
-const eventMentionsInstitution = (event, update) => {
-  const text = institutionEventText(event);
-  return [update?.name, update?.shortName, update?.id]
-    .map((value) => clean(value).replace(/[-_]+/g, " "))
-    .filter(Boolean)
-    .some((value) => containsSemanticToken(text, value));
-};
-
-const eventMentionsPolity = (event, polity, world) => {
-  const canonical = canonicalPolity(polity, world);
-  if (!canonical) return false;
-  const actorTokens = array(event?.actors).map((value) => canonicalPolity(value, world)).filter(Boolean);
-  if (actorTokens.some((value) => lower(value) === lower(canonical))) return true;
-  const identity = world?.polityOverrides?.[canonical] || {};
-  const aliases = unique([canonical, identity?.name, identity?.code, ...array(identity?.aliases)], 24);
-  const text = institutionEventText(event);
-  return aliases.some((alias) => containsSemanticToken(text, alias));
-};
-
-// Live world generation may omit an event number even when the semantic event
-// makes the institution lifecycle cause completely unambiguous. Native code owns
-// that foreign-key binding. This helper only fills a missing link when there is
-// exactly one strong semantic match; it never guesses among multiple events.
-// Founding-member joins may inherit the uniquely bound creation event when that
-// event names the polity as an actor/participant in the founding.
-export const bindInstitutionUpdatesToCausalEvents = (candidate, { world = {} } = {}) => {
-  if (!candidate || typeof candidate !== "object") return { bound: 0, ambiguous: 0, unresolved: 0 };
-  const events = array(candidate.events);
-  let updates = bindInstitutionUpdatesToEvents(candidate.institutionUpdates, events);
-  let bound = 0;
-  let ambiguous = 0;
-  let unresolved = 0;
-
-  const createEventIdsByInstitution = new Map();
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) !== "create") continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    if (!id) continue;
-    if (array(update?.eventIds).length) {
-      createEventIdsByInstitution.set(id, array(update.eventIds));
-      continue;
-    }
-    const matches = events.filter((event) =>
-      clean(event?.id) &&
-      eventMentionsInstitution(event, update) &&
-      CREATE_EVENT_RE.test(institutionEventText(event))
-    );
-    if (matches.length === 1) {
-      const eventId = clean(matches[0].id);
-      updates[index] = { ...update, eventIds: [eventId] };
-      createEventIdsByInstitution.set(id, [eventId]);
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  for (let index = 0; index < updates.length; index += 1) {
-    const update = updates[index];
-    if (lower(update?.op) === "create" || array(update?.eventIds).length) continue;
-    const id = canonicalInstitutionIdentity({ id: update?.id, name: update?.name }).id;
-    const pattern = operationEventPattern(update?.op);
-    if (!id || !pattern) {
-      unresolved += 1;
-      continue;
-    }
-
-    let matches = events.filter((event) => {
-      const text = institutionEventText(event);
-      return clean(event?.id) && eventMentionsInstitution(event, update) && pattern.test(text)
-        && (!clean(update?.polity) || eventMentionsPolity(event, update.polity, world));
-    });
-
-    // A newly created institution's founding members are often expressed by the
-    // same semantic founding event instead of separate "joins" prose. Reuse that
-    // exact creation cause only when the joining polity is actually a named actor
-    // or participant in the founding event.
-    if (!matches.length && lower(update?.op) === "join") {
-      const createIds = createEventIdsByInstitution.get(id) || [];
-      if (createIds.length === 1) {
-        const foundingEvent = events.find((event) => clean(event?.id) === createIds[0]);
-        if (foundingEvent && eventMentionsPolity(foundingEvent, update.polity, world)) matches = [foundingEvent];
-      }
-    }
-
-    if (matches.length === 1) {
-      updates[index] = { ...update, eventIds: [clean(matches[0].id)] };
-      bound += 1;
-    } else if (matches.length > 1) {
-      ambiguous += 1;
-    } else {
-      unresolved += 1;
-    }
-  }
-
-  candidate.institutionUpdates = updates;
-  return { bound, ambiguous, unresolved };
 };
 
 export const validateInstitutionUpdates = (updatesInput, {
@@ -1553,19 +1405,6 @@ export const applyInstitutionUpdates = ({
   return { world: { ...world, institutions }, institutions, appliedIds, error: "" };
 };
 
-export const removePolityFromInstitutions = (institutionsInput, polityInput, world = {}, date = "") => {
-  const institutions = normalizeInstitutions(institutionsInput, world);
-  const polity = canonicalPolity(polityInput, world);
-  if (!polity) return institutions;
-  for (const [id, institution] of Object.entries(institutions.byId)) {
-    const members = array(institution.members).filter((member) => lower(member.polity) !== lower(polity));
-    const leaders = array(institution.leaders).filter((leader) => lower(leader) !== lower(polity));
-    if (members.length === institution.members.length && leaders.length === institution.leaders.length) continue;
-    institutions.byId[id] = { ...institution, members, leaders, lastUpdatedDate: clean(date) || institution.lastUpdatedDate || "" };
-  }
-  return institutions;
-};
-
 export const institutionsForPolity = (world, polityInput, { includeSuspended = true, includeDissolved = false } = {}) => {
   const polity = canonicalPolity(polityInput, world);
   if (!polity) return [];
@@ -1631,41 +1470,4 @@ export const institutionStrategicPriority = (institution) => {
             : kind === "consultative_group" ? 45
               : 30;
   return Math.max(byId, byKind);
-};
-
-const canonicalBadgeRoot = (institution) => {
-  const identity = canonicalInstitutionIdentity(institution || {});
-  // Never leak storage/provider ids into the header. Known institutions receive
-  // a curated short key; alternate-history institutions may opt in with an
-  // explicit badgeKey and otherwise remain visible in the Diplomacy panel only.
-  return slug(institution?.badgeKey || identity.badgeKey);
-};
-
-export const institutionMembershipBadge = (institution, member) => {
-  const root = canonicalBadgeRoot(institution);
-  if (!root || !member) return "";
-  const status = lower(member.status || "member");
-  if (status === "member") return `${root}-member`;
-  if (status === "candidate") return `${root}-candidate`;
-  if (status === "associate") return `${root}-associate`;
-  if (status === "participant") return `${root}-participant`;
-  if (status === "observer") return `${root}-observer`;
-  if (status === "suspended") return `${root}-suspended`;
-  return "";
-};
-
-export const buildInstitutionContext = (world, focusPolities = [], { maxInstitutions = 14 } = {}) => {
-  const focus = new Set(array(focusPolities).map((polity) => lower(canonicalPolity(polity, world))).filter(Boolean));
-  const institutions = normalizeInstitutions(world?.institutions, world);
-  const rows = Object.values(institutions.byId)
-    .filter((institution) => institution.status !== "dissolved")
-    .filter((institution) => !focus.size || array(institution.members).some((member) => focus.has(lower(member.polity))))
-    .sort((a, b) => institutionStrategicPriority(b) - institutionStrategicPriority(a))
-    .slice(0, Math.max(1, maxInstitutions));
-  return rows.map((institution) => {
-    const members = array(institution.members)
-      .filter((member) => !focus.size || focus.has(lower(member.polity)))
-      .map((member) => `${member.polity} (${member.status}${member.role !== "member" ? `, ${member.role}` : ""})`);
-    return `- ${institution.name} [${institution.id}; ${institution.kind}]${members.length ? `: ${members.join(", ")}` : ""}`;
-  }).join("\n");
 };

@@ -178,7 +178,6 @@ export const WORLD_DEFAULTS = {
   // another look (projects.js boardPassReasons). Listed in the normalizeWorldState
   // return too, for the reason given above.
   boardReviewedRound: 0,
-  notes: "",
   // Standing multi-turn orders the ENGINE advances: {id, unitId, kind, toLng,
   // toLat, radiusKm, untilRound, targetId, targetLabel, note, issuedAt,
   // issuedRound}. kind is "move" (travel to a destination) or "patrol" (work a
@@ -914,14 +913,6 @@ const reconcileModernChatForPlayer = (entry, world, playerCountry = "", identity
   }, desiredCountries, world, index);
 };
 
-export const reconcileChatsForWorld = (chats, world) =>
-  normalizeChats(chats).map((chat) => {
-    const institutionId = normalizeOptionalString(chat?.institutionId || chat?.channelInstitutionId);
-    if (!institutionId) return chat;
-    const canonicalId = canonicalInstitutionIdentity({ id: institutionId }).id;
-    return canonicalId ? { ...chat, institutionId: canonicalId } : chat;
-  });
-
 const mergeChatThreadRecords = (primary, incoming, world, playerCountry = "", identityIndex = null) => {
   const left = reconcileModernChatForPlayer(primary, world, playerCountry, identityIndex);
   const right = reconcileModernChatForPlayer(incoming, world, playerCountry, identityIndex);
@@ -979,9 +970,6 @@ export const reconcileChatsForPlayer = (chats, world, playerCountry = "") => {
   }
   return output.filter(Boolean);
 };
-
-export const mergeIncomingChats = (existing, incoming, world, { playerCountry = "" } = {}) =>
-  reconcileChatsForPlayer([...normalizeArray(existing), ...normalizeArray(incoming)], world, playerCountry);
 
 const normalizeRegionTransfer = (entry) => {
   if (!entry || typeof entry !== "object") {
@@ -2942,12 +2930,6 @@ export const applyUnitOpBatch = (units, orders, ops, context = {}) => {
   return { units: survivors, orders: pruneSatisfiedUnitOrders(survivors, nextOrders) };
 };
 
-// Back-compat shape: units in, units out. applyUnitOpBatch is the real one and
-// is what applyEventImpactsToWorld calls; this keeps the documented array
-// contract for any caller that still expects it.
-export const applyUnitOps = (units, ops, context = {}) =>
-  applyUnitOpBatch(units, [], ops, context).units;
-
 // Advance every standing order by the time that has passed. This is what makes
 // units move realistically turn after turn without a single token being spent:
 // a move order steps toward its destination at the unit's own pace, and a patrol
@@ -4069,7 +4051,6 @@ export const normalizeWorldState = (world) => {
     boardReviewedRound: Number.isFinite(Number(nextWorld.boardReviewedRound))
       ? Math.max(0, Math.trunc(Number(nextWorld.boardReviewedRound)))
       : 0,
-    notes: normalizeOptionalString(nextWorld.notes),
     polityOverrides,
     regionClaimants,
     settledRegionClaims,
@@ -5216,7 +5197,7 @@ export const applyEventImpactsToWorld = ({
       eventId: event.id,
       polityChanges,
       regionClaims: [...event.impacts.regionClaims, ...released.regionClaims],
-      regionControlOps: [...event.impacts.regionControlOps, ...normalizeArray(released.regionControlOps)],
+      regionControlOps: event.impacts.regionControlOps,
       regionTransfers: [...event.impacts.regionTransfers, ...released.regionTransfers],
       resolveOwner,
       world: nextWorld,

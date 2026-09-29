@@ -108,7 +108,7 @@ A dependency-free promise wrapper. Database `open-historia-web`, `DB_VERSION = 2
 | `flags` | `id` | flag records |
 | `kv` | `key` | small singletons (manifests, ui-settings, `seeded`, sync versions, account session/DEK) |
 
-Helpers: `idbGet`, `idbGetAll`, `idbPut`, `idbDelete`, `idbUpdate` (read-modify-write one record), and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
+Helpers: `idbGet`, `idbGetAll`, `idbPut`, `idbDelete`, and kv-specific `kvGet(key, fallback)`, `kvPut`, `kvUpdate`. `runTx` resolves on transaction **commit** (via `oncomplete`), not merely on request success, so writes are durable before a caller reads back.
 
 ---
 

@@ -175,7 +175,7 @@ Every key on the object returned by `buildPromptContext` (`promptContext.js`, re
 | `markersSummary` | `world.markers` structures (≤60) with kind/owner/coords/note | `buildMarkersSummaryText` `promptContext.js` |
 | `numberOfRegions` | `String(regionCatalog.length)` | `promptContext.js` |
 | `recentEvents` | Unconsolidated event history, `eventLimit` window (10 default; 16 on advisor/leader path) | `buildEventHistoryText` `promptContext.js` |
-| `recentEventsLong` | `buildCampaignHistoryText`: "STORY SO FAR" (consolidated) + "RECENT EVENTS" (≤`longEventLimit`, 24) | `promptContext.js` / builder `95` |
+| `recentEventsLong` | built inline in the prompt-variable builder (`promptContext.js`, `wants("recentEventsLong")`): "STORY SO FAR" (consolidated) + "PERMANENT HISTORICAL ANCHORS" when there are any + "RECENT EVENTS" (≤`longEventLimit`, 24; 8 with lookups on) | `promptContext.js` |
 | `consolidatedHistory` | `buildConsolidatedHistoryText(world)` — the `consolidatedHistory[]` summaries | `promptContext.js` / builder `86` |
 | `recentRoundsWithDates` | `from → to` date pairs from `world.simulationHistory` (≤8) | `buildRecentRoundsWithDates` `promptContext.js` |
 | `chatHistory` | Current chat's `speaker: text` lines, or "No chat history." | `promptContext.js` |
@@ -310,7 +310,7 @@ Each subsection: purpose · default prompt location · entry point · key inputs
 
 ### 7.6 `eventConsolidator` — compress history
 - **Purpose:** Fold a batch of events + closed chats into one continuity summary (~≤360 words) so old detail leaves the context window without losing map/diplomacy facts.
-- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (`535`, auto-run by `compactHistoryIfNeeded` `554` after jumps) and `consolidateRecentHistory({limit})`.
+- **Prompt:** `tasks.eventConsolidator`. **Entries:** `consolidateHistoryBatch` (`535`, auto-run by `compactHistoryIfNeeded` after jumps) and `consolidateHistoryNow` (Cheats → History Document, refused while a turn is in flight).
 - **Tool/schema:** `submit_event_consolidation` / `EVENT_CONSOLIDATOR_SCHEMA`: `{ summary }`.
 - **Fallback:** concatenate raw event lines + `buildChatSummaryText`. Triggers: `CONSOLIDATION_*` thresholds (`gameplay.js`).
 

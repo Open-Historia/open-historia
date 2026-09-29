@@ -506,7 +506,6 @@ const TEMPLATE_WORLD_OVERRIDE_KEYS = [
   "difficulty",
   "language",
   "mapCredit",
-  "notes",
   "ownerCodes",
   "polityOverrides",
   "politicalActors",
