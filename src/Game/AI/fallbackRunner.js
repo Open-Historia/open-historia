@@ -224,9 +224,19 @@ export async function runWithFallback({
     };
     const order = orderToTry(entries, preferredEntryId, store, now());
     if (!order.length) throw unavailableError(entries, store, now, formatTime, null);
+    const refusalFor = (candidate) => (typeof canAttempt === "function" ? canAttempt(candidate) : "");
+    // A backup that could really take this request: one this request fits,
+    // that is not Spent, Unusable or sitting out a busy spell. Those still get
+    // their turn at the back, but a busy entry above them must not give up its
+    // retries on their account — it would hand over to nothing.
+    const couldAnswer = (candidate) => {
+        const state = store.get(candidate.id);
+        const at = now();
+        return isAvailable(state, at) && !isBusy(state, at) && !refusalFor(candidate);
+    };
     let tried = 0;
     for (const [index, candidate] of order.entries()) {
-        const refusal = typeof canAttempt === "function" ? canAttempt(candidate) : "";
+        const refusal = refusalFor(candidate);
         if (refusal) {
             const failure = { kind: "tooBig", reason: String(refusal) };
             refused.push({ entry: candidate, reason: String(refusal) });
@@ -240,10 +250,10 @@ export async function runWithFallback({
         // through would read as a glitch.
         let answerStarted = false;
         const context = {
-            // Whether anything is left after this entry. With a backup, a busy
-            // or rate-limited entry hands over at once; the last one keeps its
-            // full retries (shouldRetryProviderFailure).
-            canFallBack: index < order.length - 1,
+            // Whether anything after this entry could take the request. With a
+            // backup, a busy or rate-limited entry hands over at once; without
+            // one it keeps its full retries (shouldRetryProviderFailure).
+            canFallBack: order.slice(index + 1).some(couldAnswer),
             onChunk: typeof onChunk === "function"
                 ? (delta, full) => { answerStarted = true; onChunk(delta, full); }
                 : undefined,

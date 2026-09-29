@@ -234,6 +234,46 @@ test("the provider is told whether there is anything left to fall back to", asyn
     assert.deepEqual(seen, { a: true, b: true, c: false }, "the last one keeps its full retries");
 });
 
+// The busy top entry keeps its retries when nothing below could take the
+// request: a backup too small for it, or one that is Spent, Unusable or busy.
+test("a backup that cannot take the request is not something to fall back to", async () => {
+    const seen = {};
+    const attempt = async (e, context) => { seen[e.id] = context.canFallBack; return "ok"; };
+    await runWithFallback({
+        entries: [entry("gemini"), entry("ollama", "openai-compatible")],
+        store: createMemoryStateStore(),
+        now: () => 0,
+        canAttempt: (e) => (e.id === "ollama" ? "its window is 32768 tokens" : ""),
+        attempt,
+    });
+    assert.deepEqual(seen, { gemini: false }, "the only backup is refused for size");
+
+    const store = createMemoryStateStore({
+        spent: { spentUntil: 5000 },
+        broken: { unusable: "key rejected (401)" },
+        busy: { skipUntil: 5000, skipReason: "busy" },
+    });
+    const later = {};
+    await runWithFallback({
+        entries: [entry("top"), entry("spent"), entry("broken"), entry("busy")],
+        store,
+        now: () => 0,
+        attempt: async (e, context) => { later[e.id] = context.canFallBack; return "ok"; },
+    });
+    assert.deepEqual(later, { top: false });
+});
+
+test("a rate-limited backup still counts: it keeps its place and may answer", async () => {
+    const seen = {};
+    await runWithFallback({
+        entries: [entry("a"), entry("b")],
+        store: createMemoryStateStore({ b: { skipUntil: 5000, skipReason: "rate limited" } }),
+        now: () => 0,
+        attempt: async (e, context) => { seen[e.id] = context.canFallBack; return "ok"; },
+    });
+    assert.deepEqual(seen, { a: true });
+});
+
 test("a streamed reply never falls back once part of it has been shown", async () => {
     const shown = [];
     const { attempt, tried } = scripted({
