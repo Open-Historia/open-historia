@@ -186,7 +186,7 @@ The token also gates the PMTiles cache rotation (`:239`): dropping `binaryValueC
 | Store decision | Snapshotted synchronously at call time via `isNoStoreJsonUrl` (see below) — never re-evaluated post-`await` |
 | Value cache | `jsonValueCache` (Map, URL-keyed, no TTL/cap; swept on token change) |
 | Request batching | `jsonRequestCache` de-dupes concurrent fetches to the same URL even with `force:true` — the ~5 s Nations/Cities/background/units pollers share one network request |
-| Failure fallback | With `defaultValue`, serves a clone but **does not cache** it (transient failure must not pin a default) |
+| Failure fallback | With `defaultValue`, serves a clone but **does not cache** it (transient failure must not pin a default). Each caller applies its OWN default: the shared request rejects, so a caller with none gets the error (it used to be handed whichever default the first caller brought). A failed fetch's error carries `status` |
 | Parse bookkeeping | `jsonLoadedUrls.add(url)` records a genuine parse *inside* the try — lets `loadRegionCatalog` tell "no custom regions" apart from "fetch failed, retry" |
 
 `isNoStoreJsonUrl(url)` (`assets.js:158`) returns true for `regionsGeojson` and `citiesGeojson`. These FeatureCollections are huge and their only long-lived reader keeps them in React state (`Nations.jsx`/`Cities.jsx`, both `force:true`), so caching a second parsed copy is pure waste. It **must** be evaluated synchronously (the comment at `:154` explains why an after-`await` check resurrects the leak on scenario switch).

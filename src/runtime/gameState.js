@@ -4457,8 +4457,26 @@ export const readInterceptsState = async ({ force = false } = {}) => {
 export const writeInterceptsState = async (intercepts, options = {}) =>
   writeJson(JSON_URLS.intercepts, intercepts && typeof intercepts === "object" ? intercepts : {}, { pretty: true, ...options });
 
+// The conversations, the player's and the advisor's: a failed read THROWS. It
+// used to come back as [] like an empty file, and every writer that read,
+// changed and wrote the list (the Diplomacy panel, the runtime store it syncs
+// from, a turn's commit, the outreach and idle drips, the advisor's notices)
+// then saved that short list over every conversation. A missing document (a
+// new game) is legitimately empty: the stores answer it with an empty list or
+// a 404.
+const readConversationJson = (url, { force = false } = {}) =>
+  readJson(url, { force }).catch((error) => {
+    if (error?.status === 404) return [];
+    throw error;
+  });
+
 export const readChatsState = async ({ force = false } = {}) =>
-  normalizeChats(await readJson(JSON_URLS.chat, { defaultValue: [], force }));
+  normalizeChats(await readConversationJson(JSON_URLS.chat, { force }));
+
+export const readAdvisorMessages = async ({ force = false } = {}) => {
+  const messages = await readConversationJson(JSON_URLS.advisor, { force });
+  return Array.isArray(messages) ? messages : [];
+};
 
 let chatWriteQueue = Promise.resolve();
 

@@ -206,6 +206,7 @@ import {
   normalizeGameData,
   normalizeWorldState,
   readActionsState,
+  readAdvisorMessages,
   readChatsState,
   readEventsState,
   readGameData,
@@ -6704,7 +6705,7 @@ export const rollBackToSnapshot = async (index = 0) => {
     // government's hands go with them; its conversation is otherwise the
     // player's and is not rolled back.
     try {
-      const advisorMessages = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
+      const advisorMessages = await readAdvisorMessages({ force: true });
       const restoredWorld = normalizeWorldState(s.world ?? {});
       const keptMessages = withoutOrphanedNotices(advisorMessages, restoredWorld.reports, normalizeString(s.game?.country));
       if (Array.isArray(advisorMessages) && keptMessages !== advisorMessages) await writeJson(JSON_URLS.advisor, keptMessages);
@@ -10964,8 +10965,9 @@ const postDocumentNotices = async (deliveries, { lastEventId = "", date = "" } =
   const notices = documentNotices(deliveries, { lastEventId, date });
   if (!notices.length) return;
   try {
-    const stored = await readJson(JSON_URLS.advisor, { defaultValue: [], force: true });
-    const list = Array.isArray(stored) ? stored : [];
+    // A failed read throws here rather than posting the notices over an empty
+    // conversation.
+    const list = await readAdvisorMessages({ force: true });
     const posted = new Set(list.filter((message) => message?.role === "notice").map((message) => message.id));
     const fresh = notices.filter((notice) => !posted.has(notice.id));
     if (fresh.length) await writeJson(JSON_URLS.advisor, [...list, ...fresh]);

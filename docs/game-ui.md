@@ -109,7 +109,7 @@ Both launchers use `hasOpened` latches so the panel body isn't mounted until fir
 
 | Concern | Detail | Connects to |
 |---|---|---|
-| Data | `chats` from `readChatsState`/`writeChatsState`; player country + date polled from `JSON_URLS.game` every 5 s | `src/runtime/gameState.js` |
+| Data | `chats` from `readChatsState`/`writeChatsState`; player country + date polled from `JSON_URLS.game` every 5 s. A list that could not be read is not taken for an empty one: a strip says *Could not load your conversations.* with **Retry**, and nothing is saved until a read succeeds (chats begun meanwhile join the list when it loads). A save that fails says *Your latest messages were not saved.*, keeps the list in memory, and **Retry** saves it again. The advisor does the same for its conversation (`StorageProblemNotice`). | `src/runtime/gameState.js` |
 | Country list | `loadCountryNames()` (PMTiles-derived), filtered to exclude the player | `src/runtime/assets.js` |
 | Live sync | While open, polls stored chats every 5 s and merges additions (jump invitations, idle drip) without clobbering the active conversation | — |
 | Send | One-on-one sends directly to the sole AI counterpart via `sendDiplomaticMessage(text, countryName, countries)` → `{ reply, reaction, memorySummary }`. Group/institution conversations use `runChatActionBatch` as the single canonical AI request: that batch decides which AI participants speak/react/vote/stay silent and their order. There is no standalone speaker-selection request or sequential group fallback. | `src/Game/AI/main.jsx`, `src/Game/AI/gameplay.js`, `src/Game/AI/chatActions.js` |

@@ -690,7 +690,11 @@ const fetchWithPersistence = async (
     signal,
   });
   if (!response.ok) {
-    throw new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    // The status rides on the error: a 404 is a document that does not exist
+    // yet, which some readers take as empty, where anything else is a failure.
+    const error = new Error(`Failed to load ${url}: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
   if (!bypassPersistentCache) {
@@ -881,13 +885,30 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
 
   // Even with force: true, batch concurrent requests to the same URL so
   // multiple independent 5s pollers (Nations, Cities, background, units)
-  // don't each fire their own network fetch.
-  if (jsonRequestCache.has(url)) {
-    const pending = await jsonRequestCache.get(url);
-    return clone ? cloneJsonFor(url, pending) : pending;
+  // don't each fire their own network fetch. The shared request carries no
+  // default: each caller falls back to its OWN below, so one that asked for
+  // none is never handed another caller's empty default for a failed read.
+  let request = jsonRequestCache.get(url);
+  if (!request) {
+    request = startJsonRequest(url, { signal, store });
+    jsonRequestCache.set(url, request);
   }
 
-  const request = (async () => {
+  let value;
+  try {
+    value = await request;
+  } catch (error) {
+    if (defaultValue !== undefined) {
+      // Serve the fallback but do NOT cache it — a transient failure must not
+      // pin the default for the rest of the session; the next read retries.
+      return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
+    }
+    throw error;
+  }
+  return clone ? cloneJsonFor(url, value) : value;
+};
+
+const startJsonRequest = (url, { signal, store }) => (async () => {
     const fetchStartedAt = perfNow();
     const { response } = await fetchWithPersistence(url, {
       bypassPersistentCache: isMutableRuntimeJsonUrl(url),
@@ -912,33 +933,18 @@ export const readJson = async (url, { cache, defaultValue, force = false, signal
     const parseStartedAt = perfNow();
     const data = text ? JSON.parse(text) : null;
     warnSlowJson("JSON.parse", url, parseStartedAt, `${Math.round(text.length / 1024)} KiB`);
-    // Recorded INSIDE the try, before the catch below: a failed read must leave
+    // Recorded only once the document has parsed: a failed read must leave
     // this false so loadRegionCatalog retries instead of pinning a stock-only
-    // catalog. "Did we get a value?" is not a usable substitute — an originator
-    // carrying a defaultValue resolves the SHARED batched promise to that
-    // default on failure, so every awaiter sees a value either way.
+    // catalog. "Did we get a value?" is not a usable substitute — a caller
+    // carrying a defaultValue gets that default on failure.
     jsonLoadedUrls.add(url);
     jsonByteLengths.set(url, text.length);
     if (store) jsonValueCache.set(url, data);
     return data;
   })()
-    .catch((error) => {
-      if (defaultValue !== undefined) {
-        // Serve the fallback but do NOT cache it — a transient failure must not
-        // pin the default for the rest of the session; the next read retries.
-        return clone ? cloneJsonFor(url, defaultValue) : defaultValue;
-      }
-
-      throw error;
-    })
-    .finally(() => {
-      jsonRequestCache.delete(url);
-    });
-
-  jsonRequestCache.set(url, request);
-  const value = await request;
-  return clone ? cloneJsonFor(url, value) : value;
-};
+  .finally(() => {
+    jsonRequestCache.delete(url);
+  });
 
 // Did the document come back, or is this a defaultValue served after a failed read?
 export const jsonReadSucceeded = (url) => jsonLoadedUrls.has(url);

@@ -9,7 +9,8 @@ import { useFailureReportButton } from "../../runtime/saveDebugLog.js";
 import { useIsMobile } from "../../runtime/useIsMobile.js";
 import { SAFE_BOTTOM, SAFE_LEFT, SAFE_RIGHT, SAFE_TOP, useTouchPrimary } from "../../runtime/mobileUi.js";
 import { chatLanguageDiffersFromUi, isRtlLanguage, resolveChatLanguage } from "../../runtime/i18n.js";
-import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import { applyProjectOpsToWorld, normalizeActionEntry, readActionsState, readAdvisorMessages, readWorldState, viewAsSeen, writeActionsState, writeWorldState } from "../../runtime/gameState.js";
+import StorageProblemNotice from "./storageProblemNotice.jsx";
 import { describeReplyProblems, extractFencedJson, looksLikeProjectOps, validateChartConfig } from "./advisorBlocks.js";
 import { buildMessageDrafts, splitAtBlockquotes } from "./advisorDrafts.js";
 import { buildInstitutionDrafts, institutionDraftButtonLabel } from "./advisorInstitutionDrafts.js";
@@ -698,16 +699,38 @@ const AdvisorButton = ({ isAdvisorOpen, rightShift, onToggle }) => (
     }}>🧭</button>
 );
 
+// The saved conversation could not be read: nothing is saved until it is, as
+// the list in hand is not the player's. Module-level, like the saves that check
+// it, which run from callbacks with no component state in reach; and each
+// save's result goes to the panel for its "not saved" strip.
+let advisorLoadFailed = false;
+let onAdvisorSaveResult = null;
+
 const saveMessages = async (messages) => {
+    if (advisorLoadFailed) return false;
     try {
         await writeJson(JSON_URLS.advisor, messages);
-    } catch (err) { console.error("Failed to save messages:", err); }
+        onAdvisorSaveResult?.(true);
+        return true;
+    } catch (err) {
+        console.error("Failed to save messages:", err);
+        onAdvisorSaveResult?.(false);
+        return false;
+    }
 };
 
+// null when the read FAILED, never []: an empty conversation here would be
+// saved over the real one by the next message.
 const loadMessages = async () => {
     try {
-        return await readJson(JSON_URLS.advisor, { defaultValue: [] });
-    } catch { return []; }
+        const saved = await readAdvisorMessages();
+        advisorLoadFailed = false;
+        return saved;
+    } catch (err) {
+        advisorLoadFailed = true;
+        logDebugEvent("advisor", "The advisor conversation could not be loaded; nothing is saved until it is.", err, { problem: true });
+        return null;
+    }
 };
 
 // An advisor reply's prose, with each drafted letter's Send button rendered
@@ -1035,6 +1058,13 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
     const [hasOpened, setHasOpened] = useState(isAdvisorOpen);
     const [hasBootstrapped, setHasBootstrapped] = useState(false);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [saveFailed, setSaveFailed] = useState(false);
+    const [storageRetrying, setStorageRetrying] = useState(false);
+    useEffect(() => {
+        onAdvisorSaveResult = (ok) => setSaveFailed(!ok);
+        return () => { onAdvisorSaveResult = null; };
+    }, []);
     const inputRef = useRef(null);
     const [isResizing, setIsResizing] = useState(false);
     const [handleHover, setHandleHover] = useState(false);
@@ -1092,7 +1122,8 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
         let cancelled = false;
         loadMessages().then((saved) => {
             if (cancelled) return;
-            if (saved.length > 0) {
+            if (saved === null) setLoadFailed(true);
+            if (saved?.length > 0) {
                 setMessages(saved);
                 loadHistory(saved);   // restore advisor history — no prompt arg = advisor mode
             } else {
@@ -1343,6 +1374,35 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
     }, []);
 
     useEffect(() => { messagesRef.current = messages; }, [messages]);
+
+    // Retry for a conversation that could not be read: once it is, what was
+    // said meanwhile (kept here, unsaved) follows it and is saved with it.
+    const retryLoad = async () => {
+        setStorageRetrying(true);
+        try {
+            const saved = await loadMessages();
+            if (saved === null) return;
+            setLoadFailed(false);
+            const said = messagesRef.current;
+            const merged = [...saved, ...said];
+            setMessages(merged);
+            if (merged.length) loadHistory(merged);
+            else startChat();
+            if (said.length) await saveMessages(merged);
+        } finally {
+            setStorageRetrying(false);
+        }
+    };
+
+    // Retry for a save that failed: the conversation as it stands now.
+    const retrySave = async () => {
+        setStorageRetrying(true);
+        try {
+            await saveMessages(messagesRef.current);
+        } finally {
+            setStorageRetrying(false);
+        }
+    };
     useEffect(() => { runTurnRef.current = runTurn; });
 
     const handleKeyDown = (e) => {
@@ -1611,6 +1671,12 @@ const AdvisorPanel = ({ isAdvisorOpen, mapRef, onClose, width, onResize, onResiz
             >✕</button>
         )}
         </div>
+
+        {loadFailed ? (
+            <StorageProblemNotice title="Could not load your conversation with the advisor." detail="Nothing new is saved until it loads." onRetry={retryLoad} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : saveFailed ? (
+            <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retrySave} retrying={storageRetrying} retryIcon={<RetryIcon />} />
+        ) : null}
 
         <div style={{ display: "flex", flex: 1, flexDirection: "column", minHeight: 0 }}>
         {/* Messages — memoized as its own component so typing below (state that

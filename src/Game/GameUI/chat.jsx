@@ -24,6 +24,7 @@ import { Projects } from "./projects";
 import { DOCK_BOTTOM_REM, DOCK_GAP_REM, DOCK_HEIGHT_REM, DOCK_LEFT_REM, DOCK_WIDTH } from "./hudDock.js";
 import { documentsReadableBy, isDocumentExchange } from "../../runtime/reportDelivery.js";
 import { Presence } from "./presence.jsx";
+import StorageProblemNotice from "./storageProblemNotice.jsx";
 import { useMainMenuOpen } from "./libraryBar";
 import {
     JSON_URLS,
@@ -70,10 +71,16 @@ const selectGameIdentity = (game) => ({
 const newChatId = () => `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const sameChatId = (a, b) => a != null && b != null && String(a) === String(b);
 
+// Whether the save landed: a failed one is said in the panel and kept in
+// memory for its Retry.
 const saveAllChats = async (chats) => {
     try {
         await writeChatsState(chats);
-    } catch (err) { console.error("Failed to save chats:", err); }
+        return true;
+    } catch (err) {
+        console.error("Failed to save chats:", err);
+        return false;
+    }
 };
 
 // How far each leader has been shown of its other threads
@@ -85,10 +92,15 @@ const saveChatKnowledgeCursors = async (cursors) => {
     } catch (err) { console.error("Failed to save what each leader has been shown:", err); }
 };
 
+// null when the read FAILED, never []: an empty list here is taken for the
+// player's conversations, and the next save would write it over them.
 const loadAllChats = async ({ force = false } = {}) => {
     try {
         return await readChatsState({ force });
-    } catch { return []; }
+    } catch (err) {
+        logDebugEvent("diplomacy", "The conversations could not be loaded; nothing is saved until they are.", err, { problem: true });
+        return null;
+    }
 };
 
 // ── What a thread missed ──────────────────────────────────────────────────────
@@ -3143,6 +3155,20 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const [playerCountry, setPlayerCountry]       = useState("your nation");
     const [gameDate, setGameDate]                 = useState("");
     const [chats, setChats]                       = useState([]);
+    // The stored list could not be read: nothing is saved until it is, since
+    // the list in hand is not the player's. And whether the last save failed,
+    // with the list kept here for the Retry.
+    const [chatsLoadFailed, setChatsLoadFailed]   = useState(false);
+    const [chatsSaveFailed, setChatsSaveFailed]   = useState(false);
+    const [chatsRetrying, setChatsRetrying]       = useState(false);
+    const chatsLoadFailedRef = useRef(false);
+    chatsLoadFailedRef.current = chatsLoadFailed;
+    const chatsRef = useRef(chats);
+    chatsRef.current = chats;
+    const persistChats = (list) => {
+        if (chatsLoadFailedRef.current) return;
+        void saveAllChats(list).then((ok) => setChatsSaveFailed(!ok));
+    };
     const [activeChat, setActiveChat]             = useState(null);
     const [visibleCouncilChatId, setVisibleCouncilChatId] = useState("");
     const institutionAutomationInFlight = useRef(new Set());
@@ -3337,7 +3363,8 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             if (cancelled) return;
             setCountries(countryList);
             setLoadingCountries(false);
-            if (savedChats.length > 0) setChats(savedChats);
+            if (savedChats === null) setChatsLoadFailed(true);
+            else if (savedChats.length > 0) setChats(savedChats);
             setHasLoadedInitialData(true);
         })
         .catch(() => {
@@ -3377,6 +3404,9 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
         const sync = (saved) => {
             if (cancelled) return;
             if (!Array.isArray(saved)) { setFreshSinceOpen(true); return; }
+            // A list the store read (or was written) is the player's: saving
+            // is safe again.
+            setChatsLoadFailed(false);
             setChats((prev) => {
                 const signature = (list) => list.map((c) => `${c.id}:${c.status}:${c.messages?.length ?? 0}`).join("|");
                 if (signature(saved) === signature(prev)) return prev;
@@ -3409,11 +3439,40 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                                        [countries, playerCountry]
     );
 
+    // Retry for a list that could not be read: once it is, the chats begun
+    // meanwhile (kept in memory, unsaved) join it and are saved with it.
+    const retryChatsLoad = async () => {
+        setChatsRetrying(true);
+        try {
+            const saved = await loadAllChats({ force: true });
+            if (saved === null) return;
+            const begun = chatsRef.current.filter((chat) => !saved.some((entry) => sameChatId(entry.id, chat.id)));
+            const merged = [...begun, ...saved];
+            setChats(merged);
+            setChatsLoadFailed(false);
+            chatsLoadFailedRef.current = false;
+            if (begun.length) persistChats(merged);
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
+
+    // Retry for a save that failed: the list as it stands now, which holds
+    // everything the failed one did.
+    const retryChatsSave = async () => {
+        setChatsRetrying(true);
+        try {
+            setChatsSaveFailed(!(await saveAllChats(chatsRef.current)));
+        } finally {
+            setChatsRetrying(false);
+        }
+    };
+
     const handleMessagesUpdate = (chatId, newMessages) => {
         if (newMessages?.at(-1)?.role === "user") recordRecentDiplomaticOutgoing(chatId);
         setChats(prev => {
             const updated = prev.map(c => sameChatId(c.id, chatId) ? { ...c, messages: newMessages } : c);
-            saveAllChats(updated);
+            persistChats(updated);
             setActiveChat(ac => sameChatId(ac?.id, chatId) ? { ...ac, messages: newMessages } : ac);
             return updated;
         });
@@ -3430,7 +3489,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 : c));
             // Institutional one-request turns are already committed atomically
             // with their legal governance/world/event changes in gameplay.js.
-            if (!committed) saveAllChats(updated);
+            if (!committed) persistChats(updated);
             setActiveChat((ac) => (sameChatId(ac?.id, chatId) ? updated.find((c) => sameChatId(c.id, chatId)) ?? ac : ac));
             return updated;
         });
@@ -3569,7 +3628,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
 
     const handleStartChat = (selected) => {
         const newChat = { id: newChatId(), countries: selected, messages: [], status: "open" };
-        setChats(prev => { const u = [newChat, ...prev]; saveAllChats(u); return u; });
+        setChats(prev => { const u = [newChat, ...prev]; persistChats(u); return u; });
         setShowSelector(false);
         setActiveChat(newChat);
     };
@@ -3587,7 +3646,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
     const handleDeleteChat = (id) => {
         setChats(prev => {
             const updated = prev.map(chat => sameChatId(chat.id, id) ? { ...chat, status: "closed" } : chat);
-            saveAllChats(updated);
+            persistChats(updated);
             return updated;
         });
         if (sameChatId(activeChat?.id, id)) setActiveChat(null);
@@ -3691,7 +3750,7 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
             }
             const newChat = { id: newChatId(), countries: [{ name: country.name, code }], messages: [], status: "open" };
             const u = [newChat, ...prev];
-            saveAllChats(u);
+            persistChats(u);
             setView("chats");
             setActiveChat(newChat);
             if (draftText) setComposerDraft({ chatId: newChat.id, text: draftText });
@@ -3754,6 +3813,12 @@ const ChatPanel = ({ isOpen, onClose, requestedCountry, requestedDraft = "", onC
                 than a phone held sideways. Every inset is 0 on a desktop. */}
             <div style={{ position: "fixed", bottom: isOpen ? "4.25rem" : "-52rem", left: "0.5rem", width: "min(58rem, calc(100vw - 1rem))", height: "min(50rem, calc(100vh - 8rem))", minHeight: "24rem", backgroundColor: "rgba(24,24,27,0.95)", backdropFilter: "blur(8px)", borderRadius: "16px", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "-4px 0 24px rgba(0,0,0,0.4),inset 0 1px 0 rgba(255,255,255,0.06)", zIndex: 9998, overflow: "hidden", transition: "bottom 0.35s cubic-bezier(0.4,0,0.2,1),opacity 0.35s ease", opacity: isOpen ? 1 : 0, pointerEvents: isOpen ? "auto" : "none", fontFamily: "sans-serif", color: "white", display: "flex", flexDirection: "column",
                 ...(isTouch ? { width: `min(58rem, calc(100vw - 1.5rem - ${SAFE_LEFT} - ${SAFE_RIGHT}))`, height: `min(50rem, calc(${APP_HEIGHT} - 10.25rem - ${SAFE_TOP} - ${SAFE_BOTTOM}))`, minHeight: "10rem" } : {}) }}>
+
+            {chatsLoadFailed ? (
+                <StorageProblemNotice title="Could not load your conversations." detail="Nothing new is saved until they load." onRetry={retryChatsLoad} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : chatsSaveFailed ? (
+                <StorageProblemNotice title="Your latest messages were not saved." detail="They are kept here until a save works." onRetry={retryChatsSave} retrying={chatsRetrying} retryIcon={<RetryIcon />} />
+            ) : null}
 
             <Presence open={showSelector}><CountrySelectorModal countries={availableCountries} loading={loadingCountries} onStart={handleStartChat} onCancel={() => setShowSelector(false)} /></Presence>
 

@@ -511,7 +511,8 @@ Author starting tags come from `getNationTags` (`assets.js`, the scenario's `tag
 | `readGameData` / `writeGameData` |, | `normalizeGameData` on both ends. |
 | `readActionsState` / `writeActionsState` |, | `normalizeActions`. |
 | `readEventsState` / `writeEventsState` |, | `normalizeEvents`; write enqueues content strings. |
-| `readChatsState` / `writeChatsState` |, | `normalizeChats`. |
+| `readChatsState` / `writeChatsState` |, | `normalizeChats`. A failed read **throws** (a 404 is an empty list): it used to pass for `[]`, which the next writer saved over every thread. |
+| `readAdvisorMessages` | | The advisor's conversation, read the same way: a failure throws, a missing file is `[]`. |
 | `readGameStateBundle` | | `Promise.all` of all five. |
 | `applyEventImpactsToWorld` | | Pure fold of impacts → `{colors, world}`. |
 | `applyUnitOps` / `applyMarkerOps` |, | Pure list mutators. |
