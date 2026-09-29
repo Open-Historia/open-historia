@@ -53,6 +53,7 @@ import { MAP_SETTING_KEYS, getMapSettingDefaultOn, useMapSetting } from "../../r
 import { formatGameDateReadable, isGameDate, normalizeGameDate } from "../../runtime/gameDates.js";
 import { jumpDayStep, jumpTargetDate } from "../../runtime/jumpDates.js";
 import {
+    MAP_CHANGE_KIND_LABELS,
     buildLiveTurnRecord,
     captureRevealCarry,
     describeEventMapChanges,
@@ -716,7 +717,7 @@ const EventCard = ({ event, footer = null, lookups, openMapChanges = null, onTog
             <div style={{ color: "#bfdbfe", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase" }}>What changed on the map</div>
             {mapChanges.map((change, index) => (
                 <div key={`${event.id}-change-${index}`} style={{ color: "rgba(228,228,231,0.86)", display: "flex", fontSize: "0.74rem", gap: "0.45rem", lineHeight: 1.45 }}>
-                <span style={{ color: "rgba(191,219,254,0.7)", flexShrink: 0, fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.04em", minWidth: "4.4rem", paddingTop: "0.12rem", textTransform: "uppercase" }}>{change.kind}</span>
+                <span style={{ color: "rgba(191,219,254,0.7)", flexShrink: 0, fontSize: "0.6rem", fontWeight: 700, letterSpacing: "0.04em", minWidth: "4.4rem", paddingTop: "0.12rem", textTransform: "uppercase" }}>{MAP_CHANGE_KIND_LABELS[change.kind] || change.kind}</span>
                 <span>{change.text}</span>
                 </div>
             ))}

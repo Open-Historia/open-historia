@@ -201,7 +201,7 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
     }
     for (const op of listOf(impacts.unitOps)) {
         if (op?.op === "spawn") lines.push({ kind: "unit", text: `${op.unit?.name || "A formation"} raised — ${op.unit?.type || "unit"} of ${polity(op.unit?.ownerCode) || "an unknown owner"}${note(op.unit?.note)}` });
-        else if (op?.op === "move") lines.push({ kind: "unit", text: `${unitName(op.unitId)} moves${op.regionId ? ` to ${op.regionId}` : ""}${op.posture ? ` (${op.posture})` : ""}${note(op.note)}` });
+        else if (op?.op === "move") lines.push({ kind: "unit", text: `${unitName(op.unitId)} moves${op.regionId ? ` to ${region(op)}` : ""}${op.posture ? ` (${op.posture})` : ""}${note(op.note)}` });
         else if (op?.op === "strength") lines.push({ kind: "unit", text: `${unitName(op.unitId)}: strength ${op.strength}%${note(op.note)}` });
         else if (op?.op === "remove") lines.push({ kind: "unit", text: `${unitName(op.unitId)} removed${note(op.note)}` });
     }
@@ -209,8 +209,61 @@ export const describeEventMapChanges = (event, { polityLookup = new Map(), regio
         if (op?.op === "build") lines.push({ kind: "structure", text: `${op.marker?.name || "A structure"} built${op.marker?.kind ? ` (${op.marker.kind})` : ""}${op.marker?.ownerCode ? ` by ${polity(op.marker.ownerCode)}` : ""}${note(op.marker?.note)}` });
         else if (op?.op === "remove") lines.push({ kind: "structure", text: `${op.name || op.markerId || "A structure"} removed${note(op.note)}` });
         else if (op?.op === "rename") lines.push({ kind: "structure", text: `${op.name || op.markerId} renamed ${op.newName}${note(op.note)}` });
-        else if (op?.op === "update") lines.push({ kind: "structure", text: `${op.name || op.markerId} updated` });
-        else if (op?.op === "population") lines.push({ kind: "structure", text: `${op.name || op.markerId}: population changed` });
+        else if (op?.op === "update" || op?.op === "modify" || op?.op === "destroy") {
+            for (const text of describeMarkerUpdate(op, { polity, note })) lines.push({ kind: "structure", text });
+        } else if (op?.op === "population") {
+            const population = Number(op.population ?? op.value);
+            const name = op.name || op.markerId;
+            lines.push({ kind: "structure", text: Number.isFinite(population) ? `${name}: population now ${Math.round(population).toLocaleString("en-US")}${note(op.note)}` : `${name}: population changed${note(op.note)}` });
+        }
     }
     return lines;
+};
+
+// What the category column says, as a word the string extractor catalogues
+// (the kinds themselves are ids). Upper-cased by the card's style.
+export const MAP_CHANGE_KIND_LABELS = {
+    territory: "Territory",
+    control: "Control",
+    claim: "Claim",
+    group: "Group",
+    polity: "Polity",
+    unit: "Unit",
+    structure: "Structure",
+};
+
+// A structure's lifecycle, one whole line per state it can be put in
+// (MARKER_STATUSES, runtime/gameState.js). Destruction is an update, not a
+// removal: normalizeMarkerOp turns a "destroy" into status "destroyed".
+// `more` is the note the first line of an update carries.
+const MARKER_STATUS_LINES = {
+    planned: (name, more) => `${name}: now planned${more}`,
+    under_construction: (name, more) => `${name}: construction under way${more}`,
+    active: (name, more) => `${name}: now in service${more}`,
+    damaged: (name, more) => `${name} is damaged${more}`,
+    inactive: (name, more) => `${name}: out of service${more}`,
+    abandoned: (name, more) => `${name} abandoned${more}`,
+    destroyed: (name, more) => `${name} destroyed${more}`,
+};
+
+// A structure update, a line per thing it changed: the written op carries its
+// fields under `changes`, a streamed one may carry them on the op itself. A
+// note on an update is the structure's new description; it rides on the first
+// line, or is the line when nothing else changed.
+const describeMarkerUpdate = (op, { polity, note }) => {
+    const name = op.name || op.markerId || op.id || "A structure";
+    const source = op.changes && typeof op.changes === "object" && !Array.isArray(op.changes) ? op.changes : op;
+    const status = op.op === "destroy" ? "destroyed" : String(source.status ?? "").toLowerCase();
+    const coordinate = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+    const description = typeof source.note === "string" ? source.note.trim() : "";
+    const writers = [];
+    if (MARKER_STATUS_LINES[status]) writers.push((more) => MARKER_STATUS_LINES[status](name, more));
+    if (source.ownerCode !== undefined) {
+        writers.push((more) => (source.ownerCode ? `${name}: now held by ${polity(source.ownerCode)}${more}` : `${name}: no longer held by anyone${more}`));
+    }
+    if (source.kind) writers.push((more) => `${name}: its kind is now ${source.kind}${more}`);
+    if (coordinate(source.lng) && coordinate(source.lat)) writers.push((more) => `${name}: moved on the map${more}`);
+    if (source.foundedAt) writers.push((more) => `${name}: founding date set to ${source.foundedAt}${more}`);
+    if (!writers.length) return [description ? `${name}: description changed${note(description)}` : `${name} updated`];
+    return writers.map((write, index) => write(index === 0 ? note(description) : ""));
 };

@@ -10,6 +10,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   LIVE_TURN_RECORD_ID,
+  MAP_CHANGE_KIND_LABELS,
   buildLiveTurnRecord,
   captureRevealCarry,
   describeEventMapChanges,
@@ -126,6 +127,75 @@ test("one line per change, so the pill's count and the list never disagree", () 
   assert.equal(lines[4].text, "French Republic: renamed (was France)");
   assert.equal(lines[5].text, "1st Army: strength 60%");
   assert.equal(lines[6].text, "unit u2: strength 10%", "a unit the map does not know is named by its id");
+});
+
+test("a destroyed structure reads as destroyed, not as updated", () => {
+  // The written op (normalizeMarkerOp turns "destroy" into this) and a
+  // streamed card's raw one read the same.
+  const written = { impacts: { markerOps: [{ op: "update", name: "Stalingrad", changes: { status: "destroyed" } }] } };
+  const streamed = { impacts: { markerOps: [{ op: "destroy", name: "Stalingrad" }] } };
+  assert.deepEqual(describeEventMapChanges(written, lookups).map((line) => line.text), ["Stalingrad destroyed"]);
+  assert.deepEqual(describeEventMapChanges(streamed, lookups).map((line) => line.text), ["Stalingrad destroyed"]);
+});
+
+test("a structure update says what it changed, a line each, the description on the first", () => {
+  const event = {
+    impacts: {
+      markerOps: [
+        { op: "update", name: "Brest naval base", changes: { status: "damaged", ownerCode: "FRA", note: "Shelled from the sea." } },
+        { op: "update", markerId: "m-4", name: "Toulon", changes: { note: "Now the fleet's home port." } },
+        { op: "update", name: "Calais", changes: { ownerCode: "" } },
+        { op: "update", name: "Metz", changes: { foundedAt: "0050-01-01", lng: 6.17, lat: 49.12 } },
+        { op: "update", name: "Nowhere" },
+      ],
+    },
+  };
+  assert.deepEqual(describeEventMapChanges(event, lookups).map((line) => line.text), [
+    "Brest naval base is damaged — Shelled from the sea.",
+    "Brest naval base: now held by France",
+    "Toulon: description changed — Now the fleet's home port.",
+    "Calais: no longer held by anyone",
+    "Metz: moved on the map",
+    "Metz: founding date set to 0050-01-01",
+    "Nowhere updated",
+  ]);
+});
+
+test("a population change gives the figure and its reason", () => {
+  const lines = describeEventMapChanges({
+    impacts: { markerOps: [
+      { op: "population", name: "Lyon", population: 1250000, note: "refugees from the north" },
+      { op: "population", name: "Lille", population: "many" },
+    ] },
+  }, lookups);
+  assert.deepEqual(lines.map((line) => line.text), [
+    "Lyon: population now 1,250,000 — refugees from the north",
+    "Lille: population changed",
+  ]);
+});
+
+test("a unit's destination is named, not given as a region id", () => {
+  const [move] = describeEventMapChanges({ impacts: { unitOps: [{ op: "move", unitId: "u1", regionId: "FRA.1_1", posture: "attack" }] } }, lookups);
+  assert.equal(move.text, "1st Army moves to Alsace (attack)");
+  const [unknown] = describeEventMapChanges({ impacts: { unitOps: [{ op: "move", unitId: "u1", regionId: "XYZ.9_9" }] } }, lookups);
+  assert.equal(unknown.text, "1st Army moves to XYZ.9_9", "a region the catalog lacks keeps its id");
+});
+
+test("every kind of line has a display label", () => {
+  const event = {
+    impacts: {
+      regionTransfers: [{ regionId: "FRA.1_1" }],
+      regionControlOps: [{ op: "control", regionId: "FRA.1_1", toCode: "FRA" }],
+      regionClaims: [{ regionId: "FRA.1_1", claimantCode: "FRA" }],
+      groupOps: [{ op: "create", name: "Black Hand" }],
+      polityChanges: [{ operation: "create", name: "Vichy" }],
+      unitOps: [{ op: "remove", unitId: "u1" }],
+      markerOps: [{ op: "remove", name: "Fort" }],
+    },
+  };
+  for (const line of describeEventMapChanges(event, lookups)) {
+    assert.match(MAP_CHANGE_KIND_LABELS[line.kind] ?? "", /^[A-Z][a-z]+$/, `${line.kind} has a capitalised label`);
+  }
 });
 
 test("impacts that are not lists describe nothing rather than throwing", () => {
