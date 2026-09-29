@@ -201,6 +201,24 @@ test("an orphaned game exports its own stats sheet", async () => {
   assert.deepEqual(bundle.data.stats, { rows: ["gdp"] });
 });
 
+test("a game whose map is not in the library is listed as missing, under the sender's name for it", async () => {
+  await reset();
+  const imported = ok(await games("POST", "import", {
+    schema: "open-historia-game-bundle/1",
+    game: { name: "Mapless" },
+    scenarioRef: { scenarioId: "gone-map", scenarioName: "Gone Map", hubOrigin: { bundleUrl: "https://example.test/b.json", postId: "7" } },
+    data: { game: { country: "Testland" }, world: { ownerSchema: 4 } },
+  })).game.id;
+  const entry = (await library()).games.find((game) => game.id === imported);
+  assert.equal(entry.scenarioMissing, true);
+  assert.equal(entry.scenarioName, "Gone Map");
+
+  const own = await newGame("On the built-in");
+  const onDefault = (await library()).games.find((game) => game.id === own);
+  assert.equal(onDefault.scenarioMissing, false);
+  assert.equal(onDefault.scenarioName, "Modern Day");
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },

@@ -302,7 +302,7 @@ const getGameCatalog = async (scenarioCatalog, gameMetas) => {
     if (!proj) return null;
     const meta = readGameMeta(id, proj.meta ?? {});
     const assetStatus = proj.assetStatus ?? {};
-    const scenario = scenarioLookup.get(meta.scenarioId) ?? readScenarioMeta(meta.scenarioId, {});
+    const scenario = scenarioLookup.get(meta.scenarioId) ?? missingScenarioSummary(meta.scenarioId);
     const cacheToken = `${id}-${meta.updatedAt}`;
     const ownCoverImageUrl = assetStatus.cover ? coverObjectUrl(`game:${id}`, cacheToken, proj.cover) : null;
     return {
@@ -375,7 +375,15 @@ const getScenarioSummary = async (id) => {
 const getGameScenarioSummary = async (scenarioId) => {
   const catalog = await getScenarioCatalog();
   const scenario = catalog.scenarios.find((s) => s.id === scenarioId);
-  if (scenario) return scenario;
+  return scenario ?? missingScenarioSummary(scenarioId);
+};
+
+// A scenario a game names but the library does not hold, in the catalog's shape
+// (server twin: buildScenarioCatalogEntry with `missing`). The game catalog uses
+// it too: a plain readScenarioMeta there named the map "Modern Day" and never
+// marked it missing, so Play opened the game on Modern Day's geometry instead of
+// offering to fetch its own map.
+const missingScenarioSummary = (scenarioId) => {
   const meta = readScenarioMeta(scenarioId, {});
   return {
     ...meta,

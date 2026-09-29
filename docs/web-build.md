@@ -141,7 +141,7 @@ Unlike the server (which splits a scenario across many files on disk), a web rec
 
 - `getLibraryCatalog()` (`:245`) is what `/api/library` returns: `{ activeGame, activeGameId, activeScenarioId, countryNames, games, runtimeScenario, scenarios, selectedScenario, selectedScenarioId, token }`. `token` is a cache key combining the active game's + runtime scenario's `updatedAt`.
 - `getScenarioCatalog()` / `getGameCatalog()` compose per-item summaries (spread `readScenarioMeta`/`readGameMeta`, `assetStatus`, `cacheToken = ${id}-${updatedAt}`, `coverImageUrl`, usage counts). Order comes from `resolveOrderedIds` (manifest order, then extras, default id unshifted first).
-- A game summary also carries `country`, `currentDate`, `round`, `eventCount`, `pendingActions` (non-`resolved` actions), `scenarioName`, `scenarioAccentColor`, and both `coverImageUrl` (own → falls back to its scenario's) and `ownCoverImageUrl`.
+- A game summary also carries `country`, `currentDate`, `round`, `eventCount`, `pendingActions` (non-`resolved` actions), `scenarioName`, `scenarioAccentColor`, `scenarioMissing` (true when the library does not hold the game's scenario; the entry is then built by `missingScenarioSummary`, as the desktop's `buildScenarioCatalogEntry(..., { missing: true })`, and `scenarioName` is what the sender called the map), and both `coverImageUrl` (own → falls back to its scenario's) and `ownCoverImageUrl`.
 
 ### Runtime JSON read/write (what the running game hits every turn)
 
