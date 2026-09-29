@@ -1490,11 +1490,15 @@ export const buildPlayerPolityRegionsText = async (bundle, regionCatalog = null)
   }
   const regions = regionCatalog ?? await loadRegions();
   const lookup = new Map(regions.map((region) => [region.id, region]));
-  const names = entries
-    .filter(([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === playerCode.toLowerCase())
+  const owned = entries
+    .filter(([, ownerCode]) => normalizeString(ownerCode).toLowerCase() === playerCode.toLowerCase());
+  const names = owned
     .slice(0, 24)
     .map(([regionId]) => lookup.get(regionId)?.name || regionId);
-  return names.join(", ");
+  // The same suffix the region lists use (regionVocab.js), so a cut list is
+  // not read as the whole holding.
+  const more = owned.length - names.length;
+  return `${names.join(", ")}${more > 0 ? `, (+${more} more)` : ""}`;
 };
 
 const STOCK_REGION_ID = /^[A-Z]{3}\.\d+(?:_\d+)?$/;
@@ -1567,6 +1571,27 @@ export const rankFocusPowers = (regions, world, bundle, { playerName, actorNames
   return labels;
 };
 
+export const POLITY_SUMMARY_LIMIT = 16;
+export const TAG_SUMMARY_LIMIT = 40;
+
+// `items` with the powers in `focusCodes` (rankFocusPowers' order) first, in
+// that order, and everything else after them in its own order. `namesOf`
+// gives the names an item goes by; a name must equal a focus label exactly.
+export const orderByFocus = (items, namesOf, focusCodes) => {
+  const rank = new Map();
+  normalizeArray(focusCodes).forEach((label, index) => {
+    if (!rank.has(label)) rank.set(label, index);
+  });
+  const rankOf = (item) => Math.min(Infinity, ...normalizeArray(namesOf(item))
+    .map(normalizeString)
+    .filter(Boolean)
+    .map((name) => rank.get(name) ?? Infinity));
+  return normalizeArray(items)
+    .map((item, index) => ({ item, index, rank: rankOf(item) }))
+    .sort((a, b) => (a.rank === b.rank ? 0 : a.rank < b.rank ? -1 : 1) || a.index - b.index)
+    .map((entry) => entry.item);
+};
+
 // `regionListsViaTools`: the task has the lookup functions (lookupTools.js),
 // so the summary names the powers with their region counts and leaves the
 // region names and ids to find_region / list_regions / map_around.
@@ -1593,30 +1618,6 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
       return `- ${region?.name || regionId}${bakedOwner ? ` (${bakedOwner})` : ""} -> ${ownerCode}`;
     }).join("\n");
   const polities = Object.values(world.polityOverrides);
-  const politySummary = polities.length === 0
-    ? "No dynamic polity overrides are currently recorded."
-    : polities.slice(0, 16).map((entry) =>
-      // `note` is the polity's lore — the author's (or the faction creator's) own
-      // description of who this power is. It was persisted but never reached the
-      // model, so a player-written backstory did nothing. It steers the story now.
-      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}${entry.note ? ` — ${entry.note}` : ""}`,
-    ).join("\n");
-
-  // What each country IS: the map-maker's tags with the AI's own changes layered
-  // over them. This is the whole reason tags exist — the model reads it for every
-  // task, so "socialist, anti-nato" steers what the Soviet Union plausibly does
-  // without any rule saying so. Capped at 40 countries for prompt budget; drop
-  // whole countries rather than truncate one list, since "- SOV: socialist," reads
-  // as corrupt data to the model.
-  const baseTags = await getNationTags().catch(() => ({}));
-  const tagged = resolveAllCountryTags(baseTags, world);
-  const taggedCodes = Object.keys(tagged);
-  const tagSummary = taggedCodes.length === 0
-    ? "No countries have defining tags."
-    : taggedCodes.slice(0, 40).map((code) => `- ${code}: ${tagged[code].join(", ")}`).join("\n")
-      + (taggedCodes.length > 40 ? `\n(+${taggedCodes.length - 40} more tagged countries not listed)` : "");
-  const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
-
   // The region vocabulary the jump prompt promises ("every ... region ... separated
   // by a comma ... ANALYZE THIS INCREDIBLY CAREFULLY"). Until now nothing filled it,
   // so on a stock map the model saw ZERO region names and invented ones that then
@@ -1644,6 +1645,38 @@ export const buildWorldSummary = async (bundle, regionCatalog = null, { regionLi
     if (entry?.code) polityNames[toCountryName(String(entry.code)).toLowerCase()] = entry.name || toCountryName(entry.code);
   }
   const focusCodes = rankFocusPowers(regions, world, bundle, { playerName, actorNames, polityNames });
+
+  // Both lists below are capped for prompt budget, and a cap in storage order
+  // used to drop the authored lore and binding tags of whichever powers came
+  // last in the save, however central to the turn. They are ordered by the
+  // same ranking as the region lists (focusCodes) — exact names only — and
+  // the rest keep their saved order; each cut says how much it left out.
+  const orderedPolities = orderByFocus(polities, (entry) => [entry.code, toCountryName(normalizeString(entry.code)), entry.name], focusCodes);
+  const politySummary = polities.length === 0
+    ? "No dynamic polity overrides are currently recorded."
+    : orderedPolities.slice(0, POLITY_SUMMARY_LIMIT).map((entry) =>
+      // `note` is the polity's lore — the author's (or the faction creator's) own
+      // description of who this power is. It was persisted but never reached the
+      // model, so a player-written backstory did nothing. It steers the story now.
+      `- ${entry.code}: ${entry.name || entry.code}${entry.color ? ` (${entry.color})` : ""}${entry.aliases.length > 0 ? ` aliases ${entry.aliases.join(", ")}` : ""}${entry.note ? ` — ${entry.note}` : ""}`,
+    ).join("\n")
+      + (polities.length > POLITY_SUMMARY_LIMIT ? `\n(+${polities.length - POLITY_SUMMARY_LIMIT} more polities not listed)` : "");
+
+  // What each country IS: the map-maker's tags with the AI's own changes layered
+  // over them. This is the whole reason tags exist — the model reads it for every
+  // task, so "socialist, anti-nato" steers what the Soviet Union plausibly does
+  // without any rule saying so. Capped at 40 countries for prompt budget; drop
+  // whole countries rather than truncate one list, since "- SOV: socialist," reads
+  // as corrupt data to the model.
+  const baseTags = await getNationTags().catch(() => ({}));
+  const tagged = resolveAllCountryTags(baseTags, world);
+  const taggedCodes = orderByFocus(Object.keys(tagged), (code) => [code, toCountryName(code)], focusCodes);
+  const tagSummary = taggedCodes.length === 0
+    ? "No countries have defining tags."
+    : taggedCodes.slice(0, TAG_SUMMARY_LIMIT).map((code) => `- ${code}: ${tagged[code].join(", ")}`).join("\n")
+      + (taggedCodes.length > TAG_SUMMARY_LIMIT ? `\n(+${taggedCodes.length - TAG_SUMMARY_LIMIT} more tagged countries not listed)` : "");
+  const playerTags = resolveCountryTags(baseTags, world, bundle.game.country);
+
   const regionOwnershipCatalog = buildRegionOwnershipText(regions, world.regionOwnershipOverrides, {
     focusCodes,
     polityNames,

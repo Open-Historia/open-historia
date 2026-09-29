@@ -7,7 +7,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPromptContext, buildUnitsSummaryText } from "./promptContext.js";
+import {
+  buildPlayerPolityRegionsText,
+  buildPromptContext,
+  buildUnitsSummaryText,
+  buildWorldSummary,
+  orderByFocus,
+} from "./promptContext.js";
 
 const game = { country: "Ruritania", gameDate: "1930-05-12", round: 4, startDate: "1930-01-01" };
 
@@ -67,4 +73,59 @@ test("marker attention reads the queued orders, not the answered ones", async ()
     chats: [],
   }, { requiredKeys: ["markersSummary"], taskKey: "advisor" });
   assert.match(context.markersSummary, /Kiel Canal/);
+});
+
+// A hand-drawn world: twenty authored polities, the one the player is at war
+// with stored last.
+const authoredWorld = () => {
+  const names = Array.from({ length: 19 }, (_, index) => `Filler State ${index + 1}`);
+  const polityOverrides = {};
+  for (const name of [...names, "Ruritania", "Slavonia"]) {
+    polityOverrides[name] = { code: name, name, note: `${name} lore.` };
+  }
+  const countryTags = {};
+  for (const name of Array.from({ length: 44 }, (_, index) => `Tagged Land ${index + 1}`)) countryTags[name] = ["quiet"];
+  countryTags.Slavonia = ["militarist"];
+  const regions = [];
+  const regionOwnershipOverrides = {};
+  for (const [owner, count] of [["Ruritania", 30], ["Slavonia", 4], ...names.map((name) => [name, 1])]) {
+    for (let index = 0; index < count; index += 1) {
+      const id = `${owner.replace(/\s+/g, "")}-${index}`;
+      regions.push({ id, name: `${owner} province ${index}`, country: owner });
+      regionOwnershipOverrides[id] = owner;
+    }
+  }
+  return {
+    regions,
+    world: {
+      customRegions: true,
+      polityOverrides,
+      countryTags,
+      regionOwnershipOverrides,
+      wars: [{ id: "w1", status: "active", sideA: ["Ruritania"], sideB: ["Slavonia"] }],
+      language: "English",
+    },
+  };
+};
+
+test("the world summary keeps the lore and tags of the powers the turn is about, and counts the cut", async () => {
+  const { regions, world } = authoredWorld();
+  const text = await buildWorldSummary({ game, world, events: [], actions: [], chats: [] }, regions);
+  assert.match(text, /- Slavonia: Slavonia — Slavonia lore\./, "the enemy's lore survives the cap");
+  assert.match(text, /- Ruritania: Ruritania — Ruritania lore\./);
+  assert.match(text, /\(\+5 more polities not listed\)/);
+  assert.match(text, /- Slavonia: militarist/, "the enemy's tags survive the cap");
+  assert.match(text, /\(\+5 more tagged countries not listed\)/);
+});
+
+test("orderByFocus puts ranked powers first by exact name and keeps the rest in order", () => {
+  const ordered = orderByFocus(["Russia", "Panama", "Russian Federation", "Chile"], (name) => [name], ["Russian Federation", "Chile"]);
+  assert.deepEqual(ordered, ["Russian Federation", "Chile", "Russia", "Panama"], "\"Russia\" is not the Russian Federation");
+});
+
+test("the player's region list says how many regions it left out", async () => {
+  const { regions, world } = authoredWorld();
+  const text = await buildPlayerPolityRegionsText({ game, world }, regions);
+  assert.equal(text.split(", ").length, 25);
+  assert.match(text, /, \(\+6 more\)$/);
 });
