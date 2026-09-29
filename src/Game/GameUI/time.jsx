@@ -2011,11 +2011,12 @@ const TimelineHistoryPanel = ({
                             lineHeight: 1.4,
                         }}
                         >
+                        {/* One whole sentence per count, the date read as the event
+                            cards read it ("Mar 1, 218 BC"), never the stored text. */}
                         <span>
-                            Stop the round after <strong>{visibleEvents[visibleEvents.length - 1]?.title}</strong>? The
-                            {" "}{totalEvents - visibleEvents.length} event{totalEvents - visibleEvents.length === 1 ? "" : "s"} not yet revealed
-                            will be discarded — they never happen — and the date becomes {visibleEvents[visibleEvents.length - 1]?.date}.
-                            You can still undo the round afterwards.
+                            {totalEvents - visibleEvents.length === 1
+                                ? `Stop the round after "${visibleEvents[visibleEvents.length - 1]?.title}"? The 1 event not yet revealed will be discarded — it never happens — and the date becomes ${formatDate(visibleEvents[visibleEvents.length - 1]?.date)}. You can still undo the round afterwards.`
+                                : `Stop the round after "${visibleEvents[visibleEvents.length - 1]?.title}"? The ${totalEvents - visibleEvents.length} events not yet revealed will be discarded — they never happen — and the date becomes ${formatDate(visibleEvents[visibleEvents.length - 1]?.date)}. You can still undo the round afterwards.`}
                         </span>
                         <div style={{ display: "flex", gap: "0.4rem" }}>
                             <button
