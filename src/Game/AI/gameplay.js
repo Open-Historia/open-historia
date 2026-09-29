@@ -7981,7 +7981,7 @@ const applySimulationResult = async ({
   // one request, and are only filed here; a turn with no review (a resolved
   // interactive event, a game-master command) waits for the next skip's. Otherwise each
   // agent makes its own request, as before.
-  if (review) await fileReviewedAgentReports(review);
+  if (review) await fileReviewedAgentReports(review, campaignId);
   else if (!savingRequests()) await refreshSpyIntercepts();
   // And what the player's agents stole this turn, beside their traffic.
   await fileStolenDocuments(reportDeliveries, { world: nextWorld, game: nextGame, lastEventId: lastTurnEventId });
@@ -8043,6 +8043,9 @@ const readSeenGameStateBundle = async (options) => {
 };
 
 export const generateActionSuggestions = async ({ force = true } = {}) => {
+  // Stamped before the read: a switch to another save while the model answers
+  // must not file these suggestions in that save's world.
+  const campaign = activeCampaignId();
   // Suggestions answer the moment the player is looking at (readSeenGameStateBundle).
   const bundle = await readSeenGameStateBundle({ force });
   const variables = await buildTemplateVariables(bundle, { lookups: true });
@@ -8105,6 +8108,7 @@ export const generateActionSuggestions = async ({ force = true } = {}) => {
   }
 
   const world = normalizeWorldState(await readWorldState());
+  assertCampaignUnchanged(campaign, activeCampaignId(), "set of suggestions");
   world.actionSuggestions = topics;
   await writeWorldState(world);
 
@@ -10892,8 +10896,12 @@ const prepareSpyReport = async (bundle, spy, { sharedVariables = null } = {}) =>
 };
 
 // `bundle` is the campaign the report is filed INTO: its date and round stamp the
-// entry, and its seal closes it.
-const storeSpyReport = async (bundle, spy, payload) => {
+// entry, and its seal closes it. `campaign` is the one it was read from: the
+// intercepts file follows the open campaign, so a report that outlived a switch
+// is dropped (null) rather than filed over another save's report on the same
+// target, sealed with a key that save cannot open.
+const storeSpyReport = async (bundle, spy, payload, { campaign = "" } = {}) => {
+  if (leftCampaign(campaign)) return null;
   const name = normalizeString(spy?.target);
   const reportId = newSpyReportId();
   const exchanges = normalizeArray(payload?.exchanges)
@@ -10930,6 +10938,7 @@ const storeSpyReport = async (bundle, spy, payload) => {
 
   // Re-read at write time: another gather may have landed for a different target.
   const current = normalizeIntercepts(await readInterceptsState({ force: true }));
+  if (leftCampaign(campaign)) return null;
   // Each report replaces the agent's traffic, but not stolen documents already on file.
   const stolen = normalizeArray(current[name]?.exchanges).filter(isDocumentExchange).slice(0, STOLEN_DOCUMENTS_KEPT);
   const entry = {
@@ -11001,6 +11010,7 @@ const playersAgentIn = (bundle, target) => {
 export const gatherIntelligence = async (target, { signal, requestKind } = {}) => {
   const name = normalizeString(target);
   if (!name) throw new Error("No target polity.");
+  const campaign = activeCampaignId();
   const bundle = await readGameStateBundle({ force: true });
   const spy = playersAgentIn(bundle, name);
   if (!spy) throw new Error("No agent of yours is in " + name + ".");
@@ -11012,7 +11022,7 @@ export const gatherIntelligence = async (target, { signal, requestKind } = {}) =
     variables: prepared.variables,
     ...(requestKind ? { requestKind } : {}),
   });
-  return storeSpyReport(bundle, spy, payload);
+  return storeSpyReport(bundle, spy, payload, { campaign });
 };
 
 // Everything the player's agents have brought back, opened — for the simulator
@@ -13970,7 +13980,7 @@ const runStandaloneActionOutcomeReview = async ({ context, merged, signal, state
 // The agents' reports the review carried, filed once the turn is written — and
 // only for agents who are still in place after it: one caught this turn did not
 // get a report out.
-const fileReviewedAgentReports = async (review) => {
+const fileReviewedAgentReports = async (review, campaign = "") => {
   if (!review?.agentReports?.length) return;
   let world;
   try {
@@ -13984,7 +13994,7 @@ const fileReviewedAgentReports = async (review) => {
     const payload = review.parts[key];
     if (!payload || !stillActive.has(spy.target)) continue;
     try {
-      await storeSpyReport({ ...bundle, world }, spy, payload);
+      await storeSpyReport({ ...bundle, world }, spy, payload, { campaign });
     } catch (error) {
       console.warn(`[spycraft] the report from ${spy.target} could not be filed:`, error?.message || error);
     }
@@ -16869,8 +16879,9 @@ const applyIdlePulseUnitOps = async (bundle, unitOps) => {
 // One short intelligence report in the event feed, so a build-up the player can
 // see on the map also tells them WHY it is there. Only ever written when the
 // model judged the movement near enough for their services to have seen it.
-const appendSightingEvent = async (bundle, sighting, unitOps) => {
+const appendSightingEvent = async (bundle, sighting, unitOps, campaign = "") => {
   const events = await readEventsState({ force: true });
+  if (leftCampaign(campaign)) return;
   const next = normalizeEvents([
     ...events,
     {
@@ -16911,6 +16922,10 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
   const allowChat = chatChance > 0;
   idleDiplomacyInFlight = true;
   setChatGenerationInFlight(allowChat);
+  // The campaign this pulse reads. Every write below follows the open campaign,
+  // and a switch does not mark the simulation busy, so each write also checks
+  // that this is still the campaign in front of the player.
+  const campaign = activeCampaignId();
   try {
     const bundle = await readGameStateBundle({ force: true });
     if (!normalizeString(bundle.game?.country)) return null; // no active game
@@ -16994,7 +17009,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     // Only what the world may do: never the player's forces (idlePulse.js).
     // With nothing left there is nothing to apply and no sighting to report.
     const unitOps = idlePulseUnitOps(bundle.world, normalizeArray(payload.unitOps), bundle.game?.country);
-    if (unitOps.length > 0 && !isSimulationBusy()) {
+    if (unitOps.length > 0 && !isSimulationBusy() && !leftCampaign(campaign)) {
       // Placed by name, and kept off each other, like a turn's own ops.
       try {
         await resolvePlacements([{ event: null, impacts: { unitOps }, path: "$.unitOps" }], bundle.world, { receipt: null });
@@ -17005,10 +17020,10 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
         const nextWorld = await applyIdlePulseUnitOps(bundle, unitOps);
         // Re-check immediately before the write, exactly as the chat half does:
         // a jump that started while we were applying owns the world now.
-        if (!isSimulationBusy()) {
+        if (!isSimulationBusy() && !leftCampaign(campaign)) {
           await writeWorldState(nextWorld);
           if (payload.sighting && !isSimulationBusy()) {
-            await appendSightingEvent(bundle, payload.sighting, unitOps);
+            await appendSightingEvent(bundle, payload.sighting, unitOps, campaign);
           }
         }
       } catch (error) {
@@ -17020,8 +17035,9 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
     // --- diplomacy --------------------------------------------------------
     if (!allowChat || !payload.chat) return null;
     // A jump may have started while the model was thinking; its state bundle
-    // predates our write, so drop the note rather than race the save.
-    if (isSimulationBusy()) return null;
+    // predates our write, so drop the note rather than race the save. A note
+    // from a campaign the player has left is dropped the same way.
+    if (isSimulationBusy() || leftCampaign(campaign)) return null;
     const built = await buildGeneratedChat({ ...payload.chat, source: "outreach" }, "", bundle.world, {
       playerName: bundle.game.country,
     });
@@ -17043,7 +17059,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
         code: opening.code || "",
         reply: opening.text,
         date: normalizeString(bundle.game?.gameDate),
-        expectedGameId: normalizeString(bundle.game?.id || bundle.game?.gameId),
+        expectedGameId: campaign,
       });
       logDebugEvent("diplomacy", `Idle diplomacy routed ${opening.speaker} into ${institutionRoute.name || institutionRoute.id} Council instead of Contacts.`, { institutionId: institutionRoute.id }, { verbose: true });
       return { ...built, institutionId: institutionRoute.id, id: committed?.channel?.id || built.id };
@@ -17069,7 +17085,7 @@ export const maybeSendIdleDiplomacy = async ({ chance } = {}) => {
       dropEchoes: true,
     });
     if (nextChats.dropped) return null;
-    if (isSimulationBusy()) return null;
+    if (isSimulationBusy() || leftCampaign(campaign)) return null;
     await writeChatsState(nextChats);
     return built;
   } catch {
