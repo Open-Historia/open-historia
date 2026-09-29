@@ -3,6 +3,7 @@
 import { isFinitePowerScore } from "../../../runtime/powerStatus.js";
 import { normalizePoliticalWorldV2Checkpoint, recordPoliticalWorldV2ModelCall, setCheckpointQuality } from "./checkpoint.js";
 import { createPoliticalWorldV2Executor } from "./executor.js";
+import { reopenPoliticalWorldV2OfficeholderCollisions } from "./officeholderCollisions.js";
 import { evaluatePoliticalWorldV2Quality } from "./quality.js";
 import { acceptedPoliticalWorldV2ActorTargets, deriveNextPoliticalWorldV2Task, summarizePoliticalWorldV2Worklist } from "./simpleWorklist.js";
 
@@ -209,6 +210,9 @@ export const applySimpleAccounting = (checkpoint, task, result, stagedWorld, inp
       for (const polity of array(result.correctedPolities)) aligned.delete(polity);
       next.coverage["governing-alignment"] = [...aligned];
     }
+  }
+  if (task.type === "temporal-sentinel" || task.type === "historical-verification") {
+    reopenPoliticalWorldV2OfficeholderCollisions(next, clean(inputs?.scenarioDate || next.scenarioDate));
   }
 
   return next;

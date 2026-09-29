@@ -362,6 +362,44 @@ test("political-system locks reported for an unresolved actor are kept for its n
   assert.deepEqual(result.retryContext.politicalActor.C, ["parties must not be empty"]);
 });
 
+test("one prime minister leading two countries is sent back for one focused re-check before Canonical", async () => {
+  const checkpoint = finishedCheckpoint();
+  checkpoint.historicalVerificationRequired = true;
+  for (const polity of ["A", "B"]) {
+    const government = { ...completeActor(polity).government, headOfGovernment: "Jane Doe" };
+    checkpoint.stagedWorld.politicalActors.byPolity[polity] = { ...completeActor(polity), government };
+    checkpoint.generationEntriesByPolity[polity] = {
+      item: { polityKey: polity, depth: "standard", needs: ["governing_structure"] },
+      proposal: { polityKey: polity, actorPatch: { government: { form: government.form, headOfGovernment: "Jane Doe" } } },
+      validation: { actor: checkpoint.stagedWorld.politicalActors.byPolity[polity] },
+    };
+  }
+  const prompts = [];
+  const result = await runSimplePoliticalWorldV2({
+    checkpoint,
+    inputs,
+    maxModelCalls: 5,
+    callModel: async (_system, history, options) => {
+      const text = String(history?.at(-1)?.parts?.[0]?.text ?? "");
+      prompts.push({ tool: options?.tool?.name, text });
+      if (options?.tool?.name === "submit_political_world_temporal_sentinel") {
+        const checks = ["A", "B"].map((polityKey) => {
+          const block = text.split(`POLITY: ${polityKey}`)[1] || "";
+          const ids = [...block.split("POLITY-SPECIFIC")[0].matchAll(/^(F\d+) \[/gm)].map((match) => match[1]);
+          return { polityKey, verdict: "clear", confidence: "high", issue: "", checkedFactIds: ids, challengedFactIds: [] };
+        });
+        return { toolInput: { checksJson: JSON.stringify(checks) } };
+      }
+      return { toolInput: { verifications: ["A", "B"].map((polityKey) => ({ polityKey, verdict: "confirmed", confidence: "high", issue: "", correctionScopes: [], replaceRepresentationEntities: false, correctedIdentityJson: "" })) } };
+    },
+  });
+  assert.deepEqual(prompts.map((prompt) => prompt.tool), ["submit_political_world_temporal_sentinel", "submit_political_world_historical_verification"]);
+  assert.match(prompts[1].text, /MANDATORY SAME-DATE OFFICEHOLDER COLLISION/);
+  assert.match(prompts[1].text, /government\.headOfGovernment = Jane Doe/);
+  assert.ok(result.warnings.some((warning) => /Officeholder collision kept after a focused exact-date re-check: Jane Doe/.test(warning)));
+  assert.equal(result.status, "complete");
+});
+
 test("institution membership reads a text-mode answer", async () => {
   const result = await runSimplePoliticalWorldV2({
     checkpoint: withUncoveredInstitution(),

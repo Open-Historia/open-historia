@@ -122,7 +122,7 @@ export const createPoliticalWorldV2Checkpoint = ({
     "historical-verification": [],
   },
   membership: { resolvedInstitutionIds: [] },
-  verification: { challenges: {} },
+  verification: { challenges: {}, officeholderCollisionRechecks: [] },
   attempts: {},
   // Validation feedback that must survive one-call resumable attempts. This is
   // not canon; it only helps the next bounded provider request correct itself.
@@ -198,7 +198,11 @@ export const normalizePoliticalWorldV2Checkpoint = (value = {}) => {
   next.stages = { institutionDiscovery: "pending", institutionGovernance: "pending", agreements: "pending", ...object(next.stages) };
   next.coverage = Object.fromEntries(Object.entries(object(next.coverage)).map(([type, targets]) => [clean(type), [...new Set(array(targets).map(clean).filter(Boolean))]]).filter(([type]) => type));
   next.membership = { resolvedInstitutionIds: [...new Set(array(next?.membership?.resolvedInstitutionIds).map(clean).filter(Boolean))] };
-  next.verification = { challenges: object(next?.verification?.challenges) };
+  next.verification = {
+    challenges: object(next?.verification?.challenges),
+    // Officeholder collisions already sent back for one focused re-check.
+    officeholderCollisionRechecks: array(next?.verification?.officeholderCollisionRechecks).map(clean).filter(Boolean),
+  };
   next.attempts = object(next.attempts);
   next.retryContext = {
     politicalActor: object(next?.retryContext?.politicalActor),

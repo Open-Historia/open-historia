@@ -2325,7 +2325,7 @@ const normalizedOfficeholderCollisionKey = (value, role) => {
   return text.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 };
 
-const crossPolityOfficeholderCollisions = (entries = []) => {
+export const crossPolityOfficeholderCollisions = (entries = []) => {
   const byPerson = new Map();
   for (const entry of Array.isArray(entries) ? entries : []) {
     const polityKey = clean(entry?.item?.polityKey ?? entry?.proposal?.polityKey);
@@ -2363,7 +2363,7 @@ const crossPolityOfficeholderCollisions = (entries = []) => {
   return collisions;
 };
 
-const collisionReviewContextByPolity = (collisions = [], scenarioDate = "") => {
+export const collisionReviewContextByPolity = (collisions = [], scenarioDate = "") => {
   const out = {};
   for (const collision of collisions) {
     const assignments = collision.records
