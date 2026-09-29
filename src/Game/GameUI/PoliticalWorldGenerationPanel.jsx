@@ -84,17 +84,17 @@ const MODE_OPTIONS = [
   {
     id: POLITICAL_WORLD_GENERATION_MODES.BALANCED,
     label: "Balanced",
-    description: "Player/belligerents full; existing actors rich; other sovereign polities standard.",
+    description: "The player's country and countries at war get full detail, countries that already have Political Actors or puppet ties get rich detail, and every other country gets standard detail.",
   },
   {
     id: POLITICAL_WORLD_GENERATION_MODES.SIMULATION_READY,
     label: "Simulation-ready",
-    description: "Player/belligerents full; every other sovereign polity rich enough for native response/disposition simulation.",
+    description: "The player's country and countries at war get full detail, and every other sovereign country gets rich detail so its politics can react during play. The AI's answers are the longest.",
   },
   {
     id: POLITICAL_WORLD_GENERATION_MODES.BASIC,
     label: "Basic",
-    description: "Player/belligerents full; other sovereign polities receive standard identity only.",
+    description: "The player's country and countries at war get full detail, and every other country gets its basic identity only. The AI's answers are the shortest.",
   },
 ];
 
@@ -1448,9 +1448,12 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
               value={v2CallBudget}
             />
           </label>
-          <select disabled={busy || applying} onChange={(event) => setMode(event.target.value)} style={selectStyle} value={mode}>
-            {MODE_OPTIONS.map((option) => <option key={option.id} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.id}>{option.label} repair</option>)}
-          </select>
+          <label style={{ alignItems: "center", color: "rgba(255,255,255,0.58)", display: "inline-flex", fontSize: "0.68rem", gap: "0.35rem" }}>
+            Generation mode
+            <select disabled={busy || applying} onChange={(event) => setMode(event.target.value)} style={selectStyle} value={mode}>
+              {MODE_OPTIONS.map((option) => <option key={option.id} style={{ background: "#2b2b30", color: "#f8fafc" }} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
           <button disabled={busy || applying || dateMismatch} onClick={() => generate(false)} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Generate Missing Politics</button>
           <button disabled={busy || applying || dateMismatch} onClick={repairGoverningAlignment} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Repair Governing Alignment</button>
           <button disabled={busy || applying || geopoliticalApplying || dateMismatch} onClick={generateGeopoliticalBaseline} style={{ ...buttonStyle, opacity: busy || applying || geopoliticalApplying || dateMismatch ? 0.55 : 1 }} type="button">Generate Geopolitical Baseline</button>
@@ -1462,6 +1465,12 @@ const PoliticalWorldGenerationPanel = ({ details, formState, onDetailsChange } =
           {geopoliticalResult && runKind !== "political-world-unified" && <button onClick={downloadGeopoliticalDiagnostic} style={buttonStyle} type="button">Download Geopolitical Diagnostic</button>}
           {v2FailedJobs > 0 && <button disabled={busy || applying || dateMismatch} onClick={() => generatePoliticalWorld({ retryDeferred: true })} style={{ ...buttonStyle, opacity: busy || applying || dateMismatch ? 0.55 : 1 }} type="button">Retry Deferred Targets</button>}
           {v2Checkpoint && <button onClick={downloadPoliticalWorldV2Diagnostic} style={buttonStyle} type="button">Download Generation Diagnostic</button>}
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
+          {MODE_OPTIONS.find((option) => option.id === mode)?.description}
+        </div>
+        <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.35rem" }}>
+          Generation mode applies to Generate Political World and to Generate Missing Politics.
         </div>
         <div style={{ color: "rgba(255,255,255,0.48)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: "0.5rem" }}>
           Repair Governing Alignment can only fill missing rulingPartyIds / coalitionPartyIds from party IDs that already exist and never runs the temporal verifier.
