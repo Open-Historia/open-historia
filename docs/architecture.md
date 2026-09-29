@@ -115,7 +115,7 @@ Both `<Map>` and `<UI>` are keyed on `activeGameId` (not the library token) so a
 | `public/` | Static assets served as-is: `assets/` (map binaries, gitignored), `lang/` shipped language packs, `sw.js`, signed `content-manifest.json` / `node-directory.json`, marketing HTML (`guides/`, `how-to-play/`, …) |
 | `site/` | Marketing homepage shell wrapped around `/play/` by `build:site` |
 | `mobile/` | Android app: Capacitor (`android/`, `www/`, `capacitor.config.json`) + `nodejs-project/` embedded server |
-| `node-content/` + `server/node.js` | Content-node server (hash-addressed, read-only) — see [Content nodes](assets-and-data.md) |
+| `node-content/` + `server/node.js` | A minimal **development stub** of a content node (hash-addressed, read-only content only). The node hosts run is the separate [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) repository; the stub lacks the `/oh/v1/status`, `/ping`, `/leave` and `/hub` endpoints the web client uses, so `selectBestNode` never picks it — see [Content nodes](assets-and-data.md) |
 | `fmg/` | Vendored Azgaar Fantasy Map Generator (served at `/fmg` for the editor's Generate console) |
 | `trust/` | Ed25519 root key material + `pinned-key.js` for content/directory verification |
 | `tools/import-counter/` | Cloudflare Worker: self-hosted scenario-import counter |
@@ -234,7 +234,7 @@ Gameplay writes flow: **AI turn / cheat / UI action → `gameState.js` write →
 |---|---|---|
 | **Map editor** | `?editor=1` route, OpenLayers, authors custom region/city/basemap maps, exports scenario bundles; can run the vendored FMG generator | [Map editor](map-editor.md) |
 | **Community hub** | Scenario/basemap sharing via GitHub issues; server/Worker proxies downloads and counts imports | [Community hub](runtime-services.md) |
-| **Content nodes** | `server/node.js` — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest | [Content nodes](assets-and-data.md) |
+| **Content nodes** | [Open-Historia/open-historia-node](https://github.com/Open-Historia/open-historia-node) (a separate repository) — anyone-runnable, hash-addressed, read-only file server that offloads map-tile/bundle delivery; client re-verifies every byte against the signed manifest. `server/node.js` here is only a development stub that serves content by hash | [Content nodes](assets-and-data.md) |
 | **Web accounts + sync** | Google sign-in + E2E-encrypted game/scenario sync against the registry Worker (web build only) | [Web build & accounts](web-build.md) |
 | **i18n** | shipped language packs translate the interface (22 languages); the AI translates only content, once, into the server's pack; the prompts' guidance ships translated | [Languages & Translation](i18n.md) |
 
