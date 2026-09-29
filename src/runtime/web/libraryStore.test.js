@@ -382,6 +382,53 @@ test("a runtime write that asks for no reply gets none", async () => {
   assert.deepEqual(ok(await runtime("GET", "snapshots")), [SNAPSHOT]);
 });
 
+test("the lean catalog rows heal themselves against the records", async () => {
+  await reset();
+  const kept = await newGame("Kept");
+  const gone = await newGame("Gone");
+  db.get("gameMeta").delete(kept); // a record written by sync, with no row yet
+  db.get("games").delete(gone); // a record deleted out of band, its row left behind
+  const listed = (await library()).games.map((game) => game.id);
+  assert.ok(listed.includes(kept));
+  assert.ok(!listed.includes(gone));
+  assert.ok(db.get("gameMeta").has(kept));
+  assert.ok(!db.get("gameMeta").has(gone));
+});
+
+test("a code-keyed game migrates to names on first read, once, and drops its restore points", async () => {
+  await reset();
+  const id = await newGame("Legacy");
+  const stored = db.get("games").get(id);
+  stored.json.world = { regionOwnershipOverrides: { r1: "USA" }, ownerCodes: ["USA"] };
+  stored.json.game = { country: "USA", gameDate: "2016-01-01" };
+  stored.colors = { USA: [7, 7, 7] };
+  stored.snapshots = [SNAPSHOT];
+
+  const world = ok(await runtime("GET", "world"));
+  assert.equal(world.ownerSchema, 4);
+  assert.equal(world.regionOwnershipOverrides.r1, "United States");
+  assert.deepEqual(ok(await runtime("GET", "colors")), { "United States": [7, 7, 7] });
+  assert.equal(ok(await runtime("GET", "game")).country, "United States");
+  assert.deepEqual(ok(await runtime("GET", "snapshots")), []);
+
+  const migrated = structuredClone(db.get("games").get(id));
+  ok(await runtime("GET", "world"));
+  assert.deepEqual(db.get("games").get(id), migrated, "a second read changes nothing");
+});
+
+test("a turn commit is what every runtime read then sees", async () => {
+  await reset();
+  await newGame("Committed");
+  ok(await turnCommit("2016-09-01", { chat: [{ id: "c1", messages: [] }], actions: [{ id: "a1", status: "pending" }] }));
+  assert.equal(ok(await runtime("GET", "game")).gameDate, "2016-09-01");
+  assert.deepEqual(ok(await runtime("GET", "events")), [{ id: "e-2016-09-01" }]);
+  assert.deepEqual(ok(await runtime("GET", "chat")), [{ id: "c1", messages: [] }]);
+  assert.deepEqual(ok(await runtime("GET", "actions")), [{ id: "a1", status: "pending" }]);
+  const entry = (await library()).activeGame;
+  assert.equal(entry.currentDate, "2016-09-01");
+  assert.equal(entry.pendingActions, 1);
+});
+
 const turnCommit = (gameDate, extra = {}) => call(store.handleRuntimeTurnCommit, "PUT", "", {
   actions: [], chat: [], events: [{ id: `e-${gameDate}` }], colors: { Testland: [1, 2, 3] },
   game: { country: "Testland", gameDate, round: 2 },
